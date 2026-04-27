@@ -1,0 +1,70 @@
+{
+  "name": "bonnie-python",
+  "displayName": "Bonnie Python (Pyodide REPL)",
+  "description": "Beginner-friendly Python REPL and runner powered by Pyodide. Works in desktop VS Code and vscode.dev.",
+  "version": "0.0.1",
+  "publisher": "bonnie",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "packageManager": "pnpm@10.33.2",
+  "categories": [
+    "Programming Languages",
+    "Education",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "browser": "./dist/web/extension.js",
+  "activationEvents": [
+    "onLanguage:python"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "bonniePython.startRepl",
+        "title": "Bonnie Python: Start REPL"
+      },
+      {
+        "command": "bonniePython.runActiveFile",
+        "title": "Bonnie Python: Run Active File"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "bonniePython.runActiveFile",
+          "when": "editorLangId == python",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Bonnie Python",
+      "properties": {
+        "bonniePython.pyodideIndexUrl": {
+          "type": "string",
+          "default": "https://cdn.jsdelivr.net/pyodide/v0.29.3/full/",
+          "description": "Base URL used to load Pyodide assets. Must end with a trailing slash."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "compile": "tsc -p ./ --noEmit",
+    "package": "node esbuild.config.mjs --production",
+    "vscode:prepublish": "pnpm run package",
+    "test-web": "vscode-test-web --browserType=chromium --extensionDevelopmentPath=. ."
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-web": "^0.0.80",
+    "esbuild": "^0.28.0",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "pyodide": "^0.29.3"
+  }
+}

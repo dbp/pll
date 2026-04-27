@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "shell",
+      "label": "npm: build",
+      "command": "npx",
+      "args": ["--yes", "pnpm@10", "run", "build"],
+      "group": "build",
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "silent"
+      },
+      "problemMatcher": []
+    },
+    {
+      "type": "shell",
+      "label": "npm: watch",
+      "command": "npx",
+      "args": ["--yes", "pnpm@10", "run", "watch"],
+      "isBackground": true,
+      "group": "build",
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "never"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
