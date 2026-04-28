@@ -18,35 +18,56 @@ It works in **desktop VS Code** and in **`vscode.dev`** (web).
   plain-language explanation with a "what / why / how to fix" breakdown,
   shown in the REPL terminal (with ANSI colors) and as an editor diagnostic
   on the offending line/identifier.
+- **Language levels** (`#beginner` / `#expert`). The first non-blank line of
+  a file may be a magic comment that selects a language level. At
+  `#beginner`, files are statically checked for **variable shadowing**
+  (including built-ins) and **variable reassignment**; if any check fires,
+  the file isn't executed and findings are surfaced in the REPL and editor.
+  `#expert` (the default if no header is present) disables all static checks
+  and runs the file as plain Python. The REPL itself is always expert.
 
 ## Architecture
 
 ```
 src/
-├── extension.ts            Desktop entrypoint (Node host)
-├── web/extension.ts        Web entrypoint (vscode.dev)
-├── web/pyodideWorker.ts    WebWorker that hosts Pyodide in the browser
-├── web/pyodideRuntime.ts   Talks to the worker
-├── desktop/pyodideRuntime.ts  Loads Pyodide directly in the Node host
+├── extension.ts                   Desktop entrypoint (Node host)
+├── web/extension.ts               Web entrypoint (vscode.dev)
+├── web/pyodideWorker.ts           WebWorker that hosts Pyodide in the browser
+├── web/pyodideRuntime.ts          Talks to the worker
+├── desktop/pyodideRuntime.ts      Loads Pyodide directly in the Node host
 └── common/
-    ├── commands.ts         Start REPL + Run File commands (shared)
-    ├── replSession.ts      Pseudoterminal-backed REPL (line editor + history)
-    ├── ansi.ts             Tiny ANSI helpers
-    ├── errorFormatter.ts   ANSI/plain renderers for friendly errors
-    ├── diagnostics.ts      VS Code DiagnosticCollection
-    ├── pyodideRunner.ts    Python source bootstrapped into Pyodide
-    ├── analyzers/          Pluggable runtime + (future) static analyzers
-    │   ├── types.ts
-    │   ├── nameErrorAnalyzer.ts
-    │   └── registry.ts
+    ├── commands.ts                Start REPL + Run File commands (shared)
+    ├── replSession.ts             Pseudoterminal-backed REPL (line editor + history)
+    ├── level.ts                   #beginner / #expert header parser
+    ├── ansi.ts                    Tiny ANSI helpers
+    ├── errorFormatter.ts          ANSI/plain renderers for friendly errors
+    ├── diagnostics.ts             VS Code DiagnosticCollection (multi-finding)
+    ├── pyodideRunner.ts           Bootstrap loader + types
+    ├── pyodideBootstrap.py        Real Python: run / repl-eval / static analyzer
+    ├── analyzers/
+    │   ├── types.ts               AnalysisFinding, RuntimeAnalyzer
+    │   ├── nameErrorAnalyzer.ts   Runtime: NameError -> friendly finding
+    │   ├── registry.ts            Runtime analyzer registry
+    │   └── static/
+    │       ├── shadowingExplainer.ts     shadowing + shadowing-builtin
+    │       ├── reassignmentExplainer.ts  reassignment
+    │       └── registry.ts               Wraps Python-side raw findings
     └── errors/
         ├── pythonErrorParser.ts
         └── nameErrorExplainer.ts
 ```
 
-The analyzer registry is the seam where future Flake8/Pylint-style static
-checks (e.g. shadowing) will plug in - they'd run inside Pyodide via
-`micropip` and produce the same `AnalysisFinding` objects.
+The static analyzer itself (scope builder, shadowing/reassignment checks)
+lives in `pyodideBootstrap.py`. esbuild's `text` loader inlines that file as
+a string at build time so it's loaded into Pyodide once on init - which means
+the analysis runs in the same Python interpreter that runs the user's code,
+in both desktop and web hosts.
+
+## Smoke tests
+
+```bash
+pnpm run smoke   # static-analyzer Python tests + TS explainer/format tests
+```
 
 ## Development
 

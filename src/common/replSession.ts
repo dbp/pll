@@ -1,9 +1,12 @@
 import * as vscode from "vscode";
 import { findRuntimeFinding } from "./analyzers/registry";
+import { enrichStaticFindings } from "./analyzers/static/registry";
+import type { AnalysisFinding } from "./analyzers/types";
 import { ANSI, color, CRLF, toCRLF } from "./ansi";
 import type { BonnieDiagnostics } from "./diagnostics";
 import { parsePythonError } from "./errors/pythonErrorParser";
 import { formatFriendlyError } from "./errorFormatter";
+import { parseLevel, type Level } from "./level";
 import type { BonnieTerminalLinkProvider } from "./terminalLinks";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 
@@ -309,8 +312,10 @@ export class BonnieReplSession {
     this.historyIdx = -1;
     this.historyDraft = "";
     try {
+      // The REPL itself is always expert level - we never run static checks
+      // against ad-hoc prompt input.
       await this.deps.runtime.replEval({ code }, (event) =>
-        this.handleEvent(event, code, "<repl>", undefined),
+        this.handleEvent(event, code, "<repl>", undefined, "expert"),
       );
     } catch (err) {
       this.writeLine(
@@ -334,10 +339,33 @@ export class BonnieReplSession {
       this.deps.terminalLinks.registerFile(fileName, document.uri);
     }
     this.write(CLEAR_SCREEN);
-    this.writeLine(color(`# Running ${fileName}`, ANSI.dim));
+
+    const level = parseLevel(code);
+    const banner =
+      level === "expert"
+        ? `# Running ${fileName}`
+        : `# Running ${fileName} [${level}]`;
+    this.writeLine(color(banner, ANSI.dim));
+
     try {
+      // Beginner-level files go through static analysis first; if any findings
+      // are produced we render them, set diagnostics, and SKIP execution. The
+      // user has to fix things before the file will run.
+      if (level === "beginner") {
+        const blocked = await this.runStaticChecks(code, fileName, level, document);
+        if (blocked) {
+          this.writeLine(
+            color(
+              "# Static analysis found issues. File not executed.",
+              ANSI.yellow,
+            ),
+          );
+          return;
+        }
+      }
+
       await this.deps.runtime.runFile({ code, fileName }, (event) =>
-        this.handleEvent(event, code, fileName, document),
+        this.handleEvent(event, code, fileName, document, level),
       );
       this.writeLine(color(`# Finished ${fileName}`, ANSI.dim));
     } catch (err) {
@@ -351,11 +379,58 @@ export class BonnieReplSession {
     }
   }
 
+  /**
+   * Run language-level static checks against `code`. Returns true if any
+   * findings were produced (caller should skip execution).
+   */
+  private async runStaticChecks(
+    code: string,
+    fileName: string,
+    level: Level,
+    document: vscode.TextDocument | undefined,
+  ): Promise<boolean> {
+    let raw;
+    try {
+      raw = await this.deps.runtime.staticAnalyze({ code, fileName, level });
+    } catch (err) {
+      this.writeLine(
+        color("Static analysis failed: ", ANSI.red, ANSI.bold) +
+          (err instanceof Error ? err.message : String(err)),
+      );
+      return false;
+    }
+
+    const findings = enrichStaticFindings(raw, level, fileName);
+    if (findings.length === 0) {
+      if (document) {
+        this.deps.diagnostics.clear(document.uri);
+      }
+      return false;
+    }
+
+    this.renderFindings(findings);
+    if (document) {
+      this.deps.diagnostics.setFindings(document.uri, document, findings);
+    }
+    return true;
+  }
+
+  private renderFindings(findings: ReadonlyArray<AnalysisFinding>): void {
+    for (const finding of findings) {
+      this.writeLine();
+      for (const line of formatFriendlyError(finding, { ansi: true })) {
+        this.writeLine(line);
+      }
+    }
+    this.writeLine();
+  }
+
   private handleEvent(
     event: ExecutionEvent,
     source: string,
     fileName: string,
     document: vscode.TextDocument | undefined,
+    level: Level,
   ): void {
     switch (event.kind) {
       case "stdout":
@@ -381,7 +456,7 @@ export class BonnieReplSession {
         if (parsed.fileName === null && event.fileName) {
           parsed.fileName = event.fileName;
         }
-        const finding = findRuntimeFinding(source, fileName, parsed);
+        const finding = findRuntimeFinding(source, fileName, level, parsed);
         if (finding) {
           this.writeLine();
           for (const line of formatFriendlyError(finding, { ansi: true })) {

@@ -38,21 +38,46 @@ export class BonnieDiagnostics implements vscode.Disposable {
     this.applyToEditors(vscode.window.visibleTextEditors);
   }
 
+  /** Single-finding shortcut. Equivalent to `setFindings(uri, doc, [f])`. */
   setFinding(
     uri: vscode.Uri,
     document: vscode.TextDocument | undefined,
     finding: AnalysisFinding,
   ): void {
-    const range = computeRange(document, finding);
-    const diagnostic = new vscode.Diagnostic(
-      range,
-      formatFriendlyErrorPlain(finding),
-      mapSeverity(finding.severity),
-    );
-    diagnostic.source = "Bonnie Python";
-    diagnostic.code = finding.errorType;
-    this.collection.set(uri, [diagnostic]);
-    this.perUriRanges.set(uri.toString(), [range]);
+    this.setFindings(uri, document, [finding]);
+  }
+
+  /**
+   * Replace all diagnostics for `uri` with the given findings. Findings are
+   * shown in the Problems panel, get squiggles in the editor, and each
+   * contributes a gutter icon at its line.
+   */
+  setFindings(
+    uri: vscode.Uri,
+    document: vscode.TextDocument | undefined,
+    findings: ReadonlyArray<AnalysisFinding>,
+  ): void {
+    if (findings.length === 0) {
+      this.clear(uri);
+      return;
+    }
+    const diagnostics: vscode.Diagnostic[] = [];
+    const ranges: vscode.Range[] = [];
+    for (const finding of findings) {
+      const range = computeRange(document, finding);
+      const diagnostic = new vscode.Diagnostic(
+        range,
+        formatFriendlyErrorPlain(finding),
+        mapSeverity(finding.severity),
+      );
+      diagnostic.source =
+        finding.origin === "static" ? "Bonnie Python (static)" : "Bonnie Python";
+      diagnostic.code = finding.errorType;
+      diagnostics.push(diagnostic);
+      ranges.push(range);
+    }
+    this.collection.set(uri, diagnostics);
+    this.perUriRanges.set(uri.toString(), ranges);
     this.applyToEditors(vscode.window.visibleTextEditors);
   }
 

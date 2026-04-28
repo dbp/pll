@@ -5,11 +5,11 @@ export const nameErrorAnalyzer: RuntimeAnalyzer = {
   kind: "runtime",
   handles: ["NameError"],
   analyze(input: RuntimeAnalyzerInput): AnalysisFinding | null {
-    const { parsedError, fileName } = input;
+    const { parsedError, fileName, level } = input;
     if (parsedError.errorType !== "NameError") {
       return null;
     }
-    const explanation = explainNameError(parsedError);
+    const explanation = explainNameError(parsedError, level);
     return {
       id: "name-error",
       errorType: "NameError",
@@ -24,6 +24,8 @@ export const nameErrorAnalyzer: RuntimeAnalyzer = {
       nameToken: parsedError.nameToken,
       severity: "error",
       raw: parsedError.traceback,
+      origin: "runtime",
+      level,
     };
   },
 };

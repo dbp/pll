@@ -1,5 +1,9 @@
 /// <reference lib="WebWorker" />
-import { PYODIDE_BOOTSTRAP_PY, type BonnieRunResult } from "../common/pyodideRunner";
+import {
+  PYODIDE_BOOTSTRAP_PY,
+  type BonnieRunResult,
+  type RawStaticFinding,
+} from "../common/pyodideRunner";
 
 declare const self: DedicatedWorkerGlobalScope & {
   loadPyodide?: (config: { indexURL: string }) => Promise<PyodideInstance>;
@@ -34,12 +38,14 @@ export type WorkerInbound =
   | { id: number; type: "init"; indexUrl: string }
   | { id: number; type: "runFile"; code: string; fileName: string }
   | { id: number; type: "replEval"; code: string }
-  | { id: number; type: "checkSyntax"; code: string };
+  | { id: number; type: "checkSyntax"; code: string }
+  | { id: number; type: "staticAnalyze"; code: string; level: string; fileName: string };
 
 export type WorkerOutbound =
   | { id: number; type: "ready" }
   | { id: number; type: "result"; result: BonnieRunResult }
   | { id: number; type: "syntax"; result: RawReplCheck }
+  | { id: number; type: "static"; result: RawStaticFinding[] }
   | { id: number; type: "error"; message: string };
 
 let pyodideInstance: PyodideInstance | null = null;
@@ -106,6 +112,16 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
       case "checkSyntax": {
         const result = callPyFunction<RawReplCheck>("_bonnie_repl_check", [data.code]);
         const reply: WorkerOutbound = { id: data.id, type: "syntax", result };
+        self.postMessage(reply);
+        break;
+      }
+      case "staticAnalyze": {
+        const result = callPyFunction<RawStaticFinding[]>("_bonnie_static_analyze", [
+          data.code,
+          data.level,
+          data.fileName,
+        ]) ?? [];
+        const reply: WorkerOutbound = { id: data.id, type: "static", result };
         self.postMessage(reply);
         break;
       }

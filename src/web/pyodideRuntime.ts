@@ -1,17 +1,18 @@
 import * as vscode from "vscode";
-import type { BonnieRunResult } from "../common/pyodideRunner";
+import type { BonnieRunResult, RawStaticFinding } from "../common/pyodideRunner";
 import type {
   ExecutionEventHandler,
   PythonRuntime,
   ReplCheckResult,
   ReplEvalRequest,
   RunFileRequest,
+  StaticAnalyzeRequest,
 } from "../common/types";
 import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "./pyodideWorker";
 
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 type WorkerInboundPayload = DistributiveOmit<WorkerInbound, "id">;
-type AnyReply = "ready" | BonnieRunResult | RawReplCheck;
+type AnyReply = "ready" | BonnieRunResult | RawReplCheck | RawStaticFinding[];
 
 interface Pending {
   resolve: (value: AnyReply) => void;
@@ -88,6 +89,17 @@ export class WebPyodideRuntime implements PythonRuntime {
     };
   }
 
+  async staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]> {
+    await this.initialize();
+    const result = (await this.send({
+      type: "staticAnalyze",
+      code: request.code,
+      level: request.level,
+      fileName: request.fileName,
+    })) as RawStaticFinding[];
+    return result ?? [];
+  }
+
   dispose(): void {
     this.worker?.terminate();
     this.worker = null;
@@ -124,6 +136,9 @@ export class WebPyodideRuntime implements PythonRuntime {
         pending.resolve(msg.result);
         break;
       case "syntax":
+        pending.resolve(msg.result);
+        break;
+      case "static":
         pending.resolve(msg.result);
         break;
       case "error":

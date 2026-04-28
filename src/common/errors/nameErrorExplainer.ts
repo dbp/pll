@@ -1,3 +1,4 @@
+import type { Level } from "../level";
 import type { ParsedPythonError } from "./pythonErrorParser";
 
 export interface BeginnerExplanation {
@@ -20,8 +21,15 @@ export interface BeginnerExplanation {
  * Older/newer CPython versions occasionally include suggestions
  * ("Did you mean: ...?"). We strip those out of the headline and
  * surface them separately if present.
+ *
+ * The `level` parameter lets us tailor the explanation: at the beginner level
+ * we don't mention features that aren't available (modules/imports) and we
+ * keep the bullets short.
  */
-export function explainNameError(parsed: ParsedPythonError): BeginnerExplanation {
+export function explainNameError(
+  parsed: ParsedPythonError,
+  level: Level = "expert",
+): BeginnerExplanation {
   const name = parsed.nameToken ?? "this name";
   const didYouMean = extractDidYouMean(parsed.message);
 
@@ -39,14 +47,21 @@ export function explainNameError(parsed: ParsedPythonError): BeginnerExplanation
     `Order of execution: \`${name}\` may be defined later in the file, but` +
       " Python only knows about names that have already been assigned by the" +
       " time it reaches this line.",
-    `Scope: \`${name}\` may be defined inside another function or block and` +
-      " isn't visible here.",
     `Forgotten quotes: if you meant the text \"${name}\", wrap it in quotes:` +
       ` \`\"${name}\"\`.`,
-    `Missing import: if \`${name}\` comes from a module, you may need` +
-      ` \`import ${name}\` (or \`from somemodule import ${name}\`) at the top` +
-      " of the file.",
   ];
+
+  if (level === "expert") {
+    whyItHappens.splice(2, 0,
+      `Scope: \`${name}\` may be defined inside another function or block and` +
+        " isn't visible here.",
+    );
+    whyItHappens.push(
+      `Missing import: if \`${name}\` comes from a module, you may need` +
+        ` \`import ${name}\` (or \`from somemodule import ${name}\`) at the top` +
+        " of the file.",
+    );
+  }
 
   const howToFix: string[] = [
     `Check the spelling of \`${name}\` (Python is case-sensitive).`,

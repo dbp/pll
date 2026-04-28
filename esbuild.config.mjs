@@ -10,6 +10,9 @@ const baseOptions = {
   sourcemap: !production,
   logLevel: "info",
   legalComments: "none",
+  loader: {
+    ".py": "text",
+  },
 };
 
 /** @type {esbuild.BuildOptions} */

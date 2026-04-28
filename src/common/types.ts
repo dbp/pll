@@ -57,6 +57,15 @@ export interface ReplCheckResult {
   offset?: number;
 }
 
+import type { Level } from "./level";
+import type { RawStaticFinding } from "./pyodideRunner";
+
+export interface StaticAnalyzeRequest {
+  code: string;
+  fileName: string;
+  level: Level;
+}
+
 export interface PythonRuntime {
   initialize(): Promise<void>;
   isReady(): boolean;
@@ -64,5 +73,11 @@ export interface PythonRuntime {
   replEval(request: ReplEvalRequest, onEvent: ExecutionEventHandler): Promise<void>;
   /** Decide whether `code` is a complete REPL input (codeop.compile_command). */
   checkReplComplete(code: string): Promise<ReplCheckResult>;
+  /**
+   * Run language-level static checks against a file. Returns an empty array
+   * for `expert` (no checks) or when the file doesn't parse (let runtime
+   * surface SyntaxErrors).
+   */
+  staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]>;
   dispose(): void;
 }

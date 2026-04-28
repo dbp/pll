@@ -1,12 +1,17 @@
 import * as path from "path";
 import type { PyodideInterface } from "pyodide";
-import { PYODIDE_BOOTSTRAP_PY, type BonnieRunResult } from "../common/pyodideRunner";
+import {
+  PYODIDE_BOOTSTRAP_PY,
+  type BonnieRunResult,
+  type RawStaticFinding,
+} from "../common/pyodideRunner";
 import type {
   ExecutionEventHandler,
   PythonRuntime,
   ReplCheckResult,
   ReplEvalRequest,
   RunFileRequest,
+  StaticAnalyzeRequest,
 } from "../common/types";
 
 interface RawReplCheck {
@@ -104,6 +109,22 @@ export class DesktopPyodideRuntime implements PythonRuntime {
       const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as RawReplCheck;
       proxy.destroy?.();
       return adaptReplCheck(obj);
+    } finally {
+      fn.destroy?.();
+    }
+  }
+
+  async staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]> {
+    await this.initialize();
+    if (!this.pyodide) {
+      throw new Error("Pyodide failed to initialize");
+    }
+    const fn = this.pyodide.globals.get("_bonnie_static_analyze");
+    try {
+      const proxy = fn(request.code, request.level, request.fileName);
+      const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as RawStaticFinding[];
+      proxy.destroy?.();
+      return obj ?? [];
     } finally {
       fn.destroy?.();
     }
