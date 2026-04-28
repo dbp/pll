@@ -109,12 +109,12 @@ export class BonnieReplSession {
   private async handleOpen(): Promise<void> {
     this.opened = true;
     this.writeLine(color("Bonnie Python REPL", ANSI.bold, ANSI.cyan));
-    this.writeLine(color("Loading Pyodide...", ANSI.dim));
+    this.writeLine(color("Loading Python...", ANSI.dim));
     try {
       await this.deps.runtime.initialize();
     } catch (err) {
       this.writeLine(
-        color("Failed to initialize Pyodide: ", ANSI.red, ANSI.bold) +
+        color("Failed to start Python: ", ANSI.red, ANSI.bold) +
           (err instanceof Error ? err.message : String(err)),
       );
       return;
