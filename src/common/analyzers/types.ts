@@ -13,6 +13,8 @@ export interface AnalysisFinding {
   whatHappened: string[];
   whyItHappens: string[];
   howToFix: string[];
+  /** Display file name passed to the analyzer (e.g. "hello.py" or "<repl>"). */
+  fileName: string;
   /** 1-based line number in the analyzed file (null if unknown). */
   lineNumber: number | null;
   /** 1-based column (null if unknown). */

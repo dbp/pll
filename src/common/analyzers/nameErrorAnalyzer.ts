@@ -5,7 +5,7 @@ export const nameErrorAnalyzer: RuntimeAnalyzer = {
   kind: "runtime",
   handles: ["NameError"],
   analyze(input: RuntimeAnalyzerInput): AnalysisFinding | null {
-    const { parsedError } = input;
+    const { parsedError, fileName } = input;
     if (parsedError.errorType !== "NameError") {
       return null;
     }
@@ -18,6 +18,7 @@ export const nameErrorAnalyzer: RuntimeAnalyzer = {
       whatHappened: explanation.whatHappened,
       whyItHappens: explanation.whyItHappens,
       howToFix: explanation.howToFix,
+      fileName,
       lineNumber: parsedError.lineNumber,
       column: parsedError.column,
       nameToken: parsedError.nameToken,

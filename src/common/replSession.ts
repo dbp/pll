@@ -3,16 +3,20 @@ import { findRuntimeFinding } from "./analyzers/registry";
 import { ANSI, color, CRLF, toCRLF } from "./ansi";
 import type { BonnieDiagnostics } from "./diagnostics";
 import { parsePythonError } from "./errors/pythonErrorParser";
-import { formatFriendlyErrorAnsi } from "./errorFormatter";
+import { formatFriendlyError } from "./errorFormatter";
+import type { BonnieTerminalLinkProvider } from "./terminalLinks";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 
 const PROMPT = color(">>>", ANSI.green) + " ";
 const CONT_PROMPT = color("...", ANSI.green) + " ";
 const TERMINAL_NAME = "Python (Bonnie REPL)";
+/** Clear visible screen + scrollback + move cursor home (xterm). */
+const CLEAR_SCREEN = "\x1b[2J\x1b[3J\x1b[H";
 
 export interface BonnieReplDeps {
   runtime: PythonRuntime;
   diagnostics: BonnieDiagnostics;
+  terminalLinks: BonnieTerminalLinkProvider;
 }
 
 interface PendingRunFile {
@@ -327,7 +331,9 @@ export class BonnieReplSession {
     this.busy = true;
     if (document) {
       this.deps.diagnostics.clear(document.uri);
+      this.deps.terminalLinks.registerFile(fileName, document.uri);
     }
+    this.write(CLEAR_SCREEN);
     this.writeLine(color(`# Running ${fileName}`, ANSI.dim));
     try {
       await this.deps.runtime.runFile({ code, fileName }, (event) =>
@@ -377,13 +383,16 @@ export class BonnieReplSession {
         }
         const finding = findRuntimeFinding(source, fileName, parsed);
         if (finding) {
-          for (const line of formatFriendlyErrorAnsi(finding)) {
+          this.writeLine();
+          for (const line of formatFriendlyError(finding, { ansi: true })) {
             this.writeLine(line);
           }
+          this.writeLine();
           if (document) {
             this.deps.diagnostics.setFinding(document.uri, document, finding);
           }
         } else {
+          this.writeLine();
           this.writeLine(
             color(`${event.errorType}: `, ANSI.red, ANSI.bold) + event.message,
           );

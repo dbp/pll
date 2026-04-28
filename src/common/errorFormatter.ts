@@ -1,98 +1,72 @@
 import type { AnalysisFinding } from "./analyzers/types";
 import { ANSI, color } from "./ansi";
 
-const SEPARATOR = color("─".repeat(60), ANSI.dim);
-
 /**
- * Render a beginner-friendly analysis finding as an array of lines suitable
- * for a pseudoterminal. Lines do NOT include trailing line endings - the
- * caller is responsible for joining with CRLF.
+ * Concise, beginner-friendly rendering of an analysis finding.
  *
- * The plain-text variant strips ANSI codes for use in the OutputChannel /
- * Diagnostic message text, where ANSI escapes don't render.
+ * The same content is used in two places so the user sees the same message
+ * everywhere:
+ *   - REPL terminal (ANSI colored)
+ *   - VS Code diagnostic tooltip (plain text, hover squiggle)
+ *
+ * Layout:
+ *   ErrorType: headline.
+ *     at hello.py:2
+ *
+ *   How to fix:
+ *     - bullet 1
+ *     - bullet 2
+ *     - ...
  */
-export function formatFriendlyErrorAnsi(finding: AnalysisFinding): string[] {
+export interface FormatOptions {
+  ansi: boolean;
+}
+
+export function formatFriendlyError(
+  finding: AnalysisFinding,
+  options: FormatOptions = { ansi: false },
+): string[] {
+  const ansi = options.ansi;
   const lines: string[] = [];
-  lines.push("");
-  lines.push(SEPARATOR);
-  lines.push(
-    "  " +
-      color(finding.errorType, ANSI.bold, ANSI.red) +
-      ": " +
-      color(finding.headline, ANSI.bold),
-  );
-  lines.push(SEPARATOR);
 
-  if (finding.lineNumber !== null) {
-    const where =
-      finding.column !== null
-        ? `line ${finding.lineNumber}, column ${finding.column + 1}`
-        : `line ${finding.lineNumber}`;
-    const tokenSuffix = finding.nameToken
-      ? ` (` + color(finding.nameToken, ANSI.yellow) + `)`
-      : "";
-    lines.push("  " + color("at", ANSI.dim) + ` ${where}${tokenSuffix}`);
+  const errType = ansi ? color(finding.errorType, ANSI.bold, ANSI.red) : finding.errorType;
+  const headline = ansi ? color(finding.headline, ANSI.bold) : finding.headline;
+  lines.push(`${errType}: ${headline}`);
+
+  const location = formatLocation(finding);
+  if (location) {
+    const text = `  at ${location}`;
+    lines.push(ansi ? color(text, ANSI.dim) : text);
   }
 
-  pushSection(lines, "What happened", finding.whatHappened);
-  pushSection(lines, "Why this might happen", finding.whyItHappens);
-  pushSection(lines, "How to fix", finding.howToFix);
-
-  lines.push("");
-  lines.push("  " + color("Original Python message:", ANSI.dim));
-  for (const raw of finding.raw.split(/\r?\n/)) {
-    lines.push("    " + color(raw, ANSI.dim));
+  if (finding.howToFix.length > 0) {
+    lines.push("");
+    lines.push(ansi ? color("How to fix:", ANSI.bold, ANSI.cyan) : "How to fix:");
+    for (const item of finding.howToFix) {
+      const bullet = ansi ? color("-", ANSI.cyan) : "-";
+      lines.push(`  ${bullet} ${item}`);
+    }
   }
-  lines.push("");
+
   return lines;
 }
 
-export function formatFriendlyErrorPlain(finding: AnalysisFinding): string[] {
-  return formatFriendlyErrorAnsi(finding).map(stripAnsi);
+/** Plain string (newline-joined) for diagnostic.message. */
+export function formatFriendlyErrorPlain(finding: AnalysisFinding): string {
+  return formatFriendlyError(finding, { ansi: false }).join("\n");
 }
 
-function pushSection(out: string[], title: string, items: string[]): void {
-  if (items.length === 0) {
-    return;
+/** Build "fileName:line[:col]" if we know the location, else null. */
+export function formatLocation(finding: AnalysisFinding): string | null {
+  if (finding.lineNumber === null) {
+    return null;
   }
-  out.push("");
-  out.push("  " + color(title + ":", ANSI.cyan, ANSI.bold));
-  for (const item of items) {
-    const wrapped = wrapText(item, 76);
-    const [first, ...rest] = wrapped;
-    out.push("    " + color("•", ANSI.cyan) + ` ${first}`);
-    for (const cont of rest) {
-      out.push("      " + cont);
-    }
+  // <repl> isn't a real file - location lines just look weird there.
+  if (finding.fileName === "<repl>" || finding.fileName === "<input>") {
+    return null;
   }
-}
-
-function wrapText(text: string, width: number): string[] {
-  const words = text.split(/\s+/);
-  const lines: string[] = [];
-  let current = "";
-  for (const word of words) {
-    if (current.length === 0) {
-      current = word;
-      continue;
-    }
-    if (visibleLength(current) + 1 + visibleLength(word) > width) {
-      lines.push(current);
-      current = word;
-    } else {
-      current += " " + word;
-    }
+  if (finding.column !== null) {
+    return `${finding.fileName}:${finding.lineNumber}:${finding.column + 1}`;
   }
-  if (current.length > 0) {
-    lines.push(current);
-  }
-  return lines.length > 0 ? lines : [""];
-}
-
-function visibleLength(s: string): number {
-  return stripAnsi(s).length;
-}
-
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, "");
+  return `${finding.fileName}:${finding.lineNumber}`;
 }

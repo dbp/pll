@@ -49,11 +49,9 @@ export function explainNameError(parsed: ParsedPythonError): BeginnerExplanation
   ];
 
   const howToFix: string[] = [
-    `Check the spelling of \`${name}\` on the highlighted line.`,
-    `Make sure \`${name}\` is assigned (e.g. \`${name} = ...\`) before this` +
-      " line runs.",
-    `If \`${name}\` should be a string, put it in quotes: \`\"${name}\"\`.`,
-    `If \`${name}\` lives in a module, add the matching \`import\` statement.`,
+    `Check the spelling of \`${name}\` (Python is case-sensitive).`,
+    `Make sure \`${name}\` is defined before this line runs.`,
+    `If \`${name}\` should be text, put it in quotes: \`\"${name}\"\`.`,
   ];
 
   if (didYouMean.length > 0) {

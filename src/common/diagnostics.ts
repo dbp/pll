@@ -1,31 +1,72 @@
 import * as vscode from "vscode";
 import type { AnalysisFinding } from "./analyzers/types";
+import { formatFriendlyErrorPlain } from "./errorFormatter";
 
-export class BonnieDiagnostics {
+/**
+ * Owns:
+ *   - the DiagnosticCollection (squiggle + Problems panel + tooltip text)
+ *   - a gutter-icon decoration shown next to the line of the error
+ *   - an overview-ruler tint so the error is also visible in the right strip
+ *
+ * The decoration has to be re-applied whenever the set of visible editors
+ * changes (e.g. user opens the file fresh), since `setDecorations` is
+ * editor-scoped.
+ */
+export class BonnieDiagnostics implements vscode.Disposable {
   private readonly collection: vscode.DiagnosticCollection;
+  private readonly gutterDecoration: vscode.TextEditorDecorationType;
+  private readonly perUriRanges = new Map<string, vscode.Range[]>();
+  private readonly editorWatcher: vscode.Disposable;
 
-  constructor() {
+  constructor(extensionUri: vscode.Uri) {
     this.collection = vscode.languages.createDiagnosticCollection("bonnie-python");
+    this.gutterDecoration = vscode.window.createTextEditorDecorationType({
+      gutterIconPath: vscode.Uri.joinPath(extensionUri, "media", "error-gutter.svg"),
+      gutterIconSize: "contain",
+      overviewRulerColor: "rgba(229, 20, 0, 0.85)",
+      overviewRulerLane: vscode.OverviewRulerLane.Right,
+      isWholeLine: false,
+    });
+    this.editorWatcher = vscode.window.onDidChangeVisibleTextEditors((editors) => {
+      this.applyToEditors(editors);
+    });
   }
 
   clear(uri: vscode.Uri): void {
     this.collection.delete(uri);
+    this.perUriRanges.delete(uri.toString());
+    this.applyToEditors(vscode.window.visibleTextEditors);
   }
 
-  setFinding(uri: vscode.Uri, document: vscode.TextDocument | undefined, finding: AnalysisFinding): void {
+  setFinding(
+    uri: vscode.Uri,
+    document: vscode.TextDocument | undefined,
+    finding: AnalysisFinding,
+  ): void {
     const range = computeRange(document, finding);
     const diagnostic = new vscode.Diagnostic(
       range,
-      buildDiagnosticMessage(finding),
+      formatFriendlyErrorPlain(finding),
       mapSeverity(finding.severity),
     );
     diagnostic.source = "Bonnie Python";
     diagnostic.code = finding.errorType;
     this.collection.set(uri, [diagnostic]);
+    this.perUriRanges.set(uri.toString(), [range]);
+    this.applyToEditors(vscode.window.visibleTextEditors);
   }
 
   dispose(): void {
+    this.editorWatcher.dispose();
     this.collection.dispose();
+    this.gutterDecoration.dispose();
+  }
+
+  private applyToEditors(editors: readonly vscode.TextEditor[]): void {
+    for (const editor of editors) {
+      const ranges = this.perUriRanges.get(editor.document.uri.toString()) ?? [];
+      editor.setDecorations(this.gutterDecoration, ranges);
+    }
   }
 }
 
@@ -40,18 +81,6 @@ function mapSeverity(severity: AnalysisFinding["severity"]): vscode.DiagnosticSe
     default:
       return vscode.DiagnosticSeverity.Error;
   }
-}
-
-function buildDiagnosticMessage(finding: AnalysisFinding): string {
-  const parts: string[] = [finding.headline];
-  if (finding.howToFix.length > 0) {
-    parts.push("");
-    parts.push("How to fix:");
-    for (const step of finding.howToFix) {
-      parts.push(`  - ${step}`);
-    }
-  }
-  return parts.join("\n");
 }
 
 function computeRange(
