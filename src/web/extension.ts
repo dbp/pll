@@ -1,19 +1,19 @@
 import * as vscode from "vscode";
 import { registerCommands } from "../common/commands";
 import { BonnieDiagnostics } from "../common/diagnostics";
-import { BonnieOutput } from "../common/output";
+import { BonnieReplSession } from "../common/replSession";
 import { WebPyodideRuntime } from "./pyodideRuntime";
 
 export function activate(context: vscode.ExtensionContext): void {
   const runtime = new WebPyodideRuntime(context.extensionUri);
-  const output = new BonnieOutput();
   const diagnostics = new BonnieDiagnostics();
+  const repl = new BonnieReplSession({ runtime, diagnostics });
 
   context.subscriptions.push({ dispose: () => runtime.dispose() });
-  context.subscriptions.push(output);
   context.subscriptions.push(diagnostics);
+  context.subscriptions.push({ dispose: () => repl.dispose() });
 
-  registerCommands(context, { runtime, output, diagnostics });
+  registerCommands(context, { repl, diagnostics });
 }
 
 export function deactivate(): void {

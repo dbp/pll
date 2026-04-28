@@ -22,14 +22,24 @@ interface PyProxy {
   destroy?(): void;
 }
 
+export interface RawReplCheck {
+  status: "complete" | "incomplete" | "invalid";
+  error_type?: string;
+  message?: string;
+  lineno?: number;
+  offset?: number;
+}
+
 export type WorkerInbound =
   | { id: number; type: "init"; indexUrl: string }
   | { id: number; type: "runFile"; code: string; fileName: string }
-  | { id: number; type: "replEval"; code: string };
+  | { id: number; type: "replEval"; code: string }
+  | { id: number; type: "checkSyntax"; code: string };
 
 export type WorkerOutbound =
   | { id: number; type: "ready" }
   | { id: number; type: "result"; result: BonnieRunResult }
+  | { id: number; type: "syntax"; result: RawReplCheck }
   | { id: number; type: "error"; message: string };
 
 let pyodideInstance: PyodideInstance | null = null;
@@ -53,14 +63,14 @@ async function ensurePyodide(indexUrl: string): Promise<void> {
   await initPromise;
 }
 
-function callPyFunction(name: string, args: unknown[]): BonnieRunResult {
+function callPyFunction<T>(name: string, args: unknown[]): T {
   if (!pyodideInstance) {
     throw new Error("Pyodide not initialized");
   }
   const fn = pyodideInstance.globals.get(name);
   try {
     const proxy = fn(...args);
-    const result = proxy.toJs({ dict_converter: Object.fromEntries }) as BonnieRunResult;
+    const result = proxy.toJs({ dict_converter: Object.fromEntries }) as T;
     proxy.destroy?.();
     return result;
   } finally {
@@ -79,14 +89,23 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
         break;
       }
       case "runFile": {
-        const result = callPyFunction("_bonnie_run_file", [data.code, data.fileName]);
+        const result = callPyFunction<BonnieRunResult>("_bonnie_run_file", [
+          data.code,
+          data.fileName,
+        ]);
         const reply: WorkerOutbound = { id: data.id, type: "result", result };
         self.postMessage(reply);
         break;
       }
       case "replEval": {
-        const result = callPyFunction("_bonnie_repl_eval", [data.code]);
+        const result = callPyFunction<BonnieRunResult>("_bonnie_repl_eval", [data.code]);
         const reply: WorkerOutbound = { id: data.id, type: "result", result };
+        self.postMessage(reply);
+        break;
+      }
+      case "checkSyntax": {
+        const result = callPyFunction<RawReplCheck>("_bonnie_repl_check", [data.code]);
+        const reply: WorkerOutbound = { id: data.id, type: "syntax", result };
         self.postMessage(reply);
         break;
       }

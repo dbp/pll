@@ -3,16 +3,18 @@ import type { BonnieRunResult } from "../common/pyodideRunner";
 import type {
   ExecutionEventHandler,
   PythonRuntime,
+  ReplCheckResult,
   ReplEvalRequest,
   RunFileRequest,
 } from "../common/types";
-import type { WorkerInbound, WorkerOutbound } from "./pyodideWorker";
+import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "./pyodideWorker";
 
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 type WorkerInboundPayload = DistributiveOmit<WorkerInbound, "id">;
+type AnyReply = "ready" | BonnieRunResult | RawReplCheck;
 
 interface Pending {
-  resolve: (value: BonnieRunResult | "ready") => void;
+  resolve: (value: AnyReply) => void;
   reject: (err: Error) => void;
 }
 
@@ -65,19 +67,25 @@ export class WebPyodideRuntime implements PythonRuntime {
       code: request.code,
       fileName: request.fileName,
     });
-    if (result === "ready") {
-      throw new Error("Unexpected ready response from runFile");
-    }
-    deliverResult(result, onEvent, request.fileName);
+    deliverResult(result as BonnieRunResult, onEvent, request.fileName);
   }
 
   async replEval(request: ReplEvalRequest, onEvent: ExecutionEventHandler): Promise<void> {
     await this.initialize();
     const result = await this.send({ type: "replEval", code: request.code });
-    if (result === "ready") {
-      throw new Error("Unexpected ready response from replEval");
-    }
-    deliverResult(result, onEvent, "<repl>");
+    deliverResult(result as BonnieRunResult, onEvent, "<repl>");
+  }
+
+  async checkReplComplete(code: string): Promise<ReplCheckResult> {
+    await this.initialize();
+    const result = (await this.send({ type: "checkSyntax", code })) as RawReplCheck;
+    return {
+      status: result.status,
+      errorType: result.error_type,
+      message: result.message,
+      lineNumber: result.lineno,
+      offset: result.offset,
+    };
   }
 
   dispose(): void {
@@ -90,12 +98,12 @@ export class WebPyodideRuntime implements PythonRuntime {
     this.pending.clear();
   }
 
-  private send(msg: WorkerInboundPayload): Promise<BonnieRunResult | "ready"> {
+  private send(msg: WorkerInboundPayload): Promise<AnyReply> {
     if (!this.worker) {
       return Promise.reject(new Error("Worker not initialized"));
     }
     const id = this.nextId++;
-    const promise = new Promise<BonnieRunResult | "ready">((resolve, reject) => {
+    const promise = new Promise<AnyReply>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });
     this.worker.postMessage({ id, ...msg } as WorkerInbound);
@@ -113,6 +121,9 @@ export class WebPyodideRuntime implements PythonRuntime {
         pending.resolve("ready");
         break;
       case "result":
+        pending.resolve(msg.result);
+        break;
+      case "syntax":
         pending.resolve(msg.result);
         break;
       case "error":

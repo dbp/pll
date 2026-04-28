@@ -23,9 +23,32 @@ import io
 import sys
 import traceback as _tb_mod
 import ast as _ast
+import codeop as _codeop
 import contextlib
 
 _bonnie_user_globals = {"__name__": "__main__", "__builtins__": __builtins__}
+
+def _bonnie_repl_check(source):
+    """Return whether 'source' is a complete REPL input.
+
+    Mirrors what CPython's interactive shell does: uses codeop.compile_command
+    in 'single' mode, which returns None for incomplete input (e.g. open
+    parens, unfinished block) and raises SyntaxError for actually-broken code.
+    """
+    try:
+        result = _codeop.compile_command(source, "<repl>", "single")
+    except (SyntaxError, OverflowError, ValueError) as e:
+        return {
+            "status": "invalid",
+            "error_type": type(e).__name__,
+            "message": str(e),
+            "lineno": getattr(e, "lineno", None) or 0,
+            "offset": (e.offset - 1) if isinstance(e, SyntaxError) and e.offset else 0,
+        }
+    if result is None:
+        return {"status": "incomplete"}
+    return {"status": "complete"}
+
 
 def _bonnie_extract_loc(tb_str, fallback_filename):
     line_no = None

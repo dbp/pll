@@ -49,10 +49,20 @@ export interface ReplEvalRequest {
   code: string;
 }
 
+export interface ReplCheckResult {
+  status: "complete" | "incomplete" | "invalid";
+  errorType?: string;
+  message?: string;
+  lineNumber?: number;
+  offset?: number;
+}
+
 export interface PythonRuntime {
   initialize(): Promise<void>;
   isReady(): boolean;
   runFile(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void>;
   replEval(request: ReplEvalRequest, onEvent: ExecutionEventHandler): Promise<void>;
+  /** Decide whether `code` is a complete REPL input (codeop.compile_command). */
+  checkReplComplete(code: string): Promise<ReplCheckResult>;
   dispose(): void;
 }

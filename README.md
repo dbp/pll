@@ -5,15 +5,19 @@ It works in **desktop VS Code** and in **`vscode.dev`** (web).
 
 ## Features (MVP)
 
-- **Run Python files** without any local Python install. Hit
-  `Bonnie Python: Run Active File` (also available from the editor title run
-  button on `.py` files) and the file executes inside Pyodide.
-- **Interactive REPL** via `Bonnie Python: Start REPL`. Statements with
-  trailing `:` start a buffered block; submit an empty line to run it.
+- **Persistent REPL** via `Bonnie Python: Start REPL`. Opens a real
+  pseudoterminal (works in desktop and `vscode.dev`) with multi-line block
+  support, history navigation (Up/Down arrows), and Ctrl+C to clear input.
+  Multi-line completeness is decided by the same `codeop.compile_command`
+  Python's own interactive shell uses.
+- **Run Python files into the REPL.** `Bonnie Python: Run Active File`
+  (also available from the editor title run button on `.py` files) runs
+  the file *inside* the REPL, so any names it defines stay available for
+  the next prompt.
 - **Beginner-friendly errors.** Currently `NameError` is rewritten to a
   plain-language explanation with a "what / why / how to fix" breakdown,
-  shown in the output panel and as an editor diagnostic on the offending
-  line/identifier.
+  shown in the REPL terminal (with ANSI colors) and as an editor diagnostic
+  on the offending line/identifier.
 
 ## Architecture
 
@@ -25,8 +29,10 @@ src/
 ├── web/pyodideRuntime.ts   Talks to the worker
 ├── desktop/pyodideRuntime.ts  Loads Pyodide directly in the Node host
 └── common/
-    ├── commands.ts         REPL + Run File commands (shared)
-    ├── output.ts           Output channel / formatter
+    ├── commands.ts         Start REPL + Run File commands (shared)
+    ├── replSession.ts      Pseudoterminal-backed REPL (line editor + history)
+    ├── ansi.ts             Tiny ANSI helpers
+    ├── errorFormatter.ts   ANSI/plain renderers for friendly errors
     ├── diagnostics.ts      VS Code DiagnosticCollection
     ├── pyodideRunner.ts    Python source bootstrapped into Pyodide
     ├── analyzers/          Pluggable runtime + (future) static analyzers

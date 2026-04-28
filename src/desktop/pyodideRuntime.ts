@@ -4,9 +4,28 @@ import { PYODIDE_BOOTSTRAP_PY, type BonnieRunResult } from "../common/pyodideRun
 import type {
   ExecutionEventHandler,
   PythonRuntime,
+  ReplCheckResult,
   ReplEvalRequest,
   RunFileRequest,
 } from "../common/types";
+
+interface RawReplCheck {
+  status: "complete" | "incomplete" | "invalid";
+  error_type?: string;
+  message?: string;
+  lineno?: number;
+  offset?: number;
+}
+
+function adaptReplCheck(raw: RawReplCheck): ReplCheckResult {
+  return {
+    status: raw.status,
+    errorType: raw.error_type,
+    message: raw.message,
+    lineNumber: raw.lineno,
+    offset: raw.offset,
+  };
+}
 
 /**
  * Desktop Python runtime: loads Pyodide directly in the Node extension host.
@@ -69,6 +88,22 @@ export class DesktopPyodideRuntime implements PythonRuntime {
       const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as BonnieRunResult;
       proxy.destroy?.();
       this.deliverResult(obj, onEvent, "<repl>");
+    } finally {
+      fn.destroy?.();
+    }
+  }
+
+  async checkReplComplete(code: string): Promise<ReplCheckResult> {
+    await this.initialize();
+    if (!this.pyodide) {
+      throw new Error("Pyodide failed to initialize");
+    }
+    const fn = this.pyodide.globals.get("_bonnie_repl_check");
+    try {
+      const proxy = fn(code);
+      const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as RawReplCheck;
+      proxy.destroy?.();
+      return adaptReplCheck(obj);
     } finally {
       fn.destroy?.();
     }
