@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { registerCommands } from "../common/commands";
 import { BonnieDiagnostics } from "../common/diagnostics";
+import { checkConflictingExtensions } from "../common/extensionGuard";
 import { BonnieReplSession } from "../common/replSession";
 import { WebPyodideRuntime } from "./pyodideRuntime";
 
@@ -14,6 +15,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push({ dispose: () => repl.dispose() });
 
   registerCommands(context, { repl, diagnostics });
+  void checkConflictingExtensions(context);
 }
 
 export function deactivate(): void {

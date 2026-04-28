@@ -47,6 +47,91 @@
           "description": "Base URL used to load Pyodide assets. Must end with a trailing slash."
         }
       }
+    },
+    "configurationDefaults": {
+      "[python]": {
+        "editor.quickSuggestions": {
+          "other": "off",
+          "comments": "off",
+          "strings": "off"
+        },
+        "editor.suggestOnTriggerCharacters": false,
+        "editor.acceptSuggestionOnEnter": "off",
+        "editor.tabCompletion": "off",
+        "editor.wordBasedSuggestions": "off",
+        "editor.parameterHints.enabled": false,
+        "editor.snippetSuggestions": "none",
+        "editor.suggest.showWords": false,
+        "editor.suggest.showSnippets": false,
+        "editor.inlineSuggest.enabled": false,
+        "editor.codeLens": false,
+        "editor.lightbulb.enabled": "off",
+        "editor.minimap.enabled": false,
+        "editor.formatOnSave": false,
+        "editor.formatOnPaste": false,
+        "editor.formatOnType": false,
+        "editor.stickyScroll.enabled": false,
+        "editor.linkedEditing": false
+      },
+      "github.copilot.enable": {
+        "python": false
+      },
+      "github.copilot.editor.enableAutoCompletions": false,
+      "cursor.cpp.disabledLanguages": [
+        "python"
+      ],
+      "python.languageServer": "None",
+      "python.linting.enabled": false,
+      "python.linting.pylintEnabled": false,
+      "python.linting.flake8Enabled": false,
+      "python.linting.mypyEnabled": false,
+      "python.linting.banditEnabled": false,
+      "python.linting.pycodestyleEnabled": false,
+      "python.linting.pydocstyleEnabled": false,
+      "python.analysis.diagnosticMode": "openFilesOnly",
+      "python.analysis.diagnosticSeverityOverrides": {},
+      "python.analysis.autoImportCompletions": false,
+      "python.analysis.typeCheckingMode": "off",
+      "python.analysis.completeFunctionParens": false,
+      "python.analysis.indexing": false,
+      "python.analysis.useLibraryCodeForTypes": false,
+      "python.formatting.provider": "none",
+      "python.terminal.activateEnvironment": false,
+      "python.experiments.enabled": false,
+      "python.showStartPage": false,
+      "pylint.enabled": false,
+      "pylint.ignorePatterns": [
+        "**"
+      ],
+      "flake8.enabled": false,
+      "flake8.ignorePatterns": [
+        "**"
+      ],
+      "bandit.enabled": false,
+      "bandit.ignorePatterns": [
+        "**"
+      ],
+      "mypy-type-checker.enabled": false,
+      "mypy-type-checker.ignorePatterns": [
+        "**"
+      ],
+      "mypy-type-checker.reportingScope": "file",
+      "mypy.runUsingActiveInterpreter": false,
+      "mypy.checkNotebookFiles": false,
+      "mypy.checkAllOpenFolders": false,
+      "mypy.targets": [],
+      "pyright.disableLanguageServices": true,
+      "pyright.disableOrganizeImports": true,
+      "basedpyright.disableLanguageServices": true,
+      "basedpyright.disableOrganizeImports": true,
+      "ruff.enable": false,
+      "ruff.lint.enable": false,
+      "ruff.ignorePatterns": [
+        "**"
+      ],
+      "black-formatter.formatOnSave": false,
+      "isort.formatOnSave": false,
+      "breadcrumbs.enabled": false
     }
   },
   "scripts": {
@@ -55,16 +140,25 @@
     "compile": "tsc -p ./ --noEmit",
     "package": "node esbuild.config.mjs --production",
     "vscode:prepublish": "pnpm run package",
-    "test-web": "vscode-test-web --browserType=chromium --extensionDevelopmentPath=. ."
+    "setup:browser": "playwright install chromium",
+    "test-web": "pnpm run setup:browser && pnpm run build && vscode-test-web --browser=chromium --coi --extensionDevelopmentPath=. samples",
+    "test-web:server": "pnpm run build && vscode-test-web --browser=none --coi --extensionDevelopmentPath=. samples"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
     "@types/vscode": "^1.85.0",
     "@vscode/test-web": "^0.0.80",
     "esbuild": "^0.28.0",
+    "playwright": "^1.59.1",
     "typescript": "^6.0.3"
   },
   "dependencies": {
     "pyodide": "^0.29.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@playwright/browser-chromium",
+      "esbuild"
+    ]
   }
 }
