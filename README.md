@@ -43,11 +43,19 @@ It works in **desktop VS Code** and in **`vscode.dev`** (web).
 - **Images** (HtDP/Pyret-style). A small image library (`circle`, `square`,
   `rectangle`, `triangle`, `ellipse`, `regular_polygon`, `star`, `text`,
   `beside`, `above`, `overlay`, `rotate`, `scale`, `flip_*`, ...) is
-  available without import in both levels. Top-level expressions in a file
+  available without import at every level. Top-level expressions in a file
   that evaluate to images auto-display **inline in the interactions
   stream**, interleaved with text output. The same happens for image
   values returned from REPL evaluations. Images are rendered as SVG (so
   they scale cleanly) and each one has a Save SVG button.
+- **Tables and charts.** A Pyret-style `Table` type lives next to the
+  image library (also no import). Tables are immutable, methods chain,
+  and every operation returns a new table. The interactions view
+  renders tables as inline cards (sticky header, zebra rows, Save CSV),
+  and chart methods (`bar_chart`, `scatter_chart`, `line_chart`,
+  `histogram`) produce SVG images that flow into the same image-card
+  pipeline. See `samples/tables.py` for a tour. Need real pandas?
+  `t.to_pandas()` is an escape hatch.
 
 ## Architecture
 
@@ -68,8 +76,10 @@ src/
     ├── errorFormatter.ts          Plain-text rendering for diagnostic tooltips
     ├── diagnostics.ts             VS Code DiagnosticCollection (multi-finding)
     ├── pyodideRunner.ts           Bootstrap loader + types
+    ├── deliverResult.ts           Translates Python results to ExecutionEvents
     ├── pyodideBootstrap.py        Real Python: run / repl-eval / static analyzer
     ├── bonnieImageLib.py          Real Python: SVG image primitives + combinators
+    ├── bonnieTableLib.py          Real Python: Pyret-style Table + charts
     ├── analyzers/
     │   ├── types.ts               AnalysisFinding, RuntimeAnalyzer
     │   ├── nameErrorAnalyzer.ts   Runtime: NameError -> friendly finding

@@ -2,11 +2,13 @@ import * as path from "path";
 import type { PyodideInterface } from "pyodide";
 import {
   BONNIE_IMAGE_LIB_PY,
+  BONNIE_TABLE_LIB_PY,
   PYODIDE_BOOTSTRAP_PY,
   PYODIDE_INSTALL_PY,
   type BonnieRunResult,
   type RawStaticFinding,
 } from "../common/pyodideRunner";
+import { deliverBonnieResult } from "../common/deliverResult";
 import type {
   ExecutionEventHandler,
   PythonRuntime,
@@ -67,6 +69,7 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     this.pyodide = await pyodideModule.loadPyodide({ indexURL });
     this.pyodide.runPython(PYODIDE_BOOTSTRAP_PY);
     this.pyodide.runPython(BONNIE_IMAGE_LIB_PY);
+    this.pyodide.runPython(BONNIE_TABLE_LIB_PY);
     this.pyodide.runPython(PYODIDE_INSTALL_PY);
   }
 
@@ -80,7 +83,7 @@ export class DesktopPyodideRuntime implements PythonRuntime {
       const proxy = fn(request.code, request.fileName, request.sessionKey);
       const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as BonnieRunResult;
       proxy.destroy?.();
-      this.deliverResult(obj, onEvent, request.fileName);
+      deliverBonnieResult(obj, onEvent, request.fileName);
     } finally {
       fn.destroy?.();
     }
@@ -96,7 +99,7 @@ export class DesktopPyodideRuntime implements PythonRuntime {
       const proxy = fn(request.code, request.sessionKey);
       const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as BonnieRunResult;
       proxy.destroy?.();
-      this.deliverResult(obj, onEvent, "<repl>");
+      deliverBonnieResult(obj, onEvent, "<repl>");
     } finally {
       fn.destroy?.();
     }
@@ -132,45 +135,6 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     } finally {
       fn.destroy?.();
     }
-  }
-
-  private deliverResult(
-    result: BonnieRunResult,
-    onEvent: ExecutionEventHandler,
-    fileName: string,
-  ): void {
-    if (result.stdout) {
-      onEvent({ kind: "stdout", text: result.stdout });
-    }
-    if (result.stderr) {
-      onEvent({ kind: "stderr", text: result.stderr });
-    }
-    if (result.images) {
-      for (const img of result.images) {
-        onEvent({
-          kind: "image",
-          svg: img.data,
-          width: img.width,
-          height: img.height,
-          source: fileName,
-        });
-      }
-    }
-    if (result.result_repr !== null && result.result_repr !== undefined) {
-      onEvent({ kind: "result", repr: result.result_repr });
-    }
-    if (!result.ok && result.error_type) {
-      onEvent({
-        kind: "error",
-        errorType: result.error_type,
-        message: result.error_message ?? "",
-        traceback: result.traceback ?? "",
-        lineNumber: result.line_number,
-        column: result.column,
-        fileName,
-      });
-    }
-    onEvent({ kind: "done" });
   }
 
   dispose(): void {

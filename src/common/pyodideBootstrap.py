@@ -21,8 +21,6 @@
 # input keeps the names defined by the most recent Run File of the same
 # session.
 
-import io
-import sys
 import traceback as _tb_mod
 import ast as _ast
 import codeop as _codeop
@@ -38,28 +36,98 @@ _bonnie_sessions = {}
 # library + the auto-display helper.
 _bonnie_initial_globals = {"__name__": "__main__", "__builtins__": __builtins__}
 
-# Image emissions captured during the most recent `_bonnie_run_file` /
+# Display emissions captured during the most recent `_bonnie_run_file` /
 # `_bonnie_repl_eval` call. The host drains this list after the call.
+# Each entry is a typed dict (`{"type": "stdout"|"stderr", "text": ...}`,
+# `{"type": "image", ...}`, or `{"type": "table", ...}`) so the host can
+# dispatch by kind while preserving the *exact* order in which the user's
+# code produced them - that way a `print()` followed by a top-level table
+# shows up as text-then-table in the interactions view, even though
+# stdout and image/table emissions take different paths inside Python.
 # Pyodide is single-threaded, so a single shared list is fine.
-_bonnie_image_emissions = []
+_bonnie_displays = []
+
+
+class _BonnieStream:
+    """Drop-in replacement for `sys.stdout` / `sys.stderr` during a run.
+
+    Each `write` pushes a typed entry onto `_bonnie_displays` so text
+    output interleaves with image/table emissions. We also keep the
+    aggregate string so `result["stdout"]` / `result["stderr"]` can
+    still be inspected by smoke tests and any caller that just wants
+    "what did the program print?".
+    """
+
+    __slots__ = ("_kind", "_chunks")
+
+    def __init__(self, kind):
+        self._kind = kind  # "stdout" or "stderr"
+        self._chunks = []
+
+    def write(self, s):
+        if not isinstance(s, str):
+            s = str(s)
+        if s:
+            _bonnie_displays.append({"type": self._kind, "text": s})
+            self._chunks.append(s)
+        return len(s)
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+    def getvalue(self):
+        return "".join(self._chunks)
+
+
+def _bonnie_extract_display(value):
+    """Try every known display protocol on `value`.
+
+    Returns a typed payload (`{"type": "image"|"table", ...}`) or None if
+    `value` doesn't know how to display itself.
+    """
+    if hasattr(value, "_bonnie_table_data"):
+        try:
+            data = value._bonnie_table_data()
+        except Exception:
+            return None
+        if isinstance(data, dict):
+            data = dict(data)
+            data["type"] = "table"
+            return data
+    if hasattr(value, "_bonnie_image_data"):
+        try:
+            data = value._bonnie_image_data()
+        except Exception:
+            return None
+        # _bonnie_image_data historically uses {"type": "svg", ...}
+        # internally; promote to the unified outer type.
+        if isinstance(data, dict):
+            payload = dict(data)
+            payload["type"] = "image"
+            payload["format"] = data.get("type", "svg")
+            return payload
+    return None
 
 
 def _bonnie_show_top_level(value):
     """Emit a value produced by a top-level expression statement.
 
     Mirrors the behavior of Python's interactive shell: `None` is suppressed,
-    Bonnie images are captured for the host to render, anything else is
-    printed via `repr` so bare expressions like `1 + 2` still display.
+    Bonnie images and tables are captured for the host to render, anything
+    else is printed via `repr` so bare expressions like `1 + 2` still display.
     """
     if value is None:
         return
-    if hasattr(value, "_bonnie_image_data"):
-        try:
-            data = value._bonnie_image_data()
-        except Exception:
-            print(repr(value))
-            return
-        _bonnie_image_emissions.append(data)
+    payload = _bonnie_extract_display(value)
+    if payload is not None:
+        _bonnie_displays.append(payload)
         return
     print(repr(value))
 
@@ -188,8 +256,8 @@ def _bonnie_extract_loc(tb_str, fallback_filename):
 
 
 def _bonnie_run_file(code, filename, session_key):
-    stdout = io.StringIO()
-    stderr = io.StringIO()
+    stdout = _BonnieStream("stdout")
+    stderr = _BonnieStream("stderr")
     result = {
         "ok": False,
         "stdout": "",
@@ -200,13 +268,13 @@ def _bonnie_run_file(code, filename, session_key):
         "traceback": None,
         "line_number": None,
         "column": None,
-        "images": [],
+        "displays": [],
     }
     # Each Run File starts with a clean slate for this session: discard any
     # names defined by a previous Run File of the same session or by REPL
     # exploration since then.
     user_globals = _bonnie_reset_session(session_key)
-    _bonnie_image_emissions.clear()
+    _bonnie_displays.clear()
     try:
         tree = _ast.parse(code, filename=filename, mode="exec")
         _BonnieTopLevelExprWrapper().visit(tree)
@@ -221,7 +289,7 @@ def _bonnie_run_file(code, filename, session_key):
         result["column"] = (e.offset - 1) if e.offset else None
         result["stdout"] = stdout.getvalue()
         result["stderr"] = stderr.getvalue()
-        result["images"] = list(_bonnie_image_emissions)
+        result["displays"] = list(_bonnie_displays)
         return result
 
     try:
@@ -241,7 +309,7 @@ def _bonnie_run_file(code, filename, session_key):
     finally:
         result["stdout"] = stdout.getvalue()
         result["stderr"] = stderr.getvalue()
-        result["images"] = list(_bonnie_image_emissions)
+        result["displays"] = list(_bonnie_displays)
     return result
 
 
@@ -250,8 +318,8 @@ def _bonnie_run_file(code, filename, session_key):
 # -----------------------------------------------------------------------------
 
 def _bonnie_repl_eval(code, session_key):
-    stdout = io.StringIO()
-    stderr = io.StringIO()
+    stdout = _BonnieStream("stdout")
+    stderr = _BonnieStream("stderr")
     result = {
         "ok": False,
         "stdout": "",
@@ -262,9 +330,9 @@ def _bonnie_repl_eval(code, session_key):
         "traceback": None,
         "line_number": None,
         "column": None,
-        "images": [],
+        "displays": [],
     }
-    _bonnie_image_emissions.clear()
+    _bonnie_displays.clear()
     user_globals = _bonnie_get_session(session_key)
     filename = "<repl>"
     try:
@@ -292,15 +360,12 @@ def _bonnie_repl_eval(code, session_key):
                 expr_module = _ast.Expression(body=last_expr.value)
                 compiled_expr = compile(expr_module, filename, "eval")
                 value = eval(compiled_expr, user_globals)
-                if value is None:
-                    pass
-                elif hasattr(value, "_bonnie_image_data"):
-                    try:
-                        _bonnie_image_emissions.append(value._bonnie_image_data())
-                    except Exception:
+                if value is not None:
+                    payload = _bonnie_extract_display(value)
+                    if payload is not None:
+                        _bonnie_displays.append(payload)
+                    else:
                         result["result_repr"] = repr(value)
-                else:
-                    result["result_repr"] = repr(value)
         result["ok"] = True
     except SystemExit:
         result["ok"] = True
@@ -315,7 +380,7 @@ def _bonnie_repl_eval(code, session_key):
     finally:
         result["stdout"] = stdout.getvalue()
         result["stderr"] = stderr.getvalue()
-        result["images"] = list(_bonnie_image_emissions)
+        result["displays"] = list(_bonnie_displays)
     return result
 
 

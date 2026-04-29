@@ -33,18 +33,26 @@ async function main() {
 
   pyodide.runPython(readPy("src/common/pyodideBootstrap.py"));
   pyodide.runPython(readPy("src/common/bonnieImageLib.py"));
+  pyodide.runPython(readPy("src/common/bonnieTableLib.py"));
 
   // Re-derive PYODIDE_INSTALL_PY rather than parsing the TS file.
   pyodide.runPython(`
 import sys as _sys, types as _types
 _bonnie_module = _types.ModuleType("bonnie")
 _bonnie_image_module = _types.ModuleType("bonnie.image")
+_bonnie_table_module = _types.ModuleType("bonnie.table")
 for _name in BONNIE_IMAGE_EXPORTS:
     setattr(_bonnie_image_module, _name, globals()[_name])
+for _name in BONNIE_TABLE_EXPORTS:
+    setattr(_bonnie_table_module, _name, globals()[_name])
 _bonnie_module.image = _bonnie_image_module
+_bonnie_module.table = _bonnie_table_module
 _sys.modules["bonnie"] = _bonnie_module
 _sys.modules["bonnie.image"] = _bonnie_image_module
+_sys.modules["bonnie.table"] = _bonnie_table_module
 for _name in BONNIE_IMAGE_EXPORTS:
+    _bonnie_initial_globals[_name] = globals()[_name]
+for _name in BONNIE_TABLE_EXPORTS:
     _bonnie_initial_globals[_name] = globals()[_name]
 del _name
 `);
@@ -61,18 +69,26 @@ del _name
   // Default session key used by tests that don't care about session isolation.
   const SK = "test:default";
 
+  // Helper: extract the image-typed entries from a result.
+  const imagesOf = (result) =>
+    Array.isArray(result.displays)
+      ? result.displays.filter((d) => d.type === "image")
+      : [];
+
   console.log("\n[1] run-file: samples/images.py - expect 6 images, no error");
   {
     const result = py(callRunFile, [readPy("samples/images.py"), "images.py", SK]);
-    console.log(`    ok=${result.ok}, images=${result.images.length}`);
+    const images = imagesOf(result);
+    console.log(`    ok=${result.ok}, images=${images.length}`);
     if (result.error_type) {
       console.log(`    error: ${result.error_type}: ${result.error_message}`);
     }
     expect(result.ok, "samples/images.py should run cleanly");
-    expect(result.images.length === 6, `expected 6 images, got ${result.images.length}`);
-    if (result.images.length >= 1) {
-      const first = result.images[0];
-      expect(first.type === "svg", "image type is svg");
+    expect(images.length === 6, `expected 6 images, got ${images.length}`);
+    if (images.length >= 1) {
+      const first = images[0];
+      expect(first.type === "image", "display.type === 'image'");
+      expect(first.format === "svg", "display.format === 'svg'");
       expect(typeof first.data === "string" && first.data.startsWith("<svg "),
         "first image data starts with <svg");
       expect(first.data.includes("<circle"), "first image (circle) includes <circle>");
@@ -84,18 +100,20 @@ del _name
   console.log("\n[2] repl-eval: a top-level image expression");
   {
     const result = py(callReplEval, [`circle(20, "solid", "blue")`, SK]);
-    console.log(`    ok=${result.ok}, images=${result.images.length}, repr=${result.result_repr}`);
+    const images = imagesOf(result);
+    console.log(`    ok=${result.ok}, images=${images.length}, repr=${result.result_repr}`);
     expect(result.ok, "repl-eval should succeed");
-    expect(result.images.length === 1, "one image emitted");
+    expect(images.length === 1, "one image emitted");
     expect(result.result_repr == null, "image takes the place of result_repr");
   }
 
   console.log("\n[3] repl-eval: non-image expression still uses result_repr");
   {
     const result = py(callReplEval, [`1 + 2`, SK]);
-    console.log(`    repr=${result.result_repr}, images=${result.images.length}`);
+    const images = imagesOf(result);
+    console.log(`    repr=${result.result_repr}, images=${images.length}`);
     expect(result.result_repr === "3", "1 + 2 -> '3'");
-    expect(result.images.length === 0, "no images for plain expressions");
+    expect(images.length === 0, "no images for plain expressions");
   }
 
   console.log("\n[4] run-file: top-level docstring isn't displayed");
@@ -103,7 +121,7 @@ del _name
     const code = `"""A docstring at module top."""\nx = 1\n`;
     const result = py(callRunFile, [code, "doc.py", SK]);
     expect(result.ok, "docstring file runs");
-    expect(result.images.length === 0, "docstring should not be auto-displayed as repr");
+    expect(imagesOf(result).length === 0, "docstring should not be auto-displayed as repr");
     expect(result.stdout === "", `expected no stdout for docstring, got ${JSON.stringify(result.stdout)}`);
   }
 
@@ -118,9 +136,10 @@ del _name
   {
     const code = `beside(circle(10, "solid", "red"), square(50, "solid", "blue"))`;
     const result = py(callReplEval, [code, SK]);
-    expect(result.images.length === 1, "one image");
-    if (result.images[0]) {
-      const img = result.images[0];
+    const images = imagesOf(result);
+    expect(images.length === 1, "one image");
+    if (images[0]) {
+      const img = images[0];
       // beside: width = sum (20 + 50 = 70), height = max(20, 50) = 50
       expect(img.width === 70, `beside width should be 70, got ${img.width}`);
       expect(img.height === 50, `beside height should be 50, got ${img.height}`);
@@ -141,7 +160,7 @@ del _name
 
     // Image primitives must still be available after a file run.
     const r1Img = py(callReplEval, [`circle(10, "solid", "red")`, SK]);
-    expect(r1Img.ok && r1Img.images.length === 1, "image primitives survive run-file");
+    expect(r1Img.ok && imagesOf(r1Img).length === 1, "image primitives survive run-file");
 
     // Run a second file (same session) that does NOT define `x`. The
     // previous run's `x` and `bonnie_special` must be wiped.
@@ -162,7 +181,7 @@ del _name
 
     // Image primitives must still be available after the reset.
     const r2Img = py(callReplEval, [`square(20, "solid", "green")`, SK]);
-    expect(r2Img.ok && r2Img.images.length === 1, "image primitives survive reset");
+    expect(r2Img.ok && imagesOf(r2Img).length === 1, "image primitives survive reset");
 
     // The current file's defs are present.
     const r2Y = py(callReplEval, [`y`, SK]);
@@ -208,7 +227,7 @@ del _name
     // Image primitives are present in both sessions.
     const aImg = py(callReplEval, [`circle(5, "solid", "red")`, SK_A]);
     const bImg = py(callReplEval, [`circle(5, "solid", "red")`, SK_B]);
-    expect(aImg.images.length === 1 && bImg.images.length === 1,
+    expect(imagesOf(aImg).length === 1 && imagesOf(bImg).length === 1,
       "image primitives are present in both sessions");
   }
 

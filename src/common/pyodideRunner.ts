@@ -1,46 +1,58 @@
 /**
  * Python source executed inside Pyodide once on init. The actual code lives
- * in `pyodideBootstrap.py` and `bonnieImageLib.py`; esbuild's `text` loader
- * inlines them as strings at build time, which keeps the analyzer + image
- * library editable as real Python (with IDE support, syntax highlighting,
- * etc.) instead of giant template literals.
+ * in `pyodideBootstrap.py`, `bonnieImageLib.py`, and `bonnieTableLib.py`;
+ * esbuild's `text` loader inlines them as strings at build time, which keeps
+ * the analyzer + image + table libraries editable as real Python (with IDE
+ * support, syntax highlighting, etc.) instead of giant template literals.
  *
  * Initialization order (run sequentially in the same Python interpreter):
  *   1. PYODIDE_BOOTSTRAP_PY   - runtime hooks (run/repl/static-analyze)
  *   2. BONNIE_IMAGE_LIB_PY    - Image class + primitives + combinators
- *   3. PYODIDE_INSTALL_PY     - registers `bonnie.image` module and copies
- *                                public names into `_bonnie_initial_globals`
+ *   3. BONNIE_TABLE_LIB_PY    - Table class + functional ops + chart helpers
+ *   4. PYODIDE_INSTALL_PY     - registers `bonnie.image` / `bonnie.table`
+ *                                modules and copies public names into
+ *                                `_bonnie_initial_globals`
  *
- * Loading the image library second means the bootstrap doesn't depend on
- * it; it just duck-types the `_bonnie_image_data` method during display.
+ * Loading the libraries before the install step means the bootstrap doesn't
+ * depend on them; it just duck-types `_bonnie_image_data` / `_bonnie_table_data`
+ * during display.
  */
 import bootstrapSource from "./pyodideBootstrap.py";
 import imageLibSource from "./bonnieImageLib.py";
+import tableLibSource from "./bonnieTableLib.py";
 
 export const PYODIDE_BOOTSTRAP_PY = bootstrapSource;
 export const BONNIE_IMAGE_LIB_PY = imageLibSource;
+export const BONNIE_TABLE_LIB_PY = tableLibSource;
 
 /**
- * Final installation step: register `bonnie.image` as an importable module
- * and inject the public names into the per-session globals template
- * (`_bonnie_initial_globals`) so beginners can use `circle(50, "solid", "red")`
- * with no import in every file's session.
+ * Final installation step: register `bonnie.image` and `bonnie.table` as
+ * importable modules and inject their public names into the per-session
+ * globals template (`_bonnie_initial_globals`) so beginners can use
+ * `circle(...)` / `table(...)` with no import in every file's session.
  */
 export const PYODIDE_INSTALL_PY = `
 import sys as _sys, types as _types
 
 _bonnie_module = _types.ModuleType("bonnie")
 _bonnie_image_module = _types.ModuleType("bonnie.image")
+_bonnie_table_module = _types.ModuleType("bonnie.table")
 for _name in BONNIE_IMAGE_EXPORTS:
     setattr(_bonnie_image_module, _name, globals()[_name])
+for _name in BONNIE_TABLE_EXPORTS:
+    setattr(_bonnie_table_module, _name, globals()[_name])
 _bonnie_module.image = _bonnie_image_module
+_bonnie_module.table = _bonnie_table_module
 _sys.modules["bonnie"] = _bonnie_module
 _sys.modules["bonnie.image"] = _bonnie_image_module
+_sys.modules["bonnie.table"] = _bonnie_table_module
 
-# Add image library names to the per-session globals template. Each new
-# session is initialized as a copy of this template, so every file's
-# Run File / REPL prompt sees these names without an explicit import.
+# Add image + table library names to the per-session globals template.
+# Each new session is initialized as a copy of this template, so every
+# file's Run File / REPL prompt sees these names without explicit imports.
 for _name in BONNIE_IMAGE_EXPORTS:
+    _bonnie_initial_globals[_name] = globals()[_name]
+for _name in BONNIE_TABLE_EXPORTS:
     _bonnie_initial_globals[_name] = globals()[_name]
 del _name
 `;
@@ -55,15 +67,47 @@ export interface BonnieRunResult {
   traceback: string | null;
   line_number: number | null;
   column: number | null;
-  /** Images emitted by top-level expressions and the last REPL expression. */
-  images: BonnieImageData[];
+  /** Typed displays produced by top-level expressions (images and tables). */
+  displays: BonnieDisplayData[];
 }
 
-export interface BonnieImageData {
-  type: "svg";
+export type BonnieDisplayData =
+  | BonnieStdoutDisplay
+  | BonnieStderrDisplay
+  | BonnieImageDisplay
+  | BonnieTableDisplay;
+
+export interface BonnieStdoutDisplay {
+  type: "stdout";
+  text: string;
+}
+
+export interface BonnieStderrDisplay {
+  type: "stderr";
+  text: string;
+}
+
+export interface BonnieImageDisplay {
+  type: "image";
+  /** Sub-format: today only "svg". */
+  format?: string;
   width: number;
   height: number;
+  /** The SVG document, ready to drop into HTML. */
   data: string;
+}
+
+export interface BonnieTableDisplay {
+  type: "table";
+  columns: string[];
+  /** Pre-formatted display strings, parallel to `columns`. */
+  rows: string[][];
+  /** Total number of rows in the source table. */
+  row_count: number;
+  /** How many of the rows above are actually present (truncation cap). */
+  shown_count: number;
+  /** True iff the host should show a "row N of M" indicator. */
+  truncated: boolean;
 }
 
 /**

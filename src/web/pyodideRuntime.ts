@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { deliverBonnieResult } from "../common/deliverResult";
 import type { BonnieRunResult, RawStaticFinding } from "../common/pyodideRunner";
 import type {
   ExecutionEventHandler,
@@ -69,7 +70,7 @@ export class WebPyodideRuntime implements PythonRuntime {
       fileName: request.fileName,
       sessionKey: request.sessionKey,
     });
-    deliverResult(result as BonnieRunResult, onEvent, request.fileName);
+    deliverBonnieResult(result as BonnieRunResult, onEvent, request.fileName);
   }
 
   async replEval(request: ReplEvalRequest, onEvent: ExecutionEventHandler): Promise<void> {
@@ -79,7 +80,7 @@ export class WebPyodideRuntime implements PythonRuntime {
       code: request.code,
       sessionKey: request.sessionKey,
     });
-    deliverResult(result as BonnieRunResult, onEvent, "<repl>");
+    deliverBonnieResult(result as BonnieRunResult, onEvent, "<repl>");
   }
 
   async checkReplComplete(code: string): Promise<ReplCheckResult> {
@@ -153,41 +154,3 @@ export class WebPyodideRuntime implements PythonRuntime {
   }
 }
 
-function deliverResult(
-  result: BonnieRunResult,
-  onEvent: ExecutionEventHandler,
-  fileName: string,
-): void {
-  if (result.stdout) {
-    onEvent({ kind: "stdout", text: result.stdout });
-  }
-  if (result.stderr) {
-    onEvent({ kind: "stderr", text: result.stderr });
-  }
-  if (result.images) {
-    for (const img of result.images) {
-      onEvent({
-        kind: "image",
-        svg: img.data,
-        width: img.width,
-        height: img.height,
-        source: fileName,
-      });
-    }
-  }
-  if (result.result_repr !== null && result.result_repr !== undefined) {
-    onEvent({ kind: "result", repr: result.result_repr });
-  }
-  if (!result.ok && result.error_type) {
-    onEvent({
-      kind: "error",
-      errorType: result.error_type,
-      message: result.error_message ?? "",
-      traceback: result.traceback ?? "",
-      lineNumber: result.line_number,
-      column: result.column,
-      fileName,
-    });
-  }
-  onEvent({ kind: "done" });
-}

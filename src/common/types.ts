@@ -23,6 +23,22 @@ export interface ExecutionImageChunk {
   source?: string;
 }
 
+export interface ExecutionTableChunk {
+  kind: "table";
+  /** Column names in display order. */
+  columns: string[];
+  /** Pre-formatted display strings, parallel to `columns`, capped to `shownCount`. */
+  rows: string[][];
+  /** Total rows in the source table. */
+  rowCount: number;
+  /** Rows actually present in `rows` (may be < rowCount when truncated). */
+  shownCount: number;
+  /** True when display was truncated for size. */
+  truncated: boolean;
+  /** Source caption (file name or "<repl>"). */
+  source?: string;
+}
+
 export interface ExecutionErrorChunk {
   kind: "error";
   errorType: string;
@@ -45,6 +61,7 @@ export type ExecutionEvent =
   | ExecutionStderrChunk
   | ExecutionResultChunk
   | ExecutionImageChunk
+  | ExecutionTableChunk
   | ExecutionErrorChunk
   | ExecutionDoneChunk;
 

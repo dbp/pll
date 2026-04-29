@@ -33,6 +33,7 @@ export type Entry =
   | StreamTextEntry
   | ResultEntry
   | ImageEntry
+  | TableEntry
   | FindingEntry
   | RawErrorEntry;
 
@@ -58,6 +59,15 @@ export interface ImageEntry {
   svg: string;
   width: number;
   height: number;
+  source?: string;
+}
+export interface TableEntry {
+  kind: "table";
+  columns: string[];
+  rows: string[][];
+  rowCount: number;
+  shownCount: number;
+  truncated: boolean;
   source?: string;
 }
 export interface FindingEntry {
@@ -266,6 +276,17 @@ export class BonnieInteractionsView
     this.append({ kind: "image", ...image });
   }
 
+  appendTable(table: {
+    columns: string[];
+    rows: string[][];
+    rowCount: number;
+    shownCount: number;
+    truncated: boolean;
+    source?: string;
+  }): void {
+    this.append({ kind: "table", ...table });
+  }
+
   appendFinding(finding: AnalysisFinding): void {
     this.append({ kind: "finding", finding: serializeFinding(finding) });
   }
@@ -337,6 +358,7 @@ export class BonnieInteractionsView
       type?: string;
       code?: string;
       svg?: string;
+      csv?: string;
       source?: string;
       fileName?: string;
       line?: number;
@@ -380,6 +402,11 @@ export class BonnieInteractionsView
           void this.handleSaveSvg(m.svg, m.source);
         }
         break;
+      case "saveCsv":
+        if (typeof m.csv === "string") {
+          void this.handleSaveCsv(m.csv, m.source);
+        }
+        break;
     }
   }
 
@@ -410,6 +437,19 @@ export class BonnieInteractionsView
     const data = new TextEncoder().encode(svg);
     await vscode.workspace.fs.writeFile(target, data);
     vscode.window.showInformationMessage(`Saved image to ${target.fsPath}`);
+  }
+
+  private async handleSaveCsv(csv: string, source: string | undefined): Promise<void> {
+    const defaultName = (source ?? "table").replace(/[^a-zA-Z0-9_.-]+/g, "_") + ".csv";
+    const target = await vscode.window.showSaveDialog({
+      filters: { "CSV file": ["csv"] },
+      saveLabel: "Save table",
+      defaultUri: vscode.Uri.file(defaultName),
+    });
+    if (!target) return;
+    const data = new TextEncoder().encode(csv);
+    await vscode.workspace.fs.writeFile(target, data);
+    vscode.window.showInformationMessage(`Saved table to ${target.fsPath}`);
   }
 
   /* -------- Internals -------- */

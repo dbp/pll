@@ -136,6 +136,7 @@
       case "stderr":      return renderText(entry, "stderr");
       case "result":      return renderResult(entry);
       case "image":       return renderImage(entry);
+      case "table":       return renderTable(entry);
       case "finding":     return renderFinding(entry);
       case "rawError":    return renderRawError(entry);
       default: {
@@ -219,6 +220,91 @@
 
     div.appendChild(meta);
     return div;
+  }
+
+  function renderTable(entry) {
+    const div = document.createElement("div");
+    div.className = "entry table";
+
+    const wrap = document.createElement("div");
+    wrap.className = "tableWrap";
+
+    const tbl = document.createElement("table");
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    for (const colName of entry.columns) {
+      const th = document.createElement("th");
+      th.textContent = colName;
+      headerRow.appendChild(th);
+    }
+    thead.appendChild(headerRow);
+    tbl.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    for (const row of entry.rows) {
+      const tr = document.createElement("tr");
+      for (const cell of row) {
+        const td = document.createElement("td");
+        td.textContent = cell;
+        // Right-align cells that look like numbers.
+        if (/^[-+]?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(cell)) {
+          td.classList.add("num");
+        }
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    tbl.appendChild(tbody);
+    wrap.appendChild(tbl);
+    div.appendChild(wrap);
+
+    const meta = document.createElement("div");
+    meta.className = "tableMeta";
+
+    const caption = document.createElement("span");
+    caption.className = "caption";
+    if (entry.truncated) {
+      caption.textContent =
+        "Showing " + entry.shownCount + " of " + entry.rowCount + " rows";
+    } else {
+      caption.textContent =
+        entry.rowCount + " row" + (entry.rowCount === 1 ? "" : "s") +
+        " \u00d7 " + entry.columns.length + " column" +
+        (entry.columns.length === 1 ? "" : "s");
+    }
+    meta.appendChild(caption);
+
+    const save = document.createElement("button");
+    save.textContent = "Save CSV";
+    save.title = "Download this table as a .csv file (full table, not just the visible rows)";
+    save.addEventListener("click", () => {
+      vscode.postMessage({
+        type: "saveCsv",
+        csv: tableToCsv(entry),
+        source: entry.source,
+      });
+    });
+    meta.appendChild(save);
+
+    div.appendChild(meta);
+    return div;
+  }
+
+  /** Format an entry's *displayed* rows as CSV. (Truncated tables export only
+   *  the rows that came down the wire; that's an MVP limitation we accept.) */
+  function tableToCsv(entry) {
+    const escape = (s) => {
+      const str = String(s);
+      if (/[",\n\r]/.test(str)) {
+        return '"' + str.replace(/"/g, '""') + '"';
+      }
+      return str;
+    };
+    const lines = [entry.columns.map(escape).join(",")];
+    for (const row of entry.rows) {
+      lines.push(row.map(escape).join(","));
+    }
+    return lines.join("\n") + "\n";
   }
 
   function renderFinding(entry) {

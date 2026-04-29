@@ -172,6 +172,70 @@ button:disabled {
   flex: 0 0 auto;
 }
 
+/* Inline table card */
+.entry.table {
+  margin: 6px 0;
+  border: 1px solid var(--vscode-panel-border, #333);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--vscode-editorWidget-background, #252526);
+  flex-shrink: 0;
+}
+.entry.table .tableWrap {
+  overflow: auto;
+  max-height: 360px;
+}
+.entry.table table {
+  border-collapse: collapse;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  width: 100%;
+}
+.entry.table thead th {
+  position: sticky;
+  top: 0;
+  text-align: left;
+  font-weight: 600;
+  background: var(--vscode-sideBarSectionHeader-background, rgba(255,255,255,0.04));
+  border-bottom: 1px solid var(--vscode-panel-border, #444);
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+.entry.table tbody td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.04));
+  white-space: nowrap;
+  vertical-align: top;
+}
+.entry.table tbody tr:nth-child(even) td {
+  background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.025));
+}
+.entry.table tbody tr:last-child td {
+  border-bottom: none;
+}
+.entry.table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-symbolIcon-numberForeground, #b5cea8);
+}
+.entry.table .tableMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: var(--vscode-font-family, sans-serif);
+  color: var(--vscode-descriptionForeground, #aaa);
+  background: var(--vscode-sideBarSectionHeader-background, rgba(255,255,255,0.02));
+  border-top: 1px solid var(--vscode-panel-border, #333);
+}
+.entry.table .tableMeta .caption {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Structured error finding */
 .entry.finding {
   margin: 6px 0;

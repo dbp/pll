@@ -171,7 +171,7 @@
     "setup:browser": "playwright install chromium",
     "test-web": "pnpm run setup:browser && pnpm run build && vscode-test-web --browser=chromium --coi --extensionDevelopmentPath=. samples",
     "test-web:server": "pnpm run build && vscode-test-web --browser=none --coi --extensionDevelopmentPath=. samples",
-    "smoke": "node scripts/smoke-static-analyze.mjs && node scripts/smoke-explainers.mjs && node scripts/smoke-images.mjs"
+    "smoke": "node scripts/smoke-static-analyze.mjs && node scripts/smoke-explainers.mjs && node scripts/smoke-images.mjs && node scripts/smoke-tables.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

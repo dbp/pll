@@ -478,6 +478,18 @@ export class BonnieReplSession implements vscode.Disposable {
           source: event.source ?? fileName,
         });
         break;
+      case "table":
+        this.flushStreams(session);
+        this.appendToSession(session, {
+          kind: "table",
+          columns: event.columns,
+          rows: event.rows,
+          rowCount: event.rowCount,
+          shownCount: event.shownCount,
+          truncated: event.truncated,
+          source: event.source ?? fileName,
+        });
+        break;
       case "error": {
         this.flushStreams(session);
         const traceback = event.traceback || `${event.errorType}: ${event.message}`;
