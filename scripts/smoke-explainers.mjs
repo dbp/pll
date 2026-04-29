@@ -51,10 +51,14 @@ console.log("\n[parseLevel]");
 expect(mod.parseLevel("#beginner\nx=1") === "beginner", "#beginner");
 expect(mod.parseLevel("# beginner\nx=1") === "beginner", "# beginner (with space)");
 expect(mod.parseLevel("#Beginner\nx=1") === "beginner", "case-insensitive #Beginner");
-expect(mod.parseLevel("#expert\nx=1") === "expert", "#expert");
+expect(mod.parseLevel("#intermediate\nx=1") === "intermediate", "#intermediate");
+expect(mod.parseLevel("# Intermediate\nx=1") === "intermediate", "case-insensitive #Intermediate");
+expect(mod.parseLevel("#advanced\nx=1") === "advanced", "#advanced");
 expect(mod.parseLevel("\n\n#beginner\n") === "beginner", "blank lines before header");
-expect(mod.parseLevel("x = 1") === "expert", "default expert");
-expect(mod.parseLevel("# random comment\nx=1") === "expert", "non-level comment defaults expert");
+expect(mod.parseLevel("x = 1") === "advanced", "default advanced");
+expect(mod.parseLevel("# random comment\nx=1") === "advanced", "non-level comment defaults advanced");
+// Old level name no longer recognised; falls back to default.
+expect(mod.parseLevel("#expert\nx=1") === "advanced", "#expert is no longer a level");
 
 console.log("[enrichStaticFindings]");
 const findings = mod.enrichStaticFindings(
@@ -120,6 +124,69 @@ expect(
 expect(
   findings[2].howToFix.every((fix) => !/#expert/i.test(fix)),
   "reassignment fixes no longer suggest switching to #expert",
+);
+expect(
+  findings[2].howToFix.every((fix) => !/#advanced/i.test(fix)),
+  "reassignment fixes no longer suggest switching to #advanced",
+);
+
+console.log("[disallowed-keyword explainer - global at intermediate]");
+const kwFindings = mod.enrichStaticFindings(
+  [
+    {
+      id: "disallowed-keyword",
+      error_type: "DisallowedKeyword",
+      message: "`global` is not allowed at the intermediate level",
+      line_number: 8,
+      column: 4,
+      name_token: "counter",
+      scope_kind: "function",
+      keyword: "global",
+      names: ["counter"],
+    },
+    {
+      id: "disallowed-keyword",
+      error_type: "DisallowedKeyword",
+      message: "`nonlocal` is not allowed at the intermediate level",
+      line_number: 14,
+      column: 8,
+      name_token: "n",
+      scope_kind: "function",
+      keyword: "nonlocal",
+      names: ["n"],
+    },
+  ],
+  "intermediate",
+  "intermediate_keyword.py",
+);
+expect(kwFindings.length === 2, "two keyword findings");
+expect(
+  kwFindings[0].errorType === "DisallowedKeyword",
+  "errorType is DisallowedKeyword",
+);
+expect(
+  kwFindings[0].headline.includes("`global`"),
+  "global headline mentions the keyword",
+);
+expect(
+  kwFindings[0].headline.includes("intermediate"),
+  "global headline mentions level",
+);
+expect(
+  kwFindings[1].headline.includes("`nonlocal`"),
+  "nonlocal headline mentions the keyword",
+);
+expect(
+  kwFindings[0].howToFix.length >= 2,
+  "global has at least 2 fix suggestions",
+);
+expect(
+  kwFindings[0].howToFix.some((fix) => fix.includes("argument")),
+  "global suggests passing as an argument",
+);
+expect(
+  kwFindings[1].howToFix.some((fix) => fix.toLowerCase().includes("return")),
+  "nonlocal suggests returning a value",
 );
 
 console.log("[formatFriendlyError - shadowing-builtin]");

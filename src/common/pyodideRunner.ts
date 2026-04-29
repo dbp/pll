@@ -86,4 +86,8 @@ export interface RawStaticFinding {
   outer_line_number?: number | null;
   outer_column?: number | null;
   outer_scope_kind?: string | null;
+  /** For "disallowed-keyword": which keyword was used. */
+  keyword?: "global" | "nonlocal";
+  /** For "disallowed-keyword": names declared in the statement. */
+  names?: string[];
 }

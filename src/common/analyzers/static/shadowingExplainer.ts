@@ -45,12 +45,13 @@ export function explainShadowing(
       `You're creating a new variable named \`${name}\`, but a variable with` +
         ` the same name already exists in ${outerNoun}` +
         (outerLine !== null ? ` (line ${outerLine})` : "") +
-        `. In beginner mode this "shadowing" is not allowed because it makes` +
+        `. In ${level} mode this "shadowing" is not allowed because it makes` +
         ` code confusing - two different things would have the same name.`,
     ],
     whyItHappens: [
-      `Beginner mode keeps each name unique across scopes so you can always` +
-        ` tell which value \`${name}\` refers to without scrolling around.`,
+      `${capitalize(level)} mode keeps each name unique across scopes so you` +
+        ` can always tell which value \`${name}\` refers to without scrolling` +
+        ` around.`,
     ],
     howToFix: [
       `Rename the inner \`${name}\` to something distinct (e.g. \`${name}_inner\`,` +
@@ -67,6 +68,10 @@ export function explainShadowing(
     origin: "static",
     level,
   };
+}
+
+function capitalize(s: string): string {
+  return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
 }
 
 /**
@@ -92,8 +97,8 @@ export function explainShadowingBuiltin(
         ` source of confusing bugs.`,
     ],
     whyItHappens: [
-      `Beginner mode flags this so you don't accidentally lose access to the` +
-        ` built-in version of \`${name}\`.`,
+      `${capitalize(level)} mode flags this so you don't accidentally lose` +
+        ` access to the built-in version of \`${name}\`.`,
     ],
     howToFix: [
       `Pick a different name. Common patterns: \`my_${name}\`, \`${name}_value\`,` +

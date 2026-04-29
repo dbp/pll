@@ -28,7 +28,7 @@ export interface BeginnerExplanation {
  */
 export function explainNameError(
   parsed: ParsedPythonError,
-  level: Level = "expert",
+  level: Level = "advanced",
 ): BeginnerExplanation {
   const name = parsed.nameToken ?? "this name";
   const didYouMean = extractDidYouMean(parsed.message);
@@ -51,7 +51,7 @@ export function explainNameError(
       ` \`\"${name}\"\`.`,
   ];
 
-  if (level === "expert") {
+  if (level === "advanced") {
     whyItHappens.splice(2, 0,
       `Scope: \`${name}\` may be defined inside another function or block and` +
         " isn't visible here.",

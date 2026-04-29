@@ -90,7 +90,7 @@ export interface PythonRuntime {
   checkReplComplete(code: string): Promise<ReplCheckResult>;
   /**
    * Run language-level static checks against a file. Returns an empty array
-   * for `expert` (no checks) or when the file doesn't parse (let runtime
+   * for `advanced` (no checks) or when the file doesn't parse (let runtime
    * surface SyntaxErrors).
    */
   staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]>;

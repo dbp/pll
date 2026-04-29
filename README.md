@@ -24,14 +24,22 @@ It works in **desktop VS Code** and in **`vscode.dev`** (web).
   rendered as a structured block in the interactions view and as a VS
   Code diagnostic on the offending line/identifier. The location text is
   clickable and jumps to the source line.
-- **Language levels** (`#beginner` / `#expert`). The first non-blank line of
-  a file may be a magic comment that selects a language level. At
-  `#beginner`, files are statically checked for **variable shadowing**
-  (including built-ins) and **variable reassignment**; if any check fires,
-  the file isn't executed and findings are surfaced in the interactions
-  view and the editor. `#expert` (the default if no header is present)
-  disables all static checks and runs the file as plain Python. The REPL
-  itself is always expert.
+- **Language levels** (`#beginner` / `#intermediate` / `#advanced`). The
+  first non-blank line of a file may be a magic comment that selects a
+  language level. After a Run File, the active level is shown in the
+  interactions header (e.g. `hello.py [beginner]`).
+  - `#beginner` (strictest): flags **variable shadowing** (including
+    built-ins), **variable reassignment** in any scope, and the
+    `global` / `nonlocal` keywords. If any check fires the file isn't
+    executed and findings are surfaced in the interactions view and the
+    editor.
+  - `#intermediate`: same shadowing and `global` / `nonlocal` rules, but
+    reassignment is only flagged at module scope. This means rebinding
+    inside a function body is fine, so `for`-loop accumulator patterns
+    (`total = 0; for x in xs: total = total + x`) work.
+  - `#advanced` (the default if no header is present) disables all static
+    checks and runs the file as plain Python. The REPL itself is always
+    advanced.
 - **Images** (HtDP/Pyret-style). A small image library (`circle`, `square`,
   `rectangle`, `triangle`, `ellipse`, `regular_polygon`, `star`, `text`,
   `beside`, `above`, `overlay`, `rotate`, `scale`, `flip_*`, ...) is
@@ -56,7 +64,7 @@ src/
     │                              REPL multi-line buffer, file runs, exec chain
     ├── interactionsView.ts        WebviewView provider for the integrated
     │                              text + image stream + input row
-    ├── level.ts                   #beginner / #expert header parser
+    ├── level.ts                   #beginner / #intermediate / #advanced header parser
     ├── errorFormatter.ts          Plain-text rendering for diagnostic tooltips
     ├── diagnostics.ts             VS Code DiagnosticCollection (multi-finding)
     ├── pyodideRunner.ts           Bootstrap loader + types
@@ -67,9 +75,10 @@ src/
     │   ├── nameErrorAnalyzer.ts   Runtime: NameError -> friendly finding
     │   ├── registry.ts            Runtime analyzer registry
     │   └── static/
-    │       ├── shadowingExplainer.ts     shadowing + shadowing-builtin
-    │       ├── reassignmentExplainer.ts  reassignment
-    │       └── registry.ts               Wraps Python-side raw findings
+    │       ├── shadowingExplainer.ts            shadowing + shadowing-builtin
+    │       ├── reassignmentExplainer.ts         reassignment
+    │       ├── disallowedKeywordExplainer.ts    `global` / `nonlocal`
+    │       └── registry.ts                      Wraps Python-side raw findings
     └── errors/
         ├── pythonErrorParser.ts
         └── nameErrorExplainer.ts
@@ -92,7 +101,7 @@ in both desktop and web hosts.
 
 Bonnie ships a small SVG-based image library inspired by Racket's
 `2htdp/image` and Pyret's `image-lib`. The primitives are auto-imported into
-user globals at both `#beginner` and `#expert`, so a beginner can write:
+user globals at every level, so a beginner can write:
 
 ```python
 #beginner

@@ -42,8 +42,6 @@ async function main() {
     return obj;
   };
 
-  let ok = true;
-
   console.log("\n[1] beginner_ok.py - expect 0 findings");
   {
     const findings = analyze(readPy("samples/beginner_ok.py"), "beginner", "beginner_ok.py");
@@ -92,18 +90,124 @@ async function main() {
     );
   }
 
-  console.log("\n[4] expert.py - expect 0 findings (expert level disables checks)");
+  console.log("\n[4] advanced.py - expect 0 findings (advanced level disables checks)");
   {
-    const findings = analyze(readPy("samples/expert.py"), "expert", "expert.py");
+    const findings = analyze(readPy("samples/advanced.py"), "advanced", "advanced.py");
     console.log(`    findings: ${findings.length}`);
-    expect(findings.length === 0, "expert level should produce no findings");
+    expect(findings.length === 0, "advanced level should produce no findings");
   }
 
-  console.log("\n[5] expert.py treated as beginner - expect findings");
+  console.log("\n[5] advanced.py treated as beginner - expect findings");
   {
-    const findings = analyze(readPy("samples/expert.py"), "beginner", "expert.py");
+    const findings = analyze(readPy("samples/advanced.py"), "beginner", "advanced.py");
     console.log(`    findings: ${findings.length}`);
-    expect(findings.length > 0, "expert.py should fail at beginner level");
+    expect(findings.length > 0, "advanced.py should fail at beginner level");
+  }
+
+  console.log(
+    "\n[6] intermediate_ok.py - expect 0 findings " +
+      "(rebinding inside `def` is allowed at intermediate)",
+  );
+  {
+    const findings = analyze(
+      readPy("samples/intermediate_ok.py"),
+      "intermediate",
+      "intermediate_ok.py",
+    );
+    console.log(`    findings: ${findings.length}`);
+    for (const f of findings) {
+      console.log(`      [${f.id}] line ${f.line_number}: ${f.message}`);
+    }
+    expect(findings.length === 0, "intermediate_ok should pass at intermediate");
+  }
+
+  console.log(
+    "\n[7] intermediate_ok.py treated as beginner - expect reassignment findings",
+  );
+  {
+    const findings = analyze(
+      readPy("samples/intermediate_ok.py"),
+      "beginner",
+      "intermediate_ok.py",
+    );
+    console.log(`    findings: ${findings.length}`);
+    const reassignments = findings.filter((f) => f.id === "reassignment");
+    expect(
+      reassignments.length > 0,
+      "beginner should still flag in-function reassignment that intermediate allows",
+    );
+  }
+
+  console.log(
+    "\n[8] intermediate_shadowing.py - expect shadowing + shadowing-builtin",
+  );
+  {
+    const findings = analyze(
+      readPy("samples/intermediate_shadowing.py"),
+      "intermediate",
+      "intermediate_shadowing.py",
+    );
+    console.log(`    findings: ${findings.length}`);
+    for (const f of findings) {
+      console.log(`      [${f.id}] line ${f.line_number}: ${f.message}`);
+    }
+    const ids = findings.map((f) => f.id);
+    expect(ids.includes("shadowing"), "intermediate must still flag shadowing");
+    expect(
+      ids.includes("shadowing-builtin"),
+      "intermediate must still flag shadowing of built-ins",
+    );
+  }
+
+  console.log(
+    "\n[9] intermediate_keyword.py - expect 'disallowed-keyword' findings (global + nonlocal)",
+  );
+  {
+    const findings = analyze(
+      readPy("samples/intermediate_keyword.py"),
+      "intermediate",
+      "intermediate_keyword.py",
+    );
+    console.log(`    findings: ${findings.length}`);
+    for (const f of findings) {
+      console.log(
+        `      [${f.id}] line ${f.line_number}: ${f.message} (keyword=${f.keyword})`,
+      );
+    }
+    const kw = findings.filter((f) => f.id === "disallowed-keyword");
+    const keywords = new Set(kw.map((f) => f.keyword));
+    expect(kw.length >= 2, "expected at least one finding per keyword");
+    expect(keywords.has("global"), "missing 'global' finding");
+    expect(keywords.has("nonlocal"), "missing 'nonlocal' finding");
+  }
+
+  console.log(
+    "\n[10] beginner level on intermediate_keyword.py - " +
+      "should also flag global/nonlocal",
+  );
+  {
+    const findings = analyze(
+      readPy("samples/intermediate_keyword.py"),
+      "beginner",
+      "intermediate_keyword.py",
+    );
+    const kw = findings.filter((f) => f.id === "disallowed-keyword");
+    expect(kw.length >= 2, "beginner must also flag global/nonlocal");
+  }
+
+  console.log(
+    "\n[11] advanced level: global/nonlocal are NOT flagged",
+  );
+  {
+    const findings = analyze(
+      readPy("samples/intermediate_keyword.py"),
+      "advanced",
+      "intermediate_keyword.py",
+    );
+    expect(
+      findings.length === 0,
+      "advanced level should produce 0 findings even with global/nonlocal",
+    );
   }
 
   fn.destroy?.();

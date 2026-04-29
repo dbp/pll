@@ -320,16 +320,30 @@ def _bonnie_repl_eval(code, session_key):
 
 
 # =============================================================================
-# Static analysis (beginner-level checks)
+# Static analysis (beginner / intermediate level checks)
 # =============================================================================
 #
-# Beginner-level rules:
-#   1. Shadowing:     a binding whose name appears in any enclosing scope or
-#                     is the name of a Python built-in.
-#   2. Reassignment:  a name bound more than once within the same scope.
-#                     Suppressed for names already flagged as shadowing in
-#                     that scope (fix the shadow first; reassignment becomes
-#                     trivial once each binding has its own name).
+# Per-level rules:
+#
+#   beginner:
+#     1. Shadowing:        a binding whose name appears in any enclosing
+#                          scope or is the name of a Python built-in.
+#     2. Reassignment:     a name bound more than once within the *same*
+#                          scope. Suppressed for names already flagged as
+#                          shadowing in that scope (fix the shadow first).
+#     3. Disallowed kw:    `global` and `nonlocal` statements.
+#
+#   intermediate:
+#     1. Shadowing:        same as beginner.
+#     2. Reassignment:     only flagged at module scope. Function/lambda/
+#                          class/comprehension scopes are allowed to rebind,
+#                          which is what enables for-loop accumulator
+#                          patterns (e.g. `total = 0; for x in xs: total += x`
+#                          inside `def`).
+#     3. Disallowed kw:    `global` and `nonlocal` statements.
+#
+#   advanced:
+#     No checks. Full Python.
 #
 # A "scope" is one of: module, function (incl. async), lambda, class,
 # comprehension/generator. We model these explicitly because Python 3
@@ -525,13 +539,33 @@ class _BonnieScopeBuilder:
             self._walk(child, scope)
 
 
+class _BonnieKeywordVisitor(_ast.NodeVisitor):
+    """Collect every `global` / `nonlocal` statement in a tree.
+
+    Each entry is `(keyword, lineno, col_offset, names)` where `keyword`
+    is the literal string "global" or "nonlocal" and `names` is the list
+    of identifiers the statement applies to.
+    """
+
+    def __init__(self):
+        self.found = []
+
+    def visit_Global(self, node):
+        self.found.append(("global", node.lineno, node.col_offset, list(node.names)))
+        self.generic_visit(node)
+
+    def visit_Nonlocal(self, node):
+        self.found.append(("nonlocal", node.lineno, node.col_offset, list(node.names)))
+        self.generic_visit(node)
+
+
 def _bonnie_static_analyze(code, level, filename):
     """Run static checks for `level` over `code` and return findings.
 
     Returns a list of dicts. Each dict has at minimum:
       id, error_type, message, line_number, column, name_token, scope_kind.
     """
-    if level != "beginner":
+    if level not in ("beginner", "intermediate"):
         return []
     try:
         tree = _ast.parse(code, filename=filename)
@@ -543,6 +577,17 @@ def _bonnie_static_analyze(code, level, filename):
     builder = _BonnieScopeBuilder()
     builder.build(tree)
     builtins_set = {n for n in dir(__builtins__) if not n.startswith("_")}
+
+    # Whether we flag reassignment in `scope` at this level. At beginner,
+    # we flag everywhere; at intermediate, only at module scope so that
+    # function-local accumulator patterns (`total = 0; for x in xs:
+    # total += x`) work.
+    def reassignment_active(scope_kind):
+        if level == "beginner":
+            return True
+        if level == "intermediate":
+            return scope_kind == "module"
+        return False
 
     for scope in builder.scopes:
         # Names visible from any enclosing scope, paired with the *nearest*
@@ -592,23 +637,44 @@ def _bonnie_static_analyze(code, level, filename):
                 })
 
         # ---- Then reassignment (skip names already shadow-flagged) ----
-        for name, locs in scope.bindings.items():
-            if name in shadowed_in_scope:
-                continue
-            if len(locs) > 1:
-                second_loc = locs[1]
-                first_loc = locs[0]
-                findings.append({
-                    "id": "reassignment",
-                    "error_type": "Reassignment",
-                    "message": "`%s` is assigned more than once in this scope" % name,
-                    "line_number": second_loc[0],
-                    "column": second_loc[1],
-                    "name_token": name,
-                    "scope_kind": scope.kind,
-                    "first_line_number": first_loc[0],
-                    "first_column": first_loc[1],
-                })
+        if reassignment_active(scope.kind):
+            for name, locs in scope.bindings.items():
+                if name in shadowed_in_scope:
+                    continue
+                if len(locs) > 1:
+                    second_loc = locs[1]
+                    first_loc = locs[0]
+                    findings.append({
+                        "id": "reassignment",
+                        "error_type": "Reassignment",
+                        "message": "`%s` is assigned more than once in this scope" % name,
+                        "line_number": second_loc[0],
+                        "column": second_loc[1],
+                        "name_token": name,
+                        "scope_kind": scope.kind,
+                        "first_line_number": first_loc[0],
+                        "first_column": first_loc[1],
+                    })
+
+    # ---- `global` / `nonlocal` keyword check ----
+    # Both are disallowed at beginner and intermediate. We emit one finding
+    # per declaration (not per name) so a `global x, y` produces a single
+    # diagnostic on that line.
+    kw_visitor = _BonnieKeywordVisitor()
+    kw_visitor.visit(tree)
+    for keyword, lineno, col, names in kw_visitor.found:
+        primary = names[0] if names else ""
+        findings.append({
+            "id": "disallowed-keyword",
+            "error_type": "DisallowedKeyword",
+            "message": "`%s` is not allowed at the %s level" % (keyword, level),
+            "line_number": lineno,
+            "column": col,
+            "name_token": primary,
+            "scope_kind": "function",
+            "keyword": keyword,
+            "names": list(names),
+        })
 
     findings.sort(key=lambda f: (f["line_number"] or 0, f["column"] or 0))
     return findings

@@ -2,18 +2,23 @@
  * Language levels for Python files. The level is opted into via a magic
  * comment on the first non-blank line of the file:
  *
- *   #beginner       -> beginner level (strict static checks)
- *   #expert         -> expert level (no static checks)
+ *   #beginner       -> beginner level (strictest static checks)
+ *   #intermediate   -> intermediate level (shadowing checks, no global/nonlocal,
+ *                      but reassignment is allowed inside functions so for-loop
+ *                      accumulator patterns work)
+ *   #advanced       -> advanced level (no static checks; full Python)
  *
- * Files with no header default to `expert` so existing code continues to run
- * untouched.
+ * Files with no header default to `advanced` so existing code continues to
+ * run untouched.
  */
 
-export type Level = "beginner" | "expert";
+export type Level = "beginner" | "intermediate" | "advanced";
 
-export const DEFAULT_LEVEL: Level = "expert";
+export const DEFAULT_LEVEL: Level = "advanced";
 
 const HEADER_RE = /^#\s*([a-zA-Z]+)\s*$/;
+
+const LEVEL_NAMES: ReadonlyArray<Level> = ["beginner", "intermediate", "advanced"];
 
 /**
  * Parse the level header from the start of a Python source file.
@@ -34,8 +39,9 @@ export function parseLevel(source: string): Level {
       return DEFAULT_LEVEL;
     }
     const name = match[1].toLowerCase();
-    if (name === "beginner") return "beginner";
-    if (name === "expert") return "expert";
+    for (const level of LEVEL_NAMES) {
+      if (name === level) return level;
+    }
     return DEFAULT_LEVEL;
   }
   return DEFAULT_LEVEL;
@@ -44,4 +50,9 @@ export function parseLevel(source: string): Level {
 /** Human-friendly label for the level (used in REPL banners and messages). */
 export function levelLabel(level: Level): string {
   return level;
+}
+
+/** Whether this level runs any static analyzer checks at all. */
+export function levelHasStaticChecks(level: Level): boolean {
+  return level === "beginner" || level === "intermediate";
 }

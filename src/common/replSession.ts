@@ -9,7 +9,7 @@ import {
   type PromptKind,
   serializeFinding,
 } from "./interactionsView";
-import { parseLevel, type Level } from "./level";
+import { levelHasStaticChecks, parseLevel, type Level } from "./level";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 
 export interface BonnieReplDeps {
@@ -41,6 +41,13 @@ interface Session {
   busy: boolean;
   continuationLines: string[];
   continuing: boolean;
+  /**
+   * Language level of the most recent Run File on this session. `null`
+   * until the file has been run at least once. We surface this in the
+   * header (e.g. `hello.py [beginner]`) so it's easy to tell which rule
+   * set is currently in effect after a run.
+   */
+  lastLevel: Level | null;
 }
 
 /**
@@ -151,7 +158,7 @@ export class BonnieReplSession implements vscode.Disposable {
     } else if (titleChanged) {
       // Same session re-activated but its display name changed - propagate
       // to the title without re-replaying the whole stream.
-      this.deps.view.setTitle(session.fileName);
+      this.deps.view.setTitle(this.titleFor(session));
     }
   }
 
@@ -161,7 +168,7 @@ export class BonnieReplSession implements vscode.Disposable {
     const session = this.sessions.get(key);
     if (!session) return;
     this.deps.view.showSession({
-      title: session.fileName,
+      title: this.titleFor(session),
       entries: session.entries,
       prompt: session.prompt,
       busy: this.computeVisibleBusy(session),
@@ -185,11 +192,19 @@ export class BonnieReplSession implements vscode.Disposable {
         busy: false,
         continuationLines: [],
         continuing: false,
+        lastLevel: null,
       };
       this.sessions.set(key, session);
       this.streamBuffers.set(key, { stdout: "", stderr: "" });
     }
     return session;
+  }
+
+  /** The string we display as the view's header for `session`. */
+  private titleFor(session: Session): string {
+    return session.lastLevel
+      ? `${session.fileName} [${session.lastLevel}]`
+      : session.fileName;
   }
 
   private isActive(session: Session): boolean {
@@ -339,7 +354,7 @@ export class BonnieReplSession implements vscode.Disposable {
     try {
       await this.deps.runtime.replEval(
         { code, sessionKey: session.key },
-        (event) => this.handleEvent(session, event, code, "<repl>", undefined, "expert"),
+        (event) => this.handleEvent(session, event, code, "<repl>", undefined, "advanced"),
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -368,9 +383,15 @@ export class BonnieReplSession implements vscode.Disposable {
     this.deps.view.registerFile(fileName, document.uri);
 
     const level = parseLevel(code);
+    // Record the level *before* running so the header reflects it even if
+    // the run aborts due to static-analysis errors.
+    session.lastLevel = level;
+    if (this.isActive(session)) {
+      this.deps.view.setTitle(this.titleFor(session));
+    }
 
     try {
-      if (level === "beginner") {
+      if (levelHasStaticChecks(level)) {
         const blocked = await this.runStaticChecks(session, code, fileName, level, document);
         if (blocked) {
           this.appendToSession(session, {

@@ -3,6 +3,7 @@ import type { RawStaticFinding } from "../../pyodideRunner";
 import type { AnalysisFinding } from "../types";
 import { explainShadowing, explainShadowingBuiltin } from "./shadowingExplainer";
 import { explainReassignment } from "./reassignmentExplainer";
+import { explainDisallowedKeyword } from "./disallowedKeywordExplainer";
 
 export type StaticExplainer = (
   raw: RawStaticFinding,
@@ -14,6 +15,7 @@ const explainers: Record<string, StaticExplainer> = {
   shadowing: explainShadowing,
   "shadowing-builtin": explainShadowingBuiltin,
   reassignment: explainReassignment,
+  "disallowed-keyword": explainDisallowedKeyword,
 };
 
 /**
