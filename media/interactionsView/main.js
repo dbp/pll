@@ -1,16 +1,20 @@
 // Bonnie interactions view client.
 //
-// Lives inside the WebviewView. Holds an entry log + an input row, and talks
-// to the extension host via postMessage. The host is the source of truth for
-// the entry log; we mirror it locally via vscode.setState so we restore fast
-// on webview reload.
+// Lives inside the WebviewView. Holds the currently-displayed session's
+// entry log + an input row, and talks to the extension host via postMessage.
+// The session manager on the host owns per-file session state; we just
+// mirror whatever's "currently shown" via vscode.setState so we restore
+// fast on webview reload.
 //
 // Host -> view messages:
-//   { type: "append", entry }
-//   { type: "clear" }
-//   { type: "prompt", kind: "primary" | "continuation" }
-//   { type: "busy", busy: boolean, status?: string }
-//   { type: "replay", entries, prompt, busy }
+//   { type: "append", entry }                - append to current session
+//   { type: "clear" }                        - clear current session entries
+//   { type: "prompt", kind }                 - change prompt for current
+//   { type: "busy", busy, status? }          - busy state for current
+//   { type: "replay", mode: "session", title, entries, prompt, busy, status? }
+//                                            - swap to a different session
+//   { type: "empty", message }               - no session active
+//   { type: "title", title }                 - update header title in place
 //   { type: "focusInput" }
 //
 // View -> host messages:
@@ -24,15 +28,19 @@
 (function () {
   const vscode = acquireVsCodeApi();
 
-  /** @type {{ entries: any[], prompt: "primary" | "continuation", busy: boolean, history: string[] }} */
+  /** @type {{ mode: "session" | "empty", emptyMessage: string, title: string, entries: any[], prompt: "primary" | "continuation", busy: boolean, history: string[] }} */
   const state = vscode.getState() ?? {
+    mode: "empty",
+    emptyMessage: "Open a Python file to start an interactions session.",
+    title: "",
     entries: [],
     prompt: "primary",
     busy: false,
     history: [],
   };
 
-  const root = document.getElementById("root");
+  const body = document.body;
+  const titleEl = document.getElementById("title");
   const stream = document.getElementById("stream");
   const empty = document.getElementById("empty");
   const inputRow = document.getElementById("inputRow");
@@ -51,6 +59,15 @@
     vscode.setState(state);
   }
 
+  function applyMode() {
+    body.classList.toggle("mode-empty", state.mode === "empty");
+    body.classList.toggle("mode-session", state.mode === "session");
+  }
+
+  function applyTitle() {
+    titleEl.textContent = state.title || "";
+  }
+
   function setPromptText() {
     promptEl.textContent = state.prompt === "continuation" ? "..." : ">>>";
   }
@@ -60,7 +77,7 @@
     inputRow.classList.toggle("busy", busy);
     textarea.disabled = busy;
     statusEl.textContent = busy ? (status || "Running...") : "";
-    if (!busy) {
+    if (!busy && state.mode === "session") {
       requestAnimationFrame(() => textarea.focus());
     }
     persist();
@@ -72,9 +89,23 @@
     renderAll();
   }
 
+  /** Default empty-stream caption for an active session that has no entries yet. */
+  const SESSION_EMPTY_TEXT =
+    "Run the file or evaluate an expression at the prompt below.";
+
+  function renderEmpty() {
+    empty.innerHTML = "";
+    const span = document.createElement("span");
+    span.textContent = state.mode === "empty"
+      ? state.emptyMessage
+      : SESSION_EMPTY_TEXT;
+    empty.appendChild(span);
+  }
+
   function renderAll() {
     stream.innerHTML = "";
     if (state.entries.length === 0) {
+      renderEmpty();
       stream.appendChild(empty);
       return;
     }
@@ -393,40 +424,69 @@
     if (!msg || typeof msg !== "object") return;
     switch (msg.type) {
       case "append":
+        if (state.mode !== "session") return;
         appendEntry(msg.entry);
         break;
       case "clear":
+        if (state.mode !== "session") return;
         clearStream();
         break;
       case "prompt":
+        if (state.mode !== "session") return;
         state.prompt = msg.kind === "continuation" ? "continuation" : "primary";
         setPromptText();
         persist();
         break;
       case "busy":
+        if (state.mode !== "session") return;
         setBusy(!!msg.busy, msg.status);
         break;
       case "replay":
+        // Switch to (or stay in) session mode.
+        state.mode = "session";
+        state.title = typeof msg.title === "string" ? msg.title : "";
         state.entries = Array.isArray(msg.entries) ? msg.entries.slice() : [];
         state.prompt = msg.prompt === "continuation" ? "continuation" : "primary";
         state.busy = !!msg.busy;
         persist();
+        applyMode();
+        applyTitle();
         renderAll();
         setPromptText();
-        setBusy(state.busy);
+        setBusy(state.busy, msg.status);
+        break;
+      case "empty":
+        state.mode = "empty";
+        state.emptyMessage = msg.message || state.emptyMessage;
+        state.title = "";
+        state.entries = [];
+        state.busy = false;
+        persist();
+        applyMode();
+        applyTitle();
+        renderAll();
+        setBusy(false);
+        break;
+      case "title":
+        if (state.mode !== "session") return;
+        state.title = typeof msg.title === "string" ? msg.title : "";
+        persist();
+        applyTitle();
         break;
       case "focusInput":
-        textarea.focus();
+        if (state.mode === "session") textarea.focus();
         break;
     }
   });
 
   // Initial render --------------------------------------------
 
+  applyMode();
+  applyTitle();
   setPromptText();
   setBusy(state.busy);
   renderAll();
 
-  // Tell the host we're alive and ready to receive a fresh replay.
+  // Tell the host we're alive and ready to receive a fresh replay/empty.
   vscode.postMessage({ type: "ready" });
 })();

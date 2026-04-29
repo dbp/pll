@@ -45,9 +45,8 @@ _bonnie_module.image = _bonnie_image_module
 _sys.modules["bonnie"] = _bonnie_module
 _sys.modules["bonnie.image"] = _bonnie_image_module
 for _name in BONNIE_IMAGE_EXPORTS:
-    _bonnie_user_globals[_name] = globals()[_name]
+    _bonnie_initial_globals[_name] = globals()[_name]
 del _name
-_bonnie_capture_initial_globals()
 `);
 
   const callRunFile = pyodide.globals.get("_bonnie_run_file");
@@ -59,9 +58,12 @@ _bonnie_capture_initial_globals()
     return obj;
   };
 
+  // Default session key used by tests that don't care about session isolation.
+  const SK = "test:default";
+
   console.log("\n[1] run-file: samples/images.py - expect 6 images, no error");
   {
-    const result = py(callRunFile, [readPy("samples/images.py"), "images.py"]);
+    const result = py(callRunFile, [readPy("samples/images.py"), "images.py", SK]);
     console.log(`    ok=${result.ok}, images=${result.images.length}`);
     if (result.error_type) {
       console.log(`    error: ${result.error_type}: ${result.error_message}`);
@@ -81,7 +83,7 @@ _bonnie_capture_initial_globals()
 
   console.log("\n[2] repl-eval: a top-level image expression");
   {
-    const result = py(callReplEval, [`circle(20, "solid", "blue")`]);
+    const result = py(callReplEval, [`circle(20, "solid", "blue")`, SK]);
     console.log(`    ok=${result.ok}, images=${result.images.length}, repr=${result.result_repr}`);
     expect(result.ok, "repl-eval should succeed");
     expect(result.images.length === 1, "one image emitted");
@@ -90,7 +92,7 @@ _bonnie_capture_initial_globals()
 
   console.log("\n[3] repl-eval: non-image expression still uses result_repr");
   {
-    const result = py(callReplEval, [`1 + 2`]);
+    const result = py(callReplEval, [`1 + 2`, SK]);
     console.log(`    repr=${result.result_repr}, images=${result.images.length}`);
     expect(result.result_repr === "3", "1 + 2 -> '3'");
     expect(result.images.length === 0, "no images for plain expressions");
@@ -99,7 +101,7 @@ _bonnie_capture_initial_globals()
   console.log("\n[4] run-file: top-level docstring isn't displayed");
   {
     const code = `"""A docstring at module top."""\nx = 1\n`;
-    const result = py(callRunFile, [code, "doc.py"]);
+    const result = py(callRunFile, [code, "doc.py", SK]);
     expect(result.ok, "docstring file runs");
     expect(result.images.length === 0, "docstring should not be auto-displayed as repr");
     expect(result.stdout === "", `expected no stdout for docstring, got ${JSON.stringify(result.stdout)}`);
@@ -107,7 +109,7 @@ _bonnie_capture_initial_globals()
 
   console.log("\n[5] run-file: bare 1+2 prints 3 (HtDP-style)");
   {
-    const result = py(callRunFile, [`1 + 2\n`, "expr.py"]);
+    const result = py(callRunFile, [`1 + 2\n`, "expr.py", SK]);
     expect(result.ok, "bare expression file runs");
     expect(result.stdout.trim() === "3", `expected stdout '3', got ${JSON.stringify(result.stdout)}`);
   }
@@ -115,7 +117,7 @@ _bonnie_capture_initial_globals()
   console.log("\n[6] beside + above produce composed bounding boxes");
   {
     const code = `beside(circle(10, "solid", "red"), square(50, "solid", "blue"))`;
-    const result = py(callReplEval, [code]);
+    const result = py(callReplEval, [code, SK]);
     expect(result.images.length === 1, "one image");
     if (result.images[0]) {
       const img = result.images[0];
@@ -127,47 +129,90 @@ _bonnie_capture_initial_globals()
     }
   }
 
-  console.log("\n[7] run-file resets globals between runs but REPL keeps file defs");
+  console.log("\n[7] run-file resets globals between runs of the same session");
   {
     // First file defines `x` and `bonnie_special`.
-    const r1 = py(callRunFile, [`x = 5\nbonnie_special = 42\n`, "a.py"]);
+    const r1 = py(callRunFile, [`x = 5\nbonnie_special = 42\n`, "a.py", SK]);
     expect(r1.ok, "first run ok");
 
     // REPL can still see `x` (REPL inherits the file's globals).
-    const r1Repl = py(callReplEval, [`x`]);
+    const r1Repl = py(callReplEval, [`x`, SK]);
     expect(r1Repl.ok && r1Repl.result_repr === "5", `REPL sees x=5, got ${r1Repl.result_repr}`);
 
     // Image primitives must still be available after a file run.
-    const r1Img = py(callReplEval, [`circle(10, "solid", "red")`]);
+    const r1Img = py(callReplEval, [`circle(10, "solid", "red")`, SK]);
     expect(r1Img.ok && r1Img.images.length === 1, "image primitives survive run-file");
 
-    // Run a second file that does NOT define `x`. The previous run's `x`
-    // and `bonnie_special` must be wiped.
-    const r2 = py(callRunFile, [`y = 7\n`, "b.py"]);
+    // Run a second file (same session) that does NOT define `x`. The
+    // previous run's `x` and `bonnie_special` must be wiped.
+    const r2 = py(callRunFile, [`y = 7\n`, "b.py", SK]);
     expect(r2.ok, "second run ok");
 
-    const r2X = py(callReplEval, [`x`]);
+    const r2X = py(callReplEval, [`x`, SK]);
     expect(
       !r2X.ok && r2X.error_type === "NameError",
       `expected NameError for x after reset, got ok=${r2X.ok} type=${r2X.error_type}`,
     );
 
-    const r2Special = py(callReplEval, [`bonnie_special`]);
+    const r2Special = py(callReplEval, [`bonnie_special`, SK]);
     expect(
       !r2Special.ok && r2Special.error_type === "NameError",
       "expected NameError for bonnie_special after reset",
     );
 
     // Image primitives must still be available after the reset.
-    const r2Img = py(callReplEval, [`square(20, "solid", "green")`]);
+    const r2Img = py(callReplEval, [`square(20, "solid", "green")`, SK]);
     expect(r2Img.ok && r2Img.images.length === 1, "image primitives survive reset");
 
     // The current file's defs are present.
-    const r2Y = py(callReplEval, [`y`]);
+    const r2Y = py(callReplEval, [`y`, SK]);
     expect(r2Y.ok && r2Y.result_repr === "7", "REPL sees y=7 from second file");
   }
 
-  console.log("\n[8] static analyzer still works after image lib loaded");
+  console.log("\n[8] sessions are isolated: file A's defs don't leak into file B");
+  {
+    const SK_A = "test:fileA";
+    const SK_B = "test:fileB";
+
+    // Run file A in session A.
+    const ra = py(callRunFile, [`alpha = 'from-A'\n`, "fileA.py", SK_A]);
+    expect(ra.ok, "fileA runs");
+
+    // REPL in session A sees alpha.
+    const rar = py(callReplEval, [`alpha`, SK_A]);
+    expect(rar.result_repr === "'from-A'", "session A sees alpha");
+
+    // Run file B in session B (different session). It defines `beta` and
+    // does not mention alpha at all.
+    const rb = py(callRunFile, [`beta = 'from-B'\n`, "fileB.py", SK_B]);
+    expect(rb.ok, "fileB runs");
+
+    // REPL in session B sees beta but NOT alpha.
+    const rbr = py(callReplEval, [`beta`, SK_B]);
+    expect(rbr.result_repr === "'from-B'", "session B sees beta");
+    const rbAlpha = py(callReplEval, [`alpha`, SK_B]);
+    expect(
+      !rbAlpha.ok && rbAlpha.error_type === "NameError",
+      "session B does NOT see alpha (per-file isolation)",
+    );
+
+    // Switching back to A, alpha is still defined and beta is not.
+    const raAlpha = py(callReplEval, [`alpha`, SK_A]);
+    expect(raAlpha.result_repr === "'from-A'", "session A still has alpha");
+    const raBeta = py(callReplEval, [`beta`, SK_A]);
+    expect(
+      !raBeta.ok && raBeta.error_type === "NameError",
+      "session A does NOT see beta (per-file isolation)",
+    );
+
+    // Image primitives are present in both sessions.
+    const aImg = py(callReplEval, [`circle(5, "solid", "red")`, SK_A]);
+    const bImg = py(callReplEval, [`circle(5, "solid", "red")`, SK_B]);
+    expect(aImg.images.length === 1 && bImg.images.length === 1,
+      "image primitives are present in both sessions");
+  }
+
+  console.log("\n[9] static analyzer still works after image lib loaded");
   {
     const fn = pyodide.globals.get("_bonnie_static_analyze");
     const proxy = fn(`#beginner\nx = 1\nx = 2\n`, "beginner", "t.py");

@@ -67,13 +67,18 @@ export class WebPyodideRuntime implements PythonRuntime {
       type: "runFile",
       code: request.code,
       fileName: request.fileName,
+      sessionKey: request.sessionKey,
     });
     deliverResult(result as BonnieRunResult, onEvent, request.fileName);
   }
 
   async replEval(request: ReplEvalRequest, onEvent: ExecutionEventHandler): Promise<void> {
     await this.initialize();
-    const result = await this.send({ type: "replEval", code: request.code });
+    const result = await this.send({
+      type: "replEval",
+      code: request.code,
+      sessionKey: request.sessionKey,
+    });
     deliverResult(result as BonnieRunResult, onEvent, "<repl>");
   }
 

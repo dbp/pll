@@ -38,8 +38,8 @@ export interface RawReplCheck {
 
 export type WorkerInbound =
   | { id: number; type: "init"; indexUrl: string }
-  | { id: number; type: "runFile"; code: string; fileName: string }
-  | { id: number; type: "replEval"; code: string }
+  | { id: number; type: "runFile"; code: string; fileName: string; sessionKey: string }
+  | { id: number; type: "replEval"; code: string; sessionKey: string }
   | { id: number; type: "checkSyntax"; code: string }
   | { id: number; type: "staticAnalyze"; code: string; level: string; fileName: string };
 
@@ -102,13 +102,17 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
         const result = callPyFunction<BonnieRunResult>("_bonnie_run_file", [
           data.code,
           data.fileName,
+          data.sessionKey,
         ]);
         const reply: WorkerOutbound = { id: data.id, type: "result", result };
         self.postMessage(reply);
         break;
       }
       case "replEval": {
-        const result = callPyFunction<BonnieRunResult>("_bonnie_repl_eval", [data.code]);
+        const result = callPyFunction<BonnieRunResult>("_bonnie_repl_eval", [
+          data.code,
+          data.sessionKey,
+        ]);
         const reply: WorkerOutbound = { id: data.id, type: "result", result };
         self.postMessage(reply);
         break;

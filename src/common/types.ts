@@ -54,10 +54,14 @@ export interface RunFileRequest {
   code: string;
   /** Display name shown in tracebacks; doesn't have to exist on disk. */
   fileName: string;
+  /** Opaque per-file session id; the file's globals dict is keyed by this. */
+  sessionKey: string;
 }
 
 export interface ReplEvalRequest {
   code: string;
+  /** Opaque per-file session id; the prompt evaluates against this file's globals. */
+  sessionKey: string;
 }
 
 export interface ReplCheckResult {

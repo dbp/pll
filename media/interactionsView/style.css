@@ -29,10 +29,12 @@ html, body {
 
 #header .title {
   font-weight: 600;
-  text-transform: uppercase;
-  font-size: 11px;
-  letter-spacing: 0.5px;
+  font-size: 12px;
   opacity: 0.85;
+  font-family: var(--vscode-editor-font-family, var(--vscode-font-family, monospace));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 #header .actions {
@@ -232,6 +234,15 @@ button:disabled {
   font-style: italic;
   line-height: 1.5;
   font-family: var(--vscode-font-family, sans-serif);
+}
+
+/* Mode toggling: when the host signals "empty mode" (no Python file is
+ * active), the header (file name + Clear) and input row are both
+ * irrelevant - hide them entirely so the empty placeholder centerpiece
+ * carries the whole message. */
+body.mode-empty #header,
+body.mode-empty #inputRow {
+  display: none;
 }
 
 /* Input row --------------------------------------------------- */

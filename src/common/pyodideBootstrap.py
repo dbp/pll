@@ -3,13 +3,23 @@
 # This module is loaded into Pyodide once when the runtime initializes.
 # It exposes four entry points used by the TypeScript host:
 #
-#   _bonnie_run_file(code, filename)       -> dict
-#   _bonnie_repl_eval(code)                -> dict
-#   _bonnie_repl_check(source)             -> dict
-#   _bonnie_static_analyze(code, level, filename) -> list[dict]
+#   _bonnie_run_file(code, filename, session_key)   -> dict
+#   _bonnie_repl_eval(code, session_key)            -> dict
+#   _bonnie_repl_check(source)                      -> dict
+#   _bonnie_static_analyze(code, level, filename)   -> list[dict]
 #
 # Each returns a JSON-friendly dict / list of dicts so the JS side can
 # consume the result via `proxy.toJs({ dict_converter: Object.fromEntries })`.
+#
+# Sessions
+# --------
+# Each Python file gets its own session, keyed by an opaque string the host
+# chooses (typically the document URI). Sessions hold their own globals
+# dict, so file A's `data = ...` doesn't leak into file B's REPL prompt.
+# `_bonnie_run_file` resets the addressed session's globals to the baseline
+# template before executing; `_bonnie_repl_eval` does NOT reset, so REPL
+# input keeps the names defined by the most recent Run File of the same
+# session.
 
 import io
 import sys
@@ -18,39 +28,20 @@ import ast as _ast
 import codeop as _codeop
 import contextlib
 
-_bonnie_user_globals = {"__name__": "__main__", "__builtins__": __builtins__}
+# Per-session globals dicts, keyed by session_key (e.g. document URI).
+# Created lazily; initialized from `_bonnie_initial_globals`.
+_bonnie_sessions = {}
 
-# Snapshot of `_bonnie_user_globals` taken at the end of bootstrap (after
-# the image library is installed by PYODIDE_INSTALL_PY). Each `_bonnie_run_file`
-# restores from this snapshot so a file run starts with a fresh global env -
-# but with the Bonnie image primitives + display helper still pre-loaded.
-# REPL evaluations do *not* reset, so definitions made by the most recent
-# Run File remain available at the prompt.
-_bonnie_initial_globals = None
+# The "template" globals used to seed each new session and to reset a
+# session at the start of every Run File. Populated by PYODIDE_INSTALL_PY
+# at the end of bootstrap so the template includes the Bonnie image
+# library + the auto-display helper.
+_bonnie_initial_globals = {"__name__": "__main__", "__builtins__": __builtins__}
 
 # Image emissions captured during the most recent `_bonnie_run_file` /
 # `_bonnie_repl_eval` call. The host drains this list after the call.
+# Pyodide is single-threaded, so a single shared list is fine.
 _bonnie_image_emissions = []
-
-
-def _bonnie_capture_initial_globals():
-    """Capture the post-install baseline used by `_bonnie_reset_user_globals`."""
-    global _bonnie_initial_globals
-    _bonnie_initial_globals = dict(_bonnie_user_globals)
-
-
-def _bonnie_reset_user_globals():
-    """Reset `_bonnie_user_globals` to the post-install baseline.
-
-    Mutates the existing dict in place (`clear` + `update`) so any cached
-    reference to it (e.g. from `_bonnie_show_top_level`'s closure or from
-    Pyodide's `globals.get(...)`) remains valid.
-    """
-    if _bonnie_initial_globals is None:
-        # Snapshot wasn't taken yet (initialization in progress). Nothing to do.
-        return
-    _bonnie_user_globals.clear()
-    _bonnie_user_globals.update(_bonnie_initial_globals)
 
 
 def _bonnie_show_top_level(value):
@@ -73,9 +64,35 @@ def _bonnie_show_top_level(value):
     print(repr(value))
 
 
-# Make the helper available to user code, since the AST rewrite injects calls
-# to `_bonnie_show_top_level(...)` that get evaluated under `_bonnie_user_globals`.
-_bonnie_user_globals["_bonnie_show_top_level"] = _bonnie_show_top_level
+# Seed the template with the auto-display helper. The image library names
+# get added later by PYODIDE_INSTALL_PY.
+_bonnie_initial_globals["_bonnie_show_top_level"] = _bonnie_show_top_level
+
+
+def _bonnie_get_session(session_key):
+    """Get-or-create the globals dict for `session_key`.
+
+    Newly-created sessions start as a copy of `_bonnie_initial_globals`
+    (so all baseline names like the image primitives are present).
+    """
+    g = _bonnie_sessions.get(session_key)
+    if g is None:
+        g = dict(_bonnie_initial_globals)
+        _bonnie_sessions[session_key] = g
+    return g
+
+
+def _bonnie_reset_session(session_key):
+    """Reset the globals for `session_key` to the baseline template.
+
+    Mutates the existing dict in place (`clear` + `update`) so any cached
+    reference to it (e.g. from `_bonnie_show_top_level`'s closure or from
+    Pyodide's `globals.get(...)`) remains valid.
+    """
+    g = _bonnie_get_session(session_key)
+    g.clear()
+    g.update(_bonnie_initial_globals)
+    return g
 
 
 class _BonnieTopLevelExprWrapper(_ast.NodeTransformer):
@@ -170,7 +187,7 @@ def _bonnie_extract_loc(tb_str, fallback_filename):
     return line_no, col
 
 
-def _bonnie_run_file(code, filename):
+def _bonnie_run_file(code, filename, session_key):
     stdout = io.StringIO()
     stderr = io.StringIO()
     result = {
@@ -185,9 +202,10 @@ def _bonnie_run_file(code, filename):
         "column": None,
         "images": [],
     }
-    # Each Run File starts with a clean slate: discard any names defined by
-    # a previous Run File or by REPL exploration since then.
-    _bonnie_reset_user_globals()
+    # Each Run File starts with a clean slate for this session: discard any
+    # names defined by a previous Run File of the same session or by REPL
+    # exploration since then.
+    user_globals = _bonnie_reset_session(session_key)
     _bonnie_image_emissions.clear()
     try:
         tree = _ast.parse(code, filename=filename, mode="exec")
@@ -208,7 +226,7 @@ def _bonnie_run_file(code, filename):
 
     try:
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            exec(compiled, _bonnie_user_globals)
+            exec(compiled, user_globals)
         result["ok"] = True
     except SystemExit:
         result["ok"] = True
@@ -231,7 +249,7 @@ def _bonnie_run_file(code, filename):
 # REPL-style eval (statements + last-expression value)
 # -----------------------------------------------------------------------------
 
-def _bonnie_repl_eval(code):
+def _bonnie_repl_eval(code, session_key):
     stdout = io.StringIO()
     stderr = io.StringIO()
     result = {
@@ -247,6 +265,7 @@ def _bonnie_repl_eval(code):
         "images": [],
     }
     _bonnie_image_emissions.clear()
+    user_globals = _bonnie_get_session(session_key)
     filename = "<repl>"
     try:
         tree = _ast.parse(code, filename=filename, mode="exec")
@@ -268,11 +287,11 @@ def _bonnie_repl_eval(code):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             if tree.body:
                 compiled_stmts = compile(tree, filename, "exec")
-                exec(compiled_stmts, _bonnie_user_globals)
+                exec(compiled_stmts, user_globals)
             if last_expr is not None:
                 expr_module = _ast.Expression(body=last_expr.value)
                 compiled_expr = compile(expr_module, filename, "eval")
-                value = eval(compiled_expr, _bonnie_user_globals)
+                value = eval(compiled_expr, user_globals)
                 if value is None:
                     pass
                 elif hasattr(value, "_bonnie_image_data"):

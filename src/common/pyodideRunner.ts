@@ -9,7 +9,7 @@
  *   1. PYODIDE_BOOTSTRAP_PY   - runtime hooks (run/repl/static-analyze)
  *   2. BONNIE_IMAGE_LIB_PY    - Image class + primitives + combinators
  *   3. PYODIDE_INSTALL_PY     - registers `bonnie.image` module and copies
- *                                public names into `_bonnie_user_globals`
+ *                                public names into `_bonnie_initial_globals`
  *
  * Loading the image library second means the bootstrap doesn't depend on
  * it; it just duck-types the `_bonnie_image_data` method during display.
@@ -22,8 +22,9 @@ export const BONNIE_IMAGE_LIB_PY = imageLibSource;
 
 /**
  * Final installation step: register `bonnie.image` as an importable module
- * and inject the public names directly into `_bonnie_user_globals` so
- * beginners can use `circle(50, "solid", "red")` with no import.
+ * and inject the public names into the per-session globals template
+ * (`_bonnie_initial_globals`) so beginners can use `circle(50, "solid", "red")`
+ * with no import in every file's session.
  */
 export const PYODIDE_INSTALL_PY = `
 import sys as _sys, types as _types
@@ -36,14 +37,12 @@ _bonnie_module.image = _bonnie_image_module
 _sys.modules["bonnie"] = _bonnie_module
 _sys.modules["bonnie.image"] = _bonnie_image_module
 
+# Add image library names to the per-session globals template. Each new
+# session is initialized as a copy of this template, so every file's
+# Run File / REPL prompt sees these names without an explicit import.
 for _name in BONNIE_IMAGE_EXPORTS:
-    _bonnie_user_globals[_name] = globals()[_name]
+    _bonnie_initial_globals[_name] = globals()[_name]
 del _name
-
-# Freeze the now-fully-populated user globals as the baseline that
-# Run File restores to (preserves built-ins, image library, and the
-# auto-display helper while wiping any previous-run state).
-_bonnie_capture_initial_globals()
 `;
 
 export interface BonnieRunResult {

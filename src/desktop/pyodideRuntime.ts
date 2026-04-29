@@ -77,7 +77,7 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     }
     const fn = this.pyodide.globals.get("_bonnie_run_file");
     try {
-      const proxy = fn(request.code, request.fileName);
+      const proxy = fn(request.code, request.fileName, request.sessionKey);
       const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as BonnieRunResult;
       proxy.destroy?.();
       this.deliverResult(obj, onEvent, request.fileName);
@@ -93,7 +93,7 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     }
     const fn = this.pyodide.globals.get("_bonnie_repl_eval");
     try {
-      const proxy = fn(request.code);
+      const proxy = fn(request.code, request.sessionKey);
       const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as BonnieRunResult;
       proxy.destroy?.();
       this.deliverResult(obj, onEvent, "<repl>");

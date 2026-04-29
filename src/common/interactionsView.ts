@@ -7,12 +7,20 @@ import type { AnalysisFinding } from "./analyzers/types";
  * echoes, stdout/stderr, results, images, and structured errors as a stream,
  * with an input row at the bottom for new REPL submissions.
  *
- * Entry semantics:
- *   - The host (this class) is the source of truth for the entry log. The
- *     webview mirrors it via vscode.setState for fast restore on reload.
- *   - On webview open ("ready"), the host sends a `replay` message with the
- *     entire log + current prompt + busy state.
- *   - All UI changes go through `append`, `clear`, `setPrompt`, `setBusy`.
+ * Sessions
+ * --------
+ * The view itself is unaware of sessions; the session manager owns one
+ * `Session` per Python file and uses `showSession({entries, prompt, busy})`
+ * to swap which session's content is visible. Per-session incremental
+ * updates go through the regular `append` / `setBusy` / `setPrompt` /
+ * `clear` methods, but the session manager only calls those for the
+ * currently-displayed session.
+ *
+ * Empty mode
+ * ----------
+ * When no Python file has ever been active in the workspace, the view
+ * shows a placeholder message and hides the input row. `showEmpty(...)`
+ * switches into that mode; `showSession(...)` switches back.
  */
 
 /* -------------------------------------------------------------- */
@@ -93,9 +101,20 @@ interface HostMessageBusy {
 }
 interface HostMessageReplay {
   type: "replay";
+  mode: "session";
+  title: string;
   entries: Entry[];
   prompt: PromptKind;
   busy: boolean;
+  status?: string;
+}
+interface HostMessageEmpty {
+  type: "empty";
+  message: string;
+}
+interface HostMessageTitle {
+  type: "title";
+  title: string;
 }
 interface HostMessageFocus {
   type: "focusInput";
@@ -106,7 +125,18 @@ type HostToView =
   | HostMessagePrompt
   | HostMessageBusy
   | HostMessageReplay
+  | HostMessageEmpty
+  | HostMessageTitle
   | HostMessageFocus;
+
+export interface SessionDisplayState {
+  /** Header title shown at the top of the view (typically the file name). */
+  title: string;
+  entries: ReadonlyArray<Entry>;
+  prompt: PromptKind;
+  busy: boolean;
+  status?: string;
+}
 
 /* -------------------------------------------------------------- */
 /* View -> host callbacks                                          */
@@ -129,16 +159,23 @@ export class BonnieInteractionsView
   private webviewReady = false;
   private readonly disposables: vscode.Disposable[] = [];
 
-  // Authoritative entry log.
+  // Mirror of what is currently displayed (always the active session, or
+  // an "empty" placeholder when no Python file is active). The session
+  // manager keeps the per-session authoritative state; this is just what
+  // the view will show on reload.
+  private mode: "session" | "empty" = "empty";
+  private emptyMessage = "Open a Python file to start an interactions session.";
+  private title = "";
   private entries: Entry[] = [];
   private prompt: PromptKind = "primary";
   private busy = false;
+  private status: string | undefined = undefined;
 
   // Map of display fileName -> document URI, used to honor click-to-open
   // requests coming from the webview's error-location links.
   private readonly fileMap = new Map<string, vscode.Uri>();
 
-  // Optional callbacks - REPL session installs these.
+  // Optional callbacks - the session manager installs these.
   private handlers: InteractionsHandlers | null = null;
 
   constructor(private readonly extensionUri: vscode.Uri) {}
@@ -153,9 +190,54 @@ export class BonnieInteractionsView
     this.fileMap.set(displayName, uri);
   }
 
-  /* -------- Top-level operations the REPL session calls -------- */
+  /* -------- Session swapping -------- */
+
+  /**
+   * Replace the visible state with the given session's. Called by the
+   * session manager when the active editor changes to a different Python
+   * file (or when the very first Python session becomes active).
+   */
+  showSession(state: SessionDisplayState): void {
+    this.mode = "session";
+    this.title = state.title;
+    this.entries = [...state.entries];
+    this.prompt = state.prompt;
+    this.busy = state.busy;
+    this.status = state.status;
+    this.post({
+      type: "replay",
+      mode: "session",
+      title: this.title,
+      entries: this.entries,
+      prompt: this.prompt,
+      busy: this.busy,
+      status: this.status,
+    });
+  }
+
+  /** Switch the view into the empty placeholder state. */
+  showEmpty(message: string): void {
+    this.mode = "empty";
+    this.emptyMessage = message;
+    this.title = "";
+    this.entries = [];
+    this.post({ type: "empty", message });
+  }
+
+  /** Update the header title without otherwise changing state. */
+  setTitle(title: string): void {
+    if (this.mode !== "session") return;
+    this.title = title;
+    this.post({ type: "title", title });
+  }
+
+  /* -------- Top-level operations the session manager calls -------- */
+  /* These all assume the addressed session is the active one. The
+   * session manager is responsible for not calling them for inactive
+   * sessions. */
 
   append(entry: Entry): void {
+    if (this.mode !== "session") return;
     this.entries.push(entry);
     this.post({ type: "append", entry });
   }
@@ -193,17 +275,21 @@ export class BonnieInteractionsView
   }
 
   clear(): void {
+    if (this.mode !== "session") return;
     this.entries = [];
     this.post({ type: "clear" });
   }
 
   setPrompt(kind: PromptKind): void {
+    if (this.mode !== "session") return;
     this.prompt = kind;
     this.post({ type: "prompt", kind });
   }
 
   setBusy(busy: boolean, status?: string): void {
+    if (this.mode !== "session") return;
     this.busy = busy;
+    this.status = status;
     this.post({ type: "busy", busy, status });
   }
 
@@ -259,12 +345,19 @@ export class BonnieInteractionsView
     switch (m.type) {
       case "ready":
         this.webviewReady = true;
-        this.post({
-          type: "replay",
-          entries: this.entries,
-          prompt: this.prompt,
-          busy: this.busy,
-        });
+        if (this.mode === "session") {
+          this.post({
+            type: "replay",
+            mode: "session",
+            title: this.title,
+            entries: this.entries,
+            prompt: this.prompt,
+            busy: this.busy,
+            status: this.status,
+          });
+        } else {
+          this.post({ type: "empty", message: this.emptyMessage });
+        }
         break;
       case "submit":
         if (typeof m.code === "string" && this.handlers) {
@@ -356,16 +449,16 @@ export class BonnieInteractionsView
   <link rel="stylesheet" href="${styleUri}" />
   <title>Bonnie Python</title>
 </head>
-<body>
+<body class="mode-empty">
   <div id="root">
     <div id="header">
-      <span class="title">Bonnie Python</span>
+      <span id="title" class="title"></span>
       <div class="actions">
         <button id="clear" title="Clear interactions (Ctrl/Cmd+L)">Clear</button>
       </div>
     </div>
     <div id="stream">
-      <div id="empty">Bonnie Python interactions.<br/>Run a file or evaluate an expression in the prompt below.</div>
+      <div id="empty"></div>
     </div>
     <div id="inputRow">
       <span id="prompt" class="prompt">&gt;&gt;&gt;</span>
@@ -382,7 +475,12 @@ export class BonnieInteractionsView
 
 /* -------- Helpers -------- */
 
-function serializeFinding(finding: AnalysisFinding): SerializedFinding {
+/**
+ * Convert an AnalysisFinding into the shape the webview renders. Exposed
+ * for callers (e.g. the session manager) that need to manufacture
+ * FindingEntry objects directly without going through `appendFinding`.
+ */
+export function serializeFinding(finding: AnalysisFinding): SerializedFinding {
   let location: SerializedFinding["location"] = null;
   if (
     finding.lineNumber !== null &&
