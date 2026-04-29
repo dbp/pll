@@ -13,6 +13,16 @@ export interface ExecutionResultChunk {
   repr: string | null;
 }
 
+export interface ExecutionImageChunk {
+  kind: "image";
+  /** The SVG document, ready to drop into HTML. */
+  svg: string;
+  width: number;
+  height: number;
+  /** Source phrase shown as a caption (e.g. file name or REPL line). */
+  source?: string;
+}
+
 export interface ExecutionErrorChunk {
   kind: "error";
   errorType: string;
@@ -34,6 +44,7 @@ export type ExecutionEvent =
   | ExecutionStdoutChunk
   | ExecutionStderrChunk
   | ExecutionResultChunk
+  | ExecutionImageChunk
   | ExecutionErrorChunk
   | ExecutionDoneChunk;
 

@@ -20,6 +20,99 @@ import contextlib
 
 _bonnie_user_globals = {"__name__": "__main__", "__builtins__": __builtins__}
 
+# Snapshot of `_bonnie_user_globals` taken at the end of bootstrap (after
+# the image library is installed by PYODIDE_INSTALL_PY). Each `_bonnie_run_file`
+# restores from this snapshot so a file run starts with a fresh global env -
+# but with the Bonnie image primitives + display helper still pre-loaded.
+# REPL evaluations do *not* reset, so definitions made by the most recent
+# Run File remain available at the prompt.
+_bonnie_initial_globals = None
+
+# Image emissions captured during the most recent `_bonnie_run_file` /
+# `_bonnie_repl_eval` call. The host drains this list after the call.
+_bonnie_image_emissions = []
+
+
+def _bonnie_capture_initial_globals():
+    """Capture the post-install baseline used by `_bonnie_reset_user_globals`."""
+    global _bonnie_initial_globals
+    _bonnie_initial_globals = dict(_bonnie_user_globals)
+
+
+def _bonnie_reset_user_globals():
+    """Reset `_bonnie_user_globals` to the post-install baseline.
+
+    Mutates the existing dict in place (`clear` + `update`) so any cached
+    reference to it (e.g. from `_bonnie_show_top_level`'s closure or from
+    Pyodide's `globals.get(...)`) remains valid.
+    """
+    if _bonnie_initial_globals is None:
+        # Snapshot wasn't taken yet (initialization in progress). Nothing to do.
+        return
+    _bonnie_user_globals.clear()
+    _bonnie_user_globals.update(_bonnie_initial_globals)
+
+
+def _bonnie_show_top_level(value):
+    """Emit a value produced by a top-level expression statement.
+
+    Mirrors the behavior of Python's interactive shell: `None` is suppressed,
+    Bonnie images are captured for the host to render, anything else is
+    printed via `repr` so bare expressions like `1 + 2` still display.
+    """
+    if value is None:
+        return
+    if hasattr(value, "_bonnie_image_data"):
+        try:
+            data = value._bonnie_image_data()
+        except Exception:
+            print(repr(value))
+            return
+        _bonnie_image_emissions.append(data)
+        return
+    print(repr(value))
+
+
+# Make the helper available to user code, since the AST rewrite injects calls
+# to `_bonnie_show_top_level(...)` that get evaluated under `_bonnie_user_globals`.
+_bonnie_user_globals["_bonnie_show_top_level"] = _bonnie_show_top_level
+
+
+class _BonnieTopLevelExprWrapper(_ast.NodeTransformer):
+    """Wrap module-level expression statements so they auto-display.
+
+    Skips the conventional module docstring (a string literal as the first
+    statement) and bare `None` / `...` constants which are usually noise.
+    """
+
+    def visit_Module(self, node):
+        new_body = []
+        for i, stmt in enumerate(node.body):
+            if isinstance(stmt, _ast.Expr) and not _bonnie_should_skip_expr(stmt, i):
+                call = _ast.Call(
+                    func=_ast.Name(id="_bonnie_show_top_level", ctx=_ast.Load()),
+                    args=[stmt.value],
+                    keywords=[],
+                )
+                wrapped = _ast.Expr(value=call)
+                _ast.copy_location(wrapped, stmt)
+                _ast.fix_missing_locations(wrapped)
+                new_body.append(wrapped)
+            else:
+                new_body.append(stmt)
+        node.body = new_body
+        return node
+
+
+def _bonnie_should_skip_expr(stmt, index):
+    value = stmt.value
+    if isinstance(value, _ast.Constant):
+        if index == 0 and isinstance(value.value, str):
+            return True  # module docstring
+        if value.value is None or value.value is Ellipsis:
+            return True
+    return False
+
 
 # -----------------------------------------------------------------------------
 # REPL syntax check (codeop.compile_command in 'single' mode)
@@ -90,9 +183,17 @@ def _bonnie_run_file(code, filename):
         "traceback": None,
         "line_number": None,
         "column": None,
+        "images": [],
     }
+    # Each Run File starts with a clean slate: discard any names defined by
+    # a previous Run File or by REPL exploration since then.
+    _bonnie_reset_user_globals()
+    _bonnie_image_emissions.clear()
     try:
-        compiled = compile(code, filename, "exec")
+        tree = _ast.parse(code, filename=filename, mode="exec")
+        _BonnieTopLevelExprWrapper().visit(tree)
+        _ast.fix_missing_locations(tree)
+        compiled = compile(tree, filename, "exec")
     except SyntaxError as e:
         tb_text = "".join(_tb_mod.format_exception(type(e), e, e.__traceback__))
         result["error_type"] = type(e).__name__
@@ -102,6 +203,7 @@ def _bonnie_run_file(code, filename):
         result["column"] = (e.offset - 1) if e.offset else None
         result["stdout"] = stdout.getvalue()
         result["stderr"] = stderr.getvalue()
+        result["images"] = list(_bonnie_image_emissions)
         return result
 
     try:
@@ -121,6 +223,7 @@ def _bonnie_run_file(code, filename):
     finally:
         result["stdout"] = stdout.getvalue()
         result["stderr"] = stderr.getvalue()
+        result["images"] = list(_bonnie_image_emissions)
     return result
 
 
@@ -141,7 +244,9 @@ def _bonnie_repl_eval(code):
         "traceback": None,
         "line_number": None,
         "column": None,
+        "images": [],
     }
+    _bonnie_image_emissions.clear()
     filename = "<repl>"
     try:
         tree = _ast.parse(code, filename=filename, mode="exec")
@@ -168,7 +273,14 @@ def _bonnie_repl_eval(code):
                 expr_module = _ast.Expression(body=last_expr.value)
                 compiled_expr = compile(expr_module, filename, "eval")
                 value = eval(compiled_expr, _bonnie_user_globals)
-                if value is not None:
+                if value is None:
+                    pass
+                elif hasattr(value, "_bonnie_image_data"):
+                    try:
+                        _bonnie_image_emissions.append(value._bonnie_image_data())
+                    except Exception:
+                        result["result_repr"] = repr(value)
+                else:
                     result["result_repr"] = repr(value)
         result["ok"] = True
     except SystemExit:
@@ -184,6 +296,7 @@ def _bonnie_repl_eval(code):
     finally:
         result["stdout"] = stdout.getvalue()
         result["stderr"] = stderr.getvalue()
+        result["images"] = list(_bonnie_image_emissions)
     return result
 
 

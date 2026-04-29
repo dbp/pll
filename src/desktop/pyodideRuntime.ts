@@ -1,7 +1,9 @@
 import * as path from "path";
 import type { PyodideInterface } from "pyodide";
 import {
+  BONNIE_IMAGE_LIB_PY,
   PYODIDE_BOOTSTRAP_PY,
+  PYODIDE_INSTALL_PY,
   type BonnieRunResult,
   type RawStaticFinding,
 } from "../common/pyodideRunner";
@@ -64,6 +66,8 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     const indexURL = path.join(this.extensionPath, "node_modules", "pyodide");
     this.pyodide = await pyodideModule.loadPyodide({ indexURL });
     this.pyodide.runPython(PYODIDE_BOOTSTRAP_PY);
+    this.pyodide.runPython(BONNIE_IMAGE_LIB_PY);
+    this.pyodide.runPython(PYODIDE_INSTALL_PY);
   }
 
   async runFile(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void> {
@@ -140,6 +144,17 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     }
     if (result.stderr) {
       onEvent({ kind: "stderr", text: result.stderr });
+    }
+    if (result.images) {
+      for (const img of result.images) {
+        onEvent({
+          kind: "image",
+          svg: img.data,
+          width: img.width,
+          height: img.height,
+          source: fileName,
+        });
+      }
     }
     if (result.result_repr !== null && result.result_repr !== undefined) {
       onEvent({ kind: "result", repr: result.result_repr });

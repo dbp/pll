@@ -5,26 +5,41 @@ It works in **desktop VS Code** and in **`vscode.dev`** (web).
 
 ## Features (MVP)
 
-- **Persistent REPL** via `Bonnie Python: Start REPL`. Opens a real
-  pseudoterminal (works in desktop and `vscode.dev`) with multi-line block
-  support, history navigation (Up/Down arrows), and Ctrl+C to clear input.
-  Multi-line completeness is decided by the same `codeop.compile_command`
-  Python's own interactive shell uses.
-- **Run Python files into the REPL.** `Bonnie Python: Run Active File`
-  (also available from the editor title run button on `.py` files) runs
-  the file *inside* the REPL, so any names it defines stay available for
-  the next prompt.
+- **Integrated interactions view.** A single Bonnie panel-area webview
+  shows banners, your typed input, stdout/stderr, results, structured
+  errors, and images all in one scroll-back-able stream. The input row at
+  the bottom accepts Python expressions and statements. Multi-line input
+  uses Shift+Enter; otherwise Enter submits, with automatic continuation
+  prompts when `codeop.compile_command` reports the input is incomplete
+  (matching CPython's interactive shell). Up/Down arrows scroll through
+  history. Ctrl/Cmd+L clears the stream. Works identically in desktop and
+  `vscode.dev`.
+- **Run Python files into the same session.** `Bonnie Python: Run Active
+  File` (also on the editor title run button for `.py` files) clears the
+  stream, runs the file in the same Python globals the REPL uses, and
+  leaves you at a fresh prompt with all of the file's definitions
+  available.
 - **Beginner-friendly errors.** Currently `NameError` is rewritten to a
   plain-language explanation with a "what / why / how to fix" breakdown,
-  shown in the REPL terminal (with ANSI colors) and as an editor diagnostic
-  on the offending line/identifier.
+  rendered as a structured block in the interactions view and as a VS
+  Code diagnostic on the offending line/identifier. The location text is
+  clickable and jumps to the source line.
 - **Language levels** (`#beginner` / `#expert`). The first non-blank line of
   a file may be a magic comment that selects a language level. At
   `#beginner`, files are statically checked for **variable shadowing**
   (including built-ins) and **variable reassignment**; if any check fires,
-  the file isn't executed and findings are surfaced in the REPL and editor.
-  `#expert` (the default if no header is present) disables all static checks
-  and runs the file as plain Python. The REPL itself is always expert.
+  the file isn't executed and findings are surfaced in the interactions
+  view and the editor. `#expert` (the default if no header is present)
+  disables all static checks and runs the file as plain Python. The REPL
+  itself is always expert.
+- **Images** (HtDP/Pyret-style). A small image library (`circle`, `square`,
+  `rectangle`, `triangle`, `ellipse`, `regular_polygon`, `star`, `text`,
+  `beside`, `above`, `overlay`, `rotate`, `scale`, `flip_*`, ...) is
+  available without import in both levels. Top-level expressions in a file
+  that evaluate to images auto-display **inline in the interactions
+  stream**, interleaved with text output. The same happens for image
+  values returned from REPL evaluations. Images are rendered as SVG (so
+  they scale cleanly) and each one has a Save SVG button.
 
 ## Architecture
 
@@ -36,14 +51,17 @@ src/
 ├── web/pyodideRuntime.ts          Talks to the worker
 ├── desktop/pyodideRuntime.ts      Loads Pyodide directly in the Node host
 └── common/
-    ├── commands.ts                Start REPL + Run File commands (shared)
-    ├── replSession.ts             Pseudoterminal-backed REPL (line editor + history)
+    ├── commands.ts                Run File / Show Interactions / Clear commands
+    ├── replSession.ts             Drives the interactions view: init,
+    │                              REPL multi-line buffer, file runs, exec chain
+    ├── interactionsView.ts        WebviewView provider for the integrated
+    │                              text + image stream + input row
     ├── level.ts                   #beginner / #expert header parser
-    ├── ansi.ts                    Tiny ANSI helpers
-    ├── errorFormatter.ts          ANSI/plain renderers for friendly errors
+    ├── errorFormatter.ts          Plain-text rendering for diagnostic tooltips
     ├── diagnostics.ts             VS Code DiagnosticCollection (multi-finding)
     ├── pyodideRunner.ts           Bootstrap loader + types
     ├── pyodideBootstrap.py        Real Python: run / repl-eval / static analyzer
+    ├── bonnieImageLib.py          Real Python: SVG image primitives + combinators
     ├── analyzers/
     │   ├── types.ts               AnalysisFinding, RuntimeAnalyzer
     │   ├── nameErrorAnalyzer.ts   Runtime: NameError -> friendly finding
@@ -55,6 +73,13 @@ src/
     └── errors/
         ├── pythonErrorParser.ts
         └── nameErrorExplainer.ts
+
+media/
+├── interactionsView/
+│   ├── style.css                  Stream + input row styling
+│   └── main.js                    View-side state, history, message routing
+├── bonnie-icon.svg                Panel container icon
+└── error-gutter.svg               Diagnostic gutter icon
 ```
 
 The static analyzer itself (scope builder, shadowing/reassignment checks)
@@ -63,10 +88,46 @@ a string at build time so it's loaded into Pyodide once on init - which means
 the analysis runs in the same Python interpreter that runs the user's code,
 in both desktop and web hosts.
 
+## Images
+
+Bonnie ships a small SVG-based image library inspired by Racket's
+`2htdp/image` and Pyret's `image-lib`. The primitives are auto-imported into
+user globals at both `#beginner` and `#expert`, so a beginner can write:
+
+```python
+#beginner
+
+circle(50, "solid", "red")
+
+beside(
+    triangle(60, "solid", "gold"),
+    square(60, "outline", "navy"),
+)
+
+above(
+    rectangle(120, 40, "solid", "black"),
+    rectangle(120, 40, "solid", "red"),
+    rectangle(120, 40, "solid", "gold"),
+)
+```
+
+Top-level expressions auto-display **inline in the interactions
+view**, in the same stream as text output, so the order of your prints
+and your images is preserved exactly. In the REPL, evaluating an
+expression that returns an `Image` shows it the same way. Each image card
+has a "Save SVG" button.
+
+Available primitives: `circle`, `square`, `rectangle`, `ellipse`,
+`triangle`, `right_triangle`, `regular_polygon`, `star`, `star_polygon`,
+`line`, `text`. Combinators: `beside`, `above`, `overlay`, `underlay`,
+`rotate`, `scale`, `flip_horizontal`, `flip_vertical`. Inspection:
+`image_width`, `image_height`, `empty_image`. Colors are CSS strings
+(`"red"`, `"#ff0000"`) or `(r, g, b)` / `(r, g, b, a)` tuples.
+
 ## Smoke tests
 
 ```bash
-pnpm run smoke   # static-analyzer Python tests + TS explainer/format tests
+pnpm run smoke   # static analyzer + explainers + image library/runtime
 ```
 
 ## Development
@@ -143,7 +204,7 @@ What stays on by design:
 - Line numbers, bracket matching, indent guides
 - Auto-closing brackets / quotes (helpful for newcomers)
 - The Problems panel (so our friendly errors show up)
-- Our REPL terminal and `Run Active File` button
+- The Bonnie interactions view and `Run Active File` button
 
 What we turn off for `[python]` files:
 

@@ -1,0 +1,284 @@
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--vscode-editor-background, #1e1e1e);
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  font-family: var(--vscode-editor-font-family, var(--vscode-font-family, monospace));
+  font-size: var(--vscode-editor-font-size, var(--vscode-font-size, 13px));
+  overflow: hidden;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* Header bar -------------------------------------------------- */
+
+#header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--vscode-panel-border, #444);
+  font-family: var(--vscode-font-family, sans-serif);
+}
+
+#header .title {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  opacity: 0.85;
+}
+
+#header .actions {
+  display: flex;
+  gap: 4px;
+}
+
+button {
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, inherit);
+  border: 1px solid var(--vscode-button-border, transparent);
+  padding: 2px 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  border-radius: 2px;
+}
+button:hover {
+  background: var(--vscode-button-secondaryHoverBackground, rgba(255,255,255,0.08));
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Stream ------------------------------------------------------ */
+
+#stream {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px 10px 4px 10px;
+  /* Block layout: each entry stacks naturally and the stream scrolls when
+   * full. Don't use flex here - in a column-flex container, children
+   * default to flex-shrink: 1, which squishes image cards to ~0 height
+   * once the stream fills up. */
+  display: block;
+  font-variant-ligatures: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+#stream .entry {
+  display: block;
+  /* Stream is a block container, but if it ever becomes a flex container
+   * again (e.g. in a future restyle), keep entries from being shrunk
+   * below their natural size. */
+  flex-shrink: 0;
+}
+
+#stream .entry + .entry {
+  margin-top: 2px;
+}
+
+/* Banners (e.g. "# Running hello.py [beginner]") */
+.entry.banner {
+  font-style: italic;
+  opacity: 0.7;
+  margin: 4px 0 2px 0;
+}
+
+/* User echo ("\>\>\> code" or "...   code") */
+.entry.echo {
+  display: flex;
+  gap: 0;
+}
+.entry.echo .prompt {
+  color: var(--vscode-terminal-ansiGreen, #6a9955);
+  margin-right: 6px;
+  flex: 0 0 auto;
+  user-select: none;
+}
+.entry.echo .code {
+  white-space: pre-wrap;
+  flex: 1 1 auto;
+}
+
+/* Stdout / stderr / result */
+.entry.stdout {
+  color: var(--vscode-terminal-foreground, var(--vscode-editor-foreground));
+}
+.entry.stderr {
+  color: var(--vscode-terminal-ansiRed, #f48771);
+}
+.entry.result {
+  color: var(--vscode-symbolIcon-stringForeground, #ce9178);
+}
+
+/* Inline image card */
+.entry.image {
+  margin: 6px 0;
+  border: 1px solid var(--vscode-panel-border, #333);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--vscode-editorWidget-background, #252526);
+  flex-shrink: 0;
+}
+.entry.image .imgWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  overflow: auto;
+  /* Ensure the image area always has visible height even when the SVG
+   * itself is short, and so the card never collapses on tight layouts. */
+  min-height: 60px;
+}
+.entry.image .imgWrap svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  /* Don't let SVGs balloon past the natural intrinsic size of the
+   * source image - max-width: 100% already bounds them by the
+   * container width, but height: auto would otherwise make a wide
+   * SVG taller than necessary in narrow viewports. */
+}
+.entry.image .imgMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: var(--vscode-font-family, sans-serif);
+  color: var(--vscode-descriptionForeground, #aaa);
+  background: var(--vscode-sideBarSectionHeader-background, rgba(255,255,255,0.02));
+  border-top: 1px solid var(--vscode-panel-border, #333);
+}
+.entry.image .imgMeta .caption {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.entry.image .imgMeta .dims {
+  flex: 0 0 auto;
+}
+
+/* Structured error finding */
+.entry.finding {
+  margin: 6px 0;
+  border-left: 3px solid var(--vscode-editorError-foreground, #f48771);
+  padding: 4px 0 4px 8px;
+}
+.entry.finding .errType {
+  color: var(--vscode-editorError-foreground, #f48771);
+  font-weight: 700;
+}
+.entry.finding .headline {
+  font-weight: 700;
+}
+.entry.finding .loc {
+  display: block;
+  opacity: 0.7;
+  font-size: 0.95em;
+  margin-top: 2px;
+}
+.entry.finding .loc a {
+  color: inherit;
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+.entry.finding .loc a:hover {
+  color: var(--vscode-textLink-foreground, #4da3ff);
+}
+.entry.finding .howTitle {
+  margin-top: 6px;
+  color: var(--vscode-symbolIcon-keywordForeground, #569cd6);
+  font-weight: 700;
+}
+.entry.finding ul {
+  margin: 2px 0 2px 0;
+  padding-left: 16px;
+  list-style: none;
+}
+.entry.finding ul li::before {
+  content: "- ";
+  color: var(--vscode-symbolIcon-keywordForeground, #569cd6);
+  margin-right: 4px;
+}
+
+/* Raw error fallback */
+.entry.rawError {
+  margin: 6px 0;
+  border-left: 3px solid var(--vscode-editorError-foreground, #f48771);
+  padding: 4px 0 4px 8px;
+  color: var(--vscode-terminal-ansiRed, #f48771);
+}
+.entry.rawError .head {
+  font-weight: 700;
+}
+
+/* Empty state */
+#empty {
+  text-align: center;
+  color: var(--vscode-descriptionForeground, #999);
+  padding: 20px 12px;
+  font-style: italic;
+  line-height: 1.5;
+  font-family: var(--vscode-font-family, sans-serif);
+}
+
+/* Input row --------------------------------------------------- */
+
+#inputRow {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 10px 6px 10px;
+  border-top: 1px solid var(--vscode-panel-border, #444);
+  background: var(--vscode-editor-background, #1e1e1e);
+}
+
+#inputRow.busy .prompt,
+#inputRow.busy textarea {
+  opacity: 0.5;
+}
+
+#inputRow .prompt {
+  color: var(--vscode-terminal-ansiGreen, #6a9955);
+  margin-top: 2px;
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+#inputRow textarea {
+  flex: 1 1 auto;
+  background: transparent;
+  color: inherit;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.45;
+  overflow: hidden;
+  min-height: 1.45em;
+}
+
+#inputRow .status {
+  flex: 0 0 auto;
+  font-family: var(--vscode-font-family, sans-serif);
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #999);
+  margin-top: 3px;
+  font-style: italic;
+}

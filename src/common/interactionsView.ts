@@ -1,0 +1,418 @@
+import * as vscode from "vscode";
+import type { AnalysisFinding } from "./analyzers/types";
+
+/**
+ * The Bonnie interactions view replaces both the pseudoterminal REPL and the
+ * standalone image view: it is a single webview that displays banners, user
+ * echoes, stdout/stderr, results, images, and structured errors as a stream,
+ * with an input row at the bottom for new REPL submissions.
+ *
+ * Entry semantics:
+ *   - The host (this class) is the source of truth for the entry log. The
+ *     webview mirrors it via vscode.setState for fast restore on reload.
+ *   - On webview open ("ready"), the host sends a `replay` message with the
+ *     entire log + current prompt + busy state.
+ *   - All UI changes go through `append`, `clear`, `setPrompt`, `setBusy`.
+ */
+
+/* -------------------------------------------------------------- */
+/* Entry types (serializable; sent to the webview as JSON).        */
+/* -------------------------------------------------------------- */
+
+export type Entry =
+  | BannerEntry
+  | EchoEntry
+  | StreamTextEntry
+  | ResultEntry
+  | ImageEntry
+  | FindingEntry
+  | RawErrorEntry;
+
+export interface BannerEntry {
+  kind: "banner";
+  text: string;
+}
+export interface EchoEntry {
+  kind: "echo";
+  prompt: ">>>" | "...";
+  code: string;
+}
+export interface StreamTextEntry {
+  kind: "stdout" | "stderr";
+  text: string;
+}
+export interface ResultEntry {
+  kind: "result";
+  repr: string;
+}
+export interface ImageEntry {
+  kind: "image";
+  svg: string;
+  width: number;
+  height: number;
+  source?: string;
+}
+export interface FindingEntry {
+  kind: "finding";
+  finding: SerializedFinding;
+}
+export interface SerializedFinding {
+  errorType: string;
+  headline: string;
+  howToFix: string[];
+  location: { fileName: string; line: number; column: number | null; label: string } | null;
+}
+export interface RawErrorEntry {
+  kind: "rawError";
+  errorType: string;
+  message: string;
+  traceback: string;
+}
+
+export type PromptKind = "primary" | "continuation";
+
+/* -------------------------------------------------------------- */
+/* Host-side message types                                         */
+/* -------------------------------------------------------------- */
+
+interface HostMessageAppend {
+  type: "append";
+  entry: Entry;
+}
+interface HostMessageClear {
+  type: "clear";
+}
+interface HostMessagePrompt {
+  type: "prompt";
+  kind: PromptKind;
+}
+interface HostMessageBusy {
+  type: "busy";
+  busy: boolean;
+  status?: string;
+}
+interface HostMessageReplay {
+  type: "replay";
+  entries: Entry[];
+  prompt: PromptKind;
+  busy: boolean;
+}
+interface HostMessageFocus {
+  type: "focusInput";
+}
+type HostToView =
+  | HostMessageAppend
+  | HostMessageClear
+  | HostMessagePrompt
+  | HostMessageBusy
+  | HostMessageReplay
+  | HostMessageFocus;
+
+/* -------------------------------------------------------------- */
+/* View -> host callbacks                                          */
+/* -------------------------------------------------------------- */
+
+export interface InteractionsHandlers {
+  onSubmit(code: string): void;
+  onInterrupt(): void;
+  onClearRequested(): void;
+}
+
+const VIEW_ID = "bonniePythonInteractionsView";
+
+export class BonnieInteractionsView
+  implements vscode.WebviewViewProvider, vscode.Disposable
+{
+  public static readonly viewType = VIEW_ID;
+
+  private view: vscode.WebviewView | null = null;
+  private webviewReady = false;
+  private readonly disposables: vscode.Disposable[] = [];
+
+  // Authoritative entry log.
+  private entries: Entry[] = [];
+  private prompt: PromptKind = "primary";
+  private busy = false;
+
+  // Map of display fileName -> document URI, used to honor click-to-open
+  // requests coming from the webview's error-location links.
+  private readonly fileMap = new Map<string, vscode.Uri>();
+
+  // Optional callbacks - REPL session installs these.
+  private handlers: InteractionsHandlers | null = null;
+
+  constructor(private readonly extensionUri: vscode.Uri) {}
+
+  setHandlers(handlers: InteractionsHandlers): void {
+    this.handlers = handlers;
+  }
+
+  /** Tell the view that `displayName` (as it appears in error locations)
+   *  corresponds to the given URI; clicking such a link will open it. */
+  registerFile(displayName: string, uri: vscode.Uri): void {
+    this.fileMap.set(displayName, uri);
+  }
+
+  /* -------- Top-level operations the REPL session calls -------- */
+
+  append(entry: Entry): void {
+    this.entries.push(entry);
+    this.post({ type: "append", entry });
+  }
+
+  appendBanner(text: string): void {
+    this.append({ kind: "banner", text });
+  }
+
+  appendEcho(prompt: ">>>" | "...", code: string): void {
+    this.append({ kind: "echo", prompt, code });
+  }
+
+  appendStdout(text: string): void {
+    this.append({ kind: "stdout", text });
+  }
+
+  appendStderr(text: string): void {
+    this.append({ kind: "stderr", text });
+  }
+
+  appendResult(repr: string): void {
+    this.append({ kind: "result", repr });
+  }
+
+  appendImage(image: { svg: string; width: number; height: number; source?: string }): void {
+    this.append({ kind: "image", ...image });
+  }
+
+  appendFinding(finding: AnalysisFinding): void {
+    this.append({ kind: "finding", finding: serializeFinding(finding) });
+  }
+
+  appendRawError(errorType: string, message: string, traceback: string): void {
+    this.append({ kind: "rawError", errorType, message, traceback });
+  }
+
+  clear(): void {
+    this.entries = [];
+    this.post({ type: "clear" });
+  }
+
+  setPrompt(kind: PromptKind): void {
+    this.prompt = kind;
+    this.post({ type: "prompt", kind });
+  }
+
+  setBusy(busy: boolean, status?: string): void {
+    this.busy = busy;
+    this.post({ type: "busy", busy, status });
+  }
+
+  /** Reveal the view (creating it if necessary). */
+  async reveal(options: { preserveFocus?: boolean } = {}): Promise<void> {
+    if (this.view) {
+      this.view.show?.(options.preserveFocus ?? false);
+      return;
+    }
+    try {
+      await vscode.commands.executeCommand(`${VIEW_ID}.focus`);
+    } catch {
+      /* container not yet present */
+    }
+  }
+
+  focusInput(): void {
+    this.post({ type: "focusInput" });
+  }
+
+  /* -------- WebviewViewProvider -------- */
+
+  resolveWebviewView(view: vscode.WebviewView): void {
+    this.view = view;
+    this.webviewReady = false;
+
+    view.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "media")],
+    };
+    view.webview.html = this.renderHtml(view.webview);
+
+    this.disposables.push(
+      view.webview.onDidReceiveMessage((msg) => this.handleMessage(msg)),
+      view.onDidDispose(() => {
+        this.view = null;
+        this.webviewReady = false;
+      }),
+    );
+  }
+
+  private handleMessage(msg: unknown): void {
+    if (!msg || typeof msg !== "object") return;
+    const m = msg as {
+      type?: string;
+      code?: string;
+      svg?: string;
+      source?: string;
+      fileName?: string;
+      line?: number;
+      column?: number;
+    };
+    switch (m.type) {
+      case "ready":
+        this.webviewReady = true;
+        this.post({
+          type: "replay",
+          entries: this.entries,
+          prompt: this.prompt,
+          busy: this.busy,
+        });
+        break;
+      case "submit":
+        if (typeof m.code === "string" && this.handlers) {
+          this.handlers.onSubmit(m.code);
+        }
+        break;
+      case "interrupt":
+        this.handlers?.onInterrupt();
+        break;
+      case "clearRequested":
+        this.handlers?.onClearRequested();
+        break;
+      case "openLocation":
+        if (typeof m.fileName === "string" && typeof m.line === "number") {
+          void this.handleOpenLocation(m.fileName, m.line, m.column);
+        }
+        break;
+      case "saveSvg":
+        if (typeof m.svg === "string") {
+          void this.handleSaveSvg(m.svg, m.source);
+        }
+        break;
+    }
+  }
+
+  private async handleOpenLocation(
+    fileName: string,
+    line: number,
+    column: number | undefined,
+  ): Promise<void> {
+    const uri = this.fileMap.get(fileName);
+    if (!uri) return;
+    const lineIndex = Math.max(0, line - 1);
+    const colIndex = Math.max(0, (column ?? 1) - 1);
+    const position = new vscode.Position(lineIndex, colIndex);
+    await vscode.window.showTextDocument(uri, {
+      selection: new vscode.Range(position, position),
+      preserveFocus: false,
+    });
+  }
+
+  private async handleSaveSvg(svg: string, source: string | undefined): Promise<void> {
+    const defaultName = (source ?? "image").replace(/[^a-zA-Z0-9_.-]+/g, "_") + ".svg";
+    const target = await vscode.window.showSaveDialog({
+      filters: { "SVG image": ["svg"] },
+      saveLabel: "Save image",
+      defaultUri: vscode.Uri.file(defaultName),
+    });
+    if (!target) return;
+    const data = new TextEncoder().encode(svg);
+    await vscode.workspace.fs.writeFile(target, data);
+    vscode.window.showInformationMessage(`Saved image to ${target.fsPath}`);
+  }
+
+  /* -------- Internals -------- */
+
+  private post(msg: HostToView): void {
+    if (!this.view || !this.webviewReady) return;
+    void this.view.webview.postMessage(msg);
+  }
+
+  dispose(): void {
+    for (const d of this.disposables) d.dispose();
+    this.disposables.length = 0;
+    this.view = null;
+  }
+
+  private renderHtml(webview: vscode.Webview): string {
+    const styleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "interactionsView", "style.css"),
+    );
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "interactionsView", "main.js"),
+    );
+    const nonce = makeNonce();
+    const csp = [
+      `default-src 'none'`,
+      `style-src ${webview.cspSource} 'unsafe-inline'`,
+      `script-src 'nonce-${nonce}'`,
+      `img-src ${webview.cspSource} data:`,
+      `font-src ${webview.cspSource}`,
+    ].join("; ");
+
+    return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="${csp}" />
+  <link rel="stylesheet" href="${styleUri}" />
+  <title>Bonnie Python</title>
+</head>
+<body>
+  <div id="root">
+    <div id="header">
+      <span class="title">Bonnie Python</span>
+      <div class="actions">
+        <button id="clear" title="Clear interactions (Ctrl/Cmd+L)">Clear</button>
+      </div>
+    </div>
+    <div id="stream">
+      <div id="empty">Bonnie Python interactions.<br/>Run a file or evaluate an expression in the prompt below.</div>
+    </div>
+    <div id="inputRow">
+      <span id="prompt" class="prompt">&gt;&gt;&gt;</span>
+      <textarea id="input" rows="1" autocomplete="off" spellcheck="false"
+        autocapitalize="off" wrap="soft"></textarea>
+      <span id="status" class="status"></span>
+    </div>
+  </div>
+  <script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+  }
+}
+
+/* -------- Helpers -------- */
+
+function serializeFinding(finding: AnalysisFinding): SerializedFinding {
+  let location: SerializedFinding["location"] = null;
+  if (
+    finding.lineNumber !== null &&
+    finding.fileName !== "<repl>" &&
+    finding.fileName !== "<input>"
+  ) {
+    const label =
+      finding.column !== null
+        ? `${finding.fileName}:${finding.lineNumber}:${finding.column + 1}`
+        : `${finding.fileName}:${finding.lineNumber}`;
+    location = {
+      fileName: finding.fileName,
+      line: finding.lineNumber,
+      column: finding.column,
+      label,
+    };
+  }
+  return {
+    errorType: finding.errorType,
+    headline: finding.headline,
+    howToFix: [...finding.howToFix],
+    location,
+  };
+}
+
+function makeNonce(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let out = "";
+  for (let i = 0; i < 32; i++) {
+    out += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return out;
+}

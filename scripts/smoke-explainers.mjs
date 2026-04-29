@@ -123,7 +123,7 @@ expect(
 );
 
 console.log("[formatFriendlyError - shadowing-builtin]");
-const lines = mod.formatFriendlyError(findings[1], { ansi: false });
+const lines = mod.formatFriendlyError(findings[1]);
 expect(lines[0].startsWith("Shadowing:"), "first line is errorType + headline");
 expect(lines.some((l) => l.includes("at test.py:15:1")), "shows location");
 expect(lines.some((l) => l.includes("How to fix:")), "shows How to fix section");

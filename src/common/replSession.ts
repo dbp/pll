@@ -1,273 +1,153 @@
 import * as vscode from "vscode";
 import { findRuntimeFinding } from "./analyzers/registry";
 import { enrichStaticFindings } from "./analyzers/static/registry";
-import type { AnalysisFinding } from "./analyzers/types";
-import { ANSI, color, CRLF, toCRLF } from "./ansi";
 import type { BonnieDiagnostics } from "./diagnostics";
 import { parsePythonError } from "./errors/pythonErrorParser";
-import { formatFriendlyError } from "./errorFormatter";
+import type { BonnieInteractionsView } from "./interactionsView";
 import { parseLevel, type Level } from "./level";
-import type { BonnieTerminalLinkProvider } from "./terminalLinks";
 import type { ExecutionEvent, PythonRuntime } from "./types";
-
-const PROMPT = color(">>>", ANSI.green) + " ";
-const CONT_PROMPT = color("...", ANSI.green) + " ";
-const TERMINAL_NAME = "Python (Bonnie REPL)";
-/** Clear visible screen + scrollback + move cursor home (xterm). */
-const CLEAR_SCREEN = "\x1b[2J\x1b[3J\x1b[H";
 
 export interface BonnieReplDeps {
   runtime: PythonRuntime;
   diagnostics: BonnieDiagnostics;
-  terminalLinks: BonnieTerminalLinkProvider;
-}
-
-interface PendingRunFile {
-  code: string;
-  fileName: string;
-  documentUri?: vscode.Uri;
+  view: BonnieInteractionsView;
 }
 
 /**
- * A real REPL on top of vscode.Pseudoterminal.
+ * Drives the Bonnie interactions view: serves as the bridge between user
+ * input/file runs and the Pyodide runtime. There is no terminal anymore;
+ * everything happens in BonnieInteractionsView.
  *
- * - Same `_bonnie_user_globals` is used for all evaluations and for `runFile`,
- *   so definitions made by running a file persist into REPL evaluations.
- * - Multi-line input is detected by asking Pyodide via codeop.compile_command;
- *   incomplete input switches to a `...` prompt. An empty line in continuation
- *   force-executes the buffered block (matches CPython's interactive shell).
- * - Up/Down arrows scroll through history.
- * - Errors are rendered with ANSI colors via formatFriendlyErrorAnsi and also
- *   raised as VS Code diagnostics on the originating document.
+ * Responsibilities:
+ *   - One-shot Python initialization (kicked off eagerly so the UI is
+ *     usable as soon as the user looks at it).
+ *   - File runs: clear stream, parse the language level, gate beginner files
+ *     on static checks, stream the resulting events as Entries.
+ *   - REPL input: accept submissions from the webview, handle multi-line
+ *     buffering via codeop.compile_command, run on the same shared globals
+ *     so file-level definitions persist into REPL evaluations.
+ *   - Stream batching: buffer stdout/stderr by `\n` so partial-line writes
+ *     (e.g. `print(end="")`) coalesce into single Entries instead of
+ *     creating one block per chunk.
  */
-export class BonnieReplSession {
-  private terminal: vscode.Terminal | null = null;
-  private readonly writeEmitter = new vscode.EventEmitter<string>();
-  private readonly closeEmitter = new vscode.EventEmitter<number | void>();
+export class BonnieReplSession implements vscode.Disposable {
+  private execChain: Promise<void> = Promise.resolve();
 
-  private inputBuffer = "";
+  private initialized = false;
+  private initPromise: Promise<boolean> | null = null;
+
+  // Multi-line REPL buffer.
   private continuationLines: string[] = [];
   private continuing = false;
 
-  private history: string[] = [];
-  private historyIdx = -1;
-  private historyDraft = "";
+  // Line-buffered stream output.
+  private stdoutBuf = "";
+  private stderrBuf = "";
 
-  private opened = false;
-  private initialized = false;
-  private execChain: Promise<void> = Promise.resolve();
-  private busy = false;
-
-  private pendingRunFile: PendingRunFile | null = null;
-
-  constructor(private readonly deps: BonnieReplDeps) {}
-
-  /** Show (and create if needed) the REPL terminal. */
-  show(preserveFocus = false): void {
-    this.ensureTerminal();
-    this.terminal!.show(preserveFocus);
+  constructor(private readonly deps: BonnieReplDeps) {
+    deps.view.setHandlers({
+      onSubmit: (code) => this.handleSubmit(code),
+      onInterrupt: () => this.handleInterrupt(),
+      onClearRequested: () => this.handleClearRequested(),
+    });
+    void this.ensureInitialized();
   }
 
-  /** Run a file inside this REPL so its globals persist for the next prompt. */
-  runFile(code: string, fileName: string, document?: vscode.TextDocument): Promise<void> {
-    this.show();
-    if (!this.opened || !this.initialized) {
-      this.pendingRunFile = { code, fileName, documentUri: document?.uri };
-      return Promise.resolve();
-    }
+  /** Reveal the interactions view (creates it on first call). */
+  show(preserveFocus = false): void {
+    void this.deps.view.reveal({ preserveFocus });
+  }
+
+  /** Run a file in the same globals used by the REPL. */
+  async runFile(
+    code: string,
+    fileName: string,
+    document?: vscode.TextDocument,
+  ): Promise<void> {
+    this.show(false);
     return this.enqueue(() => this.executeFile(code, fileName, document));
   }
 
   dispose(): void {
-    this.terminal?.dispose();
-    this.terminal = null;
-    this.writeEmitter.dispose();
-    this.closeEmitter.dispose();
+    /* Subscriptions owned externally; nothing to clean up here. */
   }
 
-  private ensureTerminal(): void {
-    if (this.terminal) {
-      return;
-    }
-    const pty: vscode.Pseudoterminal = {
-      onDidWrite: this.writeEmitter.event,
-      onDidClose: this.closeEmitter.event,
-      open: () => {
-        void this.handleOpen();
-      },
-      close: () => this.handleClose(),
-      handleInput: (data) => this.handleInput(data),
-    };
-    this.terminal = vscode.window.createTerminal({
-      name: TERMINAL_NAME,
-      pty,
-      isTransient: true,
-    });
-  }
+  /* -------- Init -------- */
 
-  private write(text: string): void {
-    this.writeEmitter.fire(text);
-  }
-
-  private writeLine(text = ""): void {
-    this.write(text + CRLF);
-  }
-
-  private async handleOpen(): Promise<void> {
-    this.opened = true;
-    this.writeLine(color("Bonnie Python REPL", ANSI.bold, ANSI.cyan));
-    this.writeLine(color("Loading Python...", ANSI.dim));
-    try {
-      await this.deps.runtime.initialize();
-    } catch (err) {
-      this.writeLine(
-        color("Failed to start Python: ", ANSI.red, ANSI.bold) +
-          (err instanceof Error ? err.message : String(err)),
+  private async ensureInitialized(): Promise<boolean> {
+    if (this.initPromise) return this.initPromise;
+    this.deps.view.appendBanner("Bonnie Python");
+    this.deps.view.appendBanner("Loading Python...");
+    this.deps.view.setBusy(true, "Loading...");
+    this.initPromise = (async () => {
+      try {
+        await this.deps.runtime.initialize();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.deps.view.appendRawError("InitializationError", msg, "");
+        this.deps.view.setBusy(false);
+        return false;
+      }
+      this.initialized = true;
+      this.deps.view.appendBanner(
+        "Ready. \u2191/\u2193: history. Shift+Enter: newline. Ctrl/Cmd+L: clear.",
       );
-      return;
-    }
-    this.initialized = true;
-    this.writeLine(color("Ready.", ANSI.green));
-    this.writeLine(
-      color("  Definitions from `Run Active File` are available here.", ANSI.dim),
-    );
-    this.writeLine(color("  Up/Down arrows scroll history. Ctrl+C clears input.", ANSI.dim));
-
-    if (this.pendingRunFile) {
-      const pending = this.pendingRunFile;
-      this.pendingRunFile = null;
-      const document = pending.documentUri ? this.findDocument(pending.documentUri) : undefined;
-      await this.enqueue(() => this.executeFile(pending.code, pending.fileName, document));
-      return;
-    }
-    this.prompt();
+      this.deps.view.setBusy(false);
+      this.deps.view.setPrompt("primary");
+      return true;
+    })();
+    return this.initPromise;
   }
 
-  private findDocument(uri: vscode.Uri): vscode.TextDocument | undefined {
-    return vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+  /* -------- Handlers from the view -------- */
+
+  private handleSubmit(code: string): void {
+    void this.processSubmission(code);
   }
 
-  private handleClose(): void {
-    this.terminal = null;
-    this.opened = false;
-    this.initialized = false;
-    this.inputBuffer = "";
-    this.continuationLines = [];
-    this.continuing = false;
-    this.historyIdx = -1;
-    this.historyDraft = "";
-  }
-
-  private prompt(): void {
-    this.write(this.continuing ? CONT_PROMPT : PROMPT);
-  }
-
-  private redrawCurrentLine(): void {
-    this.write("\x1b[2K\r");
-    this.prompt();
-    this.write(this.inputBuffer);
-  }
-
-  private handleInput(data: string): void {
-    if (this.busy) {
-      return;
-    }
-    let i = 0;
-    while (i < data.length) {
-      const ch = data.charCodeAt(i);
-
-      if (ch === 0x1b && data[i + 1] === "[") {
-        const seq = data.substring(i, i + 3);
-        if (seq === "\x1b[A") {
-          this.historyUp();
-          i += 3;
-          continue;
-        }
-        if (seq === "\x1b[B") {
-          this.historyDown();
-          i += 3;
-          continue;
-        }
-        i += 3;
-        continue;
-      }
-
-      if (ch === 0x03) {
-        this.write(color("^C", ANSI.dim) + CRLF);
-        this.inputBuffer = "";
-        this.continuationLines = [];
-        this.continuing = false;
-        this.prompt();
-        i += 1;
-        continue;
-      }
-
-      if (ch === 0x7f || ch === 0x08) {
-        if (this.inputBuffer.length > 0) {
-          this.inputBuffer = this.inputBuffer.slice(0, -1);
-          this.write("\b \b");
-        }
-        i += 1;
-        continue;
-      }
-
-      if (ch === 0x0d) {
-        this.write(CRLF);
-        const line = this.inputBuffer;
-        this.inputBuffer = "";
-        void this.processLine(line);
-        i += 1;
-        continue;
-      }
-
-      if (ch >= 0x20) {
-        const c = data[i];
-        this.inputBuffer += c;
-        this.write(c);
-      }
-      i += 1;
+  private handleInterrupt(): void {
+    if (this.continuing) {
+      this.continuationLines = [];
+      this.continuing = false;
+      this.deps.view.appendBanner("KeyboardInterrupt");
+      this.deps.view.setPrompt("primary");
     }
   }
 
-  private historyUp(): void {
-    if (this.history.length === 0) {
-      return;
-    }
-    if (this.historyIdx === -1) {
-      this.historyDraft = this.inputBuffer;
-      this.historyIdx = this.history.length - 1;
-    } else if (this.historyIdx > 0) {
-      this.historyIdx -= 1;
-    }
-    this.inputBuffer = this.history[this.historyIdx];
-    this.redrawCurrentLine();
+  private handleClearRequested(): void {
+    this.deps.view.clear();
   }
 
-  private historyDown(): void {
-    if (this.historyIdx === -1) {
-      return;
+  /* -------- Submission flow -------- */
+
+  /**
+   * The view sends one logical submission per Enter; multi-line content
+   * (Shift+Enter or pasted text with newlines) is unrolled into per-line
+   * processing here so each line gets its own echo entry and the
+   * continuation tracking matches CPython's interactive shell.
+   */
+  private async processSubmission(rawCode: string): Promise<void> {
+    if (!this.initialized) {
+      const ok = await this.ensureInitialized();
+      if (!ok) return;
     }
-    this.historyIdx += 1;
-    if (this.historyIdx >= this.history.length) {
-      this.historyIdx = -1;
-      this.inputBuffer = this.historyDraft;
-      this.historyDraft = "";
-    } else {
-      this.inputBuffer = this.history[this.historyIdx];
+    const lines = rawCode.split(/\r?\n/);
+    for (const line of lines) {
+      await this.processLine(line);
     }
-    this.redrawCurrentLine();
   }
 
   private async processLine(rawLine: string): Promise<void> {
+    const promptUsed: ">>>" | "..." = this.continuing ? "..." : ">>>";
+    this.deps.view.appendEcho(promptUsed, rawLine);
+
     if (this.continuing) {
       if (rawLine.trim() === "") {
         const code = this.continuationLines.join("\n");
         this.continuationLines = [];
         this.continuing = false;
-        if (code.trim() === "") {
-          this.prompt();
-          return;
-        }
+        this.deps.view.setPrompt("primary");
+        if (code.trim() === "") return;
         await this.enqueue(() => this.executeRepl(code));
         return;
       }
@@ -277,15 +157,16 @@ export class BonnieReplSession {
       if (status.status === "complete") {
         this.continuationLines = [];
         this.continuing = false;
+        this.deps.view.setPrompt("primary");
         await this.enqueue(() => this.executeRepl(buffered));
       } else {
-        this.prompt();
+        this.deps.view.setPrompt("continuation");
       }
       return;
     }
 
     if (rawLine.trim() === "") {
-      this.prompt();
+      // Empty primary-prompt line: just keep the prompt as-is.
       return;
     }
 
@@ -293,7 +174,7 @@ export class BonnieReplSession {
     if (status.status === "incomplete") {
       this.continuationLines.push(rawLine);
       this.continuing = true;
-      this.prompt();
+      this.deps.view.setPrompt("continuation");
       return;
     }
 
@@ -306,11 +187,10 @@ export class BonnieReplSession {
     return next;
   }
 
+  /* -------- Execution -------- */
+
   private async executeRepl(code: string): Promise<void> {
-    this.busy = true;
-    this.history.push(code);
-    this.historyIdx = -1;
-    this.historyDraft = "";
+    this.deps.view.setBusy(true);
     try {
       // The REPL itself is always expert level - we never run static checks
       // against ad-hoc prompt input.
@@ -318,13 +198,11 @@ export class BonnieReplSession {
         this.handleEvent(event, code, "<repl>", undefined, "expert"),
       );
     } catch (err) {
-      this.writeLine(
-        color("Internal error: ", ANSI.red, ANSI.bold) +
-          (err instanceof Error ? err.message : String(err)),
-      );
+      const msg = err instanceof Error ? err.message : String(err);
+      this.deps.view.appendStderr(`Internal error: ${msg}`);
     } finally {
-      this.busy = false;
-      this.prompt();
+      this.flushStreams();
+      this.deps.view.setBusy(false);
     }
   }
 
@@ -333,32 +211,28 @@ export class BonnieReplSession {
     fileName: string,
     document?: vscode.TextDocument,
   ): Promise<void> {
-    this.busy = true;
+    // Run File starts a fresh session for the user: drop any unfinished
+    // multi-line REPL buffer and reset to the primary prompt.
+    this.continuationLines = [];
+    this.continuing = false;
+    this.deps.view.setPrompt("primary");
+
+    this.deps.view.clear();
+    this.deps.view.setBusy(true);
+
     if (document) {
       this.deps.diagnostics.clear(document.uri);
-      this.deps.terminalLinks.registerFile(fileName, document.uri);
+      this.deps.view.registerFile(fileName, document.uri);
     }
-    this.write(CLEAR_SCREEN);
 
     const level = parseLevel(code);
-    const banner =
-      level === "expert"
-        ? `# Running ${fileName}`
-        : `# Running ${fileName} [${level}]`;
-    this.writeLine(color(banner, ANSI.dim));
 
     try {
-      // Beginner-level files go through static analysis first; if any findings
-      // are produced we render them, set diagnostics, and SKIP execution. The
-      // user has to fix things before the file will run.
       if (level === "beginner") {
         const blocked = await this.runStaticChecks(code, fileName, level, document);
         if (blocked) {
-          this.writeLine(
-            color(
-              "# Static analysis found issues. File not executed.",
-              ANSI.yellow,
-            ),
+          this.deps.view.appendBanner(
+            "Static analysis found issues. File not executed.",
           );
           return;
         }
@@ -367,22 +241,15 @@ export class BonnieReplSession {
       await this.deps.runtime.runFile({ code, fileName }, (event) =>
         this.handleEvent(event, code, fileName, document, level),
       );
-      this.writeLine(color(`# Finished ${fileName}`, ANSI.dim));
     } catch (err) {
-      this.writeLine(
-        color("Internal error: ", ANSI.red, ANSI.bold) +
-          (err instanceof Error ? err.message : String(err)),
-      );
+      const msg = err instanceof Error ? err.message : String(err);
+      this.deps.view.appendStderr(`Internal error: ${msg}`);
     } finally {
-      this.busy = false;
-      this.prompt();
+      this.flushStreams();
+      this.deps.view.setBusy(false);
     }
   }
 
-  /**
-   * Run language-level static checks against `code`. Returns true if any
-   * findings were produced (caller should skip execution).
-   */
   private async runStaticChecks(
     code: string,
     fileName: string,
@@ -393,37 +260,25 @@ export class BonnieReplSession {
     try {
       raw = await this.deps.runtime.staticAnalyze({ code, fileName, level });
     } catch (err) {
-      this.writeLine(
-        color("Static analysis failed: ", ANSI.red, ANSI.bold) +
-          (err instanceof Error ? err.message : String(err)),
-      );
+      const msg = err instanceof Error ? err.message : String(err);
+      this.deps.view.appendStderr(`Static analysis failed: ${msg}`);
       return false;
     }
-
     const findings = enrichStaticFindings(raw, level, fileName);
     if (findings.length === 0) {
-      if (document) {
-        this.deps.diagnostics.clear(document.uri);
-      }
+      if (document) this.deps.diagnostics.clear(document.uri);
       return false;
     }
-
-    this.renderFindings(findings);
+    for (const finding of findings) {
+      this.deps.view.appendFinding(finding);
+    }
     if (document) {
       this.deps.diagnostics.setFindings(document.uri, document, findings);
     }
     return true;
   }
 
-  private renderFindings(findings: ReadonlyArray<AnalysisFinding>): void {
-    for (const finding of findings) {
-      this.writeLine();
-      for (const line of formatFriendlyError(finding, { ansi: true })) {
-        this.writeLine(line);
-      }
-    }
-    this.writeLine();
-  }
+  /* -------- Event handling -------- */
 
   private handleEvent(
     event: ExecutionEvent,
@@ -434,17 +289,28 @@ export class BonnieReplSession {
   ): void {
     switch (event.kind) {
       case "stdout":
-      case "stderr": {
-        const tinted = event.kind === "stderr" ? color(event.text, ANSI.red) : event.text;
-        this.write(toCRLF(tinted));
+        this.feedStream("stdout", event.text);
         break;
-      }
+      case "stderr":
+        this.feedStream("stderr", event.text);
+        break;
       case "result":
+        this.flushStreams();
         if (event.repr !== null && event.repr !== undefined) {
-          this.writeLine(event.repr);
+          this.deps.view.appendResult(event.repr);
         }
         break;
+      case "image":
+        this.flushStreams();
+        this.deps.view.appendImage({
+          svg: event.svg,
+          width: event.width,
+          height: event.height,
+          source: event.source ?? fileName,
+        });
+        break;
       case "error": {
+        this.flushStreams();
         const traceback = event.traceback || `${event.errorType}: ${event.message}`;
         const parsed = parsePythonError(traceback);
         if (parsed.lineNumber === null && event.lineNumber !== null) {
@@ -458,26 +324,49 @@ export class BonnieReplSession {
         }
         const finding = findRuntimeFinding(source, fileName, level, parsed);
         if (finding) {
-          this.writeLine();
-          for (const line of formatFriendlyError(finding, { ansi: true })) {
-            this.writeLine(line);
-          }
-          this.writeLine();
+          this.deps.view.appendFinding(finding);
           if (document) {
             this.deps.diagnostics.setFinding(document.uri, document, finding);
           }
         } else {
-          this.writeLine();
-          this.writeLine(
-            color(`${event.errorType}: `, ANSI.red, ANSI.bold) + event.message,
-          );
-          this.write(toCRLF(traceback));
-          this.writeLine();
+          this.deps.view.appendRawError(event.errorType, event.message, traceback);
         }
         break;
       }
       case "done":
+        this.flushStreams();
         break;
+    }
+  }
+
+  /* -------- Stream batching -------- */
+
+  /**
+   * Buffer stream output and flush whole lines as Entries. This avoids
+   * one Entry per chunk when Python flushes mid-line (e.g. `print(end="")`).
+   */
+  private feedStream(kind: "stdout" | "stderr", text: string): void {
+    let buf = kind === "stdout" ? this.stdoutBuf : this.stderrBuf;
+    buf += text;
+    let idx: number;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      const line = buf.substring(0, idx);
+      if (kind === "stdout") this.deps.view.appendStdout(line);
+      else this.deps.view.appendStderr(line);
+      buf = buf.substring(idx + 1);
+    }
+    if (kind === "stdout") this.stdoutBuf = buf;
+    else this.stderrBuf = buf;
+  }
+
+  private flushStreams(): void {
+    if (this.stdoutBuf.length > 0) {
+      this.deps.view.appendStdout(this.stdoutBuf);
+      this.stdoutBuf = "";
+    }
+    if (this.stderrBuf.length > 0) {
+      this.deps.view.appendStderr(this.stderrBuf);
+      this.stderrBuf = "";
     }
   }
 }

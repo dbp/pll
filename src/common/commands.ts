@@ -1,10 +1,12 @@
 import * as vscode from "vscode";
 import type { BonnieDiagnostics } from "./diagnostics";
+import type { BonnieInteractionsView } from "./interactionsView";
 import type { BonnieReplSession } from "./replSession";
 
 export interface BonnieServices {
   repl: BonnieReplSession;
   diagnostics: BonnieDiagnostics;
+  view: BonnieInteractionsView;
 }
 
 export function registerCommands(
@@ -12,17 +14,21 @@ export function registerCommands(
   services: BonnieServices,
 ): void {
   context.subscriptions.push(
+    // Show the integrated interactions view.
+    vscode.commands.registerCommand("bonniePython.showInteractions", () =>
+      services.view.reveal({ preserveFocus: false }).catch(reportError),
+    ),
+    // Back-compat alias for users who had this bound; just opens the view.
     vscode.commands.registerCommand("bonniePython.startRepl", () =>
-      startRepl(services).catch((err) => reportError(err)),
+      services.view.reveal({ preserveFocus: false }).catch(reportError),
     ),
     vscode.commands.registerCommand("bonniePython.runActiveFile", () =>
-      runActiveFile(services).catch((err) => reportError(err)),
+      runActiveFile(services).catch(reportError),
+    ),
+    vscode.commands.registerCommand("bonniePython.clearInteractions", () =>
+      services.view.clear(),
     ),
   );
-}
-
-async function startRepl(services: BonnieServices): Promise<void> {
-  services.repl.show(false);
 }
 
 async function runActiveFile(services: BonnieServices): Promise<void> {

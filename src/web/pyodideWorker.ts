@@ -1,6 +1,8 @@
 /// <reference lib="WebWorker" />
 import {
+  BONNIE_IMAGE_LIB_PY,
   PYODIDE_BOOTSTRAP_PY,
+  PYODIDE_INSTALL_PY,
   type BonnieRunResult,
   type RawStaticFinding,
 } from "../common/pyodideRunner";
@@ -64,6 +66,8 @@ async function ensurePyodide(indexUrl: string): Promise<void> {
       }
       pyodideInstance = await self.loadPyodide({ indexURL: normalized });
       pyodideInstance.runPython(PYODIDE_BOOTSTRAP_PY);
+      pyodideInstance.runPython(BONNIE_IMAGE_LIB_PY);
+      pyodideInstance.runPython(PYODIDE_INSTALL_PY);
     })();
   }
   await initPromise;

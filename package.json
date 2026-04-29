@@ -1,7 +1,7 @@
 {
   "name": "bonnie-python",
-  "displayName": "Bonnie Python (Pyodide REPL)",
-  "description": "Beginner-friendly Python REPL and runner powered by Pyodide. Works in desktop VS Code and vscode.dev.",
+  "displayName": "Bonnie Python",
+  "description": "Beginner-friendly integrated Python REPL with inline images, language levels, and friendly errors. Powered by Pyodide. Works in desktop VS Code and vscode.dev.",
   "version": "0.0.1",
   "publisher": "bonnie",
   "engines": {
@@ -16,10 +16,15 @@
   "main": "./dist/extension.js",
   "browser": "./dist/web/extension.js",
   "activationEvents": [
-    "onLanguage:python"
+    "onLanguage:python",
+    "onView:bonniePythonInteractionsView"
   ],
   "contributes": {
     "commands": [
+      {
+        "command": "bonniePython.showInteractions",
+        "title": "Bonnie Python: Show Interactions"
+      },
       {
         "command": "bonniePython.startRepl",
         "title": "Bonnie Python: Start REPL"
@@ -27,6 +32,10 @@
       {
         "command": "bonniePython.runActiveFile",
         "title": "Bonnie Python: Run Active File"
+      },
+      {
+        "command": "bonniePython.clearInteractions",
+        "title": "Bonnie Python: Clear Interactions"
       }
     ],
     "menus": {
@@ -35,6 +44,25 @@
           "command": "bonniePython.runActiveFile",
           "when": "editorLangId == python",
           "group": "navigation"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "bonniePythonPanel",
+          "title": "Bonnie",
+          "icon": "media/bonnie-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "bonniePythonPanel": [
+        {
+          "id": "bonniePythonInteractionsView",
+          "name": "Interactions",
+          "type": "webview",
+          "contextualTitle": "Bonnie"
         }
       ]
     },
@@ -143,7 +171,7 @@
     "setup:browser": "playwright install chromium",
     "test-web": "pnpm run setup:browser && pnpm run build && vscode-test-web --browser=chromium --coi --extensionDevelopmentPath=. samples",
     "test-web:server": "pnpm run build && vscode-test-web --browser=none --coi --extensionDevelopmentPath=. samples",
-    "smoke": "node scripts/smoke-static-analyze.mjs && node scripts/smoke-explainers.mjs"
+    "smoke": "node scripts/smoke-static-analyze.mjs && node scripts/smoke-explainers.mjs && node scripts/smoke-images.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

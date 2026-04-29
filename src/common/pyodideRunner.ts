@@ -1,18 +1,50 @@
 /**
  * Python source executed inside Pyodide once on init. The actual code lives
- * in `pyodideBootstrap.py`; esbuild's `text` loader inlines it as a string at
- * build time, which keeps the analyzer code editable as real Python (with IDE
- * support, syntax highlighting, etc.) instead of a giant template literal.
+ * in `pyodideBootstrap.py` and `bonnieImageLib.py`; esbuild's `text` loader
+ * inlines them as strings at build time, which keeps the analyzer + image
+ * library editable as real Python (with IDE support, syntax highlighting,
+ * etc.) instead of giant template literals.
  *
- * The bootstrap exposes:
- *   _bonnie_run_file(code: str, filename: str)               -> dict
- *   _bonnie_repl_eval(code: str)                             -> dict
- *   _bonnie_repl_check(source: str)                          -> dict
- *   _bonnie_static_analyze(code: str, level: str, fn: str)   -> list[dict]
+ * Initialization order (run sequentially in the same Python interpreter):
+ *   1. PYODIDE_BOOTSTRAP_PY   - runtime hooks (run/repl/static-analyze)
+ *   2. BONNIE_IMAGE_LIB_PY    - Image class + primitives + combinators
+ *   3. PYODIDE_INSTALL_PY     - registers `bonnie.image` module and copies
+ *                                public names into `_bonnie_user_globals`
+ *
+ * Loading the image library second means the bootstrap doesn't depend on
+ * it; it just duck-types the `_bonnie_image_data` method during display.
  */
 import bootstrapSource from "./pyodideBootstrap.py";
+import imageLibSource from "./bonnieImageLib.py";
 
 export const PYODIDE_BOOTSTRAP_PY = bootstrapSource;
+export const BONNIE_IMAGE_LIB_PY = imageLibSource;
+
+/**
+ * Final installation step: register `bonnie.image` as an importable module
+ * and inject the public names directly into `_bonnie_user_globals` so
+ * beginners can use `circle(50, "solid", "red")` with no import.
+ */
+export const PYODIDE_INSTALL_PY = `
+import sys as _sys, types as _types
+
+_bonnie_module = _types.ModuleType("bonnie")
+_bonnie_image_module = _types.ModuleType("bonnie.image")
+for _name in BONNIE_IMAGE_EXPORTS:
+    setattr(_bonnie_image_module, _name, globals()[_name])
+_bonnie_module.image = _bonnie_image_module
+_sys.modules["bonnie"] = _bonnie_module
+_sys.modules["bonnie.image"] = _bonnie_image_module
+
+for _name in BONNIE_IMAGE_EXPORTS:
+    _bonnie_user_globals[_name] = globals()[_name]
+del _name
+
+# Freeze the now-fully-populated user globals as the baseline that
+# Run File restores to (preserves built-ins, image library, and the
+# auto-display helper while wiping any previous-run state).
+_bonnie_capture_initial_globals()
+`;
 
 export interface BonnieRunResult {
   ok: boolean;
@@ -24,6 +56,15 @@ export interface BonnieRunResult {
   traceback: string | null;
   line_number: number | null;
   column: number | null;
+  /** Images emitted by top-level expressions and the last REPL expression. */
+  images: BonnieImageData[];
+}
+
+export interface BonnieImageData {
+  type: "svg";
+  width: number;
+  height: number;
+  data: string;
 }
 
 /**

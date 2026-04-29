@@ -159,6 +159,17 @@ function deliverResult(
   if (result.stderr) {
     onEvent({ kind: "stderr", text: result.stderr });
   }
+  if (result.images) {
+    for (const img of result.images) {
+      onEvent({
+        kind: "image",
+        svg: img.data,
+        width: img.width,
+        height: img.height,
+        source: fileName,
+      });
+    }
+  }
   if (result.result_repr !== null && result.result_repr !== undefined) {
     onEvent({ kind: "result", repr: result.result_repr });
   }
