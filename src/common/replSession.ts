@@ -1,10 +1,10 @@
 import * as vscode from "vscode";
 import { findRuntimeFinding } from "./analyzers/registry";
 import { enrichStaticFindings } from "./analyzers/static/registry";
-import type { BonnieDiagnostics } from "./diagnostics";
+import type { Diagnostics } from "./diagnostics";
 import { parsePythonError } from "./errors/pythonErrorParser";
 import {
-  type BonnieInteractionsView,
+  type InteractionsView,
   type Entry,
   type PromptKind,
   serializeFinding,
@@ -12,10 +12,10 @@ import {
 import { levelHasStaticChecks, parseLevel, type Level } from "./level";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 
-export interface BonnieReplDeps {
+export interface ReplDeps {
   runtime: PythonRuntime;
-  diagnostics: BonnieDiagnostics;
-  view: BonnieInteractionsView;
+  diagnostics: Diagnostics;
+  view: InteractionsView;
 }
 
 /**
@@ -55,7 +55,7 @@ interface Session {
  * keeps the interactions view showing whichever session corresponds to the
  * active Python editor. Owns the single Pyodide exec chain.
  */
-export class BonnieReplSession implements vscode.Disposable {
+export class ReplSession implements vscode.Disposable {
   private readonly sessions = new Map<string, Session>();
   /** Currently-shown session key, or null if no Python file has been active. */
   private activeKey: string | null = null;
@@ -74,7 +74,7 @@ export class BonnieReplSession implements vscode.Disposable {
     { stdout: string; stderr: string }
   >();
 
-  constructor(private readonly deps: BonnieReplDeps) {
+  constructor(private readonly deps: ReplDeps) {
     deps.view.setHandlers({
       onSubmit: (code) => this.handleSubmit(code),
       onInterrupt: () => this.handleInterrupt(),
@@ -241,12 +241,12 @@ export class BonnieReplSession implements vscode.Disposable {
     if (this.isActive(session)) this.deps.view.setPrompt(kind);
   }
 
-  private setSessionBusy(session: Session, busy: boolean): void {
+  private setSessionBusy(session: Session, busy: boolean, status?: string): void {
     session.busy = busy;
     if (this.isActive(session)) {
       this.deps.view.setBusy(
         this.computeVisibleBusy(session),
-        this.computeVisibleStatus(),
+        status ?? this.computeVisibleStatus(),
       );
     }
   }
@@ -402,6 +402,35 @@ export class BonnieReplSession implements vscode.Disposable {
         }
       }
 
+      let hasTests = false;
+      try {
+        hasTests = await this.deps.runtime.hasTests(code);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.feedStream(session, "stderr", `Could not check for tests: ${msg}\n`);
+      }
+      if (hasTests) {
+        this.setSessionBusy(session, true, "Loading pytest...");
+        try {
+          await this.deps.runtime.ensurePytest();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.appendToSession(session, {
+            kind: "banner",
+            text: `Could not load pytest (${msg}). Skipping tests.`,
+          });
+          hasTests = false;
+        }
+      }
+      if (hasTests) {
+        this.setSessionBusy(session, true, "Running tests...");
+        await this.deps.runtime.runTests(
+          { code, fileName, sessionKey: session.key },
+          (event) => this.handleEvent(session, event, code, fileName, document, level),
+        );
+      }
+
+      this.setSessionBusy(session, true, "Running...");
       await this.deps.runtime.runFile(
         { code, fileName, sessionKey: session.key },
         (event) => this.handleEvent(session, event, code, fileName, document, level),
@@ -524,6 +553,18 @@ export class BonnieReplSession implements vscode.Disposable {
       }
       case "done":
         this.flushStreams(session);
+        break;
+      case "testReport":
+        this.flushStreams(session);
+        this.appendToSession(session, {
+          kind: "testReport",
+          fileName: event.fileName,
+          passed: event.passed,
+          failed: event.failed,
+          skipped: event.skipped,
+          errors: event.errors,
+          tests: event.tests,
+        });
         break;
     }
   }

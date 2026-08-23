@@ -3,7 +3,7 @@
  * Smoke test for the language-level static analyzer.
  *
  * Boots Pyodide in Node, loads the bootstrap, and runs
- * `_bonnie_static_analyze` against each sample file. Asserts a sensible set
+ * `_pll_static_analyze` against each sample file. Asserts a sensible set
  * of findings is produced (or none, for the OK sample).
  *
  * Usage: node scripts/smoke-static-analyze.mjs
@@ -34,7 +34,7 @@ async function main() {
   const bootstrap = readPy("src/common/pyodideBootstrap.py");
   pyodide.runPython(bootstrap);
 
-  const fn = pyodide.globals.get("_bonnie_static_analyze");
+  const fn = pyodide.globals.get("_pll_static_analyze");
   const analyze = (code, level, fileName) => {
     const proxy = fn(code, level, fileName);
     const obj = proxy.toJs({ dict_converter: Object.fromEntries });

@@ -4,7 +4,7 @@ import type { AnalysisFinding } from "./analyzers/types";
  * Plain-text rendering of an analysis finding for VS Code diagnostic tooltips.
  *
  * The interactions view renders findings as structured HTML (see
- * `BonnieInteractionsView` + `media/interactionsView/main.js`) so it doesn't
+ * `InteractionsView` + `media/interactionsView/main.js`) so it doesn't
  * use this formatter. Only the squiggle hover text does.
  *
  * Layout:

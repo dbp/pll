@@ -12,14 +12,14 @@ import { formatFriendlyErrorPlain } from "./errorFormatter";
  * changes (e.g. user opens the file fresh), since `setDecorations` is
  * editor-scoped.
  */
-export class BonnieDiagnostics implements vscode.Disposable {
+export class Diagnostics implements vscode.Disposable {
   private readonly collection: vscode.DiagnosticCollection;
   private readonly gutterDecoration: vscode.TextEditorDecorationType;
   private readonly perUriRanges = new Map<string, vscode.Range[]>();
   private readonly editorWatcher: vscode.Disposable;
 
   constructor(extensionUri: vscode.Uri) {
-    this.collection = vscode.languages.createDiagnosticCollection("bonnie-python");
+    this.collection = vscode.languages.createDiagnosticCollection("python-language-levels");
     this.gutterDecoration = vscode.window.createTextEditorDecorationType({
       gutterIconPath: vscode.Uri.joinPath(extensionUri, "media", "error-gutter.svg"),
       gutterIconSize: "contain",
@@ -71,7 +71,7 @@ export class BonnieDiagnostics implements vscode.Disposable {
         mapSeverity(finding.severity),
       );
       diagnostic.source =
-        finding.origin === "static" ? "Bonnie Python (static)" : "Bonnie Python";
+        finding.origin === "static" ? "Python Language Levels (static)" : "Python Language Levels";
       diagnostic.code = finding.errorType;
       diagnostics.push(diagnostic);
       ranges.push(range);

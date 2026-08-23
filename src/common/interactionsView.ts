@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import type { AnalysisFinding } from "./analyzers/types";
 
 /**
- * The Bonnie interactions view replaces both the pseudoterminal REPL and the
+ * The PLL interactions view replaces both the pseudoterminal REPL and the
  * standalone image view: it is a single webview that displays banners, user
  * echoes, stdout/stderr, results, images, and structured errors as a stream,
  * with an input row at the bottom for new REPL submissions.
@@ -35,7 +35,8 @@ export type Entry =
   | ImageEntry
   | TableEntry
   | FindingEntry
-  | RawErrorEntry;
+  | RawErrorEntry
+  | TestReportEntry;
 
 export interface BannerEntry {
   kind: "banner";
@@ -85,6 +86,24 @@ export interface RawErrorEntry {
   errorType: string;
   message: string;
   traceback: string;
+}
+
+export interface TestCaseView {
+  name: string;
+  outcome: string;
+  lineNumber: number | null;
+  message: string | null;
+  stdout: string | null;
+}
+
+export interface TestReportEntry {
+  kind: "testReport";
+  fileName: string;
+  passed: number;
+  failed: number;
+  skipped: number;
+  errors: number;
+  tests: TestCaseView[];
 }
 
 export type PromptKind = "primary" | "continuation";
@@ -158,9 +177,9 @@ export interface InteractionsHandlers {
   onClearRequested(): void;
 }
 
-const VIEW_ID = "bonniePythonInteractionsView";
+const VIEW_ID = "pllInteractionsView";
 
-export class BonnieInteractionsView
+export class InteractionsView
   implements vscode.WebviewViewProvider, vscode.Disposable
 {
   public static readonly viewType = VIEW_ID;
@@ -487,7 +506,7 @@ export class BonnieInteractionsView
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy" content="${csp}" />
   <link rel="stylesheet" href="${styleUri}" />
-  <title>Bonnie Python</title>
+  <title>Python Language Levels</title>
 </head>
 <body class="mode-empty">
   <div id="root">

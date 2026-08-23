@@ -1,11 +1,24 @@
+# Dev / SCM
 .vscode/**
 .vscode-test/**
+.vscode-test-web/**
+.git/**
+.github/**
+.gitignore
+.pnpm-store/**
+.smoke-*/**
+**/.mypy_cache/**
+.DS_Store
+
+# Sources & tooling (runtime lives in dist/ + vendor/ + media/)
 src/**
+scripts/**
+samples/**
 out/**
 node_modules/**
-.gitignore
-.eslintrc.json
 **/*.map
 **/*.ts
 tsconfig.json
 esbuild.config.mjs
+pnpm-lock.yaml
+*.vsix

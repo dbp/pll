@@ -1,9 +1,27 @@
 {
-  "name": "bonnie-python",
-  "displayName": "Bonnie Python",
+  "name": "python-language-levels",
+  "displayName": "Python Language Levels",
   "description": "Beginner-friendly integrated Python REPL with inline images, language levels, and friendly errors. Powered by Pyodide. Works in desktop VS Code and vscode.dev.",
   "version": "0.0.1",
-  "publisher": "bonnie",
+  "publisher": "pll",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dbp/pll.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dbp/pll/issues"
+  },
+  "homepage": "https://github.com/dbp/pll",
+  "keywords": [
+    "python",
+    "education",
+    "beginner",
+    "repl",
+    "pyodide",
+    "learning"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -17,31 +35,31 @@
   "browser": "./dist/web/extension.js",
   "activationEvents": [
     "onLanguage:python",
-    "onView:bonniePythonInteractionsView"
+    "onView:pllInteractionsView"
   ],
   "contributes": {
     "commands": [
       {
-        "command": "bonniePython.showInteractions",
-        "title": "Bonnie Python: Show Interactions"
+        "command": "pll.showInteractions",
+        "title": "Python Language Levels: Show Interactions"
       },
       {
-        "command": "bonniePython.startRepl",
-        "title": "Bonnie Python: Start REPL"
+        "command": "pll.startRepl",
+        "title": "Python Language Levels: Start REPL"
       },
       {
-        "command": "bonniePython.runActiveFile",
-        "title": "Bonnie Python: Run Active File"
+        "command": "pll.runActiveFile",
+        "title": "Python Language Levels: Run Active File"
       },
       {
-        "command": "bonniePython.clearInteractions",
-        "title": "Bonnie Python: Clear Interactions"
+        "command": "pll.clearInteractions",
+        "title": "Python Language Levels: Clear Interactions"
       }
     ],
     "menus": {
       "editor/title/run": [
         {
-          "command": "bonniePython.runActiveFile",
+          "command": "pll.runActiveFile",
           "when": "editorLangId == python",
           "group": "navigation"
         }
@@ -50,26 +68,26 @@
     "viewsContainers": {
       "panel": [
         {
-          "id": "bonniePythonPanel",
-          "title": "Bonnie",
-          "icon": "media/bonnie-icon.svg"
+          "id": "pllPanel",
+          "title": "PLL",
+          "icon": "media/pll-icon.svg"
         }
       ]
     },
     "views": {
-      "bonniePythonPanel": [
+      "pllPanel": [
         {
-          "id": "bonniePythonInteractionsView",
+          "id": "pllInteractionsView",
           "name": "Interactions",
           "type": "webview",
-          "contextualTitle": "Bonnie"
+          "contextualTitle": "PLL"
         }
       ]
     },
     "configuration": {
-      "title": "Bonnie Python",
+      "title": "Python Language Levels",
       "properties": {
-        "bonniePython.pyodideIndexUrl": {
+        "pll.pyodideIndexUrl": {
           "type": "string",
           "default": "https://cdn.jsdelivr.net/pyodide/v0.29.3/full/",
           "description": "Base URL used to load Pyodide assets. Must end with a trailing slash."
@@ -168,21 +186,25 @@
     "compile": "tsc -p ./ --noEmit",
     "package": "node esbuild.config.mjs --production",
     "vscode:prepublish": "pnpm run package",
+    "vsce:package": "vsce package --no-dependencies",
+    "vsce:publish": "vsce publish --no-dependencies",
     "setup:browser": "playwright install chromium",
     "test-web": "pnpm run setup:browser && pnpm run build && vscode-test-web --browser=chromium --coi --extensionDevelopmentPath=. samples",
     "test-web:server": "pnpm run build && vscode-test-web --browser=none --coi --extensionDevelopmentPath=. samples",
-    "smoke": "node scripts/smoke-static-analyze.mjs && node scripts/smoke-explainers.mjs && node scripts/smoke-images.mjs && node scripts/smoke-tables.mjs"
+    "smoke": "node scripts/smoke-static-analyze.mjs && node scripts/smoke-explainers.mjs && node scripts/smoke-images.mjs && node scripts/smoke-tables.mjs && node scripts/smoke-tests.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
     "@types/vscode": "^1.85.0",
     "@vscode/test-web": "^0.0.80",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.0",
     "playwright": "^1.59.1",
+    "pyodide": "^0.29.3",
     "typescript": "^6.0.3"
   },
-  "dependencies": {
-    "pyodide": "^0.29.3"
+  "vsce": {
+    "dependencies": false
   },
   "pnpm": {
     "onlyBuiltDependencies": [

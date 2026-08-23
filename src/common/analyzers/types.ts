@@ -28,7 +28,7 @@ export interface AnalysisFinding {
   raw: string;
   /**
    * Where the finding came from. Used so the diagnostics layer can label
-   * the source ("bonnie / runtime" vs "bonnie / static") and so future
+   * the source ("pll / runtime" vs "pll / static") and so future
    * suppression rules can target one or the other.
    */
   origin: "runtime" | "static";

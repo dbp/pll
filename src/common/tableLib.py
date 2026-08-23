@@ -1,4 +1,4 @@
-# Bonnie table library.
+# PLL table library.
 #
 # A small, immutable, Pyret-style table abstraction. Internally a `Table`
 # stores its data column-by-column (a dict of name -> list-of-values) so
@@ -274,13 +274,13 @@ class Table:
         self._require_column(y)
         labels = [_format_cell(v) for v in self._data[x]]
         values = self._numeric_column(y, "bar_chart")
-        return _BonnieChart(_render_bar_chart(labels, values, x, y, title))
+        return _PllChart(_render_bar_chart(labels, values, x, y, title))
 
     def scatter_chart(self, x, y, title=None):
         """Scatter plot of x vs y (both numeric)."""
         xs = self._numeric_column(x, "scatter_chart")
         ys = self._numeric_column(y, "scatter_chart")
-        return _BonnieChart(_render_xy_chart(xs, ys, x, y, title, mode="scatter"))
+        return _PllChart(_render_xy_chart(xs, ys, x, y, title, mode="scatter"))
 
     def line_chart(self, x, y, title=None):
         """Line chart of x vs y (both numeric, sorted by x)."""
@@ -290,18 +290,18 @@ class Table:
         pairs = sorted(zip(xs, ys), key=lambda p: p[0])
         sx = [p[0] for p in pairs]
         sy = [p[1] for p in pairs]
-        return _BonnieChart(_render_xy_chart(sx, sy, x, y, title, mode="line"))
+        return _PllChart(_render_xy_chart(sx, sy, x, y, title, mode="line"))
 
     def histogram(self, name, bins=10, title=None):
         """Histogram of `name` (numeric)."""
         if bins < 1:
             raise ValueError("bins must be >= 1")
         values = self._numeric_column(name, "histogram")
-        return _BonnieChart(_render_histogram(values, bins, name, title))
+        return _PllChart(_render_histogram(values, bins, name, title))
 
     # ---- Display protocol ----
 
-    def _bonnie_table_data(self, max_rows=200):
+    def _pll_table_data(self, max_rows=200):
         """Return the JSON-friendly payload the host renders."""
         n = self._length
         shown = min(n, max_rows)
@@ -429,10 +429,10 @@ def _sort_key(value):
 # Chart rendering
 # -----------------------------------------------------------------------------
 #
-# Charts are pure SVG, produced as a `_BonnieChart` object that exposes the
+# Charts are pure SVG, produced as a `_PllChart` object that exposes the
 # image-display protocol so the host's existing image-card pipeline can
-# render them. We don't subclass `Image` from bonnieImageLib so the table
-# library doesn't need to import it; we duck-type via `_bonnie_image_data`.
+# render them. We don't subclass `Image` from imageLib.py so the table
+# library doesn't need to import it; we duck-type via `_pll_image_data`.
 
 _CHART_W = 480
 _CHART_H = 320
@@ -452,14 +452,14 @@ def _xml_escape(s):
     )
 
 
-class _BonnieChart:
-    """An immutable, displayable SVG chart. Duck-types as a Bonnie image."""
+class _PllChart:
+    """An immutable, displayable SVG chart. Duck-types as a PLL image."""
 
     def __init__(self, svg_payload):
         # svg_payload: {"width", "height", "data"}
         self._payload = svg_payload
 
-    def _bonnie_image_data(self):
+    def _pll_image_data(self):
         return {
             "type": "svg",
             "width": int(self._payload["width"]),
@@ -768,7 +768,7 @@ def _render_histogram(values, bins, name, title):
 # Names exported into user globals by the bootstrap.
 # -----------------------------------------------------------------------------
 
-BONNIE_TABLE_EXPORTS = [
+PLL_TABLE_EXPORTS = [
     "Table",
     "table",
     "table_from_columns",

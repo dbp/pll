@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 
 /**
- * Bonnie Python ships beginner-friendly defaults via `configurationDefaults`,
+ * Python Language Levels ships beginner-friendly defaults via `configurationDefaults`,
  * but some extensions emit Python diagnostics regardless of settings (most
  * notably `matangover.mypy`, which has no `enabled` or `ignorePatterns`
  * setting and is only quieted by disabling the extension itself).
@@ -17,6 +17,16 @@ interface KnownConflict {
 }
 
 const CONFLICTING: KnownConflict[] = [
+  {
+    id: "ms-python.python",
+    label: "Python (Microsoft)",
+    reason: "installs Pylance, linting, and a second Run Python path",
+  },
+  {
+    id: "ms-python.vscode-pylance",
+    label: "Pylance",
+    reason: "language-server completions and diagnostics",
+  },
   {
     id: "matangover.mypy",
     label: "matangover.mypy",
@@ -59,7 +69,7 @@ const CONFLICTING: KnownConflict[] = [
   },
 ];
 
-const DISMISSED_KEY = "bonniePython.extensionGuard.dismissedIds";
+const DISMISSED_KEY = "pll.extensionGuard.dismissedIds";
 
 export async function checkConflictingExtensions(
   context: vscode.ExtensionContext,
@@ -76,8 +86,8 @@ export async function checkConflictingExtensions(
 
   const summary =
     active.length === 1
-      ? `Bonnie Python: detected an installed extension that may emit Python diagnostics outside the beginner setup: ${active[0].label}.`
-      : `Bonnie Python: detected ${active.length} installed extensions that may emit Python diagnostics outside the beginner setup: ${active
+      ? `Python Language Levels: detected an installed extension that may emit Python diagnostics outside the beginner setup: ${active[0].label}.`
+      : `Python Language Levels: detected ${active.length} installed extensions that may emit Python diagnostics outside the beginner setup: ${active
           .map((e) => e.label)
           .join(", ")}.`;
 

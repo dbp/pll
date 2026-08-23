@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { deliverBonnieResult } from "../common/deliverResult";
-import type { BonnieRunResult, RawStaticFinding } from "../common/pyodideRunner";
+import { deliverRunResult, deliverTestResult } from "../common/deliverResult";
+import type { RunResult, RawStaticFinding, TestRunResult } from "../common/pyodideRunner";
 import type {
   ExecutionEventHandler,
   PythonRuntime,
@@ -13,7 +13,7 @@ import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "./pyodideWorke
 
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 type WorkerInboundPayload = DistributiveOmit<WorkerInbound, "id">;
-type AnyReply = "ready" | BonnieRunResult | RawReplCheck | RawStaticFinding[];
+type AnyReply = "ready" | "pytestReady" | boolean | RunResult | RawReplCheck | RawStaticFinding[] | TestRunResult;
 
 interface Pending {
   resolve: (value: AnyReply) => void;
@@ -44,7 +44,7 @@ export class WebPyodideRuntime implements PythonRuntime {
 
   private async doInitialize(): Promise<void> {
     const workerUri = vscode.Uri.joinPath(this.extensionUri, "dist", "web", "pyodideWorker.js");
-    const config = vscode.workspace.getConfiguration("bonniePython");
+    const config = vscode.workspace.getConfiguration("pll");
     const indexUrl = config.get<string>("pyodideIndexUrl") ?? "https://cdn.jsdelivr.net/pyodide/v0.29.3/full/";
 
     this.worker = new Worker(workerUri.toString(true));
@@ -70,7 +70,7 @@ export class WebPyodideRuntime implements PythonRuntime {
       fileName: request.fileName,
       sessionKey: request.sessionKey,
     });
-    deliverBonnieResult(result as BonnieRunResult, onEvent, request.fileName);
+    deliverRunResult(result as RunResult, onEvent, request.fileName);
   }
 
   async replEval(request: ReplEvalRequest, onEvent: ExecutionEventHandler): Promise<void> {
@@ -80,7 +80,7 @@ export class WebPyodideRuntime implements PythonRuntime {
       code: request.code,
       sessionKey: request.sessionKey,
     });
-    deliverBonnieResult(result as BonnieRunResult, onEvent, "<repl>");
+    deliverRunResult(result as RunResult, onEvent, "<repl>");
   }
 
   async checkReplComplete(code: string): Promise<ReplCheckResult> {
@@ -93,6 +93,26 @@ export class WebPyodideRuntime implements PythonRuntime {
       lineNumber: result.lineno,
       offset: result.offset,
     };
+  }
+
+  async hasTests(code: string): Promise<boolean> {
+    await this.initialize();
+    return Boolean(await this.send({ type: "hasTests", code }));
+  }
+
+  async ensurePytest(): Promise<void> {
+    await this.initialize();
+    await this.send({ type: "loadPytest" });
+  }
+
+  async runTests(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void> {
+    await this.initialize();
+    const result = await this.send({
+      type: "runTests",
+      code: request.code,
+      fileName: request.fileName,
+    });
+    deliverTestResult(result as TestRunResult, onEvent, request.fileName);
   }
 
   async staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]> {
@@ -142,6 +162,15 @@ export class WebPyodideRuntime implements PythonRuntime {
         pending.resolve(msg.result);
         break;
       case "syntax":
+        pending.resolve(msg.result);
+        break;
+      case "hasTests":
+        pending.resolve(msg.result);
+        break;
+      case "pytestReady":
+        pending.resolve("pytestReady");
+        break;
+      case "testResult":
         pending.resolve(msg.result);
         break;
       case "static":

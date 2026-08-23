@@ -1,4 +1,28 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import * as esbuild from "esbuild";
+
+/** Files loadPyodide fetches from indexURL (JS loader is bundled into dist/). */
+const PYODIDE_ASSETS = [
+  "pyodide.asm.js",
+  "pyodide.asm.wasm",
+  "python_stdlib.zip",
+  "pyodide-lock.json",
+];
+
+function copyPyodideAssets() {
+  const srcDir = path.join(process.cwd(), "node_modules", "pyodide");
+  const destDir = path.join(process.cwd(), "vendor", "pyodide");
+  fs.mkdirSync(destDir, { recursive: true });
+  for (const file of PYODIDE_ASSETS) {
+    const src = path.join(srcDir, file);
+    if (!fs.existsSync(src)) {
+      throw new Error(`Missing Pyodide asset: ${src}`);
+    }
+    fs.copyFileSync(src, path.join(destDir, file));
+  }
+  console.log("[esbuild] copied Pyodide assets to vendor/pyodide");
+}
 
 const production = process.argv.includes("--production");
 const watch = process.argv.includes("--watch");
@@ -54,6 +78,8 @@ const webWorkerOptions = {
 };
 
 const allConfigs = [desktopOptions, webExtensionOptions, webWorkerOptions];
+
+copyPyodideAssets();
 
 if (watch) {
   const contexts = await Promise.all(allConfigs.map((c) => esbuild.context(c)));

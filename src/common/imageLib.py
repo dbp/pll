@@ -1,4 +1,4 @@
-# Bonnie image library.
+# PLL image library.
 #
 # A small, immutable, HtDP-style image library inspired by Racket's
 # `2htdp/image` and Pyret's `image-lib`. Every primitive and combinator
@@ -17,8 +17,8 @@ import math as _math
 # Color handling
 # -----------------------------------------------------------------------------
 
-def _bonnie_color_to_css(color):
-    """Convert a Bonnie color value to an SVG/CSS color string.
+def _pll_color_to_css(color):
+    """Convert a PLL color value to an SVG/CSS color string.
 
     Accepts:
       - a string CSS name or hex ("red", "#ff0000")
@@ -39,7 +39,7 @@ def _bonnie_color_to_css(color):
     return str(color)
 
 
-def _bonnie_xml_escape(text):
+def _pll_xml_escape(text):
     return (
         text.replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -58,11 +58,11 @@ def _bonnie_xml_escape(text):
 #   _render_body(x, y)        -> SVG fragment positioned at (x, y) in
 #                                its parent's coordinate system
 #   to_svg()                  -> standalone <svg> document
-#   _bonnie_image_data()      -> dict the host uses to display the image
+#   _pll_image_data()      -> dict the host uses to display the image
 #
 
 class Image:
-    """Base class for all Bonnie images. Don't instantiate directly."""
+    """Base class for all PLL images. Don't instantiate directly."""
 
     @property
     def width(self):
@@ -87,7 +87,7 @@ class Image:
             'shape-rendering="geometricPrecision">%s</svg>'
         ) % (w, h, w, h, body)
 
-    def _bonnie_image_data(self):
+    def _pll_image_data(self):
         return {
             "type": "svg",
             "width": int(_math.ceil(self.width)),
@@ -106,9 +106,9 @@ class Image:
 # Primitive shapes
 # -----------------------------------------------------------------------------
 
-def _bonnie_paint_attrs(mode, color):
+def _pll_paint_attrs(mode, color):
     """Return SVG paint attributes for a `mode` ("solid" / "outline") shape."""
-    css = _bonnie_color_to_css(color)
+    css = _pll_color_to_css(color)
     if mode == "outline":
         return 'fill="none" stroke="%s" stroke-width="2"' % css
     # default: solid
@@ -133,7 +133,7 @@ class _Circle(Image):
         cx = x + self._radius
         cy = y + self._radius
         return '<circle cx="%g" cy="%g" r="%g" %s />' % (
-            cx, cy, self._radius, _bonnie_paint_attrs(self._mode, self._color),
+            cx, cy, self._radius, _pll_paint_attrs(self._mode, self._color),
         )
 
 
@@ -155,7 +155,7 @@ class _Rectangle(Image):
     def _render_body(self, x, y):
         return '<rect x="%g" y="%g" width="%g" height="%g" %s />' % (
             x, y, self._w, self._h,
-            _bonnie_paint_attrs(self._mode, self._color),
+            _pll_paint_attrs(self._mode, self._color),
         )
 
 
@@ -179,7 +179,7 @@ class _Ellipse(Image):
         ry = self._h / 2.0
         return '<ellipse cx="%g" cy="%g" rx="%g" ry="%g" %s />' % (
             x + rx, y + ry, rx, ry,
-            _bonnie_paint_attrs(self._mode, self._color),
+            _pll_paint_attrs(self._mode, self._color),
         )
 
 
@@ -214,7 +214,7 @@ class _Polygon(Image):
             for px, py in self._points
         )
         return '<polygon points="%s" %s />' % (
-            coords, _bonnie_paint_attrs(self._mode, self._color),
+            coords, _pll_paint_attrs(self._mode, self._color),
         )
 
 
@@ -238,7 +238,7 @@ class _Line(Image):
         x2 = x1 + self._dx
         y2 = y1 + self._dy
         return '<line x1="%g" y1="%g" x2="%g" y2="%g" stroke="%s" stroke-width="2" stroke-linecap="round" />' % (
-            x1, y1, x2, y2, _bonnie_color_to_css(self._color),
+            x1, y1, x2, y2, _pll_color_to_css(self._color),
         )
 
 
@@ -267,8 +267,8 @@ class _Text(Image):
             'text-rendering="optimizeLegibility">%s</text>'
         ) % (
             x, baseline, self._size,
-            _bonnie_color_to_css(self._color),
-            _bonnie_xml_escape(self._text),
+            _pll_color_to_css(self._color),
+            _pll_xml_escape(self._text),
         )
 
 
@@ -558,7 +558,7 @@ empty_image = _Rectangle(0, 0, "solid", (0, 0, 0, 0))
 # Names exported into user globals by the bootstrap. Keep this list explicit
 # so we don't accidentally leak helpers (anything starting with `_` would
 # already be filtered, but being explicit avoids drift).
-BONNIE_IMAGE_EXPORTS = [
+PLL_IMAGE_EXPORTS = [
     "Image",
     "circle",
     "square",

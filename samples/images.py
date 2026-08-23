@@ -1,6 +1,6 @@
 #beginner
 
-# Bare top-level expressions are auto-displayed inline in the Bonnie
+# Bare top-level expressions are auto-displayed inline in the PLL
 # interactions view, alongside any text output.
 
 circle(50, "solid", "red")

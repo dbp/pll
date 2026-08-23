@@ -1,11 +1,11 @@
-# Bonnie Python
+# Python Language Levels (PLL)
 
 A beginner-friendly Python extension for VS Code, powered by [Pyodide](https://pyodide.org).
 It works in **desktop VS Code** and in **`vscode.dev`** (web).
 
 ## Features (MVP)
 
-- **Integrated interactions view.** A single Bonnie panel-area webview
+- **Integrated interactions view.** A single PLL panel webview
   shows banners, your typed input, stdout/stderr, results, structured
   errors, and images all in one scroll-back-able stream. The input row at
   the bottom accepts Python expressions and statements. Multi-line input
@@ -14,11 +14,17 @@ It works in **desktop VS Code** and in **`vscode.dev`** (web).
   (matching CPython's interactive shell). Up/Down arrows scroll through
   history. Ctrl/Cmd+L clears the stream. Works identically in desktop and
   `vscode.dev`.
-- **Run Python files into the same session.** `Bonnie Python: Run Active
+- **Run Python files into the same session.** `Python Language Levels: Run Active
   File` (also on the editor title run button for `.py` files) clears the
-  stream, runs the file in the same Python globals the REPL uses, and
-  leaves you at a fresh prompt with all of the file's definitions
-  available.
+  stream, runs any tests in the file, then runs the file in the same Python
+  globals the REPL uses, and leaves you at a fresh prompt with all of the
+  file's definitions available.
+- **Same-file tests.** Write pytest tests next to the code they cover
+  (`def test_*():` or methods on a `Test*` class). On Run File, PLL loads
+  pytest (first time only), runs the equivalent of `pytest thefile.py`,
+  and shows a pass/fail card in the interactions view. Failed assertions
+  are clickable and jump to the test. The file still runs afterwards so
+  the REPL has your definitions. Files with no tests skip this step.
 - **Beginner-friendly errors.** Currently `NameError` is rewritten to a
   plain-language explanation with a "what / why / how to fix" breakdown,
   rendered as a structured block in the interactions view and as a VS
@@ -77,9 +83,9 @@ src/
     ├── diagnostics.ts             VS Code DiagnosticCollection (multi-finding)
     ├── pyodideRunner.ts           Bootstrap loader + types
     ├── deliverResult.ts           Translates Python results to ExecutionEvents
-    ├── pyodideBootstrap.py        Real Python: run / repl-eval / static analyzer
-    ├── bonnieImageLib.py          Real Python: SVG image primitives + combinators
-    ├── bonnieTableLib.py          Real Python: Pyret-style Table + charts
+    ├── pyodideBootstrap.py        Real Python: run / repl-eval / tests / static analyzer
+    ├── imageLib.py                Real Python: SVG image primitives + combinators
+    ├── tableLib.py                Real Python: Pyret-style Table + charts
     ├── analyzers/
     │   ├── types.ts               AnalysisFinding, RuntimeAnalyzer
     │   ├── nameErrorAnalyzer.ts   Runtime: NameError -> friendly finding
@@ -97,7 +103,7 @@ media/
 ├── interactionsView/
 │   ├── style.css                  Stream + input row styling
 │   └── main.js                    View-side state, history, message routing
-├── bonnie-icon.svg                Panel container icon
+├── pll-icon.svg                   Panel container icon
 └── error-gutter.svg               Diagnostic gutter icon
 ```
 
@@ -109,7 +115,7 @@ in both desktop and web hosts.
 
 ## Images
 
-Bonnie ships a small SVG-based image library inspired by Racket's
+PLL ships a small SVG-based image library inspired by Racket's
 `2htdp/image` and Pyret's `image-lib`. The primitives are auto-imported into
 user globals at every level, so a beginner can write:
 
@@ -146,15 +152,16 @@ Available primitives: `circle`, `square`, `rectangle`, `ellipse`,
 ## Smoke tests
 
 ```bash
-pnpm run smoke   # static analyzer + explainers + image library/runtime
+pnpm run smoke   # static analyzer + explainers + image library/runtime + tests
 ```
 
 ## Development
 
 ```bash
 pnpm install
-pnpm run build      # one-shot build
-pnpm run watch      # rebuild on change
+pnpm run build         # one-shot build (also copies Pyodide assets into vendor/)
+pnpm run watch         # rebuild on change
+pnpm run vsce:package  # produce a .vsix (runs vscode:prepublish first)
 ```
 
 ### Running the desktop extension
@@ -206,7 +213,7 @@ There are three options, in increasing order of "how realistic":
 
 ## Configuration
 
-- `bonniePython.pyodideIndexUrl` - base URL for Pyodide assets (web only).
+- `pll.pyodideIndexUrl` - base URL for Pyodide assets (web only).
   Defaults to the matching pinned CDN build.
 
 ## Beginner-friendly editor lockdown
@@ -223,7 +230,7 @@ What stays on by design:
 - Line numbers, bracket matching, indent guides
 - Auto-closing brackets / quotes (helpful for newcomers)
 - The Problems panel (so our friendly errors show up)
-- The Bonnie interactions view and `Run Active File` button
+- The PLL interactions view and `Run Active File` button
 
 What we turn off for `[python]` files:
 
@@ -266,10 +273,11 @@ notorious is **`matangover.mypy`**, which has no `enabled` and no
 `ignorePatterns` setting; the only way to silence it is to disable the
 extension itself.
 
-To handle this, `[src/common/extensionGuard.ts](src/common/extensionGuard.ts)`
+To handle this, the
+[extension guard](https://github.com/dbp/pll/blob/main/src/common/extensionGuard.ts)
 runs on activation: it scans installed extensions, lists known
-beginner-conflicting ones (`matangover.mypy`,
-`ms-python.{mypy-type-checker,pylint,flake8,bandit}`,
+beginner-conflicting ones (`ms-python.python`, `ms-python.vscode-pylance`,
+`matangover.mypy`, `ms-python.{mypy-type-checker,pylint,flake8,bandit}`,
 `ms-pyright.pyright`, `detachhead.basedpyright`, `charliermarsh.ruff`),
 and shows a single warning notification with two buttons:
 
@@ -277,6 +285,23 @@ and shows a single warning notification with two buttons:
   you can click *Disable (Workspace)* on each, then offers to reload.
 - **Don't ask again** records dismissal in the workspace state so the
   prompt won't reappear in this workspace.
+
+VS Code itself still recommends Microsoft's Python extension when a `.py`
+file is opened. An extension cannot turn that product-level tip off for
+every student machine. For a course repo, add this to
+`.vscode/extensions.json` so the prompt is suppressed **in that workspace**:
+
+```json
+{
+  "unwantedRecommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance"
+  ]
+}
+```
+
+If a student already installed those extensions, the guard above will
+prompt them to disable them for the workspace.
 
 ### Things you may still need to disable manually
 

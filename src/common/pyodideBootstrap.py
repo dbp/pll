@@ -1,12 +1,14 @@
-# Bonnie Python runtime bootstrap.
+# Python Language Levels runtime bootstrap.
 #
 # This module is loaded into Pyodide once when the runtime initializes.
 # It exposes four entry points used by the TypeScript host:
 #
-#   _bonnie_run_file(code, filename, session_key)   -> dict
-#   _bonnie_repl_eval(code, session_key)            -> dict
-#   _bonnie_repl_check(source)                      -> dict
-#   _bonnie_static_analyze(code, level, filename)   -> list[dict]
+#   _pll_run_file(code, filename, session_key)   -> dict
+#   _pll_repl_eval(code, session_key)            -> dict
+#   _pll_repl_check(source)                      -> dict
+#   _pll_has_tests(code)                         -> bool
+#   _pll_run_tests(code, filename)               -> dict
+#   _pll_static_analyze(code, level, filename)   -> list[dict]
 #
 # Each returns a JSON-friendly dict / list of dicts so the JS side can
 # consume the result via `proxy.toJs({ dict_converter: Object.fromEntries })`.
@@ -16,8 +18,8 @@
 # Each Python file gets its own session, keyed by an opaque string the host
 # chooses (typically the document URI). Sessions hold their own globals
 # dict, so file A's `data = ...` doesn't leak into file B's REPL prompt.
-# `_bonnie_run_file` resets the addressed session's globals to the baseline
-# template before executing; `_bonnie_repl_eval` does NOT reset, so REPL
+# `_pll_run_file` resets the addressed session's globals to the baseline
+# template before executing; `_pll_repl_eval` does NOT reset, so REPL
 # input keeps the names defined by the most recent Run File of the same
 # session.
 
@@ -27,17 +29,17 @@ import codeop as _codeop
 import contextlib
 
 # Per-session globals dicts, keyed by session_key (e.g. document URI).
-# Created lazily; initialized from `_bonnie_initial_globals`.
-_bonnie_sessions = {}
+# Created lazily; initialized from `_pll_initial_globals`.
+_pll_sessions = {}
 
 # The "template" globals used to seed each new session and to reset a
 # session at the start of every Run File. Populated by PYODIDE_INSTALL_PY
-# at the end of bootstrap so the template includes the Bonnie image
+# at the end of bootstrap so the template includes the PLL image
 # library + the auto-display helper.
-_bonnie_initial_globals = {"__name__": "__main__", "__builtins__": __builtins__}
+_pll_initial_globals = {"__name__": "__main__", "__builtins__": __builtins__}
 
-# Display emissions captured during the most recent `_bonnie_run_file` /
-# `_bonnie_repl_eval` call. The host drains this list after the call.
+# Display emissions captured during the most recent `_pll_run_file` /
+# `_pll_repl_eval` call. The host drains this list after the call.
 # Each entry is a typed dict (`{"type": "stdout"|"stderr", "text": ...}`,
 # `{"type": "image", ...}`, or `{"type": "table", ...}`) so the host can
 # dispatch by kind while preserving the *exact* order in which the user's
@@ -45,13 +47,13 @@ _bonnie_initial_globals = {"__name__": "__main__", "__builtins__": __builtins__}
 # shows up as text-then-table in the interactions view, even though
 # stdout and image/table emissions take different paths inside Python.
 # Pyodide is single-threaded, so a single shared list is fine.
-_bonnie_displays = []
+_pll_displays = []
 
 
-class _BonnieStream:
+class _PllStream:
     """Drop-in replacement for `sys.stdout` / `sys.stderr` during a run.
 
-    Each `write` pushes a typed entry onto `_bonnie_displays` so text
+    Each `write` pushes a typed entry onto `_pll_displays` so text
     output interleaves with image/table emissions. We also keep the
     aggregate string so `result["stdout"]` / `result["stderr"]` can
     still be inspected by smoke tests and any caller that just wants
@@ -68,7 +70,7 @@ class _BonnieStream:
         if not isinstance(s, str):
             s = str(s)
         if s:
-            _bonnie_displays.append({"type": self._kind, "text": s})
+            _pll_displays.append({"type": self._kind, "text": s})
             self._chunks.append(s)
         return len(s)
 
@@ -86,27 +88,27 @@ class _BonnieStream:
         return "".join(self._chunks)
 
 
-def _bonnie_extract_display(value):
+def _pll_extract_display(value):
     """Try every known display protocol on `value`.
 
     Returns a typed payload (`{"type": "image"|"table", ...}`) or None if
     `value` doesn't know how to display itself.
     """
-    if hasattr(value, "_bonnie_table_data"):
+    if hasattr(value, "_pll_table_data"):
         try:
-            data = value._bonnie_table_data()
+            data = value._pll_table_data()
         except Exception:
             return None
         if isinstance(data, dict):
             data = dict(data)
             data["type"] = "table"
             return data
-    if hasattr(value, "_bonnie_image_data"):
+    if hasattr(value, "_pll_image_data"):
         try:
-            data = value._bonnie_image_data()
+            data = value._pll_image_data()
         except Exception:
             return None
-        # _bonnie_image_data historically uses {"type": "svg", ...}
+        # _pll_image_data historically uses {"type": "svg", ...}
         # internally; promote to the unified outer type.
         if isinstance(data, dict):
             payload = dict(data)
@@ -116,54 +118,54 @@ def _bonnie_extract_display(value):
     return None
 
 
-def _bonnie_show_top_level(value):
+def _pll_show_top_level(value):
     """Emit a value produced by a top-level expression statement.
 
     Mirrors the behavior of Python's interactive shell: `None` is suppressed,
-    Bonnie images and tables are captured for the host to render, anything
+    PLL images and tables are captured for the host to render, anything
     else is printed via `repr` so bare expressions like `1 + 2` still display.
     """
     if value is None:
         return
-    payload = _bonnie_extract_display(value)
+    payload = _pll_extract_display(value)
     if payload is not None:
-        _bonnie_displays.append(payload)
+        _pll_displays.append(payload)
         return
     print(repr(value))
 
 
 # Seed the template with the auto-display helper. The image library names
 # get added later by PYODIDE_INSTALL_PY.
-_bonnie_initial_globals["_bonnie_show_top_level"] = _bonnie_show_top_level
+_pll_initial_globals["_pll_show_top_level"] = _pll_show_top_level
 
 
-def _bonnie_get_session(session_key):
+def _pll_get_session(session_key):
     """Get-or-create the globals dict for `session_key`.
 
-    Newly-created sessions start as a copy of `_bonnie_initial_globals`
+    Newly-created sessions start as a copy of `_pll_initial_globals`
     (so all baseline names like the image primitives are present).
     """
-    g = _bonnie_sessions.get(session_key)
+    g = _pll_sessions.get(session_key)
     if g is None:
-        g = dict(_bonnie_initial_globals)
-        _bonnie_sessions[session_key] = g
+        g = dict(_pll_initial_globals)
+        _pll_sessions[session_key] = g
     return g
 
 
-def _bonnie_reset_session(session_key):
+def _pll_reset_session(session_key):
     """Reset the globals for `session_key` to the baseline template.
 
     Mutates the existing dict in place (`clear` + `update`) so any cached
-    reference to it (e.g. from `_bonnie_show_top_level`'s closure or from
+    reference to it (e.g. from `_pll_show_top_level`'s closure or from
     Pyodide's `globals.get(...)`) remains valid.
     """
-    g = _bonnie_get_session(session_key)
+    g = _pll_get_session(session_key)
     g.clear()
-    g.update(_bonnie_initial_globals)
+    g.update(_pll_initial_globals)
     return g
 
 
-class _BonnieTopLevelExprWrapper(_ast.NodeTransformer):
+class _PllTopLevelExprWrapper(_ast.NodeTransformer):
     """Wrap module-level expression statements so they auto-display.
 
     Skips the conventional module docstring (a string literal as the first
@@ -173,9 +175,9 @@ class _BonnieTopLevelExprWrapper(_ast.NodeTransformer):
     def visit_Module(self, node):
         new_body = []
         for i, stmt in enumerate(node.body):
-            if isinstance(stmt, _ast.Expr) and not _bonnie_should_skip_expr(stmt, i):
+            if isinstance(stmt, _ast.Expr) and not _pll_should_skip_expr(stmt, i):
                 call = _ast.Call(
-                    func=_ast.Name(id="_bonnie_show_top_level", ctx=_ast.Load()),
+                    func=_ast.Name(id="_pll_show_top_level", ctx=_ast.Load()),
                     args=[stmt.value],
                     keywords=[],
                 )
@@ -189,7 +191,7 @@ class _BonnieTopLevelExprWrapper(_ast.NodeTransformer):
         return node
 
 
-def _bonnie_should_skip_expr(stmt, index):
+def _pll_should_skip_expr(stmt, index):
     value = stmt.value
     if isinstance(value, _ast.Constant):
         if index == 0 and isinstance(value.value, str):
@@ -203,7 +205,7 @@ def _bonnie_should_skip_expr(stmt, index):
 # REPL syntax check (codeop.compile_command in 'single' mode)
 # -----------------------------------------------------------------------------
 
-def _bonnie_repl_check(source):
+def _pll_repl_check(source):
     """Return whether 'source' is a complete REPL input.
 
     Mirrors what CPython's interactive shell does: uses codeop.compile_command
@@ -229,7 +231,7 @@ def _bonnie_repl_check(source):
 # Run a whole file (with output capture and traceback extraction)
 # -----------------------------------------------------------------------------
 
-def _bonnie_extract_loc(tb_str, fallback_filename):
+def _pll_extract_loc(tb_str, fallback_filename):
     line_no = None
     col = None
     for raw in reversed(tb_str.splitlines()):
@@ -255,9 +257,9 @@ def _bonnie_extract_loc(tb_str, fallback_filename):
     return line_no, col
 
 
-def _bonnie_run_file(code, filename, session_key):
-    stdout = _BonnieStream("stdout")
-    stderr = _BonnieStream("stderr")
+def _pll_run_file(code, filename, session_key):
+    stdout = _PllStream("stdout")
+    stderr = _PllStream("stderr")
     result = {
         "ok": False,
         "stdout": "",
@@ -273,11 +275,11 @@ def _bonnie_run_file(code, filename, session_key):
     # Each Run File starts with a clean slate for this session: discard any
     # names defined by a previous Run File of the same session or by REPL
     # exploration since then.
-    user_globals = _bonnie_reset_session(session_key)
-    _bonnie_displays.clear()
+    user_globals = _pll_reset_session(session_key)
+    _pll_displays.clear()
     try:
         tree = _ast.parse(code, filename=filename, mode="exec")
-        _BonnieTopLevelExprWrapper().visit(tree)
+        _PllTopLevelExprWrapper().visit(tree)
         _ast.fix_missing_locations(tree)
         compiled = compile(tree, filename, "exec")
     except SyntaxError as e:
@@ -289,7 +291,7 @@ def _bonnie_run_file(code, filename, session_key):
         result["column"] = (e.offset - 1) if e.offset else None
         result["stdout"] = stdout.getvalue()
         result["stderr"] = stderr.getvalue()
-        result["displays"] = list(_bonnie_displays)
+        result["displays"] = list(_pll_displays)
         return result
 
     try:
@@ -303,13 +305,289 @@ def _bonnie_run_file(code, filename, session_key):
         result["error_type"] = type(e).__name__
         result["error_message"] = str(e)
         result["traceback"] = formatted
-        line_no, col = _bonnie_extract_loc(formatted, filename)
+        line_no, col = _pll_extract_loc(formatted, filename)
         result["line_number"] = line_no
         result["column"] = col
     finally:
         result["stdout"] = stdout.getvalue()
         result["stderr"] = stderr.getvalue()
-        result["displays"] = list(_bonnie_displays)
+        result["displays"] = list(_pll_displays)
+    return result
+
+
+# -----------------------------------------------------------------------------
+# Tests (pytest, same-file test_* / Test* collection)
+# -----------------------------------------------------------------------------
+
+def _pll_has_tests(code):
+    """Return True if `code` looks like it contains pytest tests.
+
+    Mirrors pytest's default collection: module-level `test_*` functions
+    and `test_*` methods on `Test*` classes. Used so we can skip loading
+    pytest for files that have no tests.
+    """
+    try:
+        tree = _ast.parse(code)
+    except (SyntaxError, ValueError):
+        return False
+    for node in tree.body:
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            if node.name.startswith("test_"):
+                return True
+        elif isinstance(node, _ast.ClassDef) and node.name.startswith("Test"):
+            for item in node.body:
+                if isinstance(item, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    if item.name.startswith("test_"):
+                        return True
+    return False
+
+
+_PLL_TRACE_SKIP = (
+    "_pytest",
+    "pluggy",
+    "site-packages",
+    "/lib/python",
+    "get_terminal_writer",
+    "pyio.py",
+    "pathlib",
+)
+
+
+def _pll_is_internal_frame(line):
+    return any(tok in line for tok in _PLL_TRACE_SKIP)
+
+
+def _pll_fix_ast_ranges(tree):
+    """Make rewritten asserts compile on Python 3.12+.
+
+    `rewrite_asserts` can leave `end_lineno` < `lineno` on injected nodes.
+    CPython then raises `ValueError: AST node line range (...) is not valid`.
+    """
+    for child in _ast.walk(tree):
+        lineno = getattr(child, "lineno", None)
+        end_lineno = getattr(child, "end_lineno", None)
+        if lineno is not None and end_lineno is not None and end_lineno < lineno:
+            child.end_lineno = lineno
+        col = getattr(child, "col_offset", None)
+        end_col = getattr(child, "end_col_offset", None)
+        if (
+            col is not None
+            and end_col is not None
+            and lineno is not None
+            and end_lineno is not None
+            and lineno == end_lineno
+            and end_col < col
+        ):
+            child.end_col_offset = col
+
+
+def _pll_test_locations(tree):
+    """Map collected test names to 1-based source lines."""
+    locs = {}
+    for node in tree.body:
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            if node.name.startswith("test_"):
+                locs[node.name] = node.lineno
+        elif isinstance(node, _ast.ClassDef) and node.name.startswith("Test"):
+            for item in node.body:
+                if isinstance(item, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    if item.name.startswith("test_"):
+                        locs[node.name + "::" + item.name] = item.lineno
+    return locs
+
+
+def _pll_friendly_assert_message(exc, tb_text):
+    """Short explanation of a failed assert, with pytest internals stripped."""
+    msg = str(exc).strip()
+    lines = []
+    for raw in msg.split("\n"):
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        if _pll_is_internal_frame(stripped):
+            continue
+        if stripped.startswith("+"):
+            stripped = stripped.lstrip("+ ").strip()
+        lines.append(stripped)
+    if lines:
+        return "\n".join(lines)
+    for raw in reversed((tb_text or "").splitlines()):
+        stripped = raw.strip()
+        if stripped.startswith("assert "):
+            return stripped
+    return "This test failed."
+
+
+def _pll_is_async(fn):
+    try:
+        import inspect
+        return inspect.iscoroutinefunction(fn)
+    except Exception:
+        return False
+
+
+def _pll_call_test(fn):
+    """Run one test function. Returns (outcome, message, stdout)."""
+    import io
+
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            if _pll_is_async(fn):
+                return (
+                    "error",
+                    "async tests are not supported.",
+                    buf.getvalue().strip() or None,
+                )
+            fn()
+        return ("passed", None, buf.getvalue().strip() or None)
+    except AssertionError as e:
+        tb_text = "".join(_tb_mod.format_exception(type(e), e, e.__traceback__))
+        return (
+            "failed",
+            _pll_friendly_assert_message(e, tb_text),
+            buf.getvalue().strip() or None,
+        )
+    except BaseException as e:
+        name = type(e).__name__
+        if name == "Skipped":
+            return ("skipped", str(e).strip() or None, buf.getvalue().strip() or None)
+        return (
+            "error",
+            name + ": " + (str(e) or "this test raised an exception."),
+            buf.getvalue().strip() or None,
+        )
+
+
+def _pll_iter_tests(ns):
+    """Yield (name, callable) for pytest-style tests in namespace `ns`."""
+    items = list(ns.items())
+    for name, obj in items:
+        if name.startswith("test_") and callable(obj) and not isinstance(obj, type):
+            yield name, obj
+    for name, obj in items:
+        if not (isinstance(obj, type) and name.startswith("Test")):
+            continue
+        # pytest skips classes with a custom constructor.
+        try:
+            obj()
+        except TypeError:
+            continue
+        for meth_name in dir(obj):
+            if not meth_name.startswith("test_"):
+                continue
+            attr = getattr(obj, meth_name, None)
+            if not callable(attr):
+                continue
+
+            def _bound(cls=obj, method=meth_name):
+                return getattr(cls(), method)()
+
+            yield name + "::" + meth_name, _bound
+
+
+def _pll_run_tests(code, filename):
+    """Run same-file tests (`test_*` / `Test*`) in an isolated namespace.
+
+    Uses pytest only to rewrite assertions so failures show `assert 4 == 5`
+    instead of an empty AssertionError. Does **not** call `pytest.main()`,
+    which is not safe to invoke repeatedly in one Pyodide interpreter.
+    """
+    display_name = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] or "user_script.py"
+    stdout = _PllStream("stdout")
+    stderr = _PllStream("stderr")
+    result = {
+        "ok": False,
+        "internal_error": False,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "errors": 0,
+        "tests": [],
+        "stdout": "",
+        "stderr": "",
+        "error_type": None,
+        "error_message": None,
+        "traceback": None,
+        "line_number": None,
+        "column": None,
+        "displays": [],
+    }
+    _pll_displays.clear()
+
+    try:
+        tree = _ast.parse(code, filename=display_name, mode="exec")
+    except SyntaxError as e:
+        result["internal_error"] = True
+        result["error_type"] = type(e).__name__
+        result["error_message"] = str(e)
+        result["line_number"] = e.lineno
+        result["column"] = (e.offset - 1) if e.offset else None
+        return result
+
+    locs = _pll_test_locations(tree)
+    try:
+        from _pytest.assertion.rewrite import rewrite_asserts
+        rewrite_asserts(tree, code.encode("utf-8"), module_path=display_name)
+        # Do not call ast.fix_missing_locations here: it copies parent
+        # positions onto pytest's injected nodes and yields ranges that
+        # Python 3.12+ rejects (`end_lineno` < `lineno`).
+        _pll_fix_ast_ranges(tree)
+        compiled = compile(tree, display_name, "exec")
+    except Exception:
+        tree = _ast.parse(code, filename=display_name, mode="exec")
+        compiled = compile(tree, display_name, "exec")
+
+    ns = dict(_pll_initial_globals)
+    ns["__name__"] = "__pll_test__"
+    ns["__file__"] = display_name
+
+    try:
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            exec(compiled, ns)
+    except BaseException as e:
+        formatted = "".join(_tb_mod.format_exception(type(e), e, e.__traceback__))
+        result["internal_error"] = True
+        result["error_type"] = type(e).__name__
+        result["error_message"] = str(e)
+        result["traceback"] = formatted
+        line_no, col = _pll_extract_loc(formatted, display_name)
+        result["line_number"] = line_no
+        result["column"] = col
+        result["stdout"] = stdout.getvalue()
+        result["stderr"] = stderr.getvalue()
+        result["displays"] = list(_pll_displays)
+        return result
+
+    rows = []
+    passed = failed = errors = skipped = 0
+    for name, fn in _pll_iter_tests(ns):
+        outcome, message, cap = _pll_call_test(fn)
+        if outcome == "passed":
+            passed += 1
+        elif outcome == "failed":
+            failed += 1
+        elif outcome == "skipped":
+            skipped += 1
+        else:
+            errors += 1
+        rows.append({
+            "name": name,
+            "outcome": outcome,
+            "line_number": locs.get(name),
+            "message": message,
+            "stdout": cap,
+        })
+
+    result["passed"] = passed
+    result["failed"] = failed
+    result["skipped"] = skipped
+    result["errors"] = errors
+    result["tests"] = rows
+    result["ok"] = failed == 0 and errors == 0
+    result["stdout"] = stdout.getvalue()
+    result["stderr"] = stderr.getvalue()
+    result["displays"] = list(_pll_displays)
     return result
 
 
@@ -317,9 +595,9 @@ def _bonnie_run_file(code, filename, session_key):
 # REPL-style eval (statements + last-expression value)
 # -----------------------------------------------------------------------------
 
-def _bonnie_repl_eval(code, session_key):
-    stdout = _BonnieStream("stdout")
-    stderr = _BonnieStream("stderr")
+def _pll_repl_eval(code, session_key):
+    stdout = _PllStream("stdout")
+    stderr = _PllStream("stderr")
     result = {
         "ok": False,
         "stdout": "",
@@ -332,8 +610,8 @@ def _bonnie_repl_eval(code, session_key):
         "column": None,
         "displays": [],
     }
-    _bonnie_displays.clear()
-    user_globals = _bonnie_get_session(session_key)
+    _pll_displays.clear()
+    user_globals = _pll_get_session(session_key)
     filename = "<repl>"
     try:
         tree = _ast.parse(code, filename=filename, mode="exec")
@@ -361,9 +639,9 @@ def _bonnie_repl_eval(code, session_key):
                 compiled_expr = compile(expr_module, filename, "eval")
                 value = eval(compiled_expr, user_globals)
                 if value is not None:
-                    payload = _bonnie_extract_display(value)
+                    payload = _pll_extract_display(value)
                     if payload is not None:
-                        _bonnie_displays.append(payload)
+                        _pll_displays.append(payload)
                     else:
                         result["result_repr"] = repr(value)
         result["ok"] = True
@@ -374,13 +652,13 @@ def _bonnie_repl_eval(code, session_key):
         result["error_type"] = type(e).__name__
         result["error_message"] = str(e)
         result["traceback"] = formatted
-        line_no, col = _bonnie_extract_loc(formatted, filename)
+        line_no, col = _pll_extract_loc(formatted, filename)
         result["line_number"] = line_no
         result["column"] = col
     finally:
         result["stdout"] = stdout.getvalue()
         result["stderr"] = stderr.getvalue()
-        result["displays"] = list(_bonnie_displays)
+        result["displays"] = list(_pll_displays)
     return result
 
 
@@ -415,21 +693,21 @@ def _bonnie_repl_eval(code, session_key):
 # comprehensions have their own scope.
 
 
-_BONNIE_SCOPE_FUNC = (_ast.FunctionDef, _ast.AsyncFunctionDef)
-_BONNIE_SCOPE_COMP = (_ast.ListComp, _ast.SetComp, _ast.DictComp, _ast.GeneratorExp)
+_PLL_SCOPE_FUNC = (_ast.FunctionDef, _ast.AsyncFunctionDef)
+_PLL_SCOPE_COMP = (_ast.ListComp, _ast.SetComp, _ast.DictComp, _ast.GeneratorExp)
 
 
-class _BonnieScope:
+class _PllScope:
     __slots__ = ("node", "kind", "parent", "bindings")
 
     def __init__(self, node, kind, parent):
         self.node = node
         self.kind = kind        # "module" | "function" | "lambda" | "class" | "comprehension"
-        self.parent = parent    # _BonnieScope | None
+        self.parent = parent    # _PllScope | None
         self.bindings = {}      # name -> [(lineno, col, kind), ...]
 
 
-def _bonnie_arg_names(args):
+def _pll_arg_names(args):
     """All argument names (with positions) on an ast.arguments node."""
     out = []
     posonly = list(getattr(args, "posonlyargs", []) or [])
@@ -442,7 +720,7 @@ def _bonnie_arg_names(args):
     return out
 
 
-class _BonnieScopeBuilder:
+class _PllScopeBuilder:
     """Walk a module AST and build a list of scopes with their bindings.
 
     A binding is collected in the *enclosing* scope of the syntactic node
@@ -455,7 +733,7 @@ class _BonnieScopeBuilder:
         self.scopes = []
 
     def build(self, tree):
-        module = _BonnieScope(tree, "module", None)
+        module = _PllScope(tree, "module", None)
         self.scopes.append(module)
         for stmt in tree.body:
             self._walk(stmt, module)
@@ -537,7 +815,7 @@ class _BonnieScopeBuilder:
             return
 
         # --- Scope-introducing nodes -------------------------------------
-        if isinstance(node, _BONNIE_SCOPE_FUNC):
+        if isinstance(node, _PLL_SCOPE_FUNC):
             # Function name binds in the OUTER scope.
             self._add(scope, node.name, node.lineno, node.col_offset, "functiondef")
             for d in node.decorator_list:
@@ -547,9 +825,9 @@ class _BonnieScopeBuilder:
             for d in (node.args.kw_defaults or []):
                 if d is not None:
                     self._walk(d, scope)
-            inner = _BonnieScope(node, "function", scope)
+            inner = _PllScope(node, "function", scope)
             self.scopes.append(inner)
-            for name, lineno, col in _bonnie_arg_names(node.args):
+            for name, lineno, col in _pll_arg_names(node.args):
                 self._add(inner, name, lineno, col, "argument")
             for s in node.body:
                 self._walk(s, inner)
@@ -560,9 +838,9 @@ class _BonnieScopeBuilder:
             for d in (node.args.kw_defaults or []):
                 if d is not None:
                     self._walk(d, scope)
-            inner = _BonnieScope(node, "lambda", scope)
+            inner = _PllScope(node, "lambda", scope)
             self.scopes.append(inner)
-            for name, lineno, col in _bonnie_arg_names(node.args):
+            for name, lineno, col in _pll_arg_names(node.args):
                 self._add(inner, name, lineno, col, "argument")
             self._walk(node.body, inner)
             return
@@ -574,13 +852,13 @@ class _BonnieScopeBuilder:
                 self._walk(b, scope)
             for kw in node.keywords:
                 self._walk(kw.value, scope)
-            inner = _BonnieScope(node, "class", scope)
+            inner = _PllScope(node, "class", scope)
             self.scopes.append(inner)
             for s in node.body:
                 self._walk(s, inner)
             return
-        if isinstance(node, _BONNIE_SCOPE_COMP):
-            inner = _BonnieScope(node, "comprehension", scope)
+        if isinstance(node, _PLL_SCOPE_COMP):
+            inner = _PllScope(node, "comprehension", scope)
             self.scopes.append(inner)
             # Per Python semantics: outermost iter is evaluated in the OUTER
             # scope, everything else inside the comp scope.
@@ -604,7 +882,7 @@ class _BonnieScopeBuilder:
             self._walk(child, scope)
 
 
-class _BonnieKeywordVisitor(_ast.NodeVisitor):
+class _PllKeywordVisitor(_ast.NodeVisitor):
     """Collect every `global` / `nonlocal` statement in a tree.
 
     Each entry is `(keyword, lineno, col_offset, names)` where `keyword`
@@ -624,7 +902,7 @@ class _BonnieKeywordVisitor(_ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def _bonnie_static_analyze(code, level, filename):
+def _pll_static_analyze(code, level, filename):
     """Run static checks for `level` over `code` and return findings.
 
     Returns a list of dicts. Each dict has at minimum:
@@ -639,7 +917,7 @@ def _bonnie_static_analyze(code, level, filename):
         return []
 
     findings = []
-    builder = _BonnieScopeBuilder()
+    builder = _PllScopeBuilder()
     builder.build(tree)
     builtins_set = {n for n in dir(__builtins__) if not n.startswith("_")}
 
@@ -725,7 +1003,7 @@ def _bonnie_static_analyze(code, level, filename):
     # Both are disallowed at beginner and intermediate. We emit one finding
     # per declaration (not per name) so a `global x, y` produces a single
     # diagnostic on that line.
-    kw_visitor = _BonnieKeywordVisitor()
+    kw_visitor = _PllKeywordVisitor()
     kw_visitor.visit(tree)
     for keyword, lineno, col, names in kw_visitor.found:
         primary = names[0] if names else ""

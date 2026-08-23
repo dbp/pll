@@ -290,6 +290,73 @@ button:disabled {
   font-weight: 700;
 }
 
+/* Pytest report card */
+.entry.testReport {
+  margin: 6px 0;
+  border: 1px solid var(--vscode-panel-border, #333);
+  border-radius: 4px;
+  padding: 8px 10px;
+  background: var(--vscode-editorWidget-background, #252526);
+  font-family: var(--vscode-font-family, sans-serif);
+}
+.entry.testReport.passed {
+  border-left: 3px solid var(--vscode-terminal-ansiGreen, #6a9955);
+}
+.entry.testReport.failed {
+  border-left: 3px solid var(--vscode-editorError-foreground, #f48771);
+}
+.entry.testReport .summary {
+  font-weight: 600;
+  font-size: 12px;
+}
+.entry.testReport .testList {
+  margin-top: 6px;
+}
+.entry.testReport .testRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.entry.testReport .testRow .mark {
+  flex: 0 0 auto;
+  width: 1em;
+  text-align: center;
+}
+.entry.testReport .testRow.passed .mark {
+  color: var(--vscode-terminal-ansiGreen, #6a9955);
+}
+.entry.testReport .testRow.failed .mark,
+.entry.testReport .testRow.error .mark {
+  color: var(--vscode-editorError-foreground, #f48771);
+}
+.entry.testReport .testRow.skipped .mark {
+  color: var(--vscode-descriptionForeground, #999);
+}
+.entry.testReport .testRow .name {
+  flex: 1 1 auto;
+}
+.entry.testReport .testRow .loc {
+  flex: 0 0 auto;
+  color: var(--vscode-textLink-foreground, #3794ff);
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: 11px;
+}
+.entry.testReport .testMsg,
+.entry.testReport .testStdout {
+  white-space: pre-wrap;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  margin: 2px 0 8px 1.6em;
+  opacity: 0.9;
+}
+.entry.testReport .testMsg {
+  color: var(--vscode-terminal-ansiRed, #f48771);
+}
+
 /* Empty state */
 #empty {
   text-align: center;

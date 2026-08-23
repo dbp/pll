@@ -32,33 +32,33 @@ async function main() {
   const pyodide = await loadPyodide({ indexURL });
 
   pyodide.runPython(readPy("src/common/pyodideBootstrap.py"));
-  pyodide.runPython(readPy("src/common/bonnieImageLib.py"));
-  pyodide.runPython(readPy("src/common/bonnieTableLib.py"));
+  pyodide.runPython(readPy("src/common/imageLib.py"));
+  pyodide.runPython(readPy("src/common/tableLib.py"));
 
   // Re-derive PYODIDE_INSTALL_PY rather than parsing the TS file.
   pyodide.runPython(`
 import sys as _sys, types as _types
-_bonnie_module = _types.ModuleType("bonnie")
-_bonnie_image_module = _types.ModuleType("bonnie.image")
-_bonnie_table_module = _types.ModuleType("bonnie.table")
-for _name in BONNIE_IMAGE_EXPORTS:
-    setattr(_bonnie_image_module, _name, globals()[_name])
-for _name in BONNIE_TABLE_EXPORTS:
-    setattr(_bonnie_table_module, _name, globals()[_name])
-_bonnie_module.image = _bonnie_image_module
-_bonnie_module.table = _bonnie_table_module
-_sys.modules["bonnie"] = _bonnie_module
-_sys.modules["bonnie.image"] = _bonnie_image_module
-_sys.modules["bonnie.table"] = _bonnie_table_module
-for _name in BONNIE_IMAGE_EXPORTS:
-    _bonnie_initial_globals[_name] = globals()[_name]
-for _name in BONNIE_TABLE_EXPORTS:
-    _bonnie_initial_globals[_name] = globals()[_name]
+_pll_module = _types.ModuleType("pll")
+_pll_image_module = _types.ModuleType("pll.image")
+_pll_table_module = _types.ModuleType("pll.table")
+for _name in PLL_IMAGE_EXPORTS:
+    setattr(_pll_image_module, _name, globals()[_name])
+for _name in PLL_TABLE_EXPORTS:
+    setattr(_pll_table_module, _name, globals()[_name])
+_pll_module.image = _pll_image_module
+_pll_module.table = _pll_table_module
+_sys.modules["pll"] = _pll_module
+_sys.modules["pll.image"] = _pll_image_module
+_sys.modules["pll.table"] = _pll_table_module
+for _name in PLL_IMAGE_EXPORTS:
+    _pll_initial_globals[_name] = globals()[_name]
+for _name in PLL_TABLE_EXPORTS:
+    _pll_initial_globals[_name] = globals()[_name]
 del _name
 `);
 
-  const callRunFile = pyodide.globals.get("_bonnie_run_file");
-  const callReplEval = pyodide.globals.get("_bonnie_repl_eval");
+  const callRunFile = pyodide.globals.get("_pll_run_file");
+  const callReplEval = pyodide.globals.get("_pll_repl_eval");
   const py = (fn, args) => {
     const proxy = fn(...args);
     const obj = proxy.toJs({ dict_converter: Object.fromEntries });
@@ -150,8 +150,8 @@ del _name
 
   console.log("\n[7] run-file resets globals between runs of the same session");
   {
-    // First file defines `x` and `bonnie_special`.
-    const r1 = py(callRunFile, [`x = 5\nbonnie_special = 42\n`, "a.py", SK]);
+    // First file defines `x` and `pll_special`.
+    const r1 = py(callRunFile, [`x = 5\npll_special = 42\n`, "a.py", SK]);
     expect(r1.ok, "first run ok");
 
     // REPL can still see `x` (REPL inherits the file's globals).
@@ -163,7 +163,7 @@ del _name
     expect(r1Img.ok && imagesOf(r1Img).length === 1, "image primitives survive run-file");
 
     // Run a second file (same session) that does NOT define `x`. The
-    // previous run's `x` and `bonnie_special` must be wiped.
+    // previous run's `x` and `pll_special` must be wiped.
     const r2 = py(callRunFile, [`y = 7\n`, "b.py", SK]);
     expect(r2.ok, "second run ok");
 
@@ -173,10 +173,10 @@ del _name
       `expected NameError for x after reset, got ok=${r2X.ok} type=${r2X.error_type}`,
     );
 
-    const r2Special = py(callReplEval, [`bonnie_special`, SK]);
+    const r2Special = py(callReplEval, [`pll_special`, SK]);
     expect(
       !r2Special.ok && r2Special.error_type === "NameError",
-      "expected NameError for bonnie_special after reset",
+      "expected NameError for pll_special after reset",
     );
 
     // Image primitives must still be available after the reset.
@@ -233,7 +233,7 @@ del _name
 
   console.log("\n[9] static analyzer still works after image lib loaded");
   {
-    const fn = pyodide.globals.get("_bonnie_static_analyze");
+    const fn = pyodide.globals.get("_pll_static_analyze");
     const proxy = fn(`#beginner\nx = 1\nx = 2\n`, "beginner", "t.py");
     const findings = proxy.toJs({ dict_converter: Object.fromEntries });
     proxy.destroy?.();

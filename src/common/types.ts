@@ -56,6 +56,24 @@ export interface ExecutionDoneChunk {
   kind: "done";
 }
 
+export interface ExecutionTestReportChunk {
+  kind: "testReport";
+  fileName: string;
+  passed: number;
+  failed: number;
+  skipped: number;
+  errors: number;
+  tests: TestCaseResult[];
+}
+
+export interface TestCaseResult {
+  name: string;
+  outcome: "passed" | "failed" | "skipped" | "error" | string;
+  lineNumber: number | null;
+  message: string | null;
+  stdout: string | null;
+}
+
 export type ExecutionEvent =
   | ExecutionStdoutChunk
   | ExecutionStderrChunk
@@ -63,6 +81,7 @@ export type ExecutionEvent =
   | ExecutionImageChunk
   | ExecutionTableChunk
   | ExecutionErrorChunk
+  | ExecutionTestReportChunk
   | ExecutionDoneChunk;
 
 export type ExecutionEventHandler = (event: ExecutionEvent) => void;
@@ -103,6 +122,12 @@ export interface PythonRuntime {
   isReady(): boolean;
   runFile(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void>;
   replEval(request: ReplEvalRequest, onEvent: ExecutionEventHandler): Promise<void>;
+  /** True if `code` contains pytest-style `test_*` functions or `Test*` classes. */
+  hasTests(code: string): Promise<boolean>;
+  /** Load the pytest package (no-op if already loaded). Needs network the first time. */
+  ensurePytest(): Promise<void>;
+  /** Run pytest against `request.code` as `pytest <fileName>`. Isolated from the REPL session. */
+  runTests(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void>;
   /** Decide whether `code` is a complete REPL input (codeop.compile_command). */
   checkReplComplete(code: string): Promise<ReplCheckResult>;
   /**

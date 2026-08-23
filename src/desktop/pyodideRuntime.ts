@@ -1,14 +1,16 @@
+import * as fs from "fs";
 import * as path from "path";
 import type { PyodideInterface } from "pyodide";
 import {
-  BONNIE_IMAGE_LIB_PY,
-  BONNIE_TABLE_LIB_PY,
+  PLL_IMAGE_LIB_PY,
+  PLL_TABLE_LIB_PY,
   PYODIDE_BOOTSTRAP_PY,
   PYODIDE_INSTALL_PY,
-  type BonnieRunResult,
+  type RunResult,
   type RawStaticFinding,
+  type TestRunResult,
 } from "../common/pyodideRunner";
-import { deliverBonnieResult } from "../common/deliverResult";
+import { deliverRunResult, deliverTestResult } from "../common/deliverResult";
 import type {
   ExecutionEventHandler,
   PythonRuntime,
@@ -36,6 +38,29 @@ function adaptReplCheck(raw: RawReplCheck): ReplCheckResult {
   };
 }
 
+function hasPyodideAssets(dir: string): boolean {
+  return fs.existsSync(path.join(dir, "pyodide.asm.wasm"));
+}
+
+/**
+ * Published VSIX ships wasm/stdlib under vendor/pyodide. Local `pnpm run
+ * build` copies the same files there; F5 before the first build can still
+ * fall back to the npm package in node_modules.
+ */
+function resolvePyodideIndexURL(extensionPath: string): string {
+  const candidates = [
+    path.join(extensionPath, "vendor", "pyodide"),
+    path.join(extensionPath, "node_modules", "pyodide"),
+  ];
+  const found = candidates.find(hasPyodideAssets);
+  if (!found) {
+    throw new Error(
+      "Pyodide runtime assets not found. Run `pnpm run build` to copy them into vendor/pyodide.",
+    );
+  }
+  return found;
+}
+
 /**
  * Desktop Python runtime: loads Pyodide directly in the Node extension host.
  *
@@ -46,6 +71,7 @@ function adaptReplCheck(raw: RawReplCheck): ReplCheckResult {
 export class DesktopPyodideRuntime implements PythonRuntime {
   private pyodide: PyodideInterface | null = null;
   private initPromise: Promise<void> | null = null;
+  private pytestPromise: Promise<void> | null = null;
 
   constructor(private readonly extensionPath: string) {}
 
@@ -65,11 +91,11 @@ export class DesktopPyodideRuntime implements PythonRuntime {
 
   private async doInitialize(): Promise<void> {
     const pyodideModule = await import("pyodide");
-    const indexURL = path.join(this.extensionPath, "node_modules", "pyodide");
+    const indexURL = resolvePyodideIndexURL(this.extensionPath);
     this.pyodide = await pyodideModule.loadPyodide({ indexURL });
     this.pyodide.runPython(PYODIDE_BOOTSTRAP_PY);
-    this.pyodide.runPython(BONNIE_IMAGE_LIB_PY);
-    this.pyodide.runPython(BONNIE_TABLE_LIB_PY);
+    this.pyodide.runPython(PLL_IMAGE_LIB_PY);
+    this.pyodide.runPython(PLL_TABLE_LIB_PY);
     this.pyodide.runPython(PYODIDE_INSTALL_PY);
   }
 
@@ -78,12 +104,12 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     if (!this.pyodide) {
       throw new Error("Pyodide failed to initialize");
     }
-    const fn = this.pyodide.globals.get("_bonnie_run_file");
+    const fn = this.pyodide.globals.get("_pll_run_file");
     try {
       const proxy = fn(request.code, request.fileName, request.sessionKey);
-      const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as BonnieRunResult;
+      const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as RunResult;
       proxy.destroy?.();
-      deliverBonnieResult(obj, onEvent, request.fileName);
+      deliverRunResult(obj, onEvent, request.fileName);
     } finally {
       fn.destroy?.();
     }
@@ -94,12 +120,12 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     if (!this.pyodide) {
       throw new Error("Pyodide failed to initialize");
     }
-    const fn = this.pyodide.globals.get("_bonnie_repl_eval");
+    const fn = this.pyodide.globals.get("_pll_repl_eval");
     try {
       const proxy = fn(request.code, request.sessionKey);
-      const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as BonnieRunResult;
+      const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as RunResult;
       proxy.destroy?.();
-      deliverBonnieResult(obj, onEvent, "<repl>");
+      deliverRunResult(obj, onEvent, "<repl>");
     } finally {
       fn.destroy?.();
     }
@@ -110,7 +136,7 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     if (!this.pyodide) {
       throw new Error("Pyodide failed to initialize");
     }
-    const fn = this.pyodide.globals.get("_bonnie_repl_check");
+    const fn = this.pyodide.globals.get("_pll_repl_check");
     try {
       const proxy = fn(code);
       const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as RawReplCheck;
@@ -121,12 +147,52 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     }
   }
 
+  async hasTests(code: string): Promise<boolean> {
+    await this.initialize();
+    if (!this.pyodide) {
+      throw new Error("Pyodide failed to initialize");
+    }
+    const fn = this.pyodide.globals.get("_pll_has_tests");
+    try {
+      return Boolean(fn(code));
+    } finally {
+      fn.destroy?.();
+    }
+  }
+
+  async ensurePytest(): Promise<void> {
+    await this.initialize();
+    if (!this.pyodide) {
+      throw new Error("Pyodide failed to initialize");
+    }
+    if (!this.pytestPromise) {
+      this.pytestPromise = this.pyodide.loadPackage("pytest").then(() => undefined);
+    }
+    await this.pytestPromise;
+  }
+
+  async runTests(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void> {
+    await this.ensurePytest();
+    if (!this.pyodide) {
+      throw new Error("Pyodide failed to initialize");
+    }
+    const fn = this.pyodide.globals.get("_pll_run_tests");
+    try {
+      const proxy = fn(request.code, request.fileName);
+      const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as TestRunResult;
+      proxy.destroy?.();
+      deliverTestResult(obj, onEvent, request.fileName);
+    } finally {
+      fn.destroy?.();
+    }
+  }
+
   async staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]> {
     await this.initialize();
     if (!this.pyodide) {
       throw new Error("Pyodide failed to initialize");
     }
-    const fn = this.pyodide.globals.get("_bonnie_static_analyze");
+    const fn = this.pyodide.globals.get("_pll_static_analyze");
     try {
       const proxy = fn(request.code, request.level, request.fileName);
       const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as RawStaticFinding[];
@@ -140,5 +206,6 @@ export class DesktopPyodideRuntime implements PythonRuntime {
   dispose(): void {
     this.pyodide = null;
     this.initPromise = null;
+    this.pytestPromise = null;
   }
 }

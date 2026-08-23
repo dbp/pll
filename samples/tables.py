@@ -1,6 +1,6 @@
 #intermediate
 
-# Bonnie tables: a small Pyret-style tabular data type with simple
+# PLL tables: a small Pyret-style tabular data type with simple
 # functional operations and built-in charts.
 #
 # Every operation returns a *new* table; tables are immutable. The

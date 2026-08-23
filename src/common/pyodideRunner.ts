@@ -1,63 +1,63 @@
 /**
  * Python source executed inside Pyodide once on init. The actual code lives
- * in `pyodideBootstrap.py`, `bonnieImageLib.py`, and `bonnieTableLib.py`;
+ * in `pyodideBootstrap.py`, `imageLib.py`, and `tableLib.py`;
  * esbuild's `text` loader inlines them as strings at build time, which keeps
  * the analyzer + image + table libraries editable as real Python (with IDE
  * support, syntax highlighting, etc.) instead of giant template literals.
  *
  * Initialization order (run sequentially in the same Python interpreter):
  *   1. PYODIDE_BOOTSTRAP_PY   - runtime hooks (run/repl/static-analyze)
- *   2. BONNIE_IMAGE_LIB_PY    - Image class + primitives + combinators
- *   3. BONNIE_TABLE_LIB_PY    - Table class + functional ops + chart helpers
- *   4. PYODIDE_INSTALL_PY     - registers `bonnie.image` / `bonnie.table`
+ *   2. PLL_IMAGE_LIB_PY    - Image class + primitives + combinators
+ *   3. PLL_TABLE_LIB_PY    - Table class + functional ops + chart helpers
+ *   4. PYODIDE_INSTALL_PY     - registers `pll.image` / `pll.table`
  *                                modules and copies public names into
- *                                `_bonnie_initial_globals`
+ *                                `_pll_initial_globals`
  *
  * Loading the libraries before the install step means the bootstrap doesn't
- * depend on them; it just duck-types `_bonnie_image_data` / `_bonnie_table_data`
+ * depend on them; it just duck-types `_pll_image_data` / `_pll_table_data`
  * during display.
  */
 import bootstrapSource from "./pyodideBootstrap.py";
-import imageLibSource from "./bonnieImageLib.py";
-import tableLibSource from "./bonnieTableLib.py";
+import imageLibSource from "./imageLib.py";
+import tableLibSource from "./tableLib.py";
 
 export const PYODIDE_BOOTSTRAP_PY = bootstrapSource;
-export const BONNIE_IMAGE_LIB_PY = imageLibSource;
-export const BONNIE_TABLE_LIB_PY = tableLibSource;
+export const PLL_IMAGE_LIB_PY = imageLibSource;
+export const PLL_TABLE_LIB_PY = tableLibSource;
 
 /**
- * Final installation step: register `bonnie.image` and `bonnie.table` as
+ * Final installation step: register `pll.image` and `pll.table` as
  * importable modules and inject their public names into the per-session
- * globals template (`_bonnie_initial_globals`) so beginners can use
+ * globals template (`_pll_initial_globals`) so beginners can use
  * `circle(...)` / `table(...)` with no import in every file's session.
  */
 export const PYODIDE_INSTALL_PY = `
 import sys as _sys, types as _types
 
-_bonnie_module = _types.ModuleType("bonnie")
-_bonnie_image_module = _types.ModuleType("bonnie.image")
-_bonnie_table_module = _types.ModuleType("bonnie.table")
-for _name in BONNIE_IMAGE_EXPORTS:
-    setattr(_bonnie_image_module, _name, globals()[_name])
-for _name in BONNIE_TABLE_EXPORTS:
-    setattr(_bonnie_table_module, _name, globals()[_name])
-_bonnie_module.image = _bonnie_image_module
-_bonnie_module.table = _bonnie_table_module
-_sys.modules["bonnie"] = _bonnie_module
-_sys.modules["bonnie.image"] = _bonnie_image_module
-_sys.modules["bonnie.table"] = _bonnie_table_module
+_pll_module = _types.ModuleType("pll")
+_pll_image_module = _types.ModuleType("pll.image")
+_pll_table_module = _types.ModuleType("pll.table")
+for _name in PLL_IMAGE_EXPORTS:
+    setattr(_pll_image_module, _name, globals()[_name])
+for _name in PLL_TABLE_EXPORTS:
+    setattr(_pll_table_module, _name, globals()[_name])
+_pll_module.image = _pll_image_module
+_pll_module.table = _pll_table_module
+_sys.modules["pll"] = _pll_module
+_sys.modules["pll.image"] = _pll_image_module
+_sys.modules["pll.table"] = _pll_table_module
 
 # Add image + table library names to the per-session globals template.
 # Each new session is initialized as a copy of this template, so every
 # file's Run File / REPL prompt sees these names without explicit imports.
-for _name in BONNIE_IMAGE_EXPORTS:
-    _bonnie_initial_globals[_name] = globals()[_name]
-for _name in BONNIE_TABLE_EXPORTS:
-    _bonnie_initial_globals[_name] = globals()[_name]
+for _name in PLL_IMAGE_EXPORTS:
+    _pll_initial_globals[_name] = globals()[_name]
+for _name in PLL_TABLE_EXPORTS:
+    _pll_initial_globals[_name] = globals()[_name]
 del _name
 `;
 
-export interface BonnieRunResult {
+export interface RunResult {
   ok: boolean;
   stdout: string;
   stderr: string;
@@ -68,26 +68,26 @@ export interface BonnieRunResult {
   line_number: number | null;
   column: number | null;
   /** Typed displays produced by top-level expressions (images and tables). */
-  displays: BonnieDisplayData[];
+  displays: DisplayData[];
 }
 
-export type BonnieDisplayData =
-  | BonnieStdoutDisplay
-  | BonnieStderrDisplay
-  | BonnieImageDisplay
-  | BonnieTableDisplay;
+export type DisplayData =
+  | StdoutDisplay
+  | StderrDisplay
+  | ImageDisplay
+  | TableDisplay;
 
-export interface BonnieStdoutDisplay {
+export interface StdoutDisplay {
   type: "stdout";
   text: string;
 }
 
-export interface BonnieStderrDisplay {
+export interface StderrDisplay {
   type: "stderr";
   text: string;
 }
 
-export interface BonnieImageDisplay {
+export interface ImageDisplay {
   type: "image";
   /** Sub-format: today only "svg". */
   format?: string;
@@ -97,7 +97,7 @@ export interface BonnieImageDisplay {
   data: string;
 }
 
-export interface BonnieTableDisplay {
+export interface TableDisplay {
   type: "table";
   columns: string[];
   /** Pre-formatted display strings, parallel to `columns`. */
@@ -110,8 +110,34 @@ export interface BonnieTableDisplay {
   truncated: boolean;
 }
 
+export interface TestCaseData {
+  name: string;
+  outcome: string;
+  line_number: number | null;
+  message: string | null;
+  stdout: string | null;
+}
+
+export interface TestRunResult {
+  ok: boolean;
+  internal_error: boolean;
+  passed: number;
+  failed: number;
+  skipped: number;
+  errors: number;
+  tests: TestCaseData[];
+  stdout: string;
+  stderr: string;
+  displays: DisplayData[];
+  error_type: string | null;
+  error_message: string | null;
+  traceback: string | null;
+  line_number: number | null;
+  column: number | null;
+}
+
 /**
- * The Python `_bonnie_static_analyze` returns a list of dicts of this shape.
+ * The Python `_pll_static_analyze` returns a list of dicts of this shape.
  * The TS side maps each one through a level-aware explainer to produce the
  * user-facing AnalysisFinding.
  */

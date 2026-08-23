@@ -1,4 +1,4 @@
-// Bonnie interactions view client.
+// PLL interactions view client.
 //
 // Lives inside the WebviewView. Holds the currently-displayed session's
 // entry log + an input row, and talks to the extension host via postMessage.
@@ -139,6 +139,7 @@
       case "table":       return renderTable(entry);
       case "finding":     return renderFinding(entry);
       case "rawError":    return renderRawError(entry);
+      case "testReport":  return renderTestReport(entry);
       default: {
         const div = document.createElement("div");
         div.className = "entry";
@@ -372,6 +373,77 @@
       pre.style.whiteSpace = "pre-wrap";
       pre.textContent = entry.traceback;
       div.appendChild(pre);
+    }
+    return div;
+  }
+
+  function renderTestReport(entry) {
+    const failed = (entry.failed || 0) + (entry.errors || 0);
+    const div = document.createElement("div");
+    div.className = "entry testReport " + (failed > 0 ? "failed" : "passed");
+
+    const summary = document.createElement("div");
+    summary.className = "summary";
+    const parts = [];
+    if (entry.passed) parts.push(entry.passed + " passed");
+    if (entry.failed) parts.push(entry.failed + " failed");
+    if (entry.errors) parts.push(entry.errors + " error" + (entry.errors === 1 ? "" : "s"));
+    if (entry.skipped) parts.push(entry.skipped + " skipped");
+    if (parts.length === 0) parts.push("no tests collected");
+    summary.textContent = "Tests: " + parts.join(", ");
+    div.appendChild(summary);
+
+    const tests = entry.tests || [];
+    if (tests.length > 0) {
+      const list = document.createElement("div");
+      list.className = "testList";
+      for (const t of tests) {
+        const row = document.createElement("div");
+        row.className = "testRow " + (t.outcome || "");
+
+        const mark = document.createElement("span");
+        mark.className = "mark";
+        if (t.outcome === "passed") mark.textContent = "\u2713";
+        else if (t.outcome === "skipped") mark.textContent = "\u2013";
+        else mark.textContent = "\u2717";
+        row.appendChild(mark);
+
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = t.name;
+        row.appendChild(name);
+
+        if (t.lineNumber != null && entry.fileName) {
+          const loc = document.createElement("a");
+          loc.className = "loc";
+          loc.textContent = "at " + entry.fileName + ":" + t.lineNumber;
+          loc.addEventListener("click", () => {
+            vscode.postMessage({
+              type: "openLocation",
+              fileName: entry.fileName,
+              line: t.lineNumber,
+              column: null,
+            });
+          });
+          row.appendChild(loc);
+        }
+
+        list.appendChild(row);
+
+        if (t.message) {
+          const msg = document.createElement("div");
+          msg.className = "testMsg";
+          msg.textContent = t.message;
+          list.appendChild(msg);
+        }
+        if (t.stdout) {
+          const out = document.createElement("div");
+          out.className = "testStdout";
+          out.textContent = t.stdout;
+          list.appendChild(out);
+        }
+      }
+      div.appendChild(list);
     }
     return div;
   }

@@ -1,45 +1,45 @@
 import * as vscode from "vscode";
-import type { BonnieDiagnostics } from "./diagnostics";
-import type { BonnieInteractionsView } from "./interactionsView";
-import type { BonnieReplSession } from "./replSession";
+import type { Diagnostics } from "./diagnostics";
+import type { InteractionsView } from "./interactionsView";
+import type { ReplSession } from "./replSession";
 
-export interface BonnieServices {
-  repl: BonnieReplSession;
-  diagnostics: BonnieDiagnostics;
-  view: BonnieInteractionsView;
+export interface ExtensionServices {
+  repl: ReplSession;
+  diagnostics: Diagnostics;
+  view: InteractionsView;
 }
 
 export function registerCommands(
   context: vscode.ExtensionContext,
-  services: BonnieServices,
+  services: ExtensionServices,
 ): void {
   context.subscriptions.push(
     // Show the integrated interactions view.
-    vscode.commands.registerCommand("bonniePython.showInteractions", () =>
+    vscode.commands.registerCommand("pll.showInteractions", () =>
       services.view.reveal({ preserveFocus: false }).catch(reportError),
     ),
     // Back-compat alias for users who had this bound; just opens the view.
-    vscode.commands.registerCommand("bonniePython.startRepl", () =>
+    vscode.commands.registerCommand("pll.startRepl", () =>
       services.view.reveal({ preserveFocus: false }).catch(reportError),
     ),
-    vscode.commands.registerCommand("bonniePython.runActiveFile", () =>
+    vscode.commands.registerCommand("pll.runActiveFile", () =>
       runActiveFile(services).catch(reportError),
     ),
-    vscode.commands.registerCommand("bonniePython.clearInteractions", () =>
+    vscode.commands.registerCommand("pll.clearInteractions", () =>
       services.view.clear(),
     ),
   );
 }
 
-async function runActiveFile(services: BonnieServices): Promise<void> {
+async function runActiveFile(services: ExtensionServices): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
-    vscode.window.showWarningMessage("Bonnie Python: no active editor.");
+    vscode.window.showWarningMessage("Python Language Levels: no active editor.");
     return;
   }
   const document = editor.document;
   if (document.languageId !== "python") {
-    vscode.window.showWarningMessage("Bonnie Python: active file is not Python.");
+    vscode.window.showWarningMessage("Python Language Levels: active file is not Python.");
     return;
   }
 
@@ -49,5 +49,5 @@ async function runActiveFile(services: BonnieServices): Promise<void> {
 
 function reportError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
-  vscode.window.showErrorMessage(`Bonnie Python: ${message}`);
+  vscode.window.showErrorMessage(`Python Language Levels: ${message}`);
 }

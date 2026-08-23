@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Smoke test for the Bonnie table library.
+ * Smoke test for the PLL table library.
  *
  * Boots Pyodide in Node, loads bootstrap + image lib + table lib + the
  * "register exports into the per-session template" install snippet, then
- * runs each scenario through `_bonnie_run_file` / `_bonnie_repl_eval`.
+ * runs each scenario through `_pll_run_file` / `_pll_repl_eval`.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -33,20 +33,20 @@ async function main() {
   const indexURL = resolve(ROOT, "node_modules", "pyodide");
   const pyodide = await loadPyodide({ indexURL });
   pyodide.runPython(readText("src/common/pyodideBootstrap.py"));
-  pyodide.runPython(readText("src/common/bonnieImageLib.py"));
-  pyodide.runPython(readText("src/common/bonnieTableLib.py"));
+  pyodide.runPython(readText("src/common/imageLib.py"));
+  pyodide.runPython(readText("src/common/tableLib.py"));
   // Install image + table exports into the per-session template, mirroring
   // what PYODIDE_INSTALL_PY does in the runtime.
   pyodide.runPython(`
-for _name in BONNIE_IMAGE_EXPORTS:
-    _bonnie_initial_globals[_name] = globals()[_name]
-for _name in BONNIE_TABLE_EXPORTS:
-    _bonnie_initial_globals[_name] = globals()[_name]
+for _name in PLL_IMAGE_EXPORTS:
+    _pll_initial_globals[_name] = globals()[_name]
+for _name in PLL_TABLE_EXPORTS:
+    _pll_initial_globals[_name] = globals()[_name]
 del _name
 `);
 
-  const callRunFile = pyodide.globals.get("_bonnie_run_file");
-  const callReplEval = pyodide.globals.get("_bonnie_repl_eval");
+  const callRunFile = pyodide.globals.get("_pll_run_file");
+  const callReplEval = pyodide.globals.get("_pll_repl_eval");
 
   const py = (fn, ...args) => {
     const proxy = fn(...args);
