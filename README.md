@@ -1,123 +1,118 @@
 # Python Language Levels (PLL)
 
-A beginner-friendly Python extension for VS Code, powered by [Pyodide](https://pyodide.org).
-It works in **desktop VS Code** and in **`vscode.dev`** (web).
+PLL is a VS Code extension for learning Python. It runs your programs
+inside the editor and shows the results in an **interactions** panel —
+output, errors, images, tables, and a prompt where you can try extra
+Python after a run.
 
-## Features (MVP)
+It works in [vscode.dev](https://vscode.dev) (in the browser) and in
+desktop VS Code. You do **not** need to install Python on your computer.
 
-- **Integrated interactions view.** A single PLL panel webview
-  shows banners, your typed input, stdout/stderr, results, structured
-  errors, and images all in one scroll-back-able stream. The input row at
-  the bottom accepts Python expressions and statements. Multi-line input
-  uses Shift+Enter; otherwise Enter submits, with automatic continuation
-  prompts when `codeop.compile_command` reports the input is incomplete
-  (matching CPython's interactive shell). Up/Down arrows scroll through
-  history. Ctrl/Cmd+L clears the stream. Works identically in desktop and
-  `vscode.dev`.
-- **Run Python files into the same session.** `Python Language Levels: Run Active
-  File` (also on the editor title run button for `.py` files) clears the
-  stream, runs any tests in the file, then runs the file in the same Python
-  globals the REPL uses, and leaves you at a fresh prompt with all of the
-  file's definitions available.
-- **Same-file tests.** Write pytest tests next to the code they cover
-  (`def test_*():` or methods on a `Test*` class). On Run File, PLL loads
-  pytest (first time only), runs the equivalent of `pytest thefile.py`,
-  and shows a pass/fail card in the interactions view. Failed assertions
-  are clickable and jump to the test. The file still runs afterwards so
-  the REPL has your definitions. Files with no tests skip this step.
-- **Beginner-friendly errors.** Currently `NameError` is rewritten to a
-  plain-language explanation with a "what / why / how to fix" breakdown,
-  rendered as a structured block in the interactions view and as a VS
-  Code diagnostic on the offending line/identifier. The location text is
-  clickable and jumps to the source line.
-- **Language levels** (`#beginner` / `#intermediate` / `#advanced`). The
-  first non-blank line of a file may be a magic comment that selects a
-  language level. After a Run File, the active level is shown in the
-  interactions header (e.g. `hello.py [beginner]`).
-  - `#beginner` (strictest): flags **variable shadowing** (including
-    built-ins), **variable reassignment** in any scope, and the
-    `global` / `nonlocal` keywords. If any check fires the file isn't
-    executed and findings are surfaced in the interactions view and the
-    editor.
-  - `#intermediate`: same shadowing and `global` / `nonlocal` rules, but
-    reassignment is only flagged at module scope. This means rebinding
-    inside a function body is fine, so `for`-loop accumulator patterns
-    (`total = 0; for x in xs: total = total + x`) work.
-  - `#advanced` (the default if no header is present) disables all static
-    checks and runs the file as plain Python. The REPL itself is always
-    advanced.
-- **Images** (HtDP/Pyret-style). A small image library (`circle`, `square`,
-  `rectangle`, `triangle`, `ellipse`, `regular_polygon`, `star`, `text`,
-  `beside`, `above`, `overlay`, `rotate`, `scale`, `flip_*`, ...) is
-  available without import at every level. Top-level expressions in a file
-  that evaluate to images auto-display **inline in the interactions
-  stream**, interleaved with text output. The same happens for image
-  values returned from REPL evaluations. Images are rendered as SVG (so
-  they scale cleanly) and each one has a Save SVG button.
-- **Tables and charts.** A Pyret-style `Table` type lives next to the
-  image library (also no import). Tables are immutable, methods chain,
-  and every operation returns a new table. The interactions view
-  renders tables as inline cards (sticky header, zebra rows, Save CSV),
-  and chart methods (`bar_chart`, `scatter_chart`, `line_chart`,
-  `histogram`) produce SVG images that flow into the same image-card
-  pipeline. See `samples/tables.py` for a tour. Need real pandas?
-  `t.to_pandas()` is an escape hatch.
+## Install
 
-## Architecture
+1. Open VS Code (desktop or [vscode.dev](https://vscode.dev)).
+2. Open the Extensions view (the four squares in the left sidebar).
+3. Search for **Python Language Levels**.
+4. Click **Install**. If you are asked to trust the publisher, do that.
 
-```
-src/
-├── extension.ts                   Desktop entrypoint (Node host)
-├── web/extension.ts               Web entrypoint (vscode.dev)
-├── web/pyodideWorker.ts           WebWorker that hosts Pyodide in the browser
-├── web/pyodideRuntime.ts          Talks to the worker
-├── desktop/pyodideRuntime.ts      Loads Pyodide directly in the Node host
-└── common/
-    ├── commands.ts                Run File / Show Interactions / Clear commands
-    ├── replSession.ts             Drives the interactions view: init,
-    │                              REPL multi-line buffer, file runs, exec chain
-    ├── interactionsView.ts        WebviewView provider for the integrated
-    │                              text + image stream + input row
-    ├── level.ts                   #beginner / #intermediate / #advanced header parser
-    ├── errorFormatter.ts          Plain-text rendering for diagnostic tooltips
-    ├── diagnostics.ts             VS Code DiagnosticCollection (multi-finding)
-    ├── pyodideRunner.ts           Bootstrap loader + types
-    ├── deliverResult.ts           Translates Python results to ExecutionEvents
-    ├── pyodideBootstrap.py        Real Python: run / repl-eval / tests / static analyzer
-    ├── imageLib.py                Real Python: SVG image primitives + combinators
-    ├── tableLib.py                Real Python: Pyret-style Table + charts
-    ├── analyzers/
-    │   ├── types.ts               AnalysisFinding, RuntimeAnalyzer
-    │   ├── nameErrorAnalyzer.ts   Runtime: NameError -> friendly finding
-    │   ├── registry.ts            Runtime analyzer registry
-    │   └── static/
-    │       ├── shadowingExplainer.ts            shadowing + shadowing-builtin
-    │       ├── reassignmentExplainer.ts         reassignment
-    │       ├── disallowedKeywordExplainer.ts    `global` / `nonlocal`
-    │       └── registry.ts                      Wraps Python-side raw findings
-    └── errors/
-        ├── pythonErrorParser.ts
-        └── nameErrorExplainer.ts
+You do **not** need Microsoft's **Python** extension. If VS Code offers
+to install it, you can skip it. PLL is enough.
 
-media/
-├── interactionsView/
-│   ├── style.css                  Stream + input row styling
-│   └── main.js                    View-side state, history, message routing
-├── pll-icon.svg                   Panel container icon
-└── error-gutter.svg               Diagnostic gutter icon
+## Run a program
+
+1. Create a file whose name ends in `.py`, for example `hello.py`.
+2. Type a small program:
+
+   ```python
+   print("hello")
+   ```
+
+3. Look at the top right of the editor, on the same bar as the file name.
+   Click **PLL: Run Python File**.
+
+   If you do not see that text, open the Command Palette
+   (`Ctrl+Shift+P` on Windows, `Cmd+Shift+P` on a Mac) and run
+   **PLL: Run Python File**.
+
+The first run can take a little while: PLL is starting Python in the
+editor. Later runs are faster.
+
+Your file stays a normal editor. Results appear in the **PLL** panel at
+the bottom of the window (near Problems and Terminal). If that panel is
+hidden, run **PLL: Show Interactions** from the Command Palette.
+
+### Try things after a run
+
+The interactions panel has a prompt at the bottom. After a file has
+run, you can type extra Python there and press Enter. Names you defined
+in the file are still available. The prompt uses the same language
+level as that run (the one shown in the header).
+
+- **Enter** runs what you typed.
+- **Shift+Enter** adds another line (for a longer snippet).
+- If Python is waiting for more input (for example after `if True:`),
+  PLL will keep prompting until the snippet is complete.
+- **Up** and **Down** move through things you typed earlier.
+- **Ctrl+L** (Windows) or **Cmd+L** (Mac) clears the interactions panel.
+  You can also run **PLL: Clear Interactions**.
+
+## Tests
+
+You can put tests in the **same file** as the code they check. A test is
+a function whose name starts with `test_`. Use `assert` to check that
+something is true:
+
+```python
+def add(x, y):
+    return x + y
+
+def test_add():
+    assert add(2, 3) == 5
 ```
 
-The static analyzer itself (scope builder, shadowing/reassignment checks)
-lives in `pyodideBootstrap.py`. esbuild's `text` loader inlines that file as
-a string at build time so it's loaded into Pyodide once on init - which means
-the analysis runs in the same Python interpreter that runs the user's code,
-in both desktop and web hosts.
+When you click **PLL: Run Python File**, PLL runs the tests first and
+shows a pass/fail card in the interactions panel. If a test fails, you
+can click it to jump to that test. After the tests, PLL still runs the
+rest of the file so you can use your functions at the prompt.
+
+You do not need a separate test file, and you do not need to run
+`pytest` in a terminal.
+
+For decimal (floating-point) numbers, exact `==` can be unreliable.
+Import `pytest` and use `pytest.approx`:
+
+```python
+import pytest
+
+def test_cost():
+    assert 0.1 + 0.2 == pytest.approx(0.3)
+```
+
+## Language levels
+
+The first non-blank line of a file can choose how strict PLL is. After
+you run the file, the current level is shown in the interactions header
+(for example `hello.py [beginner]`).
+
+```python
+#beginner
+```
+
+| Line in your file | What it does |
+| --- | --- |
+| `#beginner` | Strictest. PLL warns about reassigning a variable, reusing a name that hides another name (including built-in names like `list`), and the `global` / `nonlocal` keywords. If it finds a problem, it **does not run** the file. |
+| `#intermediate` | Same rules about hiding names and `global` / `nonlocal`, but you **may** reassign variables inside a function. That is useful for introducing for loops, where you need mutable accumulators. Reassigning at the top of the file is still flagged. |
+| `#advanced` | No extra checks. The file runs as ordinary Python. This is the default if you omit the line. |
+
+The prompt at the bottom of the interactions panel uses the **same**
+level as the last run (the one shown in the header). If you have not
+run the file yet, the prompt is advanced.
 
 ## Images
 
-PLL ships a small SVG-based image library inspired by Racket's
-`2htdp/image` and Pyret's `image-lib`. The primitives are auto-imported into
-user globals at every level, so a beginner can write:
+You can make pictures with built-in functions. You do not need to
+`import` anything. If a line in your file produces an image, PLL shows
+it in the interactions panel, in order with any `print` output.
 
 ```python
 #beginner
@@ -128,196 +123,80 @@ beside(
     triangle(60, "solid", "gold"),
     square(60, "outline", "navy"),
 )
+```
 
-above(
-    rectangle(120, 40, "solid", "black"),
-    rectangle(120, 40, "solid", "red"),
-    rectangle(120, 40, "solid", "gold"),
+Each picture has a **Save SVG** button if you want to keep it.
+
+**Shapes:** `circle`, `square`, `rectangle`, `ellipse`, `triangle`,
+`right_triangle`, `regular_polygon`, `star`, `star_polygon`, `line`,
+`text`.
+
+**Combining and transforming:** `beside`, `above`, `overlay`, `underlay`,
+`rotate`, `scale`, `flip_horizontal`, `flip_vertical`.
+
+**Size:** `image_width`, `image_height`, `empty_image`.
+
+Colors can be names (`"red"`), hex (`"#ff0000"`), or tuples
+`(red, green, blue)` with values from 0 to 255.
+
+## Tables and charts
+
+PLL also includes a `table` type (again, no import). Tables do not
+change in place: each operation returns a **new** table.
+
+```python
+people = table(
+    ["name", "age"],
+    [
+        ["Ada", 36],
+        ["Grace", 85],
+    ],
 )
+
+people
+people.bar_chart("name", "age", title="Age")
 ```
 
-Top-level expressions auto-display **inline in the interactions
-view**, in the same stream as text output, so the order of your prints
-and your images is preserved exactly. In the REPL, evaluating an
-expression that returns an `Image` shows it the same way. Each image card
-has a "Save SVG" button.
+Tables show up as a card you can scroll, with a **Save CSV** button.
+Charts show up as images.
 
-Available primitives: `circle`, `square`, `rectangle`, `ellipse`,
-`triangle`, `right_triangle`, `regular_polygon`, `star`, `star_polygon`,
-`line`, `text`. Combinators: `beside`, `above`, `overlay`, `underlay`,
-`rotate`, `scale`, `flip_horizontal`, `flip_vertical`. Inspection:
-`image_width`, `image_height`, `empty_image`. Colors are CSS strings
-(`"red"`, `"#ff0000"`) or `(r, g, b)` / `(r, g, b, a)` tuples.
+Useful methods include `filter`, `transform_column`, `add_column`,
+`order_by`, `select_columns`, `head`, `columns`, `length`, `row`,
+`column`, `sum`, `mean`, `min`, and `max`. Charts: `bar_chart`,
+`scatter_chart`, `line_chart`, `histogram`.
 
-## Smoke tests
+If you already know pandas, `my_table.to_pandas()` gives you a DataFrame.
 
-```bash
-pnpm run smoke   # static analyzer + explainers + image library/runtime + tests
-```
+## Friendlier errors
 
-## Development
+If you use a name that is not defined, PLL rewrites Python's `NameError`
+into a short explanation of **what** went wrong, **why**, and **how to
+fix it**. The message appears in the interactions panel and as a mark
+in the editor. Click the location in the message to jump to that line.
 
-```bash
-pnpm install
-pnpm run build         # one-shot build (also copies Pyodide assets into vendor/)
-pnpm run watch         # rebuild on change
-pnpm run vsce:package  # produce a .vsix (runs vscode:prepublish first)
-```
+## Commands
 
-### Running the desktop extension
+All of these are available from the Command Palette. **PLL: Run Python File**
+also appears in the editor title bar when a `.py` file is open.
 
-Open this folder in VS Code and press **F5** -> *Run Extension (Desktop)*.
-A second window opens with the extension loaded.
+| Command | What it does |
+| --- | --- |
+| **PLL: Run Python File** | Run tests (if any), then run the file. |
+| **PLL: Show Interactions** | Open the interactions panel. |
+| **PLL: Start REPL** | Open the interactions panel (same as Show Interactions). |
+| **PLL: Clear Interactions** | Clear the panel. |
 
-### Running the web extension (the primary target)
+## A quieter editor
 
-There are three options, in increasing order of "how realistic":
+PLL turns off many extra Python tools (autocomplete popups, extra
+linters, and similar) so the editor stays simple while you are learning.
+Settings you choose yourself still win over PLL's defaults.
 
-1. **F5 -> *Run Extension (Web)*** in desktop VS Code. Uses
-   `extensionDevelopmentKind=web` so the extension host runs the web
-   bundle (`dist/web/extension.js`) and a real `Worker`. This is the
-   fastest iteration loop because it gives you the full debugger.
+If another Python extension is installed and might add confusing
+messages, PLL may ask whether to disable it **for this workspace**. That
+does not uninstall the extension.
 
-2. **`pnpm run test-web`** spins up a local copy of `vscode-web` (the
-   exact build behind `vscode.dev`) and opens it in Chromium with our
-   extension preloaded. Closest thing to `vscode.dev` short of actually
-   publishing.
+## For course staff and contributors
 
-   ```bash
-   pnpm run test-web              # ensures Chromium is downloaded, builds,
-                                  # then opens vscode-web in Chromium
-   pnpm run test-web:server       # build + run server on :3000 only
-                                  # (browse to it from any browser)
-   pnpm run setup:browser         # one-time: download Playwright Chromium
-                                  # (chained from test-web; safe to run alone)
-   ```
-
-   The script enables `--coi` (cross-origin isolation) so Pyodide's
-   workers/SharedArrayBuffer features work, and points the workspace at
-   `samples/` so you can immediately open `hello.py` or `name_error.py`.
-   First run downloads vscode-web into `.vscode-test-web/` (~30 MB) and
-   Playwright Chromium into `~/Library/Caches/ms-playwright/` (~150 MB);
-   both are cached for subsequent runs.
-
-   Iteration tip: in one terminal run `pnpm run watch` so esbuild
-   rebuilds on save; in another run `pnpm run test-web:server` and just
-   reload the browser tab to pick up changes.
-
-   `package.json` enables Playwright's postinstall via
-   `pnpm.onlyBuiltDependencies` so a fresh `pnpm install` fetches
-   Chromium for you. If you ever skipped it (e.g. cloned with
-   `--ignore-scripts`), `pnpm run setup:browser` re-runs that step.
-
-3. **Real `vscode.dev`** with the published or sideloaded extension.
-   This is what end users hit; only useful once you're ready to publish.
-
-## Configuration
-
-- `pll.pyodideIndexUrl` - base URL for Pyodide assets (web only).
-  Defaults to the matching pinned CDN build.
-
-## Beginner-friendly editor lockdown
-
-This extension ships **opinionated `configurationDefaults`** that quiet down
-the default Python editing experience so beginners only see what we
-explicitly turn on. None of these touch your `settings.json`; they are
-defaults the extension contributes, so any setting you change yourself
-still wins.
-
-What stays on by design:
-
-- Syntax highlighting (built-in TextMate grammar)
-- Line numbers, bracket matching, indent guides
-- Auto-closing brackets / quotes (helpful for newcomers)
-- The Problems panel (so our friendly errors show up)
-- The PLL interactions view and `Run Active File` button
-
-What we turn off for `[python]` files:
-
-- All autocomplete popups: `editor.quickSuggestions`,
-  `suggestOnTriggerCharacters`, `tabCompletion`, `wordBasedSuggestions`,
-  `parameterHints`, `snippetSuggestions`, `suggest.showWords/showSnippets`
-- Inline AI suggestions: `editor.inlineSuggest.enabled`,
-  `github.copilot.enable.python`, `github.copilot.editor.enableAutoCompletions`,
-  `cursor.cpp.disabledLanguages` (Cursor Tab) - best-effort across forks
-- CodeLens, lightbulb (quick-fix), minimap, sticky scroll, linked editing
-- Format on save / paste / type
-
-What we turn off globally (no-ops if the extension isn't installed):
-
-- Microsoft Python extension legacy linting:
-  `python.linting.{enabled,pylintEnabled,flake8Enabled,mypyEnabled,banditEnabled,pycodestyleEnabled,pydocstyleEnabled}`
-- Pylance: `python.languageServer = None`,
-  `python.analysis.{autoImportCompletions,typeCheckingMode,completeFunctionParens,indexing,useLibraryCodeForTypes,diagnosticMode}`
-- Standalone linters/formatters - we silence them via the python-tools
-  template's `ignorePatterns: ["**"]` (which matches every absolute path):
-  `pylint.{enabled,ignorePatterns}`, `flake8.{enabled,ignorePatterns}`,
-  `bandit.{enabled,ignorePatterns}`,
-  `mypy-type-checker.{enabled,ignorePatterns,reportingScope}`,
-  `ruff.{enable,lint.enable,ignorePatterns}`
-- `matangover.mypy` (no settings-based off switch) -
-  `mypy.runUsingActiveInterpreter`, `mypy.checkNotebookFiles`,
-  `mypy.checkAllOpenFolders`, `mypy.targets: []`. **This still triggers on
-  save** for the active file - see "Extension guard" below.
-- Pyright family: `pyright.disableLanguageServices` +
-  `pyright.disableOrganizeImports`, plus the same pair for `basedpyright`
-- Formatters: `black-formatter.formatOnSave`, `isort.formatOnSave`
-- Other noise: `python.terminal.activateEnvironment`,
-  `python.experiments.enabled`, `python.showStartPage`,
-  `breadcrumbs.enabled`
-
-### Extension guard (auto-prompt on activation)
-
-Some Python extensions emit diagnostics regardless of settings - the most
-notorious is **`matangover.mypy`**, which has no `enabled` and no
-`ignorePatterns` setting; the only way to silence it is to disable the
-extension itself.
-
-To handle this, the
-[extension guard](https://github.com/dbp/pll/blob/main/src/common/extensionGuard.ts)
-runs on activation: it scans installed extensions, lists known
-beginner-conflicting ones (`ms-python.python`, `ms-python.vscode-pylance`,
-`matangover.mypy`, `ms-python.{mypy-type-checker,pylint,flake8,bandit}`,
-`ms-pyright.pyright`, `detachhead.basedpyright`, `charliermarsh.ruff`),
-and shows a single warning notification with two buttons:
-
-- **Show & Disable** opens each conflicting extension's details page so
-  you can click *Disable (Workspace)* on each, then offers to reload.
-- **Don't ask again** records dismissal in the workspace state so the
-  prompt won't reappear in this workspace.
-
-VS Code itself still recommends Microsoft's Python extension when a `.py`
-file is opened. An extension cannot turn that product-level tip off for
-every student machine. For a course repo, add this to
-`.vscode/extensions.json` so the prompt is suppressed **in that workspace**:
-
-```json
-{
-  "unwantedRecommendations": [
-    "ms-python.python",
-    "ms-python.vscode-pylance"
-  ]
-}
-```
-
-If a student already installed those extensions, the guard above will
-prompt them to disable them for the workspace.
-
-### Things you may still need to disable manually
-
-Some features are owned by other tools that ignore both VS Code's
-`configurationDefaults` and our extension-detector. If they appear in
-your editor and you want a fully clean beginner experience, disable them
-by hand:
-
-- Cursor's "Tab" autocomplete: in addition to the
-  `cursor.cpp.disabledLanguages` hint above, you may need to toggle
-  Cursor's AI features in **Cursor Settings -> Features -> Tab**.
-- Any other AI assistant extension (Codeium, Tabnine, Supermaven, ...) -
-  disable per-language or per-workspace in that extension's own settings.
-- Workspace-installed extensions you don't want active here: use
-  **"Extensions: Disable (Workspace)"** from the command palette.
-
-If a setting we ship isn't aggressive enough for your classroom, override
-it in your workspace `.vscode/settings.json` - your value always wins
-over our defaults.
+How PLL is built, how to run it from source, and how the editor
+defaults work are documented in [ARCHITECTURE.md](ARCHITECTURE.md).

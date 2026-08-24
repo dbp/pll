@@ -122,6 +122,7 @@ export class WebPyodideRuntime implements PythonRuntime {
       code: request.code,
       level: request.level,
       fileName: request.fileName,
+      sessionKey: request.sessionKey,
     })) as RawStaticFinding[];
     return result ?? [];
   }

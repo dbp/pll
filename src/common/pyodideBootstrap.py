@@ -8,7 +8,7 @@
 #   _pll_repl_check(source)                      -> dict
 #   _pll_has_tests(code)                         -> bool
 #   _pll_run_tests(code, filename)               -> dict
-#   _pll_static_analyze(code, level, filename)   -> list[dict]
+#   _pll_static_analyze(code, level, filename, session_key=None) -> list[dict]
 #
 # Each returns a JSON-friendly dict / list of dicts so the JS side can
 # consume the result via `proxy.toJs({ dict_converter: Object.fromEntries })`.
@@ -902,11 +902,35 @@ class _PllKeywordVisitor(_ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def _pll_static_analyze(code, level, filename):
+def _pll_session_bound_names(session_key):
+    """User-defined names already bound in a session (for REPL checks).
+
+    Baseline names from `_pll_initial_globals` (image primitives, etc.) are
+    skipped unless the user rebound them, so prompt analysis matches file
+    analysis for the same snippet.
+    """
+    g = _pll_sessions.get(session_key)
+    if not g:
+        return []
+    names = []
+    for n in g:
+        if n.startswith("_") or n in ("__builtins__", "__name__", "__doc__"):
+            continue
+        if n in _pll_initial_globals and g[n] is _pll_initial_globals[n]:
+            continue
+        names.append(n)
+    return names
+
+
+def _pll_static_analyze(code, level, filename, session_key=None):
     """Run static checks for `level` over `code` and return findings.
 
     Returns a list of dicts. Each dict has at minimum:
       id, error_type, message, line_number, column, name_token, scope_kind.
+
+    If `session_key` is set, names already bound in that session are treated
+    as existing module-level bindings. That way a `#beginner` prompt cannot
+    reassign a name the file (or an earlier prompt line) already defined.
     """
     if level not in ("beginner", "intermediate"):
         return []
@@ -919,6 +943,11 @@ def _pll_static_analyze(code, level, filename):
     findings = []
     builder = _PllScopeBuilder()
     builder.build(tree)
+    if session_key:
+        module = builder.scopes[0]
+        for name in _pll_session_bound_names(session_key):
+            locs = module.bindings.setdefault(name, [])
+            locs.insert(0, (0, 0, "preexisting"))
     builtins_set = {n for n in dir(__builtins__) if not n.startswith("_")}
 
     # Whether we flag reassignment in `scope` at this level. At beginner,

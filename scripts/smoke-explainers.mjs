@@ -130,6 +130,51 @@ expect(
   "reassignment fixes no longer suggest switching to #advanced",
 );
 
+console.log("[explainers omit line 0 for preexisting session bindings]");
+{
+  const preexisting = mod.enrichStaticFindings(
+    [
+      {
+        id: "reassignment",
+        error_type: "Reassignment",
+        message: "`x` is assigned more than once in this scope",
+        line_number: 1,
+        column: 0,
+        name_token: "x",
+        scope_kind: "module",
+        first_line_number: 0,
+        first_column: 0,
+      },
+      {
+        id: "shadowing",
+        error_type: "Shadowing",
+        message: "`x` is already defined in an outer scope",
+        line_number: 2,
+        column: 4,
+        name_token: "x",
+        scope_kind: "function",
+        outer_line_number: 0,
+        outer_column: 0,
+        outer_scope_kind: "module",
+      },
+    ],
+    "beginner",
+    "<repl>",
+  );
+  expect(
+    !preexisting[0].headline.includes("line 0"),
+    "reassignment headline omits first assigned on line 0",
+  );
+  expect(
+    !preexisting[1].headline.includes("line 0"),
+    "shadowing headline omits first defined on line 0",
+  );
+  expect(
+    preexisting[1].headline.includes("the file"),
+    "shadowing still mentions the outer scope",
+  );
+}
+
 console.log("[disallowed-keyword explainer - global at intermediate]");
 const kwFindings = mod.enrichStaticFindings(
   [

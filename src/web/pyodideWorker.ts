@@ -47,7 +47,7 @@ export type WorkerInbound =
   | { id: number; type: "hasTests"; code: string }
   | { id: number; type: "loadPytest" }
   | { id: number; type: "runTests"; code: string; fileName: string }
-  | { id: number; type: "staticAnalyze"; code: string; level: string; fileName: string };
+  | { id: number; type: "staticAnalyze"; code: string; level: string; fileName: string; sessionKey?: string };
 
 export type WorkerOutbound =
   | { id: number; type: "ready" }
@@ -179,6 +179,7 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
           data.code,
           data.level,
           data.fileName,
+          data.sessionKey ?? null,
         ]) ?? [];
         const reply: WorkerOutbound = { id: data.id, type: "static", result };
         self.postMessage(reply);

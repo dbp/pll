@@ -35,8 +35,8 @@ async function main() {
   pyodide.runPython(bootstrap);
 
   const fn = pyodide.globals.get("_pll_static_analyze");
-  const analyze = (code, level, fileName) => {
-    const proxy = fn(code, level, fileName);
+  const analyze = (code, level, fileName, sessionKey = null) => {
+    const proxy = fn(code, level, fileName, sessionKey);
     const obj = proxy.toJs({ dict_converter: Object.fromEntries });
     proxy.destroy?.();
     return obj;
@@ -207,6 +207,57 @@ async function main() {
     expect(
       findings.length === 0,
       "advanced level should produce 0 findings even with global/nonlocal",
+    );
+  }
+
+  console.log(
+    "\n[12] REPL-style analysis: session names count as preexisting bindings",
+  );
+  {
+    pyodide.runPython(`
+_g = _pll_get_session("smoke-repl")
+_g["x"] = 1
+`);
+    const none = analyze("y = 1", "beginner", "<repl>", "smoke-repl");
+    expect(none.length === 0, "new name at prompt is not a finding");
+
+    const reassign = analyze("x = 2", "beginner", "<repl>", "smoke-repl");
+    expect(
+      reassign.some((f) => f.id === "reassignment" && f.name_token === "x"),
+      "reassigning a session name at beginner is flagged",
+    );
+    expect(
+      reassign.find((f) => f.id === "reassignment")?.first_line_number === 0,
+      "preexisting binding is recorded as line 0",
+    );
+
+    const shadow = analyze("def f():\n    x = 1\n", "beginner", "<repl>", "smoke-repl");
+    expect(
+      shadow.some((f) => f.id === "shadowing" && f.name_token === "x"),
+      "nested assignment of a session name is shadowing",
+    );
+
+    const noSession = analyze("x = 2", "beginner", "<repl>");
+    expect(
+      !noSession.some((f) => f.id === "reassignment"),
+      "without a session, x = 2 is a first assignment",
+    );
+
+    const interFn = analyze(
+      "def f():\n    y = 1\n    y = 2\n",
+      "intermediate",
+      "<repl>",
+      "smoke-repl",
+    );
+    expect(
+      !interFn.some((f) => f.id === "reassignment"),
+      "intermediate still allows reassignment inside a function at the prompt",
+    );
+
+    const interMod = analyze("x = 2", "intermediate", "<repl>", "smoke-repl");
+    expect(
+      interMod.some((f) => f.id === "reassignment" && f.name_token === "x"),
+      "intermediate still flags top-level reassignment at the prompt",
     );
   }
 

@@ -9,7 +9,7 @@ import {
   type PromptKind,
   serializeFinding,
 } from "./interactionsView";
-import { levelHasStaticChecks, parseLevel, type Level } from "./level";
+import { DEFAULT_LEVEL, levelHasStaticChecks, parseLevel, type Level } from "./level";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 
 export interface ReplDeps {
@@ -350,11 +350,18 @@ export class ReplSession implements vscode.Disposable {
   /* -------- Execution -------- */
 
   private async executeRepl(session: Session, code: string): Promise<void> {
+    const level = session.lastLevel ?? DEFAULT_LEVEL;
     this.setSessionBusy(session, true);
     try {
+      if (levelHasStaticChecks(level)) {
+        const blocked = await this.runReplStaticChecks(session, code, level);
+        if (blocked) {
+          return;
+        }
+      }
       await this.deps.runtime.replEval(
         { code, sessionKey: session.key },
-        (event) => this.handleEvent(session, event, code, "<repl>", undefined, "advanced"),
+        (event) => this.handleEvent(session, event, code, "<repl>", undefined, level),
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -471,6 +478,46 @@ export class ReplSession implements vscode.Disposable {
       });
     }
     this.deps.diagnostics.setFindings(document.uri, document, findings);
+    return true;
+  }
+
+  /**
+   * Static-check a prompt snippet at the session's last-run level.
+   * Findings stay in the interactions view; they are not mapped onto the
+   * `.py` file (snippet line numbers are not file line numbers).
+   */
+  private async runReplStaticChecks(
+    session: Session,
+    code: string,
+    level: Level,
+  ): Promise<boolean> {
+    let raw;
+    try {
+      raw = await this.deps.runtime.staticAnalyze({
+        code,
+        fileName: "<repl>",
+        level,
+        sessionKey: session.key,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.feedStream(session, "stderr", `Static analysis failed: ${msg}\n`);
+      return false;
+    }
+    const findings = enrichStaticFindings(raw, level, "<repl>");
+    if (findings.length === 0) {
+      return false;
+    }
+    for (const finding of findings) {
+      this.appendToSession(session, {
+        kind: "finding",
+        finding: serializeFinding(finding),
+      });
+    }
+    this.appendToSession(session, {
+      kind: "banner",
+      text: "Static analysis found issues. Input not executed.",
+    });
     return true;
   }
 

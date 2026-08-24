@@ -194,7 +194,12 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     }
     const fn = this.pyodide.globals.get("_pll_static_analyze");
     try {
-      const proxy = fn(request.code, request.level, request.fileName);
+      const proxy = fn(
+        request.code,
+        request.level,
+        request.fileName,
+        request.sessionKey ?? null,
+      );
       const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as RawStaticFinding[];
       proxy.destroy?.();
       return obj ?? [];

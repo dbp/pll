@@ -31,10 +31,10 @@ export function explainShadowing(
   const name = raw.name_token ?? "this name";
   const outerLine = raw.outer_line_number ?? null;
   const outerNoun = outerScopeNoun(raw.outer_scope_kind);
-  const outerHint =
-    outerLine !== null
-      ? ` (first defined on line ${outerLine}, in ${outerNoun})`
-      : ` in ${outerNoun}`;
+  const knownOuterLine = outerLine !== null && outerLine > 0;
+  const outerHint = knownOuterLine
+    ? ` (first defined on line ${outerLine}, in ${outerNoun})`
+    : ` in ${outerNoun}`;
 
   return {
     id: "shadowing",
@@ -44,7 +44,7 @@ export function explainShadowing(
     whatHappened: [
       `You're creating a new variable named \`${name}\`, but a variable with` +
         ` the same name already exists in ${outerNoun}` +
-        (outerLine !== null ? ` (line ${outerLine})` : "") +
+        (knownOuterLine ? ` (line ${outerLine})` : "") +
         `. In ${level} mode this "shadowing" is not allowed because it makes` +
         ` code confusing - two different things would have the same name.`,
     ],

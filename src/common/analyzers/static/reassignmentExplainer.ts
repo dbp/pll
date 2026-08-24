@@ -17,7 +17,10 @@ export function explainReassignment(
 ): AnalysisFinding {
   const name = raw.name_token ?? "this name";
   const firstLine = raw.first_line_number ?? null;
-  const firstLineHint = firstLine !== null ? ` (first assigned on line ${firstLine})` : "";
+  // Line 0 is a preexisting session binding (REPL after Run File), not a
+  // line in the snippet / file.
+  const firstLineHint =
+    firstLine !== null && firstLine > 0 ? ` (first assigned on line ${firstLine})` : "";
 
   // At intermediate, reassignment is only flagged at module/file scope, so
   // tailor the wording to make that obvious.

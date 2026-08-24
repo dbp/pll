@@ -2,7 +2,7 @@
   "name": "python-language-levels",
   "displayName": "Python Language Levels",
   "description": "Beginner-friendly integrated Python REPL with inline images, language levels, and friendly errors. Powered by Pyodide. Works in desktop VS Code and vscode.dev.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "pll",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -41,19 +41,19 @@
     "commands": [
       {
         "command": "pll.showInteractions",
-        "title": "Python Language Levels: Show Interactions"
+        "title": "PLL: Show Interactions"
       },
       {
         "command": "pll.startRepl",
-        "title": "Python Language Levels: Start REPL"
+        "title": "PLL: Start REPL"
       },
       {
         "command": "pll.runActiveFile",
-        "title": "Python Language Levels: Run Active File"
+        "title": "PLL: Run Python File"
       },
       {
         "command": "pll.clearInteractions",
-        "title": "Python Language Levels: Clear Interactions"
+        "title": "PLL: Clear Interactions"
       }
     ],
     "menus": {

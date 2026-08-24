@@ -115,6 +115,9 @@ export interface StaticAnalyzeRequest {
   code: string;
   fileName: string;
   level: Level;
+  /** When set, names already bound in this session count as existing
+   *  module-level bindings (used for REPL checks after Run File). */
+  sessionKey?: string;
 }
 
 export interface PythonRuntime {
