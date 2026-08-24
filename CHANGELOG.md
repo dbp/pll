@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.2.1
+
+Add logo.
+
+
 ## 0.0.2
 
 Documentation and command names for a closer-to-public extension release.

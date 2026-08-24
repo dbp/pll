@@ -2,7 +2,7 @@
   "name": "python-language-levels",
   "displayName": "Python Language Levels",
   "description": "Beginner-friendly integrated Python REPL with inline images, language levels, and friendly errors. Powered by Pyodide. Works in desktop VS Code and vscode.dev.",
-  "version": "0.0.2",
+  "version": "0.0.2.1",
   "publisher": "pll",
   "license": "MIT",
   "icon": "media/icon.png",
