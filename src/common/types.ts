@@ -147,9 +147,8 @@ export interface PythonRuntime {
   staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]>;
   /**
    * Register the handler used when a running program calls `input()`.
-   * The web runtime blocks the worker until this resolves with a line
-   * (no trailing newline) or `null` (EOF / cancel). The desktop runtime
-   * never calls this; `input()` raises a RuntimeError there.
+   * Both hosts block the Pyodide worker until this resolves with a line
+   * (no trailing newline) or `null` (EOF / cancel).
    */
   setStdinHandler(handler: (() => Promise<string | null>) | null): void;
   dispose(): void;

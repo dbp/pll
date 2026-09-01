@@ -110,19 +110,15 @@ run the file yet, the prompt is advanced.
 
 ## Interactive `input()`
 
-In the **browser** (vscode.dev, or `pnpm run test-web`), `input()` asks
-for a line in the interactions panel. The prompt string prints first,
-then you type a reply and press Enter. **Ctrl+C** (with nothing
-selected) cancels and the program gets an `EOFError`.
+`input()` asks for a line in the interactions panel, in desktop VS Code
+and in the browser. The prompt string prints first, then you type a
+reply and press Enter. **Ctrl+C** (with nothing selected) cancels and
+the program gets an `EOFError`.
 
 ```python
 name = input("What is your name? ")
 print("Hello,", name)
 ```
-
-On **desktop VS Code**, `input()` is not supported yet (it would freeze
-the editor). PLL raises a `RuntimeError` that tells you to use
-vscode.dev instead.
 
 ## Images
 
@@ -182,6 +178,10 @@ Useful methods include `filter`, `transform_column`, `add_column`,
 `scatter_chart`, `line_chart`, `histogram`.
 
 If you already know pandas, `my_table.to_pandas()` gives you a DataFrame.
+You can also `import pandas as pd` and read a CSV from a URL with
+`pd.read_csv("https://...")`. That works in desktop VS Code and in the
+browser. In the browser, the site must allow cross-origin requests
+(CORS).
 
 ## Friendlier errors
 

@@ -13,10 +13,15 @@ same interactions UI works in **desktop VS Code** (Node host) and
 src/
 ├── extension.ts                   Desktop entrypoint (Node host)
 ├── web/extension.ts               Web entrypoint (vscode.dev)
-├── web/pyodideWorker.ts           WebWorker that hosts Pyodide in the browser
-├── web/pyodideRuntime.ts          Talks to the worker
-├── desktop/pyodideRuntime.ts      Loads Pyodide directly in the Node host
+├── web/pyodideWorker.ts           Browser Worker that hosts Pyodide
+├── web/pyodideRuntime.ts          Talks to the browser worker
+├── desktop/pyodideWorker.ts       Node worker_threads Worker that hosts Pyodide
+├── desktop/pyodideRuntime.ts      Talks to the Node worker
+├── desktop/xhrPolyfill.ts         Sync XMLHttpRequest for pyodide-http
+├── desktop/syncHttp.ts            Child-process fetch used by the XHR polyfill
 └── common/
+    ├── workerProtocol.ts          Shared worker message types
+    ├── stdinBuffer.ts             SharedArrayBuffer protocol for input()
     ├── commands.ts                Run File / Show Interactions / Clear commands
     ├── replSession.ts             Drives the interactions view: init,
     │                              REPL multi-line buffer, file runs, exec chain
@@ -90,15 +95,19 @@ Pyodide does not connect Python's `urllib` to the host network, so
 url type: https". When the code imports a networked module
 (`NETWORK_IMPORT_RE` — pandas, requests, urllib, ...), `ensurePackages`
 also loads `pyodide-http` and runs `pyodide_http.patch_all()` once per
-interpreter, routing those reads through the host's fetch. This works in
-the web worker (synchronous XHR); the desktop Node host has no browser
-network, so URL reads there remain unsupported. Both the load and the
-patch are guarded so non-networked programs never load the shim.
+interpreter, routing those reads through the host's network. The web
+worker uses the browser's synchronous XHR. The desktop worker installs
+a Node `XMLHttpRequest` polyfill that performs the request in a child
+process (`syncHttp.ts`) so the same `pyodide-http` patch works. Both
+the load and the patch are guarded so non-networked programs never
+load the shim. Browser requests still need CORS; desktop Node fetch
+does not.
 
-## Interactive `input()` (web)
+## Interactive `input()`
 
 `input()` is synchronous Python, but the interactions view is
-asynchronous. The **web** host bridges that with two pieces:
+asynchronous. Both hosts run Pyodide in a worker and bridge that with
+two pieces:
 
 1. **Live output.** `_pll_push` in `pyodideBootstrap.py` optionally
    calls `_pll_live_emit` (a JS callback) on every stdout/stderr write
@@ -114,14 +123,11 @@ asynchronous. The **web** host bridges that with two pieces:
    Browsers forbid `TextDecoder` on a SharedArrayBuffer view, so the
    worker copies the bytes into a private buffer before decoding.
 
-This needs **cross-origin isolation** (`SharedArrayBuffer`), which
-`pnpm run test-web` already enables with `--coi`. If a SAB cannot be
+On the **web** host this needs **cross-origin isolation**
+(`SharedArrayBuffer`), which `pnpm run test-web` already enables with
+`--coi`. On **desktop**, Pyodide lives in a `worker_threads` Worker so
+`Atomics.wait` does not freeze the extension host. If a SAB cannot be
 created, `input()` raises instead of hanging.
-
-The **desktop** host runs Pyodide on the extension-host thread.
-Blocking there would freeze VS Code, so `input()` is replaced with a
-function that raises `RuntimeError`. A worker-thread port is still
-long-term (see the desktop runtime comment).
 
 ## Development
 
@@ -130,7 +136,7 @@ pnpm install
 pnpm run build         # one-shot build (also copies Pyodide assets into vendor/)
 pnpm run watch         # rebuild on change
 pnpm run vsce:package  # produce a .vsix (runs vscode:prepublish first)
-pnpm run smoke         # static analyzer + explainers + image library/runtime + tests + pandas + input()
+pnpm run smoke         # build, then static analyzer + explainers + images + tables + tests + pandas (incl. URL) + input() + desktop worker parity
 ```
 
 ### Desktop extension
@@ -160,8 +166,9 @@ Three options, in increasing order of how close they are to production:
 
    The script enables `--coi` (cross-origin isolation) so Pyodide's
    workers / SharedArrayBuffer features work, and points the workspace
-   at `samples/` so you can open `hello.py`, `name_error.py`, or
-   `input.py` (interactive `input()`). First
+   at `samples/` so you can open `hello.py`, `name_error.py`,
+   `input.py` (interactive `input()`), or `pandas.py` (`pd.read_csv`,
+   including a URL). First
    run downloads vscode-web into `.vscode-test-web/` (~30 MB) and
    Playwright Chromium into `~/Library/Caches/ms-playwright/` (~150 MB);
    both are cached afterward.

@@ -50,13 +50,12 @@ _pll_initial_globals = {"__name__": "__main__", "__builtins__": __builtins__}
 # Pyodide is single-threaded, so a single shared list is fine.
 _pll_displays = []
 
-# When set (by the web runtime, which supports live output + input), this is a
-# JS callback taking one JSON string. Every display payload — each stdout/stderr
-# write, image, and table — is emitted through it as it is produced, so the
-# interactions view updates *during* the run instead of only at the end. This
-# is what lets an interactive program print a prompt before input() blocks.
-# Left as None on the desktop host and during REPL/tests, where output is
-# delivered in one batch and this hook is a no-op.
+# When set (by either host during a file run), this is a JS callback taking
+# one JSON string. Every display payload — each stdout/stderr write, image,
+# and table — is emitted through it as it is produced, so the interactions
+# view updates *during* the run instead of only at the end. This is what
+# lets an interactive program print a prompt before input() blocks.
+# Left as None during REPL/tests, where output is delivered in one batch.
 _pll_live_emit = None
 
 

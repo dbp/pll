@@ -1,5 +1,5 @@
 /**
- * SharedArrayBuffer protocol for blocking `input()` in the web worker.
+ * SharedArrayBuffer protocol for blocking `input()`.
  *
  * Layout (little-endian):
  *   Int32[0]  state: WAITING | LINE | EOF

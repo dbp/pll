@@ -38,9 +38,9 @@ export const NETWORK_IMPORT_RE =
 
 /**
  * Routes `urllib`/`requests` (and therefore pandas URL readers) through the
- * host's fetch. Idempotent, but PLL still guards it to run once per
- * interpreter. Works in the web worker (synchronous XHR); on the desktop Node
- * host there is no browser network, so URL reads there remain unsupported.
+ * host's network. Idempotent, but PLL still guards it to run once per
+ * interpreter. In the web worker this uses synchronous XHR; on desktop a
+ * Node XMLHttpRequest polyfill does the same job via a child-process fetch.
  */
 export const PYODIDE_HTTP_PATCH_PY = "import pyodide_http as _pll_ph; _pll_ph.patch_all()";
 

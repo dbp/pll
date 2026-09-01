@@ -77,7 +77,17 @@ const webWorkerOptions = {
   },
 };
 
-const allConfigs = [desktopOptions, webExtensionOptions, webWorkerOptions];
+/** @type {esbuild.BuildOptions} */
+const desktopWorkerOptions = {
+  ...baseOptions,
+  entryPoints: ["src/desktop/pyodideWorker.ts"],
+  outfile: "dist/desktop/pyodideWorker.js",
+  platform: "node",
+  format: "cjs",
+  target: ["node18"],
+};
+
+const allConfigs = [desktopOptions, desktopWorkerOptions, webExtensionOptions, webWorkerOptions];
 
 copyPyodideAssets();
 

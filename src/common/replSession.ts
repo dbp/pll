@@ -75,7 +75,7 @@ export class ReplSession implements vscode.Disposable {
   >();
 
   /**
-   * Session whose file is currently executing `input()`. The web runtime
+   * Session whose file is currently executing `input()`. Either runtime
    * calls `provideStdin` while that run is blocked in the worker.
    */
   private stdinSession: Session | null = null;
@@ -516,7 +516,7 @@ export class ReplSession implements vscode.Disposable {
   }
 
   /**
-   * Called from the web runtime when the worker is blocked in `input()`.
+   * Called from the runtime when the worker is blocked in `input()`.
    * The unflushed stdout buffer is the prompt (`input("Choice: ")`).
    */
   private provideStdin(): Promise<string | null> {

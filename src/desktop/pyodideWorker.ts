@@ -1,4 +1,4 @@
-/// <reference lib="WebWorker" />
+import { parentPort } from "node:worker_threads";
 import {
   NETWORK_IMPORT_RE,
   PLL_IMAGE_LIB_PY,
@@ -12,10 +12,11 @@ import {
 } from "../common/pyodideRunner";
 import { waitForStdinLine } from "../common/stdinBuffer";
 import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "../common/workerProtocol";
+import { installNodeXHR } from "./xhrPolyfill";
 
-declare const self: DedicatedWorkerGlobalScope & {
-  loadPyodide?: (config: { indexURL: string }) => Promise<PyodideInstance>;
-};
+if (!parentPort) {
+  throw new Error("desktop pyodide worker must be started as a worker_thread");
+}
 
 interface PyodideInstance {
   runPython(code: string): unknown;
@@ -48,11 +49,14 @@ let pytestPromise: Promise<void> | null = null;
 let httpPatchPromise: Promise<void> | null = null;
 let stdinBuffer: SharedArrayBuffer | null = null;
 
+function post(msg: WorkerOutbound): void {
+  parentPort!.postMessage(msg);
+}
+
 function emitDisplay(json: string): void {
   try {
     const payload = JSON.parse(String(json));
-    const reply: WorkerOutbound = { type: "display", payload };
-    self.postMessage(reply);
+    post({ type: "display", payload });
   } catch {
     /* malformed payload: skip */
   }
@@ -60,29 +64,32 @@ function emitDisplay(json: string): void {
 
 function readStdin(): string | null {
   if (!stdinBuffer) {
-    throw new Error(
-      "input() needs cross-origin isolation (SharedArrayBuffer). " +
-        "Use `pnpm run test-web` or a vscode.dev session that sets COI.",
-    );
+    throw new Error("input() is unavailable (SharedArrayBuffer was not provided).");
   }
   return waitForStdinLine(stdinBuffer, () => {
-    const reply: WorkerOutbound = { type: "stdinRequest" };
-    self.postMessage(reply);
+    post({ type: "stdinRequest" });
   });
 }
 
 function enableLiveEmit(): void {
-  if (!pyodideInstance) {
-    return;
-  }
-  pyodideInstance.globals.set("_pll_live_emit", emitDisplay);
+  pyodideInstance?.globals.set("_pll_live_emit", emitDisplay);
 }
 
 function disableLiveEmit(): void {
-  if (!pyodideInstance) {
-    return;
+  pyodideInstance?.runPython("_pll_live_emit = None");
+}
+
+function ensureStdioFds(): void {
+  const streams: Array<[NodeJS.ReadStream | NodeJS.WriteStream, number]> = [
+    [process.stdin, 0],
+    [process.stdout, 1],
+    [process.stderr, 2],
+  ];
+  for (const [stream, fd] of streams) {
+    if (stream && (stream as { fd?: number }).fd == null) {
+      Object.defineProperty(stream, "fd", { value: fd });
+    }
   }
-  pyodideInstance.runPython("_pll_live_emit = None");
 }
 
 async function ensurePyodide(indexUrl: string): Promise<void> {
@@ -91,12 +98,10 @@ async function ensurePyodide(indexUrl: string): Promise<void> {
   }
   if (!initPromise) {
     initPromise = (async () => {
-      const normalized = indexUrl.endsWith("/") ? indexUrl : indexUrl + "/";
-      self.importScripts(normalized + "pyodide.js");
-      if (!self.loadPyodide) {
-        throw new Error("loadPyodide not available after importScripts");
-      }
-      pyodideInstance = await self.loadPyodide({ indexURL: normalized });
+      ensureStdioFds();
+      installNodeXHR();
+      const { loadPyodide } = await import("pyodide");
+      pyodideInstance = (await loadPyodide({ indexURL: indexUrl })) as unknown as PyodideInstance;
       pyodideInstance.setStdin({ stdin: readStdin, autoEOF: true });
       pyodideInstance.runPython(PYODIDE_BOOTSTRAP_PY);
       pyodideInstance.runPython(PLL_IMAGE_LIB_PY);
@@ -112,6 +117,7 @@ async function ensureHttpShim(): Promise<void> {
     throw new Error("Pyodide not initialized");
   }
   if (!httpPatchPromise) {
+    installNodeXHR();
     const pyodide = pyodideInstance;
     httpPatchPromise = pyodide.loadPackage("pyodide-http").then(() => {
       pyodide.runPython(PYODIDE_HTTP_PATCH_PY);
@@ -145,15 +151,13 @@ function callPyFunction<T>(name: string, args: unknown[]): T {
   }
 }
 
-self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
-  const data = event.data;
+parentPort.on("message", async (data: WorkerInbound) => {
   try {
     switch (data.type) {
       case "init": {
         stdinBuffer = data.stdinBuffer ?? null;
         await ensurePyodide(data.indexUrl);
-        const reply: WorkerOutbound = { id: data.id, type: "ready" };
-        self.postMessage(reply);
+        post({ id: data.id, type: "ready" });
         break;
       }
       case "runFile": {
@@ -164,10 +168,8 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
             data.fileName,
             data.sessionKey,
           ]);
-          // Already streamed live; returning them again would duplicate.
           result.displays = [];
-          const reply: WorkerOutbound = { id: data.id, type: "result", result };
-          self.postMessage(reply);
+          post({ id: data.id, type: "result", result });
         } finally {
           disableLiveEmit();
         }
@@ -178,14 +180,12 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
           data.code,
           data.sessionKey,
         ]);
-        const reply: WorkerOutbound = { id: data.id, type: "result", result };
-        self.postMessage(reply);
+        post({ id: data.id, type: "result", result });
         break;
       }
       case "checkSyntax": {
         const result = callPyFunction<RawReplCheck>("_pll_repl_check", [data.code]);
-        const reply: WorkerOutbound = { id: data.id, type: "syntax", result };
-        self.postMessage(reply);
+        post({ id: data.id, type: "syntax", result });
         break;
       }
       case "hasTests": {
@@ -194,9 +194,7 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
         }
         const fn = pyodideInstance.globals.get("_pll_has_tests");
         try {
-          const result = Boolean(fn(data.code));
-          const reply: WorkerOutbound = { id: data.id, type: "hasTests", result };
-          self.postMessage(reply);
+          post({ id: data.id, type: "hasTests", result: Boolean(fn(data.code)) });
         } finally {
           fn.destroy?.();
         }
@@ -210,14 +208,12 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
         if (NETWORK_IMPORT_RE.test(data.code)) {
           await ensureHttpShim();
         }
-        const reply: WorkerOutbound = { id: data.id, type: "packagesReady" };
-        self.postMessage(reply);
+        post({ id: data.id, type: "packagesReady" });
         break;
       }
       case "loadPytest": {
         await ensurePytest();
-        const reply: WorkerOutbound = { id: data.id, type: "pytestReady" };
-        self.postMessage(reply);
+        post({ id: data.id, type: "pytestReady" });
         break;
       }
       case "runTests": {
@@ -226,28 +222,26 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
           data.code,
           data.fileName,
         ]);
-        const reply: WorkerOutbound = { id: data.id, type: "testResult", result };
-        self.postMessage(reply);
+        post({ id: data.id, type: "testResult", result });
         break;
       }
       case "staticAnalyze": {
-        const result = callPyFunction<RawStaticFinding[]>("_pll_static_analyze", [
-          data.code,
-          data.level,
-          data.fileName,
-          data.sessionKey ?? null,
-        ]) ?? [];
-        const reply: WorkerOutbound = { id: data.id, type: "static", result };
-        self.postMessage(reply);
+        const result =
+          callPyFunction<RawStaticFinding[]>("_pll_static_analyze", [
+            data.code,
+            data.level,
+            data.fileName,
+            data.sessionKey ?? null,
+          ]) ?? [];
+        post({ id: data.id, type: "static", result });
         break;
       }
     }
   } catch (err) {
-    const reply: WorkerOutbound = {
+    post({
       id: data.id,
       type: "error",
       message: err instanceof Error ? err.message : String(err),
-    };
-    self.postMessage(reply);
+    });
   }
-};
+});

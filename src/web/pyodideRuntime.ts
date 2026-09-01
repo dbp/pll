@@ -9,8 +9,8 @@ import type {
   RunFileRequest,
   StaticAnalyzeRequest,
 } from "../common/types";
-import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "./pyodideWorker";
-import { tryCreateStdinBuffer, writeStdinLine } from "./stdinBuffer";
+import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "../common/workerProtocol";
+import { tryCreateStdinBuffer, writeStdinLine } from "../common/stdinBuffer";
 
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 type WorkerInboundPayload = DistributiveOmit<WorkerInbound, "id">;

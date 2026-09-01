@@ -1,18 +1,9 @@
-import * as fs from "fs";
-import * as path from "path";
-import type { PyodideInterface } from "pyodide";
-import {
-  NETWORK_IMPORT_RE,
-  PLL_IMAGE_LIB_PY,
-  PLL_TABLE_LIB_PY,
-  PYODIDE_BOOTSTRAP_PY,
-  PYODIDE_HTTP_PATCH_PY,
-  PYODIDE_INSTALL_PY,
-  type RunResult,
-  type RawStaticFinding,
-  type TestRunResult,
-} from "../common/pyodideRunner";
-import { deliverRunResult, deliverTestResult } from "../common/deliverResult";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { Worker } from "node:worker_threads";
+import { deliverDisplay, deliverRunResult, deliverTestResult } from "../common/deliverResult";
+import type { RunResult, RawStaticFinding, TestRunResult } from "../common/pyodideRunner";
+import { tryCreateStdinBuffer, writeStdinLine } from "../common/stdinBuffer";
 import type {
   ExecutionEventHandler,
   PythonRuntime,
@@ -21,34 +12,29 @@ import type {
   RunFileRequest,
   StaticAnalyzeRequest,
 } from "../common/types";
+import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "../common/workerProtocol";
 
-interface RawReplCheck {
-  status: "complete" | "incomplete" | "invalid";
-  error_type?: string;
-  message?: string;
-  lineno?: number;
-  offset?: number;
-}
+type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
+type WorkerInboundPayload = DistributiveOmit<WorkerInbound, "id">;
+type AnyReply =
+  | "ready"
+  | "packagesReady"
+  | "pytestReady"
+  | boolean
+  | RunResult
+  | RawReplCheck
+  | RawStaticFinding[]
+  | TestRunResult;
 
-function adaptReplCheck(raw: RawReplCheck): ReplCheckResult {
-  return {
-    status: raw.status,
-    errorType: raw.error_type,
-    message: raw.message,
-    lineNumber: raw.lineno,
-    offset: raw.offset,
-  };
+interface Pending {
+  resolve: (value: AnyReply) => void;
+  reject: (err: Error) => void;
 }
 
 function hasPyodideAssets(dir: string): boolean {
   return fs.existsSync(path.join(dir, "pyodide.asm.wasm"));
 }
 
-/**
- * Published VSIX ships wasm/stdlib under vendor/pyodide. Local `pnpm run
- * build` copies the same files there; F5 before the first build can still
- * fall back to the npm package in node_modules.
- */
 function resolvePyodideIndexURL(extensionPath: string): string {
   const candidates = [
     path.join(extensionPath, "vendor", "pyodide"),
@@ -64,26 +50,28 @@ function resolvePyodideIndexURL(extensionPath: string): string {
 }
 
 /**
- * Desktop Python runtime: loads Pyodide directly in the Node extension host.
- *
- * For MVP we run on the extension host thread; this is acceptable because the
- * extension host is already a separate process from the renderer. Long-term
- * we can migrate to a worker_thread for true isolation.
+ * Desktop Python runtime: Pyodide lives in a `worker_threads` Worker so
+ * `input()` can block without freezing the extension host, and so live
+ * output can stream the same way as the web worker.
  */
 export class DesktopPyodideRuntime implements PythonRuntime {
-  private pyodide: PyodideInterface | null = null;
+  private worker: Worker | null = null;
+  private nextId = 1;
+  private pending = new Map<number, Pending>();
   private initPromise: Promise<void> | null = null;
-  private pytestPromise: Promise<void> | null = null;
-  private httpPatchPromise: Promise<void> | null = null;
+  private stdinBuffer: SharedArrayBuffer | null = null;
+  private stdinHandler: (() => Promise<string | null>) | null = null;
+  private liveOnEvent: ExecutionEventHandler | null = null;
+  private liveFileName = "";
 
   constructor(private readonly extensionPath: string) {}
 
   isReady(): boolean {
-    return this.pyodide !== null;
+    return this.worker !== null;
   }
 
   async initialize(): Promise<void> {
-    if (this.pyodide) {
+    if (this.worker) {
       return;
     }
     if (!this.initPromise) {
@@ -93,166 +81,190 @@ export class DesktopPyodideRuntime implements PythonRuntime {
   }
 
   private async doInitialize(): Promise<void> {
-    const pyodideModule = await import("pyodide");
-    const indexURL = resolvePyodideIndexURL(this.extensionPath);
-    this.pyodide = await pyodideModule.loadPyodide({ indexURL });
-    this.pyodide.runPython(PYODIDE_BOOTSTRAP_PY);
-    this.pyodide.runPython(PLL_IMAGE_LIB_PY);
-    this.pyodide.runPython(PLL_TABLE_LIB_PY);
-    this.pyodide.runPython(PYODIDE_INSTALL_PY);
-    this.pyodide.runPython(`
-def _pll_desktop_input(prompt=""):
-    raise RuntimeError(
-        "input() is not supported in desktop VS Code yet. "
-        "Open this folder on vscode.dev to run interactive programs."
-    )
-_pll_initial_globals["input"] = _pll_desktop_input
-`);
+    const workerPath = path.join(this.extensionPath, "dist", "desktop", "pyodideWorker.js");
+    const indexUrl = resolvePyodideIndexURL(this.extensionPath);
+
+    this.worker = new Worker(workerPath);
+    this.worker.on("message", (msg: WorkerOutbound) => {
+      this.handleMessage(msg);
+    });
+    this.worker.on("error", (err) => {
+      const error = err instanceof Error ? err : new Error(String(err));
+      for (const pending of this.pending.values()) {
+        pending.reject(error);
+      }
+      this.pending.clear();
+    });
+
+    this.stdinBuffer = tryCreateStdinBuffer();
+    await this.send({
+      type: "init",
+      indexUrl,
+      ...(this.stdinBuffer ? { stdinBuffer: this.stdinBuffer } : {}),
+    });
   }
 
   async runFile(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void> {
     await this.initialize();
-    if (!this.pyodide) {
-      throw new Error("Pyodide failed to initialize");
-    }
-    const fn = this.pyodide.globals.get("_pll_run_file");
+    this.liveOnEvent = onEvent;
+    this.liveFileName = request.fileName;
     try {
-      const proxy = fn(request.code, request.fileName, request.sessionKey);
-      const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as RunResult;
-      proxy.destroy?.();
-      deliverRunResult(obj, onEvent, request.fileName);
+      const result = await this.send({
+        type: "runFile",
+        code: request.code,
+        fileName: request.fileName,
+        sessionKey: request.sessionKey,
+      });
+      deliverRunResult(result as RunResult, onEvent, request.fileName);
     } finally {
-      fn.destroy?.();
+      this.liveOnEvent = null;
+      this.liveFileName = "";
     }
   }
 
   async replEval(request: ReplEvalRequest, onEvent: ExecutionEventHandler): Promise<void> {
     await this.initialize();
-    if (!this.pyodide) {
-      throw new Error("Pyodide failed to initialize");
-    }
-    const fn = this.pyodide.globals.get("_pll_repl_eval");
-    try {
-      const proxy = fn(request.code, request.sessionKey);
-      const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as RunResult;
-      proxy.destroy?.();
-      deliverRunResult(obj, onEvent, "<repl>");
-    } finally {
-      fn.destroy?.();
-    }
+    const result = await this.send({
+      type: "replEval",
+      code: request.code,
+      sessionKey: request.sessionKey,
+    });
+    deliverRunResult(result as RunResult, onEvent, "<repl>");
   }
 
   async checkReplComplete(code: string): Promise<ReplCheckResult> {
     await this.initialize();
-    if (!this.pyodide) {
-      throw new Error("Pyodide failed to initialize");
-    }
-    const fn = this.pyodide.globals.get("_pll_repl_check");
-    try {
-      const proxy = fn(code);
-      const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as RawReplCheck;
-      proxy.destroy?.();
-      return adaptReplCheck(obj);
-    } finally {
-      fn.destroy?.();
-    }
+    const result = (await this.send({ type: "checkSyntax", code })) as RawReplCheck;
+    return {
+      status: result.status,
+      errorType: result.error_type,
+      message: result.message,
+      lineNumber: result.lineno,
+      offset: result.offset,
+    };
   }
 
   async hasTests(code: string): Promise<boolean> {
     await this.initialize();
-    if (!this.pyodide) {
-      throw new Error("Pyodide failed to initialize");
-    }
-    const fn = this.pyodide.globals.get("_pll_has_tests");
-    try {
-      return Boolean(fn(code));
-    } finally {
-      fn.destroy?.();
-    }
+    return Boolean(await this.send({ type: "hasTests", code }));
   }
 
   async ensurePackages(code: string): Promise<void> {
     await this.initialize();
-    if (!this.pyodide) {
-      throw new Error("Pyodide failed to initialize");
-    }
-    await this.pyodide.loadPackagesFromImports(code);
-    if (NETWORK_IMPORT_RE.test(code)) {
-      await this.ensureHttpShim();
-    }
-  }
-
-  /** Load pyodide-http and patch urllib/requests, once per interpreter. */
-  private async ensureHttpShim(): Promise<void> {
-    if (!this.pyodide) {
-      return;
-    }
-    if (!this.httpPatchPromise) {
-      const pyodide = this.pyodide;
-      this.httpPatchPromise = pyodide.loadPackage("pyodide-http").then(() => {
-        pyodide.runPython(PYODIDE_HTTP_PATCH_PY);
-      });
-    }
-    await this.httpPatchPromise;
+    await this.send({ type: "loadPackages", code });
   }
 
   async ensurePytest(): Promise<void> {
     await this.initialize();
-    if (!this.pyodide) {
-      throw new Error("Pyodide failed to initialize");
-    }
-    if (!this.pytestPromise) {
-      this.pytestPromise = this.pyodide.loadPackage("pytest").then(() => undefined);
-    }
-    await this.pytestPromise;
+    await this.send({ type: "loadPytest" });
   }
 
   async runTests(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void> {
-    await this.ensurePytest();
-    if (!this.pyodide) {
-      throw new Error("Pyodide failed to initialize");
-    }
-    const fn = this.pyodide.globals.get("_pll_run_tests");
-    try {
-      const proxy = fn(request.code, request.fileName);
-      const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as TestRunResult;
-      proxy.destroy?.();
-      deliverTestResult(obj, onEvent, request.fileName);
-    } finally {
-      fn.destroy?.();
-    }
+    await this.initialize();
+    const result = await this.send({
+      type: "runTests",
+      code: request.code,
+      fileName: request.fileName,
+    });
+    deliverTestResult(result as TestRunResult, onEvent, request.fileName);
   }
 
   async staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]> {
     await this.initialize();
-    if (!this.pyodide) {
-      throw new Error("Pyodide failed to initialize");
-    }
-    const fn = this.pyodide.globals.get("_pll_static_analyze");
-    try {
-      const proxy = fn(
-        request.code,
-        request.level,
-        request.fileName,
-        request.sessionKey ?? null,
-      );
-      const obj = proxy.toJs({ dict_converter: Object.fromEntries }) as RawStaticFinding[];
-      proxy.destroy?.();
-      return obj ?? [];
-    } finally {
-      fn.destroy?.();
-    }
+    const result = (await this.send({
+      type: "staticAnalyze",
+      code: request.code,
+      level: request.level,
+      fileName: request.fileName,
+      sessionKey: request.sessionKey,
+    })) as RawStaticFinding[];
+    return result ?? [];
   }
 
   dispose(): void {
-    this.pyodide = null;
+    void this.worker?.terminate();
+    this.worker = null;
     this.initPromise = null;
-    this.pytestPromise = null;
-    this.httpPatchPromise = null;
+    this.stdinBuffer = null;
+    this.liveOnEvent = null;
+    for (const pending of this.pending.values()) {
+      pending.reject(new Error("Runtime disposed"));
+    }
+    this.pending.clear();
   }
 
-  setStdinHandler(_handler: (() => Promise<string | null>) | null): void {
-    // Desktop runs Pyodide on the extension-host thread; blocking there
-    // would freeze VS Code. input() is overridden at init to raise instead.
+  setStdinHandler(handler: (() => Promise<string | null>) | null): void {
+    this.stdinHandler = handler;
+  }
+
+  private send(msg: WorkerInboundPayload): Promise<AnyReply> {
+    if (!this.worker) {
+      return Promise.reject(new Error("Worker not initialized"));
+    }
+    const id = this.nextId++;
+    const promise = new Promise<AnyReply>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+    });
+    this.worker.postMessage({ id, ...msg } as WorkerInbound);
+    return promise;
+  }
+
+  private handleMessage(msg: WorkerOutbound): void {
+    if (msg.type === "display") {
+      if (this.liveOnEvent) {
+        deliverDisplay(msg.payload, this.liveOnEvent, this.liveFileName);
+      }
+      return;
+    }
+    if (msg.type === "stdinRequest") {
+      void this.handleStdinRequest();
+      return;
+    }
+    const pending = this.pending.get(msg.id);
+    if (!pending) {
+      return;
+    }
+    this.pending.delete(msg.id);
+    switch (msg.type) {
+      case "ready":
+        pending.resolve("ready");
+        break;
+      case "result":
+        pending.resolve(msg.result);
+        break;
+      case "syntax":
+        pending.resolve(msg.result);
+        break;
+      case "hasTests":
+        pending.resolve(msg.result);
+        break;
+      case "packagesReady":
+        pending.resolve("packagesReady");
+        break;
+      case "pytestReady":
+        pending.resolve("pytestReady");
+        break;
+      case "testResult":
+        pending.resolve(msg.result);
+        break;
+      case "static":
+        pending.resolve(msg.result);
+        break;
+      case "error":
+        pending.reject(new Error(msg.message));
+        break;
+    }
+  }
+
+  private async handleStdinRequest(): Promise<void> {
+    let line: string | null = null;
+    try {
+      line = this.stdinHandler ? await this.stdinHandler() : null;
+    } catch {
+      line = null;
+    }
+    if (this.stdinBuffer) {
+      writeStdinLine(this.stdinBuffer, line);
+    }
   }
 }
