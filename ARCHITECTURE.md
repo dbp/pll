@@ -187,6 +187,14 @@ Three options, in increasing order of how close they are to production:
 - `pll.pyodideIndexUrl` — base URL for Pyodide assets (web only).
   Defaults to the matching pinned CDN build.
 
+PLL declares `untrustedWorkspaces` and `virtualWorkspaces` support in
+`package.json`, so Restricted Mode and vscode.dev do not disable it per
+folder. A handout `.vscode/settings.json` cannot do that:
+`extensions.supportUntrustedWorkspaces` is a **user** setting. Course
+repos should still list `"pll.python-language-levels"` in
+`.vscode/extensions.json` `recommendations` so first-time students get
+an install prompt.
+
 ## Editor defaults
 
 PLL ships opinionated `configurationDefaults` so beginners mostly see

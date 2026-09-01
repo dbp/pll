@@ -25,6 +25,15 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "PLL runs Python inside Pyodide. It does not execute workspace files on the host."
+    },
+    "virtualWorkspaces": {
+      "supported": true
+    }
+  },
   "packageManager": "pnpm@10.33.2",
   "categories": [
     "Programming Languages",
@@ -54,6 +63,26 @@
       {
         "command": "pll.clearInteractions",
         "title": "PLL: Clear Interactions"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "pll.interactions.copy",
+        "key": "ctrl+c",
+        "mac": "cmd+c",
+        "when": "isWeb && (pllInteractionsFocus || focusedView == pllInteractionsView)"
+      },
+      {
+        "command": "pll.interactions.cut",
+        "key": "ctrl+x",
+        "mac": "cmd+x",
+        "when": "isWeb && (pllInteractionsFocus || focusedView == pllInteractionsView)"
+      },
+      {
+        "command": "pll.interactions.paste",
+        "key": "ctrl+v",
+        "mac": "cmd+v",
+        "when": "isWeb && (pllInteractionsFocus || focusedView == pllInteractionsView)"
       }
     ],
     "menus": {

@@ -28,6 +28,15 @@ export function registerCommands(
     vscode.commands.registerCommand("pll.clearInteractions", () =>
       services.view.clear(),
     ),
+    vscode.commands.registerCommand("pll.interactions.copy", () =>
+      services.view.copySelectionOrInterrupt().catch(reportError),
+    ),
+    vscode.commands.registerCommand("pll.interactions.cut", () =>
+      services.view.cutSelection().catch(reportError),
+    ),
+    vscode.commands.registerCommand("pll.interactions.paste", () =>
+      services.view.pasteClipboard().catch(reportError),
+    ),
   );
 }
 

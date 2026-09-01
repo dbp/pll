@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Copy, cut, and paste shortcuts work in the interactions panel on
+  vscode.dev. The browser workbench was swallowing Ctrl/Cmd+C/V before
+  the webview saw them; right-click paste already worked.
+- PLL now declares support for untrusted and virtual workspaces, so it
+  stays enabled in Restricted Mode and on vscode.dev instead of asking
+  to be turned on for every folder.
+
 ## 0.0.4
 
 - Third-party packages now load automatically. When a file or prompt

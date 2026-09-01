@@ -155,6 +155,11 @@ interface HostMessageTitle {
 interface HostMessageFocus {
   type: "focusInput";
 }
+interface HostMessageClipboard {
+  type: "clipboard";
+  op: "copyOrInterrupt" | "cut" | "paste";
+  text?: string;
+}
 type HostToView =
   | HostMessageAppend
   | HostMessageClear
@@ -164,7 +169,8 @@ type HostToView =
   | HostMessageReplay
   | HostMessageEmpty
   | HostMessageTitle
-  | HostMessageFocus;
+  | HostMessageFocus
+  | HostMessageClipboard;
 
 export interface SessionDisplayState {
   /** Header title shown at the top of the view (typically the file name). */
@@ -197,6 +203,8 @@ export class InteractionsView
   private view: vscode.WebviewView | null = null;
   private webviewReady = false;
   private readonly disposables: vscode.Disposable[] = [];
+  private clipboardWaiters: Array<(result: { text: string; hadSelection: boolean }) => void> =
+    [];
 
   // Mirror of what is currently displayed (always the active session, or
   // an "empty" placeholder when no Python file is active). The session
@@ -389,6 +397,29 @@ export class InteractionsView
     this.post({ type: "focusInput" });
   }
 
+  /**
+   * vscode.dev steals Ctrl/Cmd+C/V before the webview iframe sees them.
+   * These go through `vscode.env.clipboard` and a message to the view.
+   */
+  async copySelectionOrInterrupt(): Promise<void> {
+    const result = await this.requestClipboard("copyOrInterrupt");
+    if (result.hadSelection) {
+      await vscode.env.clipboard.writeText(result.text);
+    }
+  }
+
+  async cutSelection(): Promise<void> {
+    const result = await this.requestClipboard("cut");
+    if (result.hadSelection) {
+      await vscode.env.clipboard.writeText(result.text);
+    }
+  }
+
+  async pasteClipboard(): Promise<void> {
+    const text = await vscode.env.clipboard.readText();
+    this.post({ type: "clipboard", op: "paste", text });
+  }
+
   /* -------- WebviewViewProvider -------- */
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -421,6 +452,9 @@ export class InteractionsView
       fileName?: string;
       line?: number;
       column?: number;
+      focused?: boolean;
+      text?: string;
+      hadSelection?: boolean;
     };
     switch (m.type) {
       case "ready":
@@ -467,7 +501,38 @@ export class InteractionsView
           void this.handleSaveCsv(m.csv, m.source);
         }
         break;
+      case "viewFocus":
+        void vscode.commands.executeCommand(
+          "setContext",
+          "pllInteractionsFocus",
+          !!m.focused,
+        );
+        break;
+      case "clipboardResult": {
+        const waiter = this.clipboardWaiters.shift();
+        waiter?.({
+          text: typeof m.text === "string" ? m.text : "",
+          hadSelection: !!m.hadSelection,
+        });
+        break;
+      }
     }
+  }
+
+  private requestClipboard(
+    op: "copyOrInterrupt" | "cut",
+  ): Promise<{ text: string; hadSelection: boolean }> {
+    return new Promise((resolve) => {
+      this.clipboardWaiters.push(resolve);
+      this.post({ type: "clipboard", op });
+      setTimeout(() => {
+        const idx = this.clipboardWaiters.indexOf(resolve);
+        if (idx >= 0) {
+          this.clipboardWaiters.splice(idx, 1);
+          resolve({ text: "", hadSelection: false });
+        }
+      }, 1000);
+    });
   }
 
   private async handleOpenLocation(
@@ -520,6 +585,7 @@ export class InteractionsView
   }
 
   dispose(): void {
+    void vscode.commands.executeCommand("setContext", "pllInteractionsFocus", false);
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
     this.view = null;
