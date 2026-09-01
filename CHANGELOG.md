@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.4
 
 - Third-party packages now load automatically. When a file or prompt
   imports a library that Pyodide ships (for example **pandas** or
