@@ -128,6 +128,11 @@ interface HostMessageBusy {
   busy: boolean;
   status?: string;
 }
+interface HostMessageAwaitingInput {
+  type: "awaitingInput";
+  awaiting: boolean;
+  prefix?: string;
+}
 interface HostMessageReplay {
   type: "replay";
   mode: "session";
@@ -136,6 +141,8 @@ interface HostMessageReplay {
   prompt: PromptKind;
   busy: boolean;
   status?: string;
+  awaitingInput?: boolean;
+  inputPrefix?: string;
 }
 interface HostMessageEmpty {
   type: "empty";
@@ -153,6 +160,7 @@ type HostToView =
   | HostMessageClear
   | HostMessagePrompt
   | HostMessageBusy
+  | HostMessageAwaitingInput
   | HostMessageReplay
   | HostMessageEmpty
   | HostMessageTitle
@@ -165,6 +173,8 @@ export interface SessionDisplayState {
   prompt: PromptKind;
   busy: boolean;
   status?: string;
+  awaitingInput?: boolean;
+  inputPrefix?: string;
 }
 
 /* -------------------------------------------------------------- */
@@ -199,6 +209,8 @@ export class InteractionsView
   private prompt: PromptKind = "primary";
   private busy = false;
   private status: string | undefined = undefined;
+  private awaitingInput = false;
+  private inputPrefix = "";
 
   // Map of display fileName -> document URI, used to honor click-to-open
   // requests coming from the webview's error-location links.
@@ -233,6 +245,8 @@ export class InteractionsView
     this.prompt = state.prompt;
     this.busy = state.busy;
     this.status = state.status;
+    this.awaitingInput = state.awaitingInput ?? false;
+    this.inputPrefix = state.inputPrefix ?? "";
     this.post({
       type: "replay",
       mode: "session",
@@ -241,6 +255,8 @@ export class InteractionsView
       prompt: this.prompt,
       busy: this.busy,
       status: this.status,
+      awaitingInput: this.awaitingInput,
+      inputPrefix: this.inputPrefix,
     });
   }
 
@@ -330,7 +346,30 @@ export class InteractionsView
     if (this.mode !== "session") return;
     this.busy = busy;
     this.status = status;
+    if (!busy) {
+      this.awaitingInput = false;
+      this.inputPrefix = "";
+    }
     this.post({ type: "busy", busy, status });
+    if (!busy) {
+      this.post({ type: "awaitingInput", awaiting: false });
+    }
+  }
+
+  /**
+   * While a file is running, `input()` needs the prompt row enabled even
+   * though the session is busy. `prefix` is any unflushed stdout (the
+   * `input("Choice: ")` prompt) shown next to the textarea.
+   */
+  setAwaitingInput(awaiting: boolean, prefix?: string): void {
+    if (this.mode !== "session") return;
+    this.awaitingInput = awaiting;
+    this.inputPrefix = awaiting ? (prefix ?? "") : "";
+    this.post({
+      type: "awaitingInput",
+      awaiting,
+      prefix: this.inputPrefix,
+    });
   }
 
   /** Reveal the view (creating it if necessary). */
@@ -395,6 +434,8 @@ export class InteractionsView
             prompt: this.prompt,
             busy: this.busy,
             status: this.status,
+            awaitingInput: this.awaitingInput,
+            inputPrefix: this.inputPrefix,
           });
         } else {
           this.post({ type: "empty", message: this.emptyMessage });

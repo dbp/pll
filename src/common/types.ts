@@ -125,6 +125,12 @@ export interface PythonRuntime {
   isReady(): boolean;
   runFile(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void>;
   replEval(request: ReplEvalRequest, onEvent: ExecutionEventHandler): Promise<void>;
+  /**
+   * Load any Pyodide packages the code imports (pandas, numpy, ...), via
+   * Pyodide's `loadPackagesFromImports`. A no-op when the code imports nothing
+   * that maps to a known package; needs network the first time it loads one.
+   */
+  ensurePackages(code: string): Promise<void>;
   /** True if `code` contains pytest-style `test_*` functions or `Test*` classes. */
   hasTests(code: string): Promise<boolean>;
   /** Load the pytest package (no-op if already loaded). Needs network the first time. */
@@ -139,5 +145,12 @@ export interface PythonRuntime {
    * surface SyntaxErrors).
    */
   staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]>;
+  /**
+   * Register the handler used when a running program calls `input()`.
+   * The web runtime blocks the worker until this resolves with a line
+   * (no trailing newline) or `null` (EOF / cancel). The desktop runtime
+   * never calls this; `input()` raises a RuntimeError there.
+   */
+  setStdinHandler(handler: (() => Promise<string | null>) | null): void;
   dispose(): void;
 }

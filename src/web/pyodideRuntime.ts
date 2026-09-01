@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { deliverRunResult, deliverTestResult } from "../common/deliverResult";
+import { deliverDisplay, deliverRunResult, deliverTestResult } from "../common/deliverResult";
 import type { RunResult, RawStaticFinding, TestRunResult } from "../common/pyodideRunner";
 import type {
   ExecutionEventHandler,
@@ -10,10 +10,11 @@ import type {
   StaticAnalyzeRequest,
 } from "../common/types";
 import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "./pyodideWorker";
+import { tryCreateStdinBuffer, writeStdinLine } from "./stdinBuffer";
 
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 type WorkerInboundPayload = DistributiveOmit<WorkerInbound, "id">;
-type AnyReply = "ready" | "pytestReady" | boolean | RunResult | RawReplCheck | RawStaticFinding[] | TestRunResult;
+type AnyReply = "ready" | "packagesReady" | "pytestReady" | boolean | RunResult | RawReplCheck | RawStaticFinding[] | TestRunResult;
 
 interface Pending {
   resolve: (value: AnyReply) => void;
@@ -25,6 +26,11 @@ export class WebPyodideRuntime implements PythonRuntime {
   private nextId = 1;
   private pending = new Map<number, Pending>();
   private initPromise: Promise<void> | null = null;
+  private stdinBuffer: SharedArrayBuffer | null = null;
+  private stdinHandler: (() => Promise<string | null>) | null = null;
+  /** Event sink for the in-flight runFile, so live displays can stream. */
+  private liveOnEvent: ExecutionEventHandler | null = null;
+  private liveFileName = "";
 
   constructor(private readonly extensionUri: vscode.Uri) {}
 
@@ -59,18 +65,30 @@ export class WebPyodideRuntime implements PythonRuntime {
       this.pending.clear();
     };
 
-    await this.send({ type: "init", indexUrl });
+    this.stdinBuffer = tryCreateStdinBuffer();
+    await this.send({
+      type: "init",
+      indexUrl,
+      ...(this.stdinBuffer ? { stdinBuffer: this.stdinBuffer } : {}),
+    });
   }
 
   async runFile(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void> {
     await this.initialize();
-    const result = await this.send({
-      type: "runFile",
-      code: request.code,
-      fileName: request.fileName,
-      sessionKey: request.sessionKey,
-    });
-    deliverRunResult(result as RunResult, onEvent, request.fileName);
+    this.liveOnEvent = onEvent;
+    this.liveFileName = request.fileName;
+    try {
+      const result = await this.send({
+        type: "runFile",
+        code: request.code,
+        fileName: request.fileName,
+        sessionKey: request.sessionKey,
+      });
+      deliverRunResult(result as RunResult, onEvent, request.fileName);
+    } finally {
+      this.liveOnEvent = null;
+      this.liveFileName = "";
+    }
   }
 
   async replEval(request: ReplEvalRequest, onEvent: ExecutionEventHandler): Promise<void> {
@@ -98,6 +116,11 @@ export class WebPyodideRuntime implements PythonRuntime {
   async hasTests(code: string): Promise<boolean> {
     await this.initialize();
     return Boolean(await this.send({ type: "hasTests", code }));
+  }
+
+  async ensurePackages(code: string): Promise<void> {
+    await this.initialize();
+    await this.send({ type: "loadPackages", code });
   }
 
   async ensurePytest(): Promise<void> {
@@ -131,10 +154,16 @@ export class WebPyodideRuntime implements PythonRuntime {
     this.worker?.terminate();
     this.worker = null;
     this.initPromise = null;
+    this.stdinBuffer = null;
+    this.liveOnEvent = null;
     for (const pending of this.pending.values()) {
       pending.reject(new Error("Runtime disposed"));
     }
     this.pending.clear();
+  }
+
+  setStdinHandler(handler: (() => Promise<string | null>) | null): void {
+    this.stdinHandler = handler;
   }
 
   private send(msg: WorkerInboundPayload): Promise<AnyReply> {
@@ -150,6 +179,16 @@ export class WebPyodideRuntime implements PythonRuntime {
   }
 
   private handleMessage(msg: WorkerOutbound): void {
+    if (msg.type === "display") {
+      if (this.liveOnEvent) {
+        deliverDisplay(msg.payload, this.liveOnEvent, this.liveFileName);
+      }
+      return;
+    }
+    if (msg.type === "stdinRequest") {
+      void this.handleStdinRequest();
+      return;
+    }
     const pending = this.pending.get(msg.id);
     if (!pending) {
       return;
@@ -168,6 +207,9 @@ export class WebPyodideRuntime implements PythonRuntime {
       case "hasTests":
         pending.resolve(msg.result);
         break;
+      case "packagesReady":
+        pending.resolve("packagesReady");
+        break;
       case "pytestReady":
         pending.resolve("pytestReady");
         break;
@@ -180,6 +222,18 @@ export class WebPyodideRuntime implements PythonRuntime {
       case "error":
         pending.reject(new Error(msg.message));
         break;
+    }
+  }
+
+  private async handleStdinRequest(): Promise<void> {
+    let line: string | null = null;
+    try {
+      line = this.stdinHandler ? await this.stdinHandler() : null;
+    } catch {
+      line = null;
+    }
+    if (this.stdinBuffer) {
+      writeStdinLine(this.stdinBuffer, line);
     }
   }
 }

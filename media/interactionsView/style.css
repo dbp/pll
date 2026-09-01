@@ -393,6 +393,13 @@ body.mode-empty #inputRow {
   opacity: 0.5;
 }
 
+#inputRow.awaiting-input .prompt {
+  color: var(--vscode-terminal-foreground, var(--vscode-editor-foreground));
+  max-width: 60%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 #inputRow .prompt {
   color: var(--vscode-terminal-ansiGreen, #6a9955);
   margin-top: 2px;

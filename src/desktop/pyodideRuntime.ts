@@ -2,9 +2,11 @@ import * as fs from "fs";
 import * as path from "path";
 import type { PyodideInterface } from "pyodide";
 import {
+  NETWORK_IMPORT_RE,
   PLL_IMAGE_LIB_PY,
   PLL_TABLE_LIB_PY,
   PYODIDE_BOOTSTRAP_PY,
+  PYODIDE_HTTP_PATCH_PY,
   PYODIDE_INSTALL_PY,
   type RunResult,
   type RawStaticFinding,
@@ -72,6 +74,7 @@ export class DesktopPyodideRuntime implements PythonRuntime {
   private pyodide: PyodideInterface | null = null;
   private initPromise: Promise<void> | null = null;
   private pytestPromise: Promise<void> | null = null;
+  private httpPatchPromise: Promise<void> | null = null;
 
   constructor(private readonly extensionPath: string) {}
 
@@ -97,6 +100,14 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     this.pyodide.runPython(PLL_IMAGE_LIB_PY);
     this.pyodide.runPython(PLL_TABLE_LIB_PY);
     this.pyodide.runPython(PYODIDE_INSTALL_PY);
+    this.pyodide.runPython(`
+def _pll_desktop_input(prompt=""):
+    raise RuntimeError(
+        "input() is not supported in desktop VS Code yet. "
+        "Open this folder on vscode.dev to run interactive programs."
+    )
+_pll_initial_globals["input"] = _pll_desktop_input
+`);
   }
 
   async runFile(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void> {
@@ -160,6 +171,31 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     }
   }
 
+  async ensurePackages(code: string): Promise<void> {
+    await this.initialize();
+    if (!this.pyodide) {
+      throw new Error("Pyodide failed to initialize");
+    }
+    await this.pyodide.loadPackagesFromImports(code);
+    if (NETWORK_IMPORT_RE.test(code)) {
+      await this.ensureHttpShim();
+    }
+  }
+
+  /** Load pyodide-http and patch urllib/requests, once per interpreter. */
+  private async ensureHttpShim(): Promise<void> {
+    if (!this.pyodide) {
+      return;
+    }
+    if (!this.httpPatchPromise) {
+      const pyodide = this.pyodide;
+      this.httpPatchPromise = pyodide.loadPackage("pyodide-http").then(() => {
+        pyodide.runPython(PYODIDE_HTTP_PATCH_PY);
+      });
+    }
+    await this.httpPatchPromise;
+  }
+
   async ensurePytest(): Promise<void> {
     await this.initialize();
     if (!this.pyodide) {
@@ -212,5 +248,11 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     this.pyodide = null;
     this.initPromise = null;
     this.pytestPromise = null;
+    this.httpPatchPromise = null;
+  }
+
+  setStdinHandler(_handler: (() => Promise<string | null>) | null): void {
+    // Desktop runs Pyodide on the extension-host thread; blocking there
+    // would freeze VS Code. input() is overridden at init to raise instead.
   }
 }

@@ -27,6 +27,7 @@ import traceback as _tb_mod
 import ast as _ast
 import codeop as _codeop
 import contextlib
+import json as _pll_json
 
 # Per-session globals dicts, keyed by session_key (e.g. document URI).
 # Created lazily; initialized from `_pll_initial_globals`.
@@ -49,6 +50,26 @@ _pll_initial_globals = {"__name__": "__main__", "__builtins__": __builtins__}
 # Pyodide is single-threaded, so a single shared list is fine.
 _pll_displays = []
 
+# When set (by the web runtime, which supports live output + input), this is a
+# JS callback taking one JSON string. Every display payload — each stdout/stderr
+# write, image, and table — is emitted through it as it is produced, so the
+# interactions view updates *during* the run instead of only at the end. This
+# is what lets an interactive program print a prompt before input() blocks.
+# Left as None on the desktop host and during REPL/tests, where output is
+# delivered in one batch and this hook is a no-op.
+_pll_live_emit = None
+
+
+def _pll_push(payload):
+    """Record a display payload and, if a live hook is set, emit it now."""
+    _pll_displays.append(payload)
+    emit = _pll_live_emit
+    if emit is not None:
+        try:
+            emit(_pll_json.dumps(payload))
+        except Exception:
+            pass
+
 
 class _PllStream:
     """Drop-in replacement for `sys.stdout` / `sys.stderr` during a run.
@@ -70,7 +91,7 @@ class _PllStream:
         if not isinstance(s, str):
             s = str(s)
         if s:
-            _pll_displays.append({"type": self._kind, "text": s})
+            _pll_push({"type": self._kind, "text": s})
             self._chunks.append(s)
         return len(s)
 
@@ -129,7 +150,7 @@ def _pll_show_top_level(value):
         return
     payload = _pll_extract_display(value)
     if payload is not None:
-        _pll_displays.append(payload)
+        _pll_push(payload)
         return
     print(repr(value))
 
@@ -641,7 +662,7 @@ def _pll_repl_eval(code, session_key):
                 if value is not None:
                     payload = _pll_extract_display(value)
                     if payload is not None:
-                        _pll_displays.append(payload)
+                        _pll_push(payload)
                     else:
                         result["result_repr"] = repr(value)
         result["ok"] = True

@@ -26,6 +26,25 @@ export const PLL_IMAGE_LIB_PY = imageLibSource;
 export const PLL_TABLE_LIB_PY = tableLibSource;
 
 /**
+ * Imports whose use implies network access. Pyodide does not wire Python's
+ * `urllib` to the host network, so `pd.read_csv(url)` / `requests` / `urllib`
+ * fail with "unknown url type: https" until the `pyodide-http` shim is applied.
+ * When code imports one of these, PLL loads `pyodide-http` and patches it in
+ * (see PYODIDE_HTTP_PATCH_PY). `pandas` is included because its readers take
+ * URLs. Programs that import nothing networked never load the shim.
+ */
+export const NETWORK_IMPORT_RE =
+  /(^|\n)[ \t]*(?:import|from)[ \t]+(?:pandas|requests|urllib|urllib3|httpx|aiohttp|http)\b/;
+
+/**
+ * Routes `urllib`/`requests` (and therefore pandas URL readers) through the
+ * host's fetch. Idempotent, but PLL still guards it to run once per
+ * interpreter. Works in the web worker (synchronous XHR); on the desktop Node
+ * host there is no browser network, so URL reads there remain unsupported.
+ */
+export const PYODIDE_HTTP_PATCH_PY = "import pyodide_http as _pll_ph; _pll_ph.patch_all()";
+
+/**
  * Final installation step: register `pll.image` and `pll.table` as
  * importable modules and inject their public names into the per-session
  * globals template (`_pll_initial_globals`) so beginners can use

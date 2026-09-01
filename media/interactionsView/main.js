@@ -11,6 +11,8 @@
 //   { type: "clear" }                        - clear current session entries
 //   { type: "prompt", kind }                 - change prompt for current
 //   { type: "busy", busy, status? }          - busy state for current
+//   { type: "awaitingInput", awaiting, prefix? } - program input() is waiting
+//   { type: "replay", mode: "session", title, entries, prompt, busy, status?, awaitingInput?, inputPrefix? }
 //   { type: "replay", mode: "session", title, entries, prompt, busy, status? }
 //                                            - swap to a different session
 //   { type: "empty", message }               - no session active
@@ -28,7 +30,7 @@
 (function () {
   const vscode = acquireVsCodeApi();
 
-  /** @type {{ mode: "session" | "empty", emptyMessage: string, title: string, entries: any[], prompt: "primary" | "continuation", busy: boolean, history: string[] }} */
+  /** @type {{ mode: "session" | "empty", emptyMessage: string, title: string, entries: any[], prompt: "primary" | "continuation", busy: boolean, awaitingInput: boolean, inputPrefix: string, history: string[] }} */
   const state = vscode.getState() ?? {
     mode: "empty",
     emptyMessage: "Open a Python file to start an interactions session.",
@@ -36,8 +38,12 @@
     entries: [],
     prompt: "primary",
     busy: false,
+    awaitingInput: false,
+    inputPrefix: "",
     history: [],
   };
+  if (typeof state.awaitingInput !== "boolean") state.awaitingInput = false;
+  if (typeof state.inputPrefix !== "string") state.inputPrefix = "";
 
   const body = document.body;
   const titleEl = document.getElementById("title");
@@ -69,17 +75,40 @@
   }
 
   function setPromptText() {
+    if (state.awaitingInput) {
+      promptEl.textContent = state.inputPrefix || "";
+      return;
+    }
     promptEl.textContent = state.prompt === "continuation" ? "..." : ">>>";
+  }
+
+  function applyInputEnabled() {
+    const blocked = state.busy && !state.awaitingInput;
+    inputRow.classList.toggle("busy", blocked);
+    inputRow.classList.toggle("awaiting-input", state.awaitingInput);
+    textarea.disabled = blocked;
+    if (!blocked && state.mode === "session") {
+      requestAnimationFrame(() => textarea.focus());
+    }
   }
 
   function setBusy(busy, status) {
     state.busy = busy;
-    inputRow.classList.toggle("busy", busy);
-    textarea.disabled = busy;
-    statusEl.textContent = busy ? (status || "Running...") : "";
-    if (!busy && state.mode === "session") {
-      requestAnimationFrame(() => textarea.focus());
+    if (!busy) {
+      state.awaitingInput = false;
+      state.inputPrefix = "";
+      setPromptText();
     }
+    statusEl.textContent = busy ? (status || "Running...") : "";
+    applyInputEnabled();
+    persist();
+  }
+
+  function setAwaitingInput(awaiting, prefix) {
+    state.awaitingInput = !!awaiting;
+    state.inputPrefix = awaiting ? (prefix || "") : "";
+    setPromptText();
+    applyInputEnabled();
     persist();
   }
 
@@ -456,11 +485,11 @@
   }
 
   function submitCurrent() {
-    if (state.busy) return;
+    if (state.busy && !state.awaitingInput) return;
     const code = textarea.value;
     textarea.value = "";
     autoSizeInput();
-    if (code.trim().length > 0) {
+    if (!state.awaitingInput && code.trim().length > 0) {
       pushHistory(code);
     }
     historyIdx = -1;
@@ -599,6 +628,10 @@
         if (state.mode !== "session") return;
         setBusy(!!msg.busy, msg.status);
         break;
+      case "awaitingInput":
+        if (state.mode !== "session") return;
+        setAwaitingInput(!!msg.awaiting, msg.prefix);
+        break;
       case "replay":
         // Switch to (or stay in) session mode.
         state.mode = "session";
@@ -610,6 +643,7 @@
         applyMode();
         applyTitle();
         renderAll();
+        setAwaitingInput(!!msg.awaitingInput, msg.inputPrefix);
         setPromptText();
         setBusy(state.busy, msg.status);
         break;
@@ -619,6 +653,8 @@
         state.title = "";
         state.entries = [];
         state.busy = false;
+        state.awaitingInput = false;
+        state.inputPrefix = "";
         persist();
         applyMode();
         applyTitle();

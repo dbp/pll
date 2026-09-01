@@ -1,4 +1,4 @@
-import type { RunResult, TestRunResult } from "./pyodideRunner";
+import type { DisplayData, RunResult, TestRunResult } from "./pyodideRunner";
 import type { ExecutionEventHandler, TestCaseResult } from "./types";
 
 /**
@@ -31,34 +31,7 @@ export function deliverRunResult(
 ): void {
   if (result.displays) {
     for (const display of result.displays) {
-      switch (display.type) {
-        case "stdout":
-          onEvent({ kind: "stdout", text: display.text });
-          break;
-        case "stderr":
-          onEvent({ kind: "stderr", text: display.text });
-          break;
-        case "image":
-          onEvent({
-            kind: "image",
-            svg: display.data,
-            width: display.width,
-            height: display.height,
-            source: fileName,
-          });
-          break;
-        case "table":
-          onEvent({
-            kind: "table",
-            columns: display.columns,
-            rows: display.rows,
-            rowCount: display.row_count,
-            shownCount: display.shown_count,
-            truncated: display.truncated,
-            source: fileName,
-          });
-          break;
-      }
+      deliverDisplay(display, onEvent, fileName);
     }
   }
   if (result.result_repr !== null && result.result_repr !== undefined) {
@@ -76,6 +49,46 @@ export function deliverRunResult(
     });
   }
   onEvent({ kind: "done" });
+}
+
+/**
+ * Translate one display payload into an `ExecutionEvent`. Used both for the
+ * batched end-of-run list and for live streaming during a run (so `input()`
+ * prompts appear before the program blocks).
+ */
+export function deliverDisplay(
+  display: DisplayData,
+  onEvent: ExecutionEventHandler,
+  fileName: string,
+): void {
+  switch (display.type) {
+    case "stdout":
+      onEvent({ kind: "stdout", text: display.text });
+      break;
+    case "stderr":
+      onEvent({ kind: "stderr", text: display.text });
+      break;
+    case "image":
+      onEvent({
+        kind: "image",
+        svg: display.data,
+        width: display.width,
+        height: display.height,
+        source: fileName,
+      });
+      break;
+    case "table":
+      onEvent({
+        kind: "table",
+        columns: display.columns,
+        rows: display.rows,
+        rowCount: display.row_count,
+        shownCount: display.shown_count,
+        truncated: display.truncated,
+        source: fileName,
+      });
+      break;
+  }
 }
 
 function asPlain(value: unknown): unknown {

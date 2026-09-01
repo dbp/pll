@@ -1,13 +1,17 @@
 /// <reference lib="WebWorker" />
 import {
+  NETWORK_IMPORT_RE,
   PLL_IMAGE_LIB_PY,
   PLL_TABLE_LIB_PY,
   PYODIDE_BOOTSTRAP_PY,
+  PYODIDE_HTTP_PATCH_PY,
   PYODIDE_INSTALL_PY,
+  type DisplayData,
   type RunResult,
   type RawStaticFinding,
   type TestRunResult,
 } from "../common/pyodideRunner";
+import { waitForStdinLine } from "./stdinBuffer";
 
 declare const self: DedicatedWorkerGlobalScope & {
   loadPyodide?: (config: { indexURL: string }) => Promise<PyodideInstance>;
@@ -16,8 +20,15 @@ declare const self: DedicatedWorkerGlobalScope & {
 interface PyodideInstance {
   runPython(code: string): unknown;
   loadPackage(names: string | string[]): Promise<unknown>;
+  loadPackagesFromImports(code: string): Promise<unknown>;
+  setStdin(options: {
+    stdin?: () => string | null | undefined;
+    autoEOF?: boolean;
+    isatty?: boolean;
+  }): void;
   globals: {
     get(name: string): PyCallable;
+    set(name: string, value: unknown): void;
   };
 }
 
@@ -40,10 +51,11 @@ export interface RawReplCheck {
 }
 
 export type WorkerInbound =
-  | { id: number; type: "init"; indexUrl: string }
+  | { id: number; type: "init"; indexUrl: string; stdinBuffer?: SharedArrayBuffer }
   | { id: number; type: "runFile"; code: string; fileName: string; sessionKey: string }
   | { id: number; type: "replEval"; code: string; sessionKey: string }
   | { id: number; type: "checkSyntax"; code: string }
+  | { id: number; type: "loadPackages"; code: string }
   | { id: number; type: "hasTests"; code: string }
   | { id: number; type: "loadPytest" }
   | { id: number; type: "runTests"; code: string; fileName: string }
@@ -54,14 +66,56 @@ export type WorkerOutbound =
   | { id: number; type: "result"; result: RunResult }
   | { id: number; type: "syntax"; result: RawReplCheck }
   | { id: number; type: "hasTests"; result: boolean }
+  | { id: number; type: "packagesReady" }
   | { id: number; type: "pytestReady" }
   | { id: number; type: "testResult"; result: TestRunResult }
   | { id: number; type: "static"; result: RawStaticFinding[] }
-  | { id: number; type: "error"; message: string };
+  | { id: number; type: "error"; message: string }
+  | { type: "display"; payload: DisplayData }
+  | { type: "stdinRequest" };
 
 let pyodideInstance: PyodideInstance | null = null;
 let initPromise: Promise<void> | null = null;
 let pytestPromise: Promise<void> | null = null;
+let httpPatchPromise: Promise<void> | null = null;
+let stdinBuffer: SharedArrayBuffer | null = null;
+
+function emitDisplay(json: string): void {
+  try {
+    const payload = JSON.parse(String(json)) as DisplayData;
+    const reply: WorkerOutbound = { type: "display", payload };
+    self.postMessage(reply);
+  } catch {
+    /* malformed payload: skip */
+  }
+}
+
+function readStdin(): string | null {
+  if (!stdinBuffer) {
+    throw new Error(
+      "input() needs cross-origin isolation (SharedArrayBuffer). " +
+        "Use `pnpm run test-web` or a vscode.dev session that sets COI.",
+    );
+  }
+  return waitForStdinLine(stdinBuffer, () => {
+    const reply: WorkerOutbound = { type: "stdinRequest" };
+    self.postMessage(reply);
+  });
+}
+
+function enableLiveEmit(): void {
+  if (!pyodideInstance) {
+    return;
+  }
+  pyodideInstance.globals.set("_pll_live_emit", emitDisplay);
+}
+
+function disableLiveEmit(): void {
+  if (!pyodideInstance) {
+    return;
+  }
+  pyodideInstance.runPython("_pll_live_emit = None");
+}
 
 async function ensurePyodide(indexUrl: string): Promise<void> {
   if (pyodideInstance) {
@@ -75,6 +129,7 @@ async function ensurePyodide(indexUrl: string): Promise<void> {
         throw new Error("loadPyodide not available after importScripts");
       }
       pyodideInstance = await self.loadPyodide({ indexURL: normalized });
+      pyodideInstance.setStdin({ stdin: readStdin, autoEOF: true });
       pyodideInstance.runPython(PYODIDE_BOOTSTRAP_PY);
       pyodideInstance.runPython(PLL_IMAGE_LIB_PY);
       pyodideInstance.runPython(PLL_TABLE_LIB_PY);
@@ -82,6 +137,19 @@ async function ensurePyodide(indexUrl: string): Promise<void> {
     })();
   }
   await initPromise;
+}
+
+async function ensureHttpShim(): Promise<void> {
+  if (!pyodideInstance) {
+    throw new Error("Pyodide not initialized");
+  }
+  if (!httpPatchPromise) {
+    const pyodide = pyodideInstance;
+    httpPatchPromise = pyodide.loadPackage("pyodide-http").then(() => {
+      pyodide.runPython(PYODIDE_HTTP_PATCH_PY);
+    });
+  }
+  await httpPatchPromise;
 }
 
 async function ensurePytest(): Promise<void> {
@@ -114,19 +182,27 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
   try {
     switch (data.type) {
       case "init": {
+        stdinBuffer = data.stdinBuffer ?? null;
         await ensurePyodide(data.indexUrl);
         const reply: WorkerOutbound = { id: data.id, type: "ready" };
         self.postMessage(reply);
         break;
       }
       case "runFile": {
-        const result = callPyFunction<RunResult>("_pll_run_file", [
-          data.code,
-          data.fileName,
-          data.sessionKey,
-        ]);
-        const reply: WorkerOutbound = { id: data.id, type: "result", result };
-        self.postMessage(reply);
+        enableLiveEmit();
+        try {
+          const result = callPyFunction<RunResult>("_pll_run_file", [
+            data.code,
+            data.fileName,
+            data.sessionKey,
+          ]);
+          // Already streamed live; returning them again would duplicate.
+          result.displays = [];
+          const reply: WorkerOutbound = { id: data.id, type: "result", result };
+          self.postMessage(reply);
+        } finally {
+          disableLiveEmit();
+        }
         break;
       }
       case "replEval": {
@@ -156,6 +232,18 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
         } finally {
           fn.destroy?.();
         }
+        break;
+      }
+      case "loadPackages": {
+        if (!pyodideInstance) {
+          throw new Error("Pyodide not initialized");
+        }
+        await pyodideInstance.loadPackagesFromImports(data.code);
+        if (NETWORK_IMPORT_RE.test(data.code)) {
+          await ensureHttpShim();
+        }
+        const reply: WorkerOutbound = { id: data.id, type: "packagesReady" };
+        self.postMessage(reply);
         break;
       }
       case "loadPytest": {

@@ -74,12 +74,24 @@ export class ReplSession implements vscode.Disposable {
     { stdout: string; stderr: string }
   >();
 
+  /**
+   * Session whose file is currently executing `input()`. The web runtime
+   * calls `provideStdin` while that run is blocked in the worker.
+   */
+  private stdinSession: Session | null = null;
+  private stdinPending: {
+    session: Session;
+    prefix: string;
+    resolve: (line: string | null) => void;
+  } | null = null;
+
   constructor(private readonly deps: ReplDeps) {
     deps.view.setHandlers({
       onSubmit: (code) => this.handleSubmit(code),
       onInterrupt: () => this.handleInterrupt(),
       onClearRequested: () => this.handleClearRequested(),
     });
+    deps.runtime.setStdinHandler(() => this.provideStdin());
 
     // Keep the visible session in sync with the active editor.
     this.editorWatcher = vscode.window.onDidChangeActiveTextEditor((editor) =>
@@ -109,6 +121,7 @@ export class ReplSession implements vscode.Disposable {
     // Switching active to this session ensures the user sees the run output
     // even if they're currently looking at a different file's session.
     this.setActive(session.key);
+    this.cancelStdin();
     return this.enqueue(() => this.executeFile(session, code, fileName, document));
   }
 
@@ -173,6 +186,8 @@ export class ReplSession implements vscode.Disposable {
       prompt: session.prompt,
       busy: this.computeVisibleBusy(session),
       status: this.computeVisibleStatus(),
+      awaitingInput: this.stdinPending?.session === session,
+      inputPrefix: this.stdinPending?.session === session ? this.stdinPending.prefix : "",
     });
   }
 
@@ -259,6 +274,13 @@ export class ReplSession implements vscode.Disposable {
   /* -------- Handlers from the view -------- */
 
   private handleSubmit(code: string): void {
+    if (
+      this.stdinPending &&
+      this.activeKey === this.stdinPending.session.key
+    ) {
+      this.fulfillStdin(code.split(/\r?\n/)[0] ?? "");
+      return;
+    }
     if (this.activeKey === null) return;
     const session = this.sessions.get(this.activeKey);
     if (!session) return;
@@ -266,6 +288,13 @@ export class ReplSession implements vscode.Disposable {
   }
 
   private handleInterrupt(): void {
+    if (
+      this.stdinPending &&
+      this.activeKey === this.stdinPending.session.key
+    ) {
+      this.fulfillStdin(null);
+      return;
+    }
     if (this.activeKey === null) return;
     const session = this.sessions.get(this.activeKey);
     if (!session) return;
@@ -359,6 +388,7 @@ export class ReplSession implements vscode.Disposable {
           return;
         }
       }
+      await this.ensurePackagesForRun(session, code);
       await this.deps.runtime.replEval(
         { code, sessionKey: session.key },
         (event) => this.handleEvent(session, event, code, "<repl>", undefined, level),
@@ -409,6 +439,8 @@ export class ReplSession implements vscode.Disposable {
         }
       }
 
+      await this.ensurePackagesForRun(session, code);
+
       let hasTests = false;
       try {
         hasTests = await this.deps.runtime.hasTests(code);
@@ -438,10 +470,16 @@ export class ReplSession implements vscode.Disposable {
       }
 
       this.setSessionBusy(session, true, "Running...");
-      await this.deps.runtime.runFile(
-        { code, fileName, sessionKey: session.key },
-        (event) => this.handleEvent(session, event, code, fileName, document, level),
-      );
+      this.stdinSession = session;
+      try {
+        await this.deps.runtime.runFile(
+          { code, fileName, sessionKey: session.key },
+          (event) => this.handleEvent(session, event, code, fileName, document, level),
+        );
+      } finally {
+        this.stdinSession = null;
+        this.cancelStdin();
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.feedStream(session, "stderr", `Internal error: ${msg}\n`);
@@ -449,6 +487,83 @@ export class ReplSession implements vscode.Disposable {
       this.flushStreams(session);
       this.setSessionBusy(session, false);
     }
+  }
+
+  /**
+   * Load any third-party packages the code imports (pandas, numpy, ...) before
+   * running it. Only reaches the runtime when the code actually has an import,
+   * so plain REPL lines don't pay a round-trip. Non-fatal: if a load fails, the
+   * import itself surfaces the error when the code runs.
+   */
+  private async ensurePackagesForRun(session: Session, code: string): Promise<void> {
+    if (!/(^|\n)[ \t]*(import|from)[ \t]+\S/.test(code)) {
+      return;
+    }
+    this.setSessionBusy(session, true, "Loading libraries...");
+    try {
+      await this.deps.runtime.ensurePackages(code);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // A SyntaxError here just means the file doesn't parse; the run itself
+      // will surface it. Only flag genuine load/network failures.
+      if (!/syntaxerror|invalid syntax/i.test(msg)) {
+        this.appendToSession(session, {
+          kind: "banner",
+          text: `Could not load libraries (${msg}). Continuing; imports may fail.`,
+        });
+      }
+    }
+  }
+
+  /**
+   * Called from the web runtime when the worker is blocked in `input()`.
+   * The unflushed stdout buffer is the prompt (`input("Choice: ")`).
+   */
+  private provideStdin(): Promise<string | null> {
+    const session = this.stdinSession;
+    if (!session) {
+      return Promise.resolve(null);
+    }
+    const buffers = this.streamBuffers.get(session.key);
+    const prefix = buffers ? buffers.stdout : "";
+    if (buffers) {
+      buffers.stdout = "";
+    }
+    this.setSessionBusy(session, true, "Waiting for input...");
+    if (this.isActive(session)) {
+      this.deps.view.setAwaitingInput(true, prefix);
+      this.deps.view.focusInput();
+    }
+    return new Promise((resolve) => {
+      this.stdinPending = { session, prefix, resolve };
+    });
+  }
+
+  private fulfillStdin(line: string | null): void {
+    const pending = this.stdinPending;
+    if (!pending) {
+      return;
+    }
+    this.stdinPending = null;
+    if (line !== null) {
+      this.appendToSession(pending.session, {
+        kind: "stdout",
+        text: pending.prefix + line,
+      });
+    }
+    if (this.isActive(pending.session)) {
+      this.deps.view.setAwaitingInput(false);
+      this.deps.view.setBusy(true, "Running...");
+    }
+    pending.resolve(line);
+  }
+
+  /** Unblock a waiting `input()` with EOF so a new run / interrupt can proceed. */
+  private cancelStdin(): void {
+    if (!this.stdinPending) {
+      return;
+    }
+    this.fulfillStdin(null);
   }
 
   private async runStaticChecks(

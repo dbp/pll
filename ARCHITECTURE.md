@@ -71,6 +71,58 @@ looks like it contains tests, rewrites asserts, collects `test_*` /
 `import pytest` (for example `pytest.approx`) because the package is
 loaded into that interpreter.
 
+## Third-party packages
+
+Before running a file or a prompt line that contains an `import`,
+`replSession` calls `runtime.ensurePackages(code)`, which delegates to
+Pyodide's `loadPackagesFromImports`. That scans the code for imports,
+maps them to packages in `pyodide-lock.json`, and loads the ones it
+recognizes (with their dependencies) — so `import pandas as pd` pulls in
+pandas, numpy, etc. Unknown imports (e.g. the user's own modules) are
+ignored and surface as normal `ImportError`s at run time. Wheels come
+from `indexURL`, falling back to the pinned jsdelivr CDN when they are
+not vendored locally, so the first load of a package needs the network.
+The call is gated on the code actually containing an `import`, so plain
+REPL lines never pay a round-trip.
+
+Pyodide does not connect Python's `urllib` to the host network, so
+`pd.read_csv(url)` / `requests` / `urllib` otherwise fail with "unknown
+url type: https". When the code imports a networked module
+(`NETWORK_IMPORT_RE` — pandas, requests, urllib, ...), `ensurePackages`
+also loads `pyodide-http` and runs `pyodide_http.patch_all()` once per
+interpreter, routing those reads through the host's fetch. This works in
+the web worker (synchronous XHR); the desktop Node host has no browser
+network, so URL reads there remain unsupported. Both the load and the
+patch are guarded so non-networked programs never load the shim.
+
+## Interactive `input()` (web)
+
+`input()` is synchronous Python, but the interactions view is
+asynchronous. The **web** host bridges that with two pieces:
+
+1. **Live output.** `_pll_push` in `pyodideBootstrap.py` optionally
+   calls `_pll_live_emit` (a JS callback) on every stdout/stderr write
+   and every image/table. The worker posts a `display` message so the
+   prompt of `input("Choice: ")` appears *before* the program blocks.
+2. **Blocking stdin.** Pyodide's `setStdin({ stdin, autoEOF: true })`
+   calls the JS `stdin` callback once per `input()`. That callback
+   cannot `await` a UI event (it is synchronous), so the worker
+   `Atomics.wait`s on a `SharedArrayBuffer` while the extension host
+   shows the input row. The host writes the line into the SAB and
+   `Atomics.notify`s. `autoEOF: true` is required: without it, Pyodide
+   drains stdin greedily and one `input()` would prompt several times.
+   Browsers forbid `TextDecoder` on a SharedArrayBuffer view, so the
+   worker copies the bytes into a private buffer before decoding.
+
+This needs **cross-origin isolation** (`SharedArrayBuffer`), which
+`pnpm run test-web` already enables with `--coi`. If a SAB cannot be
+created, `input()` raises instead of hanging.
+
+The **desktop** host runs Pyodide on the extension-host thread.
+Blocking there would freeze VS Code, so `input()` is replaced with a
+function that raises `RuntimeError`. A worker-thread port is still
+long-term (see the desktop runtime comment).
+
 ## Development
 
 ```bash
@@ -78,7 +130,7 @@ pnpm install
 pnpm run build         # one-shot build (also copies Pyodide assets into vendor/)
 pnpm run watch         # rebuild on change
 pnpm run vsce:package  # produce a .vsix (runs vscode:prepublish first)
-pnpm run smoke         # static analyzer + explainers + image library/runtime + tests
+pnpm run smoke         # static analyzer + explainers + image library/runtime + tests + pandas + input()
 ```
 
 ### Desktop extension
@@ -108,7 +160,8 @@ Three options, in increasing order of how close they are to production:
 
    The script enables `--coi` (cross-origin isolation) so Pyodide's
    workers / SharedArrayBuffer features work, and points the workspace
-   at `samples/` so you can open `hello.py` or `name_error.py`. First
+   at `samples/` so you can open `hello.py`, `name_error.py`, or
+   `input.py` (interactive `input()`). First
    run downloads vscode-web into `.vscode-test-web/` (~30 MB) and
    Playwright Chromium into `~/Library/Caches/ms-playwright/` (~150 MB);
    both are cached afterward.
