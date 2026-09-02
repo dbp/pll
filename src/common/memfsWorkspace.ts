@@ -20,12 +20,26 @@ export interface MemFS {
   writeFile(path: string, data: string | Uint8Array): void;
   readFile(path: string, opts?: { encoding?: string }): string | Uint8Array;
   readdir(path: string): string[];
-  stat(path: string): { mode: number; size: number };
+  stat(path: string): { mode: number; size: number; mtime?: Date | number };
+  utime(path: string, atime: number, mtime: number): void;
   isFile(mode: number): boolean;
   unlink(path: string): void;
 }
 
-let lastMounted = new Map<string, string>();
+interface MountSnapshot {
+  contents: string;
+  mtimeMs: number;
+}
+
+let lastMounted = new Map<string, MountSnapshot>();
+
+function mtimeMs(stat: { mtime?: Date | number }): number {
+  const m = stat.mtime;
+  if (m instanceof Date) {
+    return m.getTime();
+  }
+  return typeof m === "number" ? m : Number.NaN;
+}
 
 function joinCwd(FS: MemFS, name: string): string {
   const cwd = FS.cwd();
@@ -80,14 +94,25 @@ export function mountWorkspaceFiles(FS: MemFS, files: WorkspaceFile[]): void {
     if (utf8ByteLength(file.contents) > MAX_FILE_BYTES) {
       continue;
     }
-    FS.writeFile(joinCwd(FS, file.name), file.contents);
-    lastMounted.set(file.name, file.contents);
+    const path = joinCwd(FS, file.name);
+    FS.writeFile(path, file.contents);
+    // Zero mtime so a later open("w") / to_csv is visible even when the
+    // bytes are identical.
+    try {
+      FS.utime(path, 0, 0);
+    } catch {
+      /* keep the write-time mtime */
+    }
+    lastMounted.set(file.name, {
+      contents: file.contents,
+      mtimeMs: mtimeMs(FS.stat(path)),
+    });
   }
 }
 
 /**
- * Files in the work dir that are eligible for writeback and differ from
- * (or were not in) the last mount snapshot.
+ * Files in the work dir that are eligible for writeback and are new,
+ * rewritten (mtime changed), or different from the last mount snapshot.
  */
 export function collectChangedWorkspaceFiles(FS: MemFS): WorkspaceFile[] {
   ensureWorkDir(FS);
@@ -96,17 +121,21 @@ export function collectChangedWorkspaceFiles(FS: MemFS): WorkspaceFile[] {
     if (!isWritebackName(name)) {
       continue;
     }
+    const path = joinCwd(FS, name);
     let contents: string;
+    let stat: { mode: number; size: number; mtime?: Date | number };
     try {
-      const raw = FS.readFile(joinCwd(FS, name), { encoding: "utf8" });
+      const raw = FS.readFile(path, { encoding: "utf8" });
       contents = typeof raw === "string" ? raw : new TextDecoder().decode(raw);
+      stat = FS.stat(path);
     } catch {
       continue;
     }
     if (utf8ByteLength(contents) > MAX_FILE_BYTES) {
       continue;
     }
-    if (lastMounted.get(name) === contents) {
+    const prev = lastMounted.get(name);
+    if (prev && prev.contents === contents && prev.mtimeMs === mtimeMs(stat)) {
       continue;
     }
     out.push({ name, contents });

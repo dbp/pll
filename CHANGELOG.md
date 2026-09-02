@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Rewriting a file with the same contents still saves it and still
+  shows the **Saved … next to this file** banner.
 
 ## 0.0.6
 - Editor **keyboard** copy/paste is **not** supported on vscode-web /

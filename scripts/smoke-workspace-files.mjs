@@ -121,7 +121,7 @@ _buf.getvalue()
   expect(readOut.includes("name,mpg"), "open() should read the header");
   expect(readOut.includes("3"), "open() should see 3 data rows");
 
-  console.log("\n[3] unchanged files are not collected; open('w') is");
+  console.log("\n[3] unread files are not collected; open('w') is, even if bytes match");
   const unchanged = memfs.collectChangedWorkspaceFiles(FS);
   expect(
     unchanged.length === 0,
@@ -141,7 +141,7 @@ with open('helper.py', 'w') as f:
   const names = changed.map((f) => f.name).sort();
   console.log(`    collected=${JSON.stringify(names)}`);
   expect(names.includes("efficient_cars.csv"), "new csv should be collected");
-  expect(!names.includes("cars.csv"), "rewriting the same csv contents should not collect");
+  expect(names.includes("cars.csv"), "rewriting the same csv contents should still collect");
   expect(!names.includes("helper.py"), ".py must not be written back");
   const efficient = changed.find((f) => f.name === "efficient_cars.csv");
   expect(

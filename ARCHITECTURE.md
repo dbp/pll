@@ -127,9 +127,10 @@ files. Untitled editors have no folder; the work dir is still cleared
 so a previous run's files do not leak across.
 
 After the run (or REPL line), the worker reports data files that are
-new or different from that snapshot. PLL writes those back with
-`workspace.fs.writeFile` so students can open `home_loans.csv` in the
-explorer. `.py` files are mounted for `open` and for sibling imports
+new or were written (mtime changed, even if the bytes match — so two
+functions that write the same CSV both count). PLL writes those back
+with `workspace.fs.writeFile` so students can open `home_loans.csv` in
+the explorer. `.py` files are mounted for `open` and for sibling imports
 whose names are not already installed (a local `helper.py` still
 imports; a local `pandas.py` must not win over the real package). They
 are **not** written back. A short interactions banner lists what was
