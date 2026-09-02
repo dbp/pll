@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.5
 
 - Copy, cut, and paste shortcuts work in the interactions panel on
   vscode.dev. The browser workbench was swallowing Ctrl/Cmd+C/V before
