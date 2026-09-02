@@ -22,7 +22,12 @@ src/
 └── common/
     ├── workerProtocol.ts          Shared worker message types
     ├── stdinBuffer.ts             SharedArrayBuffer protocol for input()
+    ├── workspaceFilePolicy.ts     Which sibling files to mount / write back
+    ├── workspaceFiles.ts          vscode.workspace.fs snapshot + writeback
+    ├── memfsWorkspace.ts          Pyodide MEMFS mount / collect helpers
     ├── commands.ts                Run File / Show Interactions / Clear commands
+    ├── editorClipboard.ts         Palette PLL: Editor Copy/Cut/Paste (no keys)
+    ├── editorDefaults.ts          Clear leftover web C/V bindings; EditContext off
     ├── replSession.ts             Drives the interactions view: init,
     │                              REPL multi-line buffer, file runs, exec chain
     ├── interactionsView.ts        WebviewView provider for the integrated
@@ -103,6 +108,37 @@ the load and the patch are guarded so non-networked programs never
 load the shim. Browser requests still need CORS; desktop Node fetch
 does not.
 
+## Workspace files (`open` / `to_csv`)
+
+Pyodide's disk is an in-memory MEMFS. Workspace files are not there
+unless PLL copies them in. Both hosts already have
+`vscode.workspace.fs` (including github.dev virtual repos), so PLL does
+not mount Node `fs` or a browser File System Access tree.
+
+Before a file run (after static checks, before tests) and before each
+REPL evaluation, `replSession` lists **regular files in the same folder**
+as the script, prefers unsaved editor buffers, and sends text files
+(`.csv`, `.txt`, `.tsv`, `.json`, `.md`, `.dat`, `.xml`, `.py`) to the
+worker. The worker writes them into `/home/pyodide/pll_workspace` and
+`chdir`s there so `open("library_loans.csv")` and
+`pd.read_csv("library_loans.csv")` work. Names with `/`, `..`, or a
+leading dot are rejected. Size caps: 2 MiB per file, 8 MiB total, 50
+files. Untitled editors have no folder; the work dir is still cleared
+so a previous run's files do not leak across.
+
+After the run (or REPL line), the worker reports data files that are
+new or different from that snapshot. PLL writes those back with
+`workspace.fs.writeFile` so students can open `home_loans.csv` in the
+explorer. `.py` files are mounted for `open` and for sibling imports
+whose names are not already installed (a local `helper.py` still
+imports; a local `pandas.py` must not win over the real package). They
+are **not** written back. A short interactions banner lists what was
+saved. The work dir is cwd, so PLL drops `''` from `sys.path` and
+appends the work dir after site-packages.
+
+This is a snapshot around the run, not a live VFS: inspect output after
+the program finishes. Binary files and subdirectories are ignored.
+
 ## Interactive `input()`
 
 `input()` is synchronous Python, but the interactions view is
@@ -136,7 +172,7 @@ pnpm install
 pnpm run build         # one-shot build (also copies Pyodide assets into vendor/)
 pnpm run watch         # rebuild on change
 pnpm run vsce:package  # produce a .vsix (runs vscode:prepublish first)
-pnpm run smoke         # build, then static analyzer + explainers + images + tables + tests + pandas (incl. URL) + input() + desktop worker parity
+pnpm run smoke         # build, then static analyzer + explainers + images + tables + tests + pandas (incl. URL) + input() + workspace files + desktop worker parity
 ```
 
 ### Desktop extension
@@ -165,10 +201,13 @@ Three options, in increasing order of how close they are to production:
    ```
 
    The script enables `--coi` (cross-origin isolation) so Pyodide's
-   workers / SharedArrayBuffer features work, and points the workspace
-   at `samples/` so you can open `hello.py`, `name_error.py`,
-   `input.py` (interactive `input()`), or `pandas.py` (`pd.read_csv`,
-   including a URL). First
+   workers / SharedArrayBuffer features work. It also grants
+   `--permission=clipboard-read` / `clipboard-write` (COI otherwise
+   blocks the clipboard API). That does **not** make editor
+   Ctrl+C/V work; see [Clipboard](#clipboard-editor-and-interactions-panel).
+   The workspace is `samples/` so you can open `hello.py`, `name_error.py`,
+   `input.py` (interactive `input()`), `pandas.py` (`pd.read_csv`,
+   including a URL), or `files.py` (`open` / `to_csv` on a sibling CSV). First
    run downloads vscode-web into `.vscode-test-web/` (~30 MB) and
    Playwright Chromium into `~/Library/Caches/ms-playwright/` (~150 MB);
    both are cached afterward.
@@ -181,6 +220,32 @@ Three options, in increasing order of how close they are to production:
    run `pnpm run setup:browser`.
 
 3. **Real `vscode.dev`** with the published or sideloaded extension.
+
+## Clipboard (editor and interactions panel)
+
+**Interactions panel:** Ctrl/Cmd+C/X/V and right-click work (0.0.5).
+The workbench used to swallow those keys before the webview saw them.
+
+**Editor (Monaco) on vscode-web / `test-web`:** keyboard copy/paste is
+**not supported** and is abandoned. What works:
+
+- Editor **context menu** (right-click)
+- Command Palette **PLL: Editor Copy/Cut/Paste** (`pll.editor.*`, via
+  `vscode.env.clipboard`)
+
+What does not: physical Ctrl/Cmd+C/X/V in the editor. vscode-web
+**does not dispatch** those keys to commands so the browser can fire
+`copy` / `paste` / `cut` without a permission prompt. Binding them
+makes the workbench `preventDefault` and then **not** run the command
+(palette still works). Leaving them unbound still does not give working
+native copy here (`test-web` is Insiders with EditContext; COI also
+restricts the clipboard). Do not bind `pll.editor.*` or
+`editor.action.clipboard*Action` to those keys; activation strips
+leftover `pll.editor.*` user bindings. PLL still turns EditContext off
+(`editor.editContext`); that did not restore the keys.
+
+`pnpm run test-web:clipboard` (Playwright `keyboard.press`) is **not**
+a real OS keypress and is not evidence that copy works.
 
 ## Configuration
 

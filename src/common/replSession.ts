@@ -11,6 +11,7 @@ import {
 } from "./interactionsView";
 import { DEFAULT_LEVEL, levelHasStaticChecks, parseLevel, type Level } from "./level";
 import type { ExecutionEvent, PythonRuntime } from "./types";
+import { collectSiblingFiles, folderUri, writeBackSiblingFiles } from "./workspaceFiles";
 
 export interface ReplDeps {
   runtime: PythonRuntime;
@@ -39,6 +40,8 @@ interface Session {
   history: string[];
   prompt: PromptKind;
   busy: boolean;
+  /** Shown while `busy` (e.g. "Loading libraries..."). */
+  status?: string;
   continuationLines: string[];
   continuing: boolean;
   /**
@@ -185,7 +188,7 @@ export class ReplSession implements vscode.Disposable {
       entries: session.entries,
       prompt: session.prompt,
       busy: this.computeVisibleBusy(session),
-      status: this.computeVisibleStatus(),
+      status: this.visibleStatus(session),
       awaitingInput: this.stdinPending?.session === session,
       inputPrefix: this.stdinPending?.session === session ? this.stdinPending.prefix : "",
     });
@@ -205,6 +208,7 @@ export class ReplSession implements vscode.Disposable {
         history: [],
         prompt: "primary",
         busy: false,
+        status: undefined,
         continuationLines: [],
         continuing: false,
         lastLevel: null,
@@ -230,8 +234,14 @@ export class ReplSession implements vscode.Disposable {
     return !this.initialized || session.busy;
   }
 
-  private computeVisibleStatus(): string | undefined {
-    return !this.initialized ? "Loading Python..." : undefined;
+  private visibleStatus(session: Session): string | undefined {
+    if (!this.initialized) {
+      return "Loading Python...";
+    }
+    if (session.busy) {
+      return session.status ?? "Running...";
+    }
+    return undefined;
   }
 
   private refreshActiveBusy(): void {
@@ -240,7 +250,7 @@ export class ReplSession implements vscode.Disposable {
     if (!session) return;
     this.deps.view.setBusy(
       this.computeVisibleBusy(session),
-      this.computeVisibleStatus(),
+      this.visibleStatus(session),
     );
   }
 
@@ -258,11 +268,9 @@ export class ReplSession implements vscode.Disposable {
 
   private setSessionBusy(session: Session, busy: boolean, status?: string): void {
     session.busy = busy;
+    session.status = busy ? (status ?? this.visibleStatus(session) ?? "Running...") : undefined;
     if (this.isActive(session)) {
-      this.deps.view.setBusy(
-        this.computeVisibleBusy(session),
-        status ?? this.computeVisibleStatus(),
-      );
+      this.deps.view.setBusy(this.computeVisibleBusy(session), this.visibleStatus(session));
     }
   }
 
@@ -380,19 +388,30 @@ export class ReplSession implements vscode.Disposable {
 
   private async executeRepl(session: Session, code: string): Promise<void> {
     const level = session.lastLevel ?? DEFAULT_LEVEL;
-    this.setSessionBusy(session, true);
+    this.setSessionBusy(session, true, "Starting...");
     try {
       if (levelHasStaticChecks(level)) {
+        this.setSessionBusy(session, true, "Checking...");
         const blocked = await this.runReplStaticChecks(session, code, level);
         if (blocked) {
           return;
         }
       }
       await this.ensurePackagesForRun(session, code);
-      await this.deps.runtime.replEval(
-        { code, sessionKey: session.key },
-        (event) => this.handleEvent(session, event, code, "<repl>", undefined, level),
-      );
+      this.setSessionBusy(session, true, "Loading files...");
+      const workspaceReady = await this.syncWorkspaceIn(session);
+      this.setSessionBusy(session, true, "Running...");
+      try {
+        await this.deps.runtime.replEval(
+          { code, sessionKey: session.key },
+          (event) => this.handleEvent(session, event, code, "<repl>", undefined, level),
+        );
+      } finally {
+        this.flushStreams(session);
+        if (workspaceReady) {
+          await this.syncWorkspaceOut(session);
+        }
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.feedStream(session, "stderr", `Internal error: ${msg}\n`);
@@ -414,7 +433,7 @@ export class ReplSession implements vscode.Disposable {
     session.continuing = false;
     this.setSessionPrompt(session, "primary");
     this.clearSession(session);
-    this.setSessionBusy(session, true);
+    this.setSessionBusy(session, true, this.initialized ? "Starting..." : "Loading Python...");
 
     this.deps.diagnostics.clear(document.uri);
     this.deps.view.registerFile(fileName, document.uri);
@@ -427,8 +446,17 @@ export class ReplSession implements vscode.Disposable {
       this.deps.view.setTitle(this.titleFor(session));
     }
 
+    let workspaceReady = false;
     try {
+      if (!this.initialized) {
+        const ok = await this.ensureInitialized();
+        if (!ok) {
+          return;
+        }
+        this.setSessionBusy(session, true, "Starting...");
+      }
       if (levelHasStaticChecks(level)) {
+        this.setSessionBusy(session, true, "Checking...");
         const blocked = await this.runStaticChecks(session, code, fileName, level, document);
         if (blocked) {
           this.appendToSession(session, {
@@ -440,6 +468,8 @@ export class ReplSession implements vscode.Disposable {
       }
 
       await this.ensurePackagesForRun(session, code);
+      this.setSessionBusy(session, true, "Loading files...");
+      workspaceReady = await this.syncWorkspaceIn(session);
 
       let hasTests = false;
       try {
@@ -485,7 +515,65 @@ export class ReplSession implements vscode.Disposable {
       this.feedStream(session, "stderr", `Internal error: ${msg}\n`);
     } finally {
       this.flushStreams(session);
+      if (workspaceReady) {
+        await this.syncWorkspaceOut(session);
+      }
       this.setSessionBusy(session, false);
+    }
+  }
+
+  /**
+   * Snapshot sibling files into Pyodide so `open` / `read_csv` see the
+   * folder next to the running script. Always remounts (even if empty)
+   * so a previous file's leftovers do not leak into this run.
+   */
+  private async syncWorkspaceIn(session: Session): Promise<boolean> {
+    try {
+      const files = folderUri(session.documentUri)
+        ? await collectSiblingFiles(session.documentUri)
+        : [];
+      await this.deps.runtime.mountWorkspaceFiles(files);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendToSession(session, {
+        kind: "banner",
+        text: `Could not load files next to this script (${msg}). open() may fail.`,
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Copy data files Python created or changed back into the script's folder.
+   */
+  private async syncWorkspaceOut(session: Session): Promise<void> {
+    if (!folderUri(session.documentUri)) {
+      return;
+    }
+    try {
+      const changed = await this.deps.runtime.collectWorkspaceFiles();
+      if (changed.length === 0) {
+        return;
+      }
+      const written = await writeBackSiblingFiles(session.documentUri, changed);
+      if (written.length === 1) {
+        this.appendToSession(session, {
+          kind: "banner",
+          text: `Saved ${written[0]} next to this file.`,
+        });
+      } else if (written.length > 1) {
+        this.appendToSession(session, {
+          kind: "banner",
+          text: `Saved ${written.join(", ")} next to this file.`,
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendToSession(session, {
+        kind: "banner",
+        text: `Could not save files next to this script (${msg}).`,
+      });
     }
   }
 

@@ -227,7 +227,25 @@ export class InteractionsView
   // Optional callbacks - the session manager installs these.
   private handlers: InteractionsHandlers | null = null;
 
-  constructor(private readonly extensionUri: vscode.Uri) {}
+  constructor(private readonly extensionUri: vscode.Uri) {
+    // Any editor activity must drop our clipboard when-clause. Switching
+    // the active editor is not enough: clicking back into the already
+    // active file does not fire that event, and a sticky
+    // `pllInteractionsFocus` would steal Ctrl/C/V from the editor.
+    this.disposables.push(
+      vscode.window.onDidChangeActiveTextEditor(() => {
+        void vscode.commands.executeCommand("setContext", "pllInteractionsFocus", false);
+      }),
+      vscode.window.onDidChangeTextEditorSelection((event) => {
+        if (
+          event.kind === vscode.TextEditorSelectionChangeKind.Mouse ||
+          event.kind === vscode.TextEditorSelectionChangeKind.Keyboard
+        ) {
+          void vscode.commands.executeCommand("setContext", "pllInteractionsFocus", false);
+        }
+      }),
+    );
+  }
 
   setHandlers(handlers: InteractionsHandlers): void {
     this.handlers = handlers;
@@ -434,9 +452,15 @@ export class InteractionsView
 
     this.disposables.push(
       view.webview.onDidReceiveMessage((msg) => this.handleMessage(msg)),
+      view.onDidChangeVisibility(() => {
+        if (!view.visible) {
+          void vscode.commands.executeCommand("setContext", "pllInteractionsFocus", false);
+        }
+      }),
       view.onDidDispose(() => {
         this.view = null;
         this.webviewReady = false;
+        void vscode.commands.executeCommand("setContext", "pllInteractionsFocus", false);
       }),
     );
   }

@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+## 0.0.6
+- Editor **keyboard** copy/paste is **not** supported on vscode-web /
+  `test-web` and is abandoned. vscode-web does not dispatch
+  Ctrl/Cmd+C/V to commands (so the browser can copy without a
+  prompt); binding those keys swallows them without running anything,
+  and leaving them unbound still does not give working native copy in
+  this setup. Use the editor **context menu** (right-click) or
+  Command Palette **PLL: Editor Copy/Paste**. The interactions panel
+  shortcuts from 0.0.5 are unchanged.
+- The interactions pane shows a status in the empty stream while a
+  run is preparing (Loading Python..., Loading libraries...,
+  Running...) so a slow first import is not a blank wait.
+- Files next to your Python script are visible to `open()`,
+  `pd.read_csv("data.csv")`, and `to_csv` on **desktop and web**. After
+  the run, new or changed data files (CSV, text, JSON, …) are saved
+  back into that folder so you can open them in the editor. Python
+  source files are not overwritten. A sibling `pandas.py` (as in
+  `samples/`) no longer shadows the real pandas library.
+
 ## 0.0.5
 
 - Copy, cut, and paste shortcuts work in the interactions panel on

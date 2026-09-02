@@ -10,6 +10,12 @@ import {
   type RawStaticFinding,
   type TestRunResult,
 } from "../common/pyodideRunner";
+import {
+  collectChangedWorkspaceFiles,
+  ensureWorkDir,
+  mountWorkspaceFiles,
+  type MemFS,
+} from "../common/memfsWorkspace";
 import { waitForStdinLine } from "../common/stdinBuffer";
 import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "../common/workerProtocol";
 
@@ -26,6 +32,7 @@ interface PyodideInstance {
     autoEOF?: boolean;
     isatty?: boolean;
   }): void;
+  FS: MemFS;
   globals: {
     get(name: string): PyCallable;
     set(name: string, value: unknown): void;
@@ -102,6 +109,7 @@ async function ensurePyodide(indexUrl: string): Promise<void> {
       pyodideInstance.runPython(PLL_IMAGE_LIB_PY);
       pyodideInstance.runPython(PLL_TABLE_LIB_PY);
       pyodideInstance.runPython(PYODIDE_INSTALL_PY);
+      ensureWorkDir(pyodideInstance.FS);
     })();
   }
   await initPromise;
@@ -239,6 +247,24 @@ self.onmessage = async (event: MessageEvent<WorkerInbound>) => {
         ]) ?? [];
         const reply: WorkerOutbound = { id: data.id, type: "static", result };
         self.postMessage(reply);
+        break;
+      }
+      case "mountWorkspace": {
+        if (!pyodideInstance) {
+          throw new Error("Pyodide not initialized");
+        }
+        mountWorkspaceFiles(pyodideInstance.FS, data.files);
+        const mounted: WorkerOutbound = { id: data.id, type: "workspaceReady" };
+        self.postMessage(mounted);
+        break;
+      }
+      case "collectWorkspace": {
+        if (!pyodideInstance) {
+          throw new Error("Pyodide not initialized");
+        }
+        const files = collectChangedWorkspaceFiles(pyodideInstance.FS);
+        const collected: WorkerOutbound = { id: data.id, type: "workspaceFiles", files };
+        self.postMessage(collected);
         break;
       }
     }

@@ -1,12 +1,14 @@
 import * as vscode from "vscode";
 import { registerCommands } from "./common/commands";
 import { Diagnostics } from "./common/diagnostics";
+import { disableEditContext } from "./common/editorDefaults";
 import { checkConflictingExtensions } from "./common/extensionGuard";
 import { InteractionsView } from "./common/interactionsView";
 import { ReplSession } from "./common/replSession";
 import { DesktopPyodideRuntime } from "./desktop/pyodideRuntime";
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  await disableEditContext();
   const runtime = new DesktopPyodideRuntime(context.extensionPath);
   const diagnostics = new Diagnostics(context.extensionUri);
   const view = new InteractionsView(context.extensionUri);

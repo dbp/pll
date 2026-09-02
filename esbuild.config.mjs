@@ -87,7 +87,23 @@ const desktopWorkerOptions = {
   target: ["node18"],
 };
 
-const allConfigs = [desktopOptions, desktopWorkerOptions, webExtensionOptions, webWorkerOptions];
+/** Policy + MEMFS helpers for smoke tests (not part of the extension). */
+const testLibOptions = {
+  ...baseOptions,
+  entryPoints: ["src/common/memfsWorkspace.ts", "src/common/workspaceFilePolicy.ts"],
+  outdir: "out/test",
+  platform: "node",
+  format: "cjs",
+  target: ["node18"],
+};
+
+const allConfigs = [
+  desktopOptions,
+  desktopWorkerOptions,
+  webExtensionOptions,
+  webWorkerOptions,
+  testLibOptions,
+];
 
 copyPyodideAssets();
 

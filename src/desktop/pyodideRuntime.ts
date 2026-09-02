@@ -12,6 +12,7 @@ import type {
   RunFileRequest,
   StaticAnalyzeRequest,
 } from "../common/types";
+import type { WorkspaceFile } from "../common/workspaceFilePolicy";
 import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "../common/workerProtocol";
 
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -24,7 +25,9 @@ type AnyReply =
   | RunResult
   | RawReplCheck
   | RawStaticFinding[]
-  | TestRunResult;
+  | TestRunResult
+  | "workspaceReady"
+  | WorkspaceFile[];
 
 interface Pending {
   resolve: (value: AnyReply) => void;
@@ -181,6 +184,16 @@ export class DesktopPyodideRuntime implements PythonRuntime {
     return result ?? [];
   }
 
+  async mountWorkspaceFiles(files: WorkspaceFile[]): Promise<void> {
+    await this.initialize();
+    await this.send({ type: "mountWorkspace", files });
+  }
+
+  async collectWorkspaceFiles(): Promise<WorkspaceFile[]> {
+    await this.initialize();
+    return (await this.send({ type: "collectWorkspace" })) as WorkspaceFile[];
+  }
+
   dispose(): void {
     void this.worker?.terminate();
     this.worker = null;
@@ -249,6 +262,12 @@ export class DesktopPyodideRuntime implements PythonRuntime {
         break;
       case "static":
         pending.resolve(msg.result);
+        break;
+      case "workspaceReady":
+        pending.resolve("workspaceReady");
+        break;
+      case "workspaceFiles":
+        pending.resolve(msg.files);
         break;
       case "error":
         pending.reject(new Error(msg.message));

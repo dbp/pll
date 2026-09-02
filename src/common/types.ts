@@ -110,6 +110,7 @@ export interface ReplCheckResult {
 
 import type { Level } from "./level";
 import type { RawStaticFinding } from "./pyodideRunner";
+import type { WorkspaceFile } from "./workspaceFilePolicy";
 
 export interface StaticAnalyzeRequest {
   code: string;
@@ -145,6 +146,17 @@ export interface PythonRuntime {
    * surface SyntaxErrors).
    */
   staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]>;
+  /**
+   * Copy sibling workspace files into Pyodide's work directory so
+   * `open("data.csv")` / `pd.read_csv("data.csv")` see them. Replaces any
+   * files from a previous mount.
+   */
+  mountWorkspaceFiles(files: WorkspaceFile[]): Promise<void>;
+  /**
+   * Data files Python created or changed since the last mount, to write
+   * back next to the running script.
+   */
+  collectWorkspaceFiles(): Promise<WorkspaceFile[]>;
   /**
    * Register the handler used when a running program calls `input()`.
    * Both hosts block the Pyodide worker until this resolves with a line

@@ -183,6 +183,18 @@ You can also `import pandas as pd` and read a CSV from a URL with
 browser. In the browser, the site must allow cross-origin requests
 (CORS).
 
+## Files next to your program
+
+`open("data.csv")` and `pd.read_csv("data.csv")` read files that sit in
+the **same folder** as the `.py` file you ran. That works in desktop
+VS Code and in the browser (including vscode.dev). After the program
+finishes, files it wrote or changed — for example `to_csv("out.csv")`
+or `open("out.csv", "w")` — show up in that folder. You can open them
+in the editor. PLL does not overwrite your `.py` files.
+
+Untitled editors (not yet saved to a folder) have no sibling files to
+load or save.
+
 ## Friendlier errors
 
 If you use a name that is not defined, PLL rewrites Python's `NameError`

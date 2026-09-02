@@ -186,6 +186,79 @@ async function main() {
     } finally {
       server.close();
     }
+
+    console.log("\n[4] sibling files via mountWorkspace / collectWorkspace");
+    await session.send({
+      type: "mountWorkspace",
+      files: [
+        { name: "cars.csv", contents: CARS_CSV },
+        { name: "../escape.csv", contents: "nope\n" },
+      ],
+    });
+    const fileCode = [
+      "with open('cars.csv') as f:",
+      "    rows = f.readlines()",
+      "print(len(rows) - 1)",
+      "with open('home_loans.csv', 'w') as f:",
+      "    f.write('title,days\\n')",
+      "    f.write('Dune,40\\n')",
+    ].join("\n");
+    const fileReply = await session.send({
+      type: "runFile",
+      code: fileCode,
+      fileName: "files.py",
+      sessionKey: "desktop-files",
+    });
+    const fileResult = fileReply.result;
+    console.log(
+      `    ok=${fileResult.ok} stdout=${JSON.stringify(fileResult.stdout)} error=${fileResult.error_type || ""}`,
+    );
+    expect(fileResult.ok === true, "open() program should succeed: " + (fileResult.error_message || ""));
+    expect(
+      String(fileResult.stdout).includes("3"),
+      "open() should print 3 data rows, got " + JSON.stringify(fileResult.stdout),
+    );
+
+    const collected = await session.send({ type: "collectWorkspace" });
+    const collectedNames = (collected.files ?? []).map((f) => f.name).sort();
+    console.log(`    collected=${JSON.stringify(collectedNames)}`);
+    expect(collectedNames.includes("home_loans.csv"), "new csv should be collected");
+    expect(!collectedNames.includes("cars.csv"), "unchanged cars.csv should not be collected");
+    expect(!collectedNames.includes("escape.csv"), "rejected path must not appear");
+    const homeLoans = (collected.files ?? []).find((f) => f.name === "home_loans.csv");
+    expect(
+      homeLoans !== undefined && homeLoans.contents.includes("Dune,40"),
+      "home_loans.csv should contain the written row",
+    );
+
+    const localPandas = [
+      "import pandas as pd",
+      "df = pd.read_csv('cars.csv')",
+      "df[df['mpg'] >= 30].to_csv('efficient_pandas.csv', index=False)",
+      "print(len(df))",
+    ].join("\n");
+    await session.send({ type: "loadPackages", code: localPandas });
+    await session.send({
+      type: "mountWorkspace",
+      files: [{ name: "cars.csv", contents: CARS_CSV }],
+    });
+    const pandasReply = await session.send({
+      type: "runFile",
+      code: localPandas,
+      fileName: "pandas_local.py",
+      sessionKey: "desktop-pandas-local",
+    });
+    expect(
+      pandasReply.result.ok === true,
+      "local pd.read_csv should succeed: " + (pandasReply.result.error_message || ""),
+    );
+    const pandasCollected = await session.send({ type: "collectWorkspace" });
+    const pandasFile = (pandasCollected.files ?? []).find((f) => f.name === "efficient_pandas.csv");
+    expect(!!pandasFile, "to_csv should be collected from the desktop worker");
+    expect(
+      pandasFile !== undefined && pandasFile.contents.includes("honda"),
+      "efficient_pandas.csv should contain honda",
+    );
   } finally {
     await worker.terminate();
   }

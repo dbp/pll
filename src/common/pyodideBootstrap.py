@@ -28,6 +28,33 @@ import ast as _ast
 import codeop as _codeop
 import contextlib
 import json as _pll_json
+import sys as _sys
+
+# Must match PLL_WORK_DIR in memfsWorkspace.ts. Sibling files are mounted
+# here and it is cwd, so open("cars.csv") works. It must not sit first on
+# sys.path or a neighboring pandas.py wins over the real package.
+_PLL_WORK_DIR = "/home/pyodide/pll_workspace"
+
+
+def _pll_protect_import_path():
+    """Keep sibling .py files from shadowing installed packages.
+
+    Python puts '' (cwd) first on sys.path. After chdir to the work dir,
+    import pandas would load a mounted pandas.py. Drop the empty entry,
+    append the work dir so unique sibling modules still import, and evict
+    anything already loaded from that folder (a failed pandas.py import
+    leaves a poisoned sys.modules entry).
+    """
+    while "" in _sys.path:
+        _sys.path.remove("")
+    while _PLL_WORK_DIR in _sys.path:
+        _sys.path.remove(_PLL_WORK_DIR)
+    _sys.path.append(_PLL_WORK_DIR)
+    prefix = _PLL_WORK_DIR + "/"
+    for name, mod in list(_sys.modules.items()):
+        filename = getattr(mod, "__file__", None)
+        if isinstance(filename, str) and filename.startswith(prefix):
+            _sys.modules.pop(name, None)
 
 # Per-session globals dicts, keyed by session_key (e.g. document URI).
 # Created lazily; initialized from `_pll_initial_globals`.
@@ -295,6 +322,7 @@ def _pll_run_file(code, filename, session_key):
     # Each Run File starts with a clean slate for this session: discard any
     # names defined by a previous Run File of the same session or by REPL
     # exploration since then.
+    _pll_protect_import_path()
     user_globals = _pll_reset_session(session_key)
     _pll_displays.clear()
     try:
@@ -534,6 +562,7 @@ def _pll_run_tests(code, filename):
         "displays": [],
     }
     _pll_displays.clear()
+    _pll_protect_import_path()
 
     try:
         tree = _ast.parse(code, filename=display_name, mode="exec")
@@ -631,6 +660,7 @@ def _pll_repl_eval(code, session_key):
         "displays": [],
     }
     _pll_displays.clear()
+    _pll_protect_import_path()
     user_globals = _pll_get_session(session_key)
     filename = "<repl>"
     try:

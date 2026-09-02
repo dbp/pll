@@ -33,7 +33,7 @@
 (function () {
   const vscode = acquireVsCodeApi();
 
-  /** @type {{ mode: "session" | "empty", emptyMessage: string, title: string, entries: any[], prompt: "primary" | "continuation", busy: boolean, awaitingInput: boolean, inputPrefix: string, history: string[] }} */
+  /** @type {{ mode: "session" | "empty", emptyMessage: string, title: string, entries: any[], prompt: "primary" | "continuation", busy: boolean, status: string, awaitingInput: boolean, inputPrefix: string, history: string[] }} */
   const state = vscode.getState() ?? {
     mode: "empty",
     emptyMessage: "Open a Python file to start an interactions session.",
@@ -41,12 +41,14 @@
     entries: [],
     prompt: "primary",
     busy: false,
+    status: "",
     awaitingInput: false,
     inputPrefix: "",
     history: [],
   };
   if (typeof state.awaitingInput !== "boolean") state.awaitingInput = false;
   if (typeof state.inputPrefix !== "string") state.inputPrefix = "";
+  if (typeof state.status !== "string") state.status = "";
 
   const body = document.body;
   const titleEl = document.getElementById("title");
@@ -97,13 +99,15 @@
 
   function setBusy(busy, status) {
     state.busy = busy;
+    state.status = busy ? (status || "Running...") : "";
     if (!busy) {
       state.awaitingInput = false;
       state.inputPrefix = "";
       setPromptText();
     }
-    statusEl.textContent = busy ? (status || "Running...") : "";
+    statusEl.textContent = state.status;
     applyInputEnabled();
+    refreshEmptyIfNeeded();
     persist();
   }
 
@@ -127,11 +131,27 @@
 
   function renderEmpty() {
     empty.innerHTML = "";
+    const busyWait = state.mode === "session" && state.busy;
+    empty.classList.toggle("busy", busyWait);
+    if (busyWait) {
+      const spinner = document.createElement("span");
+      spinner.className = "spinner";
+      spinner.setAttribute("aria-hidden", "true");
+      empty.appendChild(spinner);
+    }
     const span = document.createElement("span");
-    span.textContent = state.mode === "empty"
-      ? state.emptyMessage
-      : SESSION_EMPTY_TEXT;
+    span.textContent = busyWait
+      ? (state.status || "Running...")
+      : state.mode === "empty"
+        ? state.emptyMessage
+        : SESSION_EMPTY_TEXT;
     empty.appendChild(span);
+  }
+
+  function refreshEmptyIfNeeded() {
+    if (state.entries.length === 0 && empty.parentNode) {
+      renderEmpty();
+    }
   }
 
   function renderAll() {
@@ -635,8 +655,9 @@
       historyNext();
       return;
     }
-    if (event.key === "c" && event.ctrlKey && !event.shiftKey && !event.altKey) {
-      // Use Ctrl+C only if no selection - otherwise let the user copy.
+    const mod = event.ctrlKey || event.metaKey;
+    if (event.key === "c" && mod && !event.shiftKey && !event.altKey) {
+      // Use Ctrl/Cmd+C only if no selection - otherwise let the user copy.
       if (textarea.selectionStart === textarea.selectionEnd) {
         event.preventDefault();
         textarea.value = "";
@@ -740,12 +761,26 @@
   function reportViewFocus(focused) {
     vscode.postMessage({ type: "viewFocus", focused });
   }
-  window.addEventListener("focus", () => reportViewFocus(true));
-  window.addEventListener("blur", () => reportViewFocus(false));
-  document.addEventListener("focusin", () => reportViewFocus(true));
-  if (document.hasFocus()) {
-    reportViewFocus(true);
+  let blurTimer = 0;
+  function setViewFocus(focused) {
+    if (focused) {
+      window.clearTimeout(blurTimer);
+      blurTimer = 0;
+      reportViewFocus(true);
+      return;
+    }
+    // vscode.dev / the workbench can blur the iframe while handling our
+    // copy/paste keybinding. Wait so `pllInteractionsFocus` stays true
+    // long enough for the when-clause to match.
+    window.clearTimeout(blurTimer);
+    blurTimer = window.setTimeout(() => {
+      blurTimer = 0;
+      reportViewFocus(false);
+    }, 250);
   }
+  window.addEventListener("focus", () => setViewFocus(true));
+  window.addEventListener("blur", () => setViewFocus(false));
+  document.addEventListener("focusin", () => setViewFocus(true));
 
   // Initial render --------------------------------------------
 

@@ -1,12 +1,22 @@
 import * as vscode from "vscode";
 import { registerCommands } from "../common/commands";
 import { Diagnostics } from "../common/diagnostics";
+import {
+  clearWebClipboardKeybindings,
+  disableEditContext,
+} from "../common/editorDefaults";
 import { checkConflictingExtensions } from "../common/extensionGuard";
 import { InteractionsView } from "../common/interactionsView";
 import { ReplSession } from "../common/replSession";
 import { WebPyodideRuntime } from "./pyodideRuntime";
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  await disableEditContext();
+  try {
+    await clearWebClipboardKeybindings();
+  } catch (err) {
+    console.error("PLL: could not clear web clipboard keybindings", err);
+  }
   const runtime = new WebPyodideRuntime(context.extensionUri);
   const diagnostics = new Diagnostics(context.extensionUri);
   const view = new InteractionsView(context.extensionUri);

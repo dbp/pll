@@ -2,7 +2,7 @@
   "name": "python-language-levels",
   "displayName": "Python Language Levels",
   "description": "Beginner-friendly integrated Python REPL with inline images, language levels, and friendly errors. Powered by Pyodide. Works in desktop VS Code and vscode.dev.",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "publisher": "pll",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -43,6 +43,7 @@
   "main": "./dist/extension.js",
   "browser": "./dist/web/extension.js",
   "activationEvents": [
+    "onStartupFinished",
     "onLanguage:python",
     "onView:pllInteractionsView"
   ],
@@ -63,26 +64,18 @@
       {
         "command": "pll.clearInteractions",
         "title": "PLL: Clear Interactions"
-      }
-    ],
-    "keybindings": [
-      {
-        "command": "pll.interactions.copy",
-        "key": "ctrl+c",
-        "mac": "cmd+c",
-        "when": "isWeb && (pllInteractionsFocus || focusedView == pllInteractionsView)"
       },
       {
-        "command": "pll.interactions.cut",
-        "key": "ctrl+x",
-        "mac": "cmd+x",
-        "when": "isWeb && (pllInteractionsFocus || focusedView == pllInteractionsView)"
+        "command": "pll.editor.copy",
+        "title": "PLL: Editor Copy"
       },
       {
-        "command": "pll.interactions.paste",
-        "key": "ctrl+v",
-        "mac": "cmd+v",
-        "when": "isWeb && (pllInteractionsFocus || focusedView == pllInteractionsView)"
+        "command": "pll.editor.cut",
+        "title": "PLL: Editor Cut"
+      },
+      {
+        "command": "pll.editor.paste",
+        "title": "PLL: Editor Paste"
       }
     ],
     "menus": {
@@ -146,8 +139,13 @@
         "editor.formatOnPaste": false,
         "editor.formatOnType": false,
         "editor.stickyScroll.enabled": false,
-        "editor.linkedEditing": false
+        "editor.linkedEditing": false,
+        "editor.editContext": false,
+        "editor.experimentalEditContextEnabled": false
       },
+      "editor.editContext": false,
+      "editor.experimentalEditContextEnabled": false,
+      "workbench.startupEditor": "none",
       "github.copilot.enable": {
         "python": false
       },
@@ -218,9 +216,10 @@
     "vsce:package": "vsce package --no-dependencies",
     "vsce:publish": "vsce publish --no-dependencies",
     "setup:browser": "playwright install chromium",
-    "test-web": "pnpm run setup:browser && pnpm run build && vscode-test-web --browser=chromium --coi --extensionDevelopmentPath=. samples",
-    "test-web:server": "pnpm run build && vscode-test-web --browser=none --coi --extensionDevelopmentPath=. samples",
-    "smoke": "pnpm run build && node scripts/smoke-static-analyze.mjs && node scripts/smoke-explainers.mjs && node scripts/smoke-images.mjs && node scripts/smoke-tables.mjs && node scripts/smoke-tests.mjs && node scripts/smoke-pandas.mjs && node scripts/smoke-input.mjs && node scripts/smoke-desktop-parity.mjs"
+    "test-web": "pnpm run setup:browser && pnpm run build && vscode-test-web --browser=chromium --coi --permission=clipboard-read --permission=clipboard-write --extensionDevelopmentPath=. samples",
+    "test-web:clipboard": "pnpm run build && node scripts/smoke-editor-clipboard.mjs",
+    "test-web:server": "pnpm run build && vscode-test-web --browser=none --coi --permission=clipboard-read --permission=clipboard-write --extensionDevelopmentPath=. samples",
+    "smoke": "pnpm run build && node scripts/smoke-static-analyze.mjs && node scripts/smoke-explainers.mjs && node scripts/smoke-images.mjs && node scripts/smoke-tables.mjs && node scripts/smoke-tests.mjs && node scripts/smoke-pandas.mjs && node scripts/smoke-input.mjs && node scripts/smoke-workspace-files.mjs && node scripts/smoke-desktop-parity.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

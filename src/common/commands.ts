@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { Diagnostics } from "./diagnostics";
+import { editorCopy, editorCut, editorPaste } from "./editorClipboard";
 import type { InteractionsView } from "./interactionsView";
 import type { ReplSession } from "./replSession";
 
@@ -36,6 +37,15 @@ export function registerCommands(
     ),
     vscode.commands.registerCommand("pll.interactions.paste", () =>
       services.view.pasteClipboard().catch(reportError),
+    ),
+    vscode.commands.registerCommand("pll.editor.copy", () =>
+      editorCopy().catch(reportError),
+    ),
+    vscode.commands.registerCommand("pll.editor.cut", () =>
+      editorCut().catch(reportError),
+    ),
+    vscode.commands.registerCommand("pll.editor.paste", () =>
+      editorPaste().catch(reportError),
     ),
   );
 }

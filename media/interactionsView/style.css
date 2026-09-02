@@ -367,6 +367,29 @@ button:disabled {
   font-family: var(--vscode-font-family, sans-serif);
 }
 
+#empty.busy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+#empty.busy .spinner {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--vscode-descriptionForeground, #999);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: pll-spin 0.7s linear infinite;
+}
+
+@keyframes pll-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Mode toggling: when the host signals "empty mode" (no Python file is
  * active), the header (file name + Clear) and input row are both
  * irrelevant - hide them entirely so the empty placeholder centerpiece
