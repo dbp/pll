@@ -198,9 +198,9 @@ load or save.
 ## Friendlier errors
 
 If you use a name that is not defined, PLL rewrites Python's `NameError`
-into a short explanation of **what** went wrong, **why**, and **how to
-fix it**. The message appears in the interactions panel and as a mark
-in the editor. Click the location in the message to jump to that line.
+into a short explanation of what went wrong and **how to fix it**. The
+message appears in the interactions panel and as a mark in the editor.
+Click the location in the message to jump to that line.
 
 ## Commands
 

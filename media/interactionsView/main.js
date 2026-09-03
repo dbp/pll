@@ -18,7 +18,6 @@
 //   { type: "empty", message }               - no session active
 //   { type: "title", title }                 - update header title in place
 //   { type: "focusInput" }
-//   { type: "clipboard", op, text? }         - web copy/cut/paste (vscode.dev)
 //
 // View -> host messages:
 //   { type: "ready" }
@@ -27,8 +26,6 @@
 //   { type: "clearRequested" }
 //   { type: "openLocation", fileName, line, column? }
 //   { type: "saveSvg", svg, source? }
-//   { type: "viewFocus", focused }
-//   { type: "clipboardResult", text, hadSelection }
 
 (function () {
   const vscode = acquireVsCodeApi();
@@ -575,58 +572,6 @@
     textarea.setSelectionRange(len, len);
   }
 
-  function currentSelection() {
-    if (document.activeElement === textarea) {
-      if (textarea.selectionStart !== textarea.selectionEnd) {
-        return textarea.value.slice(textarea.selectionStart, textarea.selectionEnd);
-      }
-      return "";
-    }
-    return window.getSelection()?.toString() ?? "";
-  }
-
-  function insertAtCaret(text) {
-    if (textarea.disabled) {
-      return;
-    }
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    textarea.value = textarea.value.slice(0, start) + text + textarea.value.slice(end);
-    const pos = start + text.length;
-    textarea.setSelectionRange(pos, pos);
-    textarea.dispatchEvent(new Event("input"));
-    textarea.focus();
-    autoSizeInput();
-  }
-
-  function reportClipboard(hadSelection, text) {
-    vscode.postMessage({ type: "clipboardResult", hadSelection, text });
-  }
-
-  function clipboardCopyOrInterrupt() {
-    const text = currentSelection();
-    if (text) {
-      reportClipboard(true, text);
-      return;
-    }
-    reportClipboard(false, "");
-    if (document.activeElement === textarea) {
-      textarea.value = "";
-      autoSizeInput();
-      vscode.postMessage({ type: "interrupt" });
-    }
-  }
-
-  function clipboardCut() {
-    if (document.activeElement === textarea && textarea.selectionStart !== textarea.selectionEnd) {
-      const text = textarea.value.slice(textarea.selectionStart, textarea.selectionEnd);
-      insertAtCaret("");
-      reportClipboard(true, text);
-      return;
-    }
-    reportClipboard(false, "");
-  }
-
   textarea.addEventListener("input", () => {
     autoSizeInput();
     if (historyIdx !== -1) {
@@ -746,41 +691,8 @@
       case "focusInput":
         if (state.mode === "session") textarea.focus();
         break;
-      case "clipboard":
-        if (msg.op === "copyOrInterrupt") {
-          clipboardCopyOrInterrupt();
-        } else if (msg.op === "cut") {
-          clipboardCut();
-        } else if (msg.op === "paste") {
-          insertAtCaret(typeof msg.text === "string" ? msg.text : "");
-        }
-        break;
     }
   });
-
-  function reportViewFocus(focused) {
-    vscode.postMessage({ type: "viewFocus", focused });
-  }
-  let blurTimer = 0;
-  function setViewFocus(focused) {
-    if (focused) {
-      window.clearTimeout(blurTimer);
-      blurTimer = 0;
-      reportViewFocus(true);
-      return;
-    }
-    // vscode.dev / the workbench can blur the iframe while handling our
-    // copy/paste keybinding. Wait so `pllInteractionsFocus` stays true
-    // long enough for the when-clause to match.
-    window.clearTimeout(blurTimer);
-    blurTimer = window.setTimeout(() => {
-      blurTimer = 0;
-      reportViewFocus(false);
-    }, 250);
-  }
-  window.addEventListener("focus", () => setViewFocus(true));
-  window.addEventListener("blur", () => setViewFocus(false));
-  document.addEventListener("focusin", () => setViewFocus(true));
 
   // Initial render --------------------------------------------
 

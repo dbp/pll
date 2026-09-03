@@ -9,25 +9,34 @@ same interactions UI works in **desktop VS Code** (Node host) and
 
 ## Layout
 
+Both hosts share everything except how they spawn a worker and where
+Pyodide's assets come from. `common/workerRuntime.ts` and
+`common/workerHost.ts` hold the two ends of the worker protocol; the
+`desktop/` and `web/` files below them are thin adapters.
+
 ```
 src/
 ├── extension.ts                   Desktop entrypoint (Node host)
 ├── web/extension.ts               Web entrypoint (vscode.dev)
-├── web/pyodideWorker.ts           Browser Worker that hosts Pyodide
-├── web/pyodideRuntime.ts          Talks to the browser worker
-├── desktop/pyodideWorker.ts       Node worker_threads Worker that hosts Pyodide
-├── desktop/pyodideRuntime.ts      Talks to the Node worker
+├── web/pyodideWorker.ts           Browser Worker: boots Pyodide via importScripts
+├── web/pyodideRuntime.ts          Spawns the browser Worker
+├── desktop/pyodideWorker.ts       Node worker_threads Worker: boots Pyodide
+├── desktop/pyodideRuntime.ts      Spawns the Node worker; finds vendor/pyodide
 ├── desktop/xhrPolyfill.ts         Sync XMLHttpRequest for pyodide-http
 ├── desktop/syncHttp.ts            Child-process fetch used by the XHR polyfill
 └── common/
+    ├── activate.ts                Shared activation for both hosts
     ├── workerProtocol.ts          Shared worker message types
+    ├── workerRuntime.ts           Host side of the protocol: request/reply
+    │                              correlation, live displays, stdin
+    ├── workerHost.ts              Worker side of the protocol: one Pyodide
+    │                              interpreter + the message dispatch
     ├── stdinBuffer.ts             SharedArrayBuffer protocol for input()
     ├── workspaceFilePolicy.ts     Which sibling files to mount / write back
     ├── workspaceFiles.ts          vscode.workspace.fs snapshot + writeback
     ├── memfsWorkspace.ts          Pyodide MEMFS mount / collect helpers
     ├── commands.ts                Run File / Show Interactions / Clear commands
     ├── editorClipboard.ts         Palette PLL: Editor Copy/Cut/Paste (no keys)
-    ├── editorDefaults.ts          Clear leftover web C/V bindings; EditContext off
     ├── replSession.ts             Drives the interactions view: init,
     │                              REPL multi-line buffer, file runs, exec chain
     ├── interactionsView.ts        WebviewView provider for the integrated
@@ -173,8 +182,27 @@ pnpm install
 pnpm run build         # one-shot build (also copies Pyodide assets into vendor/)
 pnpm run watch         # rebuild on change
 pnpm run vsce:package  # produce a .vsix (runs vscode:prepublish first)
-pnpm run smoke         # build, then static analyzer + explainers + images + tables + tests + pandas (incl. URL) + input() + workspace files + desktop worker parity
+pnpm run smoke         # build, then the whole smoke suite (below)
 ```
+
+### Smoke tests
+
+`pnpm run smoke` builds and then runs `scripts/smoke-*.mjs` in order.
+Two of them cover the host-side TypeScript with no Pyodide involved:
+
+- `smoke-repl-session.mjs` — `ReplSession` against a fake runtime and a
+  recording view, with `vscode` aliased to a stub: per-file sessions,
+  the multi-line prompt buffer, static-check gating, stream line
+  batching, the `input()` handshake, sibling-file syncing.
+- `smoke-worker-protocol.mjs` — `WorkerPythonRuntime` against a scripted
+  in-process worker: request/reply correlation, error propagation, live
+  display streaming, the stdin round-trip.
+
+The rest boot real Pyodide in Node: `smoke-static-analyze`,
+`smoke-explainers`, `smoke-images`, `smoke-tables`, `smoke-tests`,
+`smoke-pandas` (incl. a URL read), `smoke-input`,
+`smoke-workspace-files`, and `smoke-desktop-parity` (the built desktop
+worker, end to end).
 
 ### Desktop extension
 
@@ -241,9 +269,9 @@ makes the workbench `preventDefault` and then **not** run the command
 (palette still works). Leaving them unbound still does not give working
 native copy here (`test-web` is Insiders with EditContext; COI also
 restricts the clipboard). Do not bind `pll.editor.*` or
-`editor.action.clipboard*Action` to those keys; activation strips
-leftover `pll.editor.*` user bindings. PLL still turns EditContext off
-(`editor.editContext`); that did not restore the keys.
+`editor.action.clipboard*Action` to those keys. PLL turns EditContext
+off through `configurationDefaults` (`editor.editContext`); that did
+not restore the keys either.
 
 `pnpm run test-web:clipboard` (Playwright `keyboard.press`) is **not**
 a real OS keypress and is not evidence that copy works.
@@ -264,8 +292,9 @@ an install prompt.
 ## Editor defaults
 
 PLL ships opinionated `configurationDefaults` so beginners mostly see
-what the extension turns on. None of these write the user's
-`settings.json`; a setting the user changes still wins.
+what the extension turns on. These are *defaults only* — PLL never
+writes the user's `settings.json` or `keybindings.json`, and a setting
+the user changes still wins.
 
 Kept on:
 

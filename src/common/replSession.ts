@@ -10,6 +10,7 @@ import {
   serializeFinding,
 } from "./interactionsView";
 import { DEFAULT_LEVEL, levelHasStaticChecks, parseLevel, type Level } from "./level";
+import type { RawStaticFinding } from "./pyodideRunner";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 import { collectSiblingFiles, folderUri, writeBackSiblingFiles } from "./workspaceFiles";
 
@@ -37,7 +38,8 @@ interface Session {
   /** URI of the underlying document, used for diagnostics + open-location. */
   documentUri: vscode.Uri;
   entries: Entry[];
-  history: string[];
+  /** Partial stream output, flushed to entries a line at a time. */
+  streams: { stdout: string; stderr: string };
   prompt: PromptKind;
   busy: boolean;
   /** Shown while `busy` (e.g. "Loading libraries..."). */
@@ -68,14 +70,10 @@ export class ReplSession implements vscode.Disposable {
 
   private initialized = false;
   private initPromise: Promise<boolean> | null = null;
+  /** Why Pyodide failed to start, if it did. */
+  private initError: string | null = null;
 
   private readonly editorWatcher: vscode.Disposable;
-
-  /** Line-buffered stream output, keyed by session. */
-  private readonly streamBuffers = new Map<
-    string,
-    { stdout: string; stderr: string }
-  >();
 
   /**
    * Session whose file is currently executing `input()`. Either runtime
@@ -108,11 +106,6 @@ export class ReplSession implements vscode.Disposable {
     void this.ensureInitialized();
   }
 
-  /** Reveal the interactions view (creates it on first call). */
-  show(preserveFocus = false): void {
-    void this.deps.view.reveal({ preserveFocus });
-  }
-
   /** Run a file in its own session (creates the session if needed). */
   async runFile(
     code: string,
@@ -120,7 +113,7 @@ export class ReplSession implements vscode.Disposable {
     document: vscode.TextDocument,
   ): Promise<void> {
     const session = this.getOrCreateSession(document.uri, fileName);
-    this.show(false);
+    void this.deps.view.reveal({ preserveFocus: false });
     // Switching active to this session ensures the user sees the run output
     // even if they're currently looking at a different file's session.
     this.setActive(session.key);
@@ -142,10 +135,7 @@ export class ReplSession implements vscode.Disposable {
       try {
         await this.deps.runtime.initialize();
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (this.activeKey !== null) {
-          this.deps.view.appendRawError("InitializationError", msg, "");
-        }
+        this.initError = errorMessage(err);
         return false;
       }
       this.initialized = true;
@@ -153,6 +143,21 @@ export class ReplSession implements vscode.Disposable {
       return true;
     })();
     return this.initPromise;
+  }
+
+  /**
+   * Record a failed Pyodide start in the session's own log. `initPromise` is
+   * memoized, so this has to be reported per attempt rather than once: the
+   * eager warm-up in the constructor has no session to report against, and a
+   * later Run File clears the stream before it asks.
+   */
+  private reportInitFailure(session: Session): void {
+    this.appendToSession(session, {
+      kind: "rawError",
+      errorType: "InitializationError",
+      message: this.initError ?? "Python could not be started.",
+      traceback: "",
+    });
   }
 
   /* -------- Active editor tracking -------- */
@@ -190,7 +195,8 @@ export class ReplSession implements vscode.Disposable {
       busy: this.computeVisibleBusy(session),
       status: this.visibleStatus(session),
       awaitingInput: this.stdinPending?.session === session,
-      inputPrefix: this.stdinPending?.session === session ? this.stdinPending.prefix : "",
+      inputPrefix:
+        this.stdinPending?.session === session ? this.stdinPending.prefix : "",
     });
   }
 
@@ -205,16 +211,14 @@ export class ReplSession implements vscode.Disposable {
         fileName,
         documentUri: uri,
         entries: [],
-        history: [],
+        streams: { stdout: "", stderr: "" },
         prompt: "primary",
         busy: false,
-        status: undefined,
         continuationLines: [],
         continuing: false,
         lastLevel: null,
       };
       this.sessions.set(key, session);
-      this.streamBuffers.set(key, { stdout: "", stderr: "" });
     }
     return session;
   }
@@ -230,12 +234,30 @@ export class ReplSession implements vscode.Disposable {
     return this.activeKey === session.key;
   }
 
+  /** The session the interactions view is currently showing, if any. */
+  private activeSession(): Session | null {
+    return (this.activeKey !== null ? this.sessions.get(this.activeKey) : undefined) ?? null;
+  }
+
+  /** True when a running program is blocked in `input()` on the visible session. */
+  private isAwaitingInputOnActive(): boolean {
+    return this.stdinPending !== null && this.stdinPending.session.key === this.activeKey;
+  }
+
+  /**
+   * True while Pyodide is still starting. A *failed* start is not "loading":
+   * treating it as busy left the view spinning forever with no way out.
+   */
+  private get loadingPython(): boolean {
+    return !this.initialized && this.initError === null;
+  }
+
   private computeVisibleBusy(session: Session): boolean {
-    return !this.initialized || session.busy;
+    return this.loadingPython || session.busy;
   }
 
   private visibleStatus(session: Session): string | undefined {
-    if (!this.initialized) {
+    if (this.loadingPython) {
       return "Loading Python...";
     }
     if (session.busy) {
@@ -245,8 +267,7 @@ export class ReplSession implements vscode.Disposable {
   }
 
   private refreshActiveBusy(): void {
-    if (this.activeKey === null) return;
-    const session = this.sessions.get(this.activeKey);
+    const session = this.activeSession();
     if (!session) return;
     this.deps.view.setBusy(
       this.computeVisibleBusy(session),
@@ -282,31 +303,21 @@ export class ReplSession implements vscode.Disposable {
   /* -------- Handlers from the view -------- */
 
   private handleSubmit(code: string): void {
-    if (
-      this.stdinPending &&
-      this.activeKey === this.stdinPending.session.key
-    ) {
+    if (this.isAwaitingInputOnActive()) {
       this.fulfillStdin(code.split(/\r?\n/)[0] ?? "");
       return;
     }
-    if (this.activeKey === null) return;
-    const session = this.sessions.get(this.activeKey);
-    if (!session) return;
-    void this.processSubmission(session, code);
+    const session = this.activeSession();
+    if (session) void this.processSubmission(session, code);
   }
 
   private handleInterrupt(): void {
-    if (
-      this.stdinPending &&
-      this.activeKey === this.stdinPending.session.key
-    ) {
+    if (this.isAwaitingInputOnActive()) {
       this.fulfillStdin(null);
       return;
     }
-    if (this.activeKey === null) return;
-    const session = this.sessions.get(this.activeKey);
-    if (!session) return;
-    if (session.continuing) {
+    const session = this.activeSession();
+    if (session?.continuing) {
       session.continuationLines = [];
       session.continuing = false;
       this.appendToSession(session, { kind: "banner", text: "KeyboardInterrupt" });
@@ -315,18 +326,16 @@ export class ReplSession implements vscode.Disposable {
   }
 
   private handleClearRequested(): void {
-    if (this.activeKey === null) return;
-    const session = this.sessions.get(this.activeKey);
-    if (!session) return;
-    this.clearSession(session);
+    const session = this.activeSession();
+    if (session) this.clearSession(session);
   }
 
   /* -------- Submission flow (matches CPython's interactive shell) -------- */
 
   private async processSubmission(session: Session, rawCode: string): Promise<void> {
-    if (!this.initialized) {
-      const ok = await this.ensureInitialized();
-      if (!ok) return;
+    if (!this.initialized && !(await this.ensureInitialized())) {
+      this.reportInitFailure(session);
+      return;
     }
     const lines = rawCode.split(/\r?\n/);
     for (const line of lines) {
@@ -335,47 +344,50 @@ export class ReplSession implements vscode.Disposable {
   }
 
   private async processLine(session: Session, rawLine: string): Promise<void> {
-    const promptUsed: ">>>" | "..." = session.continuing ? "..." : ">>>";
-    this.appendToSession(session, { kind: "echo", prompt: promptUsed, code: rawLine });
+    this.appendToSession(session, {
+      kind: "echo",
+      prompt: session.continuing ? "..." : ">>>",
+      code: rawLine,
+    });
+    const blank = rawLine.trim() === "";
 
-    if (session.continuing) {
-      if (rawLine.trim() === "") {
-        const code = session.continuationLines.join("\n");
-        session.continuationLines = [];
-        session.continuing = false;
-        this.setSessionPrompt(session, "primary");
-        if (code.trim() === "") return;
-        await this.enqueue(() => this.executeRepl(session, code));
+    if (!session.continuing) {
+      // Empty primary-prompt line: nothing to do, keep the prompt as-is.
+      if (blank) return;
+      const status = await this.deps.runtime.checkReplComplete(rawLine);
+      if (status.status === "incomplete") {
+        session.continuationLines.push(rawLine);
+        session.continuing = true;
+        this.setSessionPrompt(session, "continuation");
         return;
       }
+      return this.runSnippet(session, rawLine);
+    }
+
+    // A blank line ends a multi-line snippet, as it does in CPython's shell.
+    if (!blank) {
       session.continuationLines.push(rawLine);
-      const buffered = session.continuationLines.join("\n");
+    }
+    const buffered = session.continuationLines.join("\n");
+    if (!blank) {
       const status = await this.deps.runtime.checkReplComplete(buffered);
-      if (status.status === "complete") {
-        session.continuationLines = [];
-        session.continuing = false;
-        this.setSessionPrompt(session, "primary");
-        await this.enqueue(() => this.executeRepl(session, buffered));
-      } else {
+      if (status.status !== "complete") {
         this.setSessionPrompt(session, "continuation");
+        return;
       }
-      return;
     }
+    return this.runSnippet(session, buffered);
+  }
 
-    if (rawLine.trim() === "") {
-      // Empty primary-prompt line: keep the prompt as-is.
-      return;
+  /** Reset the continuation buffer and queue `code` for evaluation. */
+  private runSnippet(session: Session, code: string): Promise<void> {
+    session.continuationLines = [];
+    session.continuing = false;
+    this.setSessionPrompt(session, "primary");
+    if (code.trim() === "") {
+      return Promise.resolve();
     }
-
-    const status = await this.deps.runtime.checkReplComplete(rawLine);
-    if (status.status === "incomplete") {
-      session.continuationLines.push(rawLine);
-      session.continuing = true;
-      this.setSessionPrompt(session, "continuation");
-      return;
-    }
-
-    await this.enqueue(() => this.executeRepl(session, rawLine));
+    return this.enqueue(() => this.executeRepl(session, code));
   }
 
   private enqueue(task: () => Promise<void>): Promise<void> {
@@ -386,39 +398,51 @@ export class ReplSession implements vscode.Disposable {
 
   /* -------- Execution -------- */
 
+  /**
+   * Shared envelope for every Python execution: load packages the code
+   * imports, mount the sibling files, run, then flush pending output and
+   * copy changed files back. Internal failures land in the session's stderr
+   * instead of propagating.
+   */
+  private async execute(
+    session: Session,
+    code: string,
+    run: () => Promise<void>,
+  ): Promise<void> {
+    let workspaceReady = false;
+    try {
+      await this.ensurePackagesForRun(session, code);
+      this.setSessionBusy(session, true, "Loading files...");
+      workspaceReady = await this.syncWorkspaceIn(session);
+      this.setSessionBusy(session, true, "Running...");
+      await run();
+    } catch (err) {
+      this.feedStream(session, "stderr", `Internal error: ${errorMessage(err)}\n`);
+    } finally {
+      this.flushStreams(session);
+      if (workspaceReady) {
+        await this.syncWorkspaceOut(session);
+      }
+      this.setSessionBusy(session, false);
+    }
+  }
+
   private async executeRepl(session: Session, code: string): Promise<void> {
     const level = session.lastLevel ?? DEFAULT_LEVEL;
     this.setSessionBusy(session, true, "Starting...");
-    try {
-      if (levelHasStaticChecks(level)) {
-        this.setSessionBusy(session, true, "Checking...");
-        const blocked = await this.runReplStaticChecks(session, code, level);
-        if (blocked) {
-          return;
-        }
-      }
-      await this.ensurePackagesForRun(session, code);
-      this.setSessionBusy(session, true, "Loading files...");
-      const workspaceReady = await this.syncWorkspaceIn(session);
-      this.setSessionBusy(session, true, "Running...");
-      try {
-        await this.deps.runtime.replEval(
-          { code, sessionKey: session.key },
-          (event) => this.handleEvent(session, event, code, "<repl>", undefined, level),
-        );
-      } finally {
+    if (levelHasStaticChecks(level)) {
+      this.setSessionBusy(session, true, "Checking...");
+      if (await this.runStaticChecks(session, code, "<repl>", level, undefined)) {
         this.flushStreams(session);
-        if (workspaceReady) {
-          await this.syncWorkspaceOut(session);
-        }
+        this.setSessionBusy(session, false);
+        return;
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.feedStream(session, "stderr", `Internal error: ${msg}\n`);
-    } finally {
-      this.flushStreams(session);
-      this.setSessionBusy(session, false);
     }
+    await this.execute(session, code, () =>
+      this.deps.runtime.replEval({ code, sessionKey: session.key }, (event) =>
+        this.handleEvent(session, event, code, "<repl>", undefined, level),
+      ),
+    );
   }
 
   private async executeFile(
@@ -433,7 +457,7 @@ export class ReplSession implements vscode.Disposable {
     session.continuing = false;
     this.setSessionPrompt(session, "primary");
     this.clearSession(session);
-    this.setSessionBusy(session, true, this.initialized ? "Starting..." : "Loading Python...");
+    this.setSessionBusy(session, true, "Starting...");
 
     this.deps.diagnostics.clear(document.uri);
     this.deps.view.registerFile(fileName, document.uri);
@@ -446,79 +470,64 @@ export class ReplSession implements vscode.Disposable {
       this.deps.view.setTitle(this.titleFor(session));
     }
 
-    let workspaceReady = false;
-    try {
-      if (!this.initialized) {
-        const ok = await this.ensureInitialized();
-        if (!ok) {
-          return;
-        }
-        this.setSessionBusy(session, true, "Starting...");
+    if (!this.initialized && !(await this.ensureInitialized())) {
+      this.reportInitFailure(session);
+      this.flushStreams(session);
+      this.setSessionBusy(session, false);
+      return;
+    }
+    // Re-post the status: until init finished it read "Loading Python...".
+    this.setSessionBusy(session, true, "Starting...");
+    if (levelHasStaticChecks(level)) {
+      this.setSessionBusy(session, true, "Checking...");
+      if (await this.runStaticChecks(session, code, fileName, level, document)) {
+        this.flushStreams(session);
+        this.setSessionBusy(session, false);
+        return;
       }
-      if (levelHasStaticChecks(level)) {
-        this.setSessionBusy(session, true, "Checking...");
-        const blocked = await this.runStaticChecks(session, code, fileName, level, document);
-        if (blocked) {
-          this.appendToSession(session, {
-            kind: "banner",
-            text: "Static analysis found issues. File not executed.",
-          });
-          return;
-        }
-      }
+    }
 
-      await this.ensurePackagesForRun(session, code);
-      this.setSessionBusy(session, true, "Loading files...");
-      workspaceReady = await this.syncWorkspaceIn(session);
-
-      let hasTests = false;
-      try {
-        hasTests = await this.deps.runtime.hasTests(code);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.feedStream(session, "stderr", `Could not check for tests: ${msg}\n`);
-      }
-      if (hasTests) {
-        this.setSessionBusy(session, true, "Loading pytest...");
-        try {
-          await this.deps.runtime.ensurePytest();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          this.appendToSession(session, {
-            kind: "banner",
-            text: `Could not load pytest (${msg}). Skipping tests.`,
-          });
-          hasTests = false;
-        }
-      }
-      if (hasTests) {
+    const onEvent = (event: ExecutionEvent) =>
+      this.handleEvent(session, event, code, fileName, document, level);
+    await this.execute(session, code, async () => {
+      if (await this.shouldRunTests(session, code)) {
         this.setSessionBusy(session, true, "Running tests...");
-        await this.deps.runtime.runTests(
-          { code, fileName, sessionKey: session.key },
-          (event) => this.handleEvent(session, event, code, fileName, document, level),
-        );
+        await this.deps.runtime.runTests({ code, fileName, sessionKey: session.key }, onEvent);
       }
-
       this.setSessionBusy(session, true, "Running...");
       this.stdinSession = session;
       try {
-        await this.deps.runtime.runFile(
-          { code, fileName, sessionKey: session.key },
-          (event) => this.handleEvent(session, event, code, fileName, document, level),
-        );
+        await this.deps.runtime.runFile({ code, fileName, sessionKey: session.key }, onEvent);
       } finally {
         this.stdinSession = null;
         this.cancelStdin();
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.feedStream(session, "stderr", `Internal error: ${msg}\n`);
-    } finally {
-      this.flushStreams(session);
-      if (workspaceReady) {
-        await this.syncWorkspaceOut(session);
+    });
+  }
+
+  /**
+   * True if the file has `test_*` functions *and* pytest loaded. Both checks
+   * are non-fatal: a failure here just means the file runs without tests.
+   */
+  private async shouldRunTests(session: Session, code: string): Promise<boolean> {
+    try {
+      if (!(await this.deps.runtime.hasTests(code))) {
+        return false;
       }
-      this.setSessionBusy(session, false);
+    } catch (err) {
+      this.feedStream(session, "stderr", `Could not check for tests: ${errorMessage(err)}\n`);
+      return false;
+    }
+    this.setSessionBusy(session, true, "Loading pytest...");
+    try {
+      await this.deps.runtime.ensurePytest();
+      return true;
+    } catch (err) {
+      this.appendToSession(session, {
+        kind: "banner",
+        text: `Could not load pytest (${errorMessage(err)}). Skipping tests.`,
+      });
+      return false;
     }
   }
 
@@ -535,10 +544,11 @@ export class ReplSession implements vscode.Disposable {
       await this.deps.runtime.mountWorkspaceFiles(files);
       return true;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
       this.appendToSession(session, {
         kind: "banner",
-        text: `Could not load files next to this script (${msg}). open() may fail.`,
+        text:
+          `Could not load files next to this script (${errorMessage(err)}). ` +
+          "open() may fail.",
       });
       return false;
     }
@@ -557,22 +567,16 @@ export class ReplSession implements vscode.Disposable {
         return;
       }
       const written = await writeBackSiblingFiles(session.documentUri, changed);
-      if (written.length === 1) {
-        this.appendToSession(session, {
-          kind: "banner",
-          text: `Saved ${written[0]} next to this file.`,
-        });
-      } else if (written.length > 1) {
+      if (written.length > 0) {
         this.appendToSession(session, {
           kind: "banner",
           text: `Saved ${written.join(", ")} next to this file.`,
         });
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
       this.appendToSession(session, {
         kind: "banner",
-        text: `Could not save files next to this script (${msg}).`,
+        text: `Could not save files next to this script (${errorMessage(err)}).`,
       });
     }
   }
@@ -591,13 +595,13 @@ export class ReplSession implements vscode.Disposable {
     try {
       await this.deps.runtime.ensurePackages(code);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       // A SyntaxError here just means the file doesn't parse; the run itself
       // will surface it. Only flag genuine load/network failures.
-      if (!/syntaxerror|invalid syntax/i.test(msg)) {
+      if (!/syntaxerror|invalid syntax/i.test(message)) {
         this.appendToSession(session, {
           kind: "banner",
-          text: `Could not load libraries (${msg}). Continuing; imports may fail.`,
+          text: `Could not load libraries (${message}). Continuing; imports may fail.`,
         });
       }
     }
@@ -612,11 +616,8 @@ export class ReplSession implements vscode.Disposable {
     if (!session) {
       return Promise.resolve(null);
     }
-    const buffers = this.streamBuffers.get(session.key);
-    const prefix = buffers ? buffers.stdout : "";
-    if (buffers) {
-      buffers.stdout = "";
-    }
+    const prefix = session.streams.stdout;
+    session.streams.stdout = "";
     this.setSessionBusy(session, true, "Waiting for input...");
     if (this.isActive(session)) {
       this.deps.view.setAwaitingInput(true, prefix);
@@ -654,60 +655,38 @@ export class ReplSession implements vscode.Disposable {
     this.fulfillStdin(null);
   }
 
+  /**
+   * Run the level's static checks. Returns true when findings blocked the
+   * run. For a file run, `document` is set and the findings also become
+   * editor diagnostics; prompt snippets keep their findings in the
+   * interactions view only, since snippet lines are not file lines (they are
+   * analyzed with `sessionKey` so names bound earlier in the session count as
+   * existing bindings).
+   */
   private async runStaticChecks(
     session: Session,
     code: string,
     fileName: string,
     level: Level,
-    document: vscode.TextDocument,
+    document: vscode.TextDocument | undefined,
   ): Promise<boolean> {
-    let raw;
-    try {
-      raw = await this.deps.runtime.staticAnalyze({ code, fileName, level });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.feedStream(session, "stderr", `Static analysis failed: ${msg}\n`);
-      return false;
-    }
-    const findings = enrichStaticFindings(raw, level, fileName);
-    if (findings.length === 0) {
-      this.deps.diagnostics.clear(document.uri);
-      return false;
-    }
-    for (const finding of findings) {
-      this.appendToSession(session, {
-        kind: "finding",
-        finding: serializeFinding(finding),
-      });
-    }
-    this.deps.diagnostics.setFindings(document.uri, document, findings);
-    return true;
-  }
-
-  /**
-   * Static-check a prompt snippet at the session's last-run level.
-   * Findings stay in the interactions view; they are not mapped onto the
-   * `.py` file (snippet line numbers are not file line numbers).
-   */
-  private async runReplStaticChecks(
-    session: Session,
-    code: string,
-    level: Level,
-  ): Promise<boolean> {
-    let raw;
+    let raw: RawStaticFinding[];
     try {
       raw = await this.deps.runtime.staticAnalyze({
         code,
-        fileName: "<repl>",
+        fileName,
         level,
-        sessionKey: session.key,
+        ...(document ? {} : { sessionKey: session.key }),
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.feedStream(session, "stderr", `Static analysis failed: ${msg}\n`);
+      this.feedStream(session, "stderr", `Static analysis failed: ${errorMessage(err)}\n`);
       return false;
     }
-    const findings = enrichStaticFindings(raw, level, "<repl>");
+    const findings = enrichStaticFindings(raw, level, fileName);
+    if (document) {
+      // Also clears stale diagnostics when there are no findings.
+      this.deps.diagnostics.setFindings(document.uri, document, findings);
+    }
     if (findings.length === 0) {
       return false;
     }
@@ -719,7 +698,7 @@ export class ReplSession implements vscode.Disposable {
     }
     this.appendToSession(session, {
       kind: "banner",
-      text: "Static analysis found issues. Input not executed.",
+      text: `Static analysis found issues. ${document ? "File" : "Input"} not executed.`,
     });
     return true;
   }
@@ -734,21 +713,20 @@ export class ReplSession implements vscode.Disposable {
     document: vscode.TextDocument | undefined,
     level: Level,
   ): void {
+    if (event.kind === "stdout" || event.kind === "stderr") {
+      this.feedStream(session, event.kind, event.text);
+      return;
+    }
+    // Everything else is its own entry, so any partial line has to land first.
+    this.flushStreams(session);
+
     switch (event.kind) {
-      case "stdout":
-        this.feedStream(session, "stdout", event.text);
-        break;
-      case "stderr":
-        this.feedStream(session, "stderr", event.text);
-        break;
       case "result":
-        this.flushStreams(session);
         if (event.repr !== null && event.repr !== undefined) {
           this.appendToSession(session, { kind: "result", repr: event.repr });
         }
         break;
       case "image":
-        this.flushStreams(session);
         this.appendToSession(session, {
           kind: "image",
           svg: event.svg,
@@ -758,7 +736,6 @@ export class ReplSession implements vscode.Disposable {
         });
         break;
       case "table":
-        this.flushStreams(session);
         this.appendToSession(session, {
           kind: "table",
           columns: event.columns,
@@ -770,7 +747,6 @@ export class ReplSession implements vscode.Disposable {
         });
         break;
       case "error": {
-        this.flushStreams(session);
         const traceback = event.traceback || `${event.errorType}: ${event.message}`;
         const parsed = parsePythonError(traceback);
         if (parsed.lineNumber === null && event.lineNumber !== null) {
@@ -802,10 +778,8 @@ export class ReplSession implements vscode.Disposable {
         break;
       }
       case "done":
-        this.flushStreams(session);
         break;
       case "testReport":
-        this.flushStreams(session);
         this.appendToSession(session, {
           kind: "testReport",
           fileName: event.fileName,
@@ -830,29 +804,28 @@ export class ReplSession implements vscode.Disposable {
     kind: "stdout" | "stderr",
     text: string,
   ): void {
-    const buffers = this.streamBuffers.get(session.key)!;
-    let buf = buffers[kind] + text;
+    let buf = session.streams[kind] + text;
     let idx: number;
     while ((idx = buf.indexOf("\n")) !== -1) {
-      const line = buf.substring(0, idx);
-      this.appendToSession(session, { kind, text: line });
+      this.appendToSession(session, { kind, text: buf.substring(0, idx) });
       buf = buf.substring(idx + 1);
     }
-    buffers[kind] = buf;
+    session.streams[kind] = buf;
   }
 
   private flushStreams(session: Session): void {
-    const buffers = this.streamBuffers.get(session.key);
-    if (!buffers) return;
-    if (buffers.stdout.length > 0) {
-      this.appendToSession(session, { kind: "stdout", text: buffers.stdout });
-      buffers.stdout = "";
-    }
-    if (buffers.stderr.length > 0) {
-      this.appendToSession(session, { kind: "stderr", text: buffers.stderr });
-      buffers.stderr = "";
+    for (const kind of ["stdout", "stderr"] as const) {
+      const text = session.streams[kind];
+      if (text.length > 0) {
+        session.streams[kind] = "";
+        this.appendToSession(session, { kind, text });
+      }
     }
   }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function displayName(uri: vscode.Uri): string {

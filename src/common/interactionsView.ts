@@ -18,9 +18,9 @@ import type { AnalysisFinding } from "./analyzers/types";
  *
  * Empty mode
  * ----------
- * When no Python file has ever been active in the workspace, the view
- * shows a placeholder message and hides the input row. `showEmpty(...)`
- * switches into that mode; `showSession(...)` switches back.
+ * Until a Python file has been active in the workspace, the view shows a
+ * placeholder message and hides the input row. `showSession(...)` switches
+ * out of that mode.
  */
 
 /* -------------------------------------------------------------- */
@@ -155,11 +155,6 @@ interface HostMessageTitle {
 interface HostMessageFocus {
   type: "focusInput";
 }
-interface HostMessageClipboard {
-  type: "clipboard";
-  op: "copyOrInterrupt" | "cut" | "paste";
-  text?: string;
-}
 type HostToView =
   | HostMessageAppend
   | HostMessageClear
@@ -169,8 +164,7 @@ type HostToView =
   | HostMessageReplay
   | HostMessageEmpty
   | HostMessageTitle
-  | HostMessageFocus
-  | HostMessageClipboard;
+  | HostMessageFocus;
 
 export interface SessionDisplayState {
   /** Header title shown at the top of the view (typically the file name). */
@@ -203,8 +197,6 @@ export class InteractionsView
   private view: vscode.WebviewView | null = null;
   private webviewReady = false;
   private readonly disposables: vscode.Disposable[] = [];
-  private clipboardWaiters: Array<(result: { text: string; hadSelection: boolean }) => void> =
-    [];
 
   // Mirror of what is currently displayed (always the active session, or
   // an "empty" placeholder when no Python file is active). The session
@@ -227,25 +219,7 @@ export class InteractionsView
   // Optional callbacks - the session manager installs these.
   private handlers: InteractionsHandlers | null = null;
 
-  constructor(private readonly extensionUri: vscode.Uri) {
-    // Any editor activity must drop our clipboard when-clause. Switching
-    // the active editor is not enough: clicking back into the already
-    // active file does not fire that event, and a sticky
-    // `pllInteractionsFocus` would steal Ctrl/C/V from the editor.
-    this.disposables.push(
-      vscode.window.onDidChangeActiveTextEditor(() => {
-        void vscode.commands.executeCommand("setContext", "pllInteractionsFocus", false);
-      }),
-      vscode.window.onDidChangeTextEditorSelection((event) => {
-        if (
-          event.kind === vscode.TextEditorSelectionChangeKind.Mouse ||
-          event.kind === vscode.TextEditorSelectionChangeKind.Keyboard
-        ) {
-          void vscode.commands.executeCommand("setContext", "pllInteractionsFocus", false);
-        }
-      }),
-    );
-  }
+  constructor(private readonly extensionUri: vscode.Uri) {}
 
   setHandlers(handlers: InteractionsHandlers): void {
     this.handlers = handlers;
@@ -273,26 +247,7 @@ export class InteractionsView
     this.status = state.status;
     this.awaitingInput = state.awaitingInput ?? false;
     this.inputPrefix = state.inputPrefix ?? "";
-    this.post({
-      type: "replay",
-      mode: "session",
-      title: this.title,
-      entries: this.entries,
-      prompt: this.prompt,
-      busy: this.busy,
-      status: this.status,
-      awaitingInput: this.awaitingInput,
-      inputPrefix: this.inputPrefix,
-    });
-  }
-
-  /** Switch the view into the empty placeholder state. */
-  showEmpty(message: string): void {
-    this.mode = "empty";
-    this.emptyMessage = message;
-    this.title = "";
-    this.entries = [];
-    this.post({ type: "empty", message });
+    this.post(this.replayMessage());
   }
 
   /** Update the header title without otherwise changing state. */
@@ -311,49 +266,6 @@ export class InteractionsView
     if (this.mode !== "session") return;
     this.entries.push(entry);
     this.post({ type: "append", entry });
-  }
-
-  appendBanner(text: string): void {
-    this.append({ kind: "banner", text });
-  }
-
-  appendEcho(prompt: ">>>" | "...", code: string): void {
-    this.append({ kind: "echo", prompt, code });
-  }
-
-  appendStdout(text: string): void {
-    this.append({ kind: "stdout", text });
-  }
-
-  appendStderr(text: string): void {
-    this.append({ kind: "stderr", text });
-  }
-
-  appendResult(repr: string): void {
-    this.append({ kind: "result", repr });
-  }
-
-  appendImage(image: { svg: string; width: number; height: number; source?: string }): void {
-    this.append({ kind: "image", ...image });
-  }
-
-  appendTable(table: {
-    columns: string[];
-    rows: string[][];
-    rowCount: number;
-    shownCount: number;
-    truncated: boolean;
-    source?: string;
-  }): void {
-    this.append({ kind: "table", ...table });
-  }
-
-  appendFinding(finding: AnalysisFinding): void {
-    this.append({ kind: "finding", finding: serializeFinding(finding) });
-  }
-
-  appendRawError(errorType: string, message: string, traceback: string): void {
-    this.append({ kind: "rawError", errorType, message, traceback });
   }
 
   clear(): void {
@@ -415,29 +327,6 @@ export class InteractionsView
     this.post({ type: "focusInput" });
   }
 
-  /**
-   * vscode.dev steals Ctrl/Cmd+C/V before the webview iframe sees them.
-   * These go through `vscode.env.clipboard` and a message to the view.
-   */
-  async copySelectionOrInterrupt(): Promise<void> {
-    const result = await this.requestClipboard("copyOrInterrupt");
-    if (result.hadSelection) {
-      await vscode.env.clipboard.writeText(result.text);
-    }
-  }
-
-  async cutSelection(): Promise<void> {
-    const result = await this.requestClipboard("cut");
-    if (result.hadSelection) {
-      await vscode.env.clipboard.writeText(result.text);
-    }
-  }
-
-  async pasteClipboard(): Promise<void> {
-    const text = await vscode.env.clipboard.readText();
-    this.post({ type: "clipboard", op: "paste", text });
-  }
-
   /* -------- WebviewViewProvider -------- */
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -452,15 +341,9 @@ export class InteractionsView
 
     this.disposables.push(
       view.webview.onDidReceiveMessage((msg) => this.handleMessage(msg)),
-      view.onDidChangeVisibility(() => {
-        if (!view.visible) {
-          void vscode.commands.executeCommand("setContext", "pllInteractionsFocus", false);
-        }
-      }),
       view.onDidDispose(() => {
         this.view = null;
         this.webviewReady = false;
-        void vscode.commands.executeCommand("setContext", "pllInteractionsFocus", false);
       }),
     );
   }
@@ -476,25 +359,12 @@ export class InteractionsView
       fileName?: string;
       line?: number;
       column?: number;
-      focused?: boolean;
-      text?: string;
-      hadSelection?: boolean;
     };
     switch (m.type) {
       case "ready":
         this.webviewReady = true;
         if (this.mode === "session") {
-          this.post({
-            type: "replay",
-            mode: "session",
-            title: this.title,
-            entries: this.entries,
-            prompt: this.prompt,
-            busy: this.busy,
-            status: this.status,
-            awaitingInput: this.awaitingInput,
-            inputPrefix: this.inputPrefix,
-          });
+          this.post(this.replayMessage());
         } else {
           this.post({ type: "empty", message: this.emptyMessage });
         }
@@ -517,46 +387,15 @@ export class InteractionsView
         break;
       case "saveSvg":
         if (typeof m.svg === "string") {
-          void this.handleSaveSvg(m.svg, m.source);
+          void this.saveText("image", "svg", m.svg, m.source);
         }
         break;
       case "saveCsv":
         if (typeof m.csv === "string") {
-          void this.handleSaveCsv(m.csv, m.source);
+          void this.saveText("table", "csv", m.csv, m.source);
         }
         break;
-      case "viewFocus":
-        void vscode.commands.executeCommand(
-          "setContext",
-          "pllInteractionsFocus",
-          !!m.focused,
-        );
-        break;
-      case "clipboardResult": {
-        const waiter = this.clipboardWaiters.shift();
-        waiter?.({
-          text: typeof m.text === "string" ? m.text : "",
-          hadSelection: !!m.hadSelection,
-        });
-        break;
-      }
     }
-  }
-
-  private requestClipboard(
-    op: "copyOrInterrupt" | "cut",
-  ): Promise<{ text: string; hadSelection: boolean }> {
-    return new Promise((resolve) => {
-      this.clipboardWaiters.push(resolve);
-      this.post({ type: "clipboard", op });
-      setTimeout(() => {
-        const idx = this.clipboardWaiters.indexOf(resolve);
-        if (idx >= 0) {
-          this.clipboardWaiters.splice(idx, 1);
-          resolve({ text: "", hadSelection: false });
-        }
-      }, 1000);
-    });
   }
 
   private async handleOpenLocation(
@@ -575,33 +414,42 @@ export class InteractionsView
     });
   }
 
-  private async handleSaveSvg(svg: string, source: string | undefined): Promise<void> {
-    const defaultName = (source ?? "image").replace(/[^a-zA-Z0-9_.-]+/g, "_") + ".svg";
+  /** Offer a save dialog for generated text (image SVG / table CSV). */
+  private async saveText(
+    what: "image" | "table",
+    extension: "svg" | "csv",
+    contents: string,
+    source: string | undefined,
+  ): Promise<void> {
+    const label = extension.toUpperCase();
     const target = await vscode.window.showSaveDialog({
-      filters: { "SVG image": ["svg"] },
-      saveLabel: "Save image",
-      defaultUri: vscode.Uri.file(defaultName),
+      filters: { [`${label} file`]: [extension] },
+      saveLabel: `Save ${what}`,
+      defaultUri: vscode.Uri.file(
+        `${(source ?? what).replace(/[^a-zA-Z0-9_.-]+/g, "_")}.${extension}`,
+      ),
     });
     if (!target) return;
-    const data = new TextEncoder().encode(svg);
-    await vscode.workspace.fs.writeFile(target, data);
-    vscode.window.showInformationMessage(`Saved image to ${target.fsPath}`);
-  }
-
-  private async handleSaveCsv(csv: string, source: string | undefined): Promise<void> {
-    const defaultName = (source ?? "table").replace(/[^a-zA-Z0-9_.-]+/g, "_") + ".csv";
-    const target = await vscode.window.showSaveDialog({
-      filters: { "CSV file": ["csv"] },
-      saveLabel: "Save table",
-      defaultUri: vscode.Uri.file(defaultName),
-    });
-    if (!target) return;
-    const data = new TextEncoder().encode(csv);
-    await vscode.workspace.fs.writeFile(target, data);
-    vscode.window.showInformationMessage(`Saved table to ${target.fsPath}`);
+    await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(contents));
+    vscode.window.showInformationMessage(`Saved ${what} to ${target.fsPath}`);
   }
 
   /* -------- Internals -------- */
+
+  /** Everything the view needs to render the current session from scratch. */
+  private replayMessage(): HostMessageReplay {
+    return {
+      type: "replay",
+      mode: "session",
+      title: this.title,
+      entries: this.entries,
+      prompt: this.prompt,
+      busy: this.busy,
+      status: this.status,
+      awaitingInput: this.awaitingInput,
+      inputPrefix: this.inputPrefix,
+    };
+  }
 
   private post(msg: HostToView): void {
     if (!this.view || !this.webviewReady) return;
@@ -609,7 +457,6 @@ export class InteractionsView
   }
 
   dispose(): void {
-    void vscode.commands.executeCommand("setContext", "pllInteractionsFocus", false);
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
     this.view = null;

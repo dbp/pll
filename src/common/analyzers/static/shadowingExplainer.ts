@@ -41,18 +41,6 @@ export function explainShadowing(
     errorType: "Shadowing",
     message: raw.message,
     headline: `\`${name}\` is already defined${outerHint}.`,
-    whatHappened: [
-      `You're creating a new variable named \`${name}\`, but a variable with` +
-        ` the same name already exists in ${outerNoun}` +
-        (knownOuterLine ? ` (line ${outerLine})` : "") +
-        `. In ${level} mode this "shadowing" is not allowed because it makes` +
-        ` code confusing - two different things would have the same name.`,
-    ],
-    whyItHappens: [
-      `${capitalize(level)} mode keeps each name unique across scopes so you` +
-        ` can always tell which value \`${name}\` refers to without scrolling` +
-        ` around.`,
-    ],
     howToFix: [
       `Rename the inner \`${name}\` to something distinct (e.g. \`${name}_inner\`,` +
         ` \`local_${name}\`, or whatever describes its role).`,
@@ -68,10 +56,6 @@ export function explainShadowing(
     origin: "static",
     level,
   };
-}
-
-function capitalize(s: string): string {
-  return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
 }
 
 /**
@@ -90,16 +74,6 @@ export function explainShadowingBuiltin(
     errorType: "Shadowing",
     message: raw.message,
     headline,
-    whatHappened: [
-      `\`${name}\` is already a built-in name in Python (e.g. one of \`list\`,` +
-        ` \`sum\`, \`print\`, \`type\`, ...). Using it as a variable name` +
-        ` "hides" the built-in for the rest of this scope, which is a common` +
-        ` source of confusing bugs.`,
-    ],
-    whyItHappens: [
-      `${capitalize(level)} mode flags this so you don't accidentally lose` +
-        ` access to the built-in version of \`${name}\`.`,
-    ],
     howToFix: [
       `Pick a different name. Common patterns: \`my_${name}\`, \`${name}_value\`,` +
         ` \`${name}s\` (plural), or a more specific noun describing what this` +

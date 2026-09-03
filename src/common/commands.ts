@@ -15,28 +15,18 @@ export function registerCommands(
   services: ExtensionServices,
 ): void {
   context.subscriptions.push(
-    // Show the integrated interactions view.
-    vscode.commands.registerCommand("pll.showInteractions", () =>
-      services.view.reveal({ preserveFocus: false }).catch(reportError),
-    ),
-    // Back-compat alias for users who had this bound; just opens the view.
-    vscode.commands.registerCommand("pll.startRepl", () =>
-      services.view.reveal({ preserveFocus: false }).catch(reportError),
+    // Show the integrated interactions view. `startRepl` is a back-compat
+    // alias for users who had it bound.
+    ...["pll.showInteractions", "pll.startRepl"].map((id) =>
+      vscode.commands.registerCommand(id, () =>
+        services.view.reveal({ preserveFocus: false }).catch(reportError),
+      ),
     ),
     vscode.commands.registerCommand("pll.runActiveFile", () =>
       runActiveFile(services).catch(reportError),
     ),
     vscode.commands.registerCommand("pll.clearInteractions", () =>
       services.view.clear(),
-    ),
-    vscode.commands.registerCommand("pll.interactions.copy", () =>
-      services.view.copySelectionOrInterrupt().catch(reportError),
-    ),
-    vscode.commands.registerCommand("pll.interactions.cut", () =>
-      services.view.cutSelection().catch(reportError),
-    ),
-    vscode.commands.registerCommand("pll.interactions.paste", () =>
-      services.view.pasteClipboard().catch(reportError),
     ),
     vscode.commands.registerCommand("pll.editor.copy", () =>
       editorCopy().catch(reportError),

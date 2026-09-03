@@ -47,11 +47,6 @@ export function parseLevel(source: string): Level {
   return DEFAULT_LEVEL;
 }
 
-/** Human-friendly label for the level (used in REPL banners and messages). */
-export function levelLabel(level: Level): string {
-  return level;
-}
-
 /** Whether this level runs any static analyzer checks at all. */
 export function levelHasStaticChecks(level: Level): boolean {
   return level === "beginner" || level === "intermediate";

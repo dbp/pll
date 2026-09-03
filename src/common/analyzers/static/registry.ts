@@ -11,21 +11,13 @@ export type StaticExplainer = (
   fileName: string,
 ) => AnalysisFinding;
 
+/** Add an entry here to give another static-analyzer id a friendly finding. */
 const explainers: Record<string, StaticExplainer> = {
   shadowing: explainShadowing,
   "shadowing-builtin": explainShadowingBuiltin,
   reassignment: explainReassignment,
   "disallowed-keyword": explainDisallowedKeyword,
 };
-
-/**
- * Register a custom explainer for a static-analyzer finding id. Useful for
- * adding more checks (e.g. "comparison-vs-assignment") without touching this
- * file.
- */
-export function registerStaticExplainer(id: string, explainer: StaticExplainer): void {
-  explainers[id] = explainer;
-}
 
 function fallbackExplainer(
   raw: RawStaticFinding,
@@ -37,8 +29,6 @@ function fallbackExplainer(
     errorType: raw.error_type || "StaticError",
     message: raw.message,
     headline: raw.message,
-    whatHappened: [raw.message],
-    whyItHappens: [],
     howToFix: [],
     fileName,
     lineNumber: raw.line_number,

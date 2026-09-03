@@ -10,9 +10,7 @@ export interface AnalysisFinding {
   message: string;
   /** Beginner-friendly headline (single line). */
   headline: string;
-  /** Beginner-friendly explanation, one entry per paragraph. */
-  whatHappened: string[];
-  whyItHappens: string[];
+  /** Beginner-friendly next steps, one entry per bullet. */
   howToFix: string[];
   /** Display file name passed to the analyzer (e.g. "hello.py" or "<repl>"). */
   fileName: string;
@@ -56,10 +54,7 @@ export interface RuntimeAnalyzerInput extends AnalyzerContext {
  * explanation to features available at that level.
  */
 export interface RuntimeAnalyzer {
-  readonly kind: "runtime";
   /** Errors this analyzer handles (e.g. ["NameError"]). */
   readonly handles: ReadonlyArray<string>;
   analyze(input: RuntimeAnalyzerInput): AnalysisFinding | null;
 }
-
-export type Analyzer = RuntimeAnalyzer;

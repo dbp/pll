@@ -1,13 +1,8 @@
-import type { Level } from "../level";
 import type { ParsedPythonError } from "./pythonErrorParser";
 
 export interface BeginnerExplanation {
   /** Short headline, e.g. "Python doesn't know what `foo` means." */
   headline: string;
-  /** A few short paragraphs/lines of plain-language explanation. */
-  whatHappened: string[];
-  /** Common reasons this error appears. */
-  whyItHappens: string[];
   /** Concrete next steps the learner can take. */
   howToFix: string[];
 }
@@ -21,47 +16,12 @@ export interface BeginnerExplanation {
  * Older/newer CPython versions occasionally include suggestions
  * ("Did you mean: ...?"). We strip those out of the headline and
  * surface them separately if present.
- *
- * The `level` parameter lets us tailor the explanation: at the beginner level
- * we don't mention features that aren't available (modules/imports) and we
- * keep the bullets short.
  */
-export function explainNameError(
-  parsed: ParsedPythonError,
-  level: Level = "advanced",
-): BeginnerExplanation {
+export function explainNameError(parsed: ParsedPythonError): BeginnerExplanation {
   const name = parsed.nameToken ?? "this name";
   const didYouMean = extractDidYouMean(parsed.message);
 
   const headline = `Python doesn't know what \`${name}\` means.`;
-
-  const whatHappened: string[] = [
-    `When Python ran your code, it reached the name \`${name}\` and looked` +
-      " for a value with that name (a variable, function, class, or import) -" +
-      " but no such name exists in the current scope.",
-  ];
-
-  const whyItHappens: string[] = [
-    `Typo: \`${name}\` may be misspelled. Python is case-sensitive, so` +
-      " `Total` and `total` are different names.",
-    `Order of execution: \`${name}\` may be defined later in the file, but` +
-      " Python only knows about names that have already been assigned by the" +
-      " time it reaches this line.",
-    `Forgotten quotes: if you meant the text \"${name}\", wrap it in quotes:` +
-      ` \`\"${name}\"\`.`,
-  ];
-
-  if (level === "advanced") {
-    whyItHappens.splice(2, 0,
-      `Scope: \`${name}\` may be defined inside another function or block and` +
-        " isn't visible here.",
-    );
-    whyItHappens.push(
-      `Missing import: if \`${name}\` comes from a module, you may need` +
-        ` \`import ${name}\` (or \`from somemodule import ${name}\`) at the top` +
-        " of the file.",
-    );
-  }
 
   const howToFix: string[] = [
     `Check the spelling of \`${name}\` (Python is case-sensitive).`,
@@ -77,7 +37,7 @@ export function explainNameError(
     );
   }
 
-  return { headline, whatHappened, whyItHappens, howToFix };
+  return { headline, howToFix };
 }
 
 function extractDidYouMean(message: string): string[] {

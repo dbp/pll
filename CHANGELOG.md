@@ -3,6 +3,27 @@
 ## Unreleased
 - Rewriting a file with the same contents still saves it and still
   shows the **Saved … next to this file** banner.
+- If Python fails to start, the interactions panel now says so instead
+  of showing an empty panel and a spinner that never stops.
+- PLL no longer writes to your `settings.json` or `keybindings.json` on
+  activation. Its editor defaults were already declared as
+  `configurationDefaults`, which the runtime writes duplicated; the
+  leftover keybinding cleanup could also clobber a `keybindings.json`
+  that had comments in it.
+- Friendly errors show the headline and **How to fix**; the unused
+  "what happened" / "why it happens" paragraphs were dropped.
+
+### Internal
+- The desktop and web hosts now share one worker-protocol client
+  (`common/workerRuntime.ts`) and one worker implementation
+  (`common/workerHost.ts`) instead of two near-identical copies, and
+  one shared `activate`. Removed the dead
+  `pll.interactions.copy/cut/paste` commands and the host↔webview
+  clipboard round-trip they needed (their keybindings went away in
+  0.0.6). About 900 lines lighter.
+- New smoke tests for the previously untested host-side logic:
+  `scripts/smoke-repl-session.mjs` and
+  `scripts/smoke-worker-protocol.mjs`.
 
 ## 0.0.6
 - Editor **keyboard** copy/paste is **not** supported on vscode-web /

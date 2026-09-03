@@ -21,27 +21,6 @@ export function explainDisallowedKeyword(
 
   const headline = `\`${keyword}\` is not allowed at the ${level} level.`;
 
-  const whatHappened: string[] = [
-    `The \`${keyword}\` statement tells Python that an assignment inside this` +
-      ` function should rebind a variable in ${
-        keyword === "global" ? "the surrounding file" : "an enclosing function"
-      } instead of creating a new local variable. ${level} mode disallows it` +
-      ` because that "spooky" action makes code hard to follow.`,
-  ];
-
-  const whyItHappens: string[] =
-    level === "intermediate"
-      ? [
-          `In ${level} mode, each function works only with its own local` +
-            ` variables (and the arguments you pass in). Reading from outer` +
-            ` scopes is fine, but writing to them with \`${keyword}\` is not.`,
-        ]
-      : [
-          `In ${level} mode, each function should communicate with the rest of` +
-            ` your program through its arguments and its return value, not by` +
-            ` reaching out to modify variables defined elsewhere.`,
-        ];
-
   const howToFix: string[] = [];
   if (keyword === "global") {
     howToFix.push(
@@ -65,8 +44,6 @@ export function explainDisallowedKeyword(
     errorType: "DisallowedKeyword",
     message: raw.message,
     headline,
-    whatHappened,
-    whyItHappens,
     howToFix,
     fileName,
     lineNumber: raw.line_number,

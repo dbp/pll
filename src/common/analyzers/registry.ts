@@ -1,13 +1,10 @@
 import type { Level } from "../level";
 import type { ParsedPythonError } from "../errors/pythonErrorParser";
 import { nameErrorAnalyzer } from "./nameErrorAnalyzer";
-import type { AnalysisFinding, Analyzer } from "./types";
+import type { AnalysisFinding, RuntimeAnalyzer } from "./types";
 
-const analyzers: Analyzer[] = [nameErrorAnalyzer];
-
-export function registerAnalyzer(analyzer: Analyzer): void {
-  analyzers.push(analyzer);
-}
+/** Add an analyzer here to give another runtime error a friendly finding. */
+const analyzers: RuntimeAnalyzer[] = [nameErrorAnalyzer];
 
 export function findRuntimeFinding(
   source: string,
@@ -15,12 +12,11 @@ export function findRuntimeFinding(
   level: Level,
   parsedError: ParsedPythonError,
 ): AnalysisFinding | null {
-  for (const a of analyzers) {
-    if (a.kind !== "runtime") continue;
-    if (!a.handles.includes(parsedError.errorType)) {
+  for (const analyzer of analyzers) {
+    if (!analyzer.handles.includes(parsedError.errorType)) {
       continue;
     }
-    const finding = a.analyze({ source, fileName, level, parsedError });
+    const finding = analyzer.analyze({ source, fileName, level, parsedError });
     if (finding) {
       return finding;
     }

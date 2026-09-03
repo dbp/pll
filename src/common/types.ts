@@ -1,3 +1,7 @@
+import type { Level } from "./level";
+import type { RawStaticFinding } from "./pyodideRunner";
+import type { WorkspaceFile } from "./workspaceFilePolicy";
+
 export interface ExecutionStdoutChunk {
   kind: "stdout";
   text: string;
@@ -108,10 +112,6 @@ export interface ReplCheckResult {
   offset?: number;
 }
 
-import type { Level } from "./level";
-import type { RawStaticFinding } from "./pyodideRunner";
-import type { WorkspaceFile } from "./workspaceFilePolicy";
-
 export interface StaticAnalyzeRequest {
   code: string;
   fileName: string;
@@ -123,7 +123,6 @@ export interface StaticAnalyzeRequest {
 
 export interface PythonRuntime {
   initialize(): Promise<void>;
-  isReady(): boolean;
   runFile(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void>;
   replEval(request: ReplEvalRequest, onEvent: ExecutionEventHandler): Promise<void>;
   /**
