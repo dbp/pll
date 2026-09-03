@@ -1,12 +1,23 @@
 #!/usr/bin/env node
 /**
- * The actual student workflow:
- *   1. Open hello.py
+ * Editor keyboard copy/paste on vscode-web, as a student would do it:
+ *   1. Open a file
  *   2. Select the first line
- *   3. Copy
+ *   3. Ctrl/Cmd+C
  *   4. Move the cursor to the end of the file
- *   5. Paste
+ *   5. Ctrl/Cmd+V
  *   6. The first line is still there, and also appears at the bottom
+ *
+ * vscode-web registers the clipboard actions with no keybinding
+ * (`kbOpts: isNative ? ... : undefined`) so that Chromium's own
+ * copy/paste events fire on Monaco's focused `textarea.inputarea`. This
+ * test exercises that native path: Playwright's key events go through
+ * Chromium's input pipeline as trusted events. The one thing it is not is
+ * a physical key event from the OS.
+ *
+ *   node scripts/smoke-editor-clipboard.mjs                  # insiders
+ *   VSCODE_WEB_QUALITY=stable node scripts/...               # what vscode.dev ships
+ *   VSCODE_WEB_URL=http://localhost:3000 node scripts/...    # reuse a server
  */
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
@@ -14,6 +25,8 @@ import { chromium } from "playwright";
 const PORT = process.env.VSCODE_WEB_PORT ?? "3013";
 const URL = process.env.VSCODE_WEB_URL ?? `http://localhost:${PORT}`;
 const START_SERVER = !process.env.VSCODE_WEB_URL;
+const QUALITY = process.env.VSCODE_WEB_QUALITY ?? "insiders";
+const HEADED = !!process.env.VSCODE_WEB_HEADED;
 const FIRST_LINE = 'greeting = "Hello!"';
 
 function startServer() {
@@ -22,6 +35,7 @@ function startServer() {
     [
       "vscode-test-web",
       "--browser=none",
+      `--quality=${QUALITY}`,
       "--coi",
       "--permission=clipboard-read",
       "--permission=clipboard-write",
@@ -29,7 +43,7 @@ function startServer() {
       `--port=${PORT}`,
       "samples",
     ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    { stdio: ["ignore", "pipe", "pipe"], detached: true },
   );
   return new Promise((resolve, reject) => {
     const onData = (buf) => {
@@ -69,7 +83,7 @@ async function main() {
   let browser;
   try {
     browser = await chromium.launch({
-      headless: true,
+      headless: !HEADED,
       args: ["--no-sandbox"],
     });
     const context = await browser.newContext();
@@ -82,7 +96,7 @@ async function main() {
     await page.locator(".monaco-list-row", { hasText: "hello.py" }).first().waitFor({
       state: "visible",
     });
-    // Startup activation writes editor.editContext before we open a file.
+    // Let activation and the extension host settle before opening a file.
     await page.waitForTimeout(4000);
 
     await page.locator(".monaco-list-row", { hasText: "hello.py" }).first().dblclick();
@@ -102,9 +116,8 @@ async function main() {
     await page.waitForTimeout(400);
     console.log("2 selected first line");
 
-    // Playwright CDP key events (NOT an OS Ctrl+C). Chromium treats them as
-    // trusted; they are still not the same path as a physical keypress in
-    // the headed `pnpm run test-web` window.
+    // Chromium delivers these through its input pipeline as trusted events,
+    // which is what makes them exercise the browser's native copy handler.
     await page.evaluate(() => navigator.clipboard.writeText("NOT_YET"));
     await page.keyboard.press("Control+c");
     await page.waitForTimeout(400);
@@ -147,8 +160,13 @@ async function main() {
     console.log("ok: select / copy / move / paste kept the original and inserted a copy");
   } finally {
     await browser?.close();
-    if (server) {
-      server.kill("SIGTERM");
+    if (server?.pid) {
+      // Kill the whole group: `npx` is the child, the server its grandchild.
+      try {
+        process.kill(-server.pid, "SIGTERM");
+      } catch {
+        server.kill("SIGTERM");
+      }
       await new Promise((resolve) => {
         const t = setTimeout(resolve, 2000);
         server.once("exit", () => {
@@ -160,7 +178,12 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main().then(
+  // Piped stdio from the server can keep the loop alive; exit explicitly so
+  // a passing run does not look like a hang.
+  () => process.exit(0),
+  (err) => {
+    console.error(err);
+    process.exit(1);
+  },
+);

@@ -12,6 +12,21 @@
   that had comments in it.
 - Friendly errors show the headline and **How to fix**; the unused
   "what happened" / "why it happens" paragraphs were dropped.
+- **Correction to 0.0.6:** editor keyboard copy/paste on vscode-web is
+  *not* broken, and PLL is not the reason it looked that way. vscode-web
+  registers the clipboard commands with no keybinding on purpose, so the
+  browser's own copy/paste handles them; that works. Verified against
+  stable 1.136.1 (what vscode.dev ships) and insiders 1.137.0, for `.py`
+  and `.txt`, headed and headless, with `editor.editContext` both on and
+  off. `pnpm run test-web:clipboard` covers it and no longer hangs after
+  passing (it was leaking the server process, which read as a failure).
+  **PLL: Editor Copy/Cut/Paste** stay as a palette fallback — Firefox
+  registers no paste action at all.
+- Documented the one case where editor copy/paste really does fail in
+  the browser: a non-QWERTY layout (Dvorak, Colemak, …), where VS Code
+  web assumes QWERTY and reads Ctrl+C as another shortcut.
+  `"keyboard.dispatch": "keyCode"` in **user** settings fixes it; PLL
+  cannot ship the fix, as the setting is application-scoped.
 
 ### Internal
 - The desktop and web hosts now share one worker-protocol client

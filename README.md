@@ -214,6 +214,27 @@ also appears in the editor title bar when a `.py` file is open.
 | **PLL: Start REPL** | Open the interactions panel (same as Show Interactions). |
 | **PLL: Clear Interactions** | Clear the panel. |
 
+## Copy and paste
+
+Ctrl/Cmd+C, X, and V work as usual, both in the editor and in the
+interactions panel, in the browser and on the desktop. Right-click also
+works.
+
+If the shortcuts do nothing in the browser and you use a layout other
+than QWERTY (Dvorak, Colemak, …), add this to your **user** settings
+(Command Palette → *Preferences: Open User Settings (JSON)*) — a
+`.vscode/settings.json` in the folder will not work:
+
+```json
+{
+  "keyboard.dispatch": "keyCode"
+}
+```
+
+Otherwise, check whether something in your own **Keyboard Shortcuts**
+has taken over Ctrl/Cmd+C or V. **PLL: Editor Copy/Cut/Paste** in the
+Command Palette also work as a fallback.
+
 ## A quieter editor
 
 PLL turns off many extra Python tools (autocomplete popups, extra

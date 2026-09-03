@@ -255,26 +255,78 @@ Three options, in increasing order of how close they are to production:
 **Interactions panel:** Ctrl/Cmd+C/X/V and right-click work (0.0.5).
 The workbench used to swallow those keys before the webview saw them.
 
-**Editor (Monaco) on vscode-web / `test-web`:** keyboard copy/paste is
-**not supported** and is abandoned. What works:
+**Editor (Monaco) on vscode-web:** keyboard copy/paste **works**. An
+earlier version of this document said it was unsupported and abandoned;
+that was wrong, and `pnpm run test-web:clipboard` now checks it.
 
-- Editor **context menu** (right-click)
-- Command Palette **PLL: Editor Copy/Cut/Paste** (`pll.editor.*`, via
-  `vscode.env.clipboard`)
+How it works, and why it looks broken if you go looking for a command:
+vscode-web registers `editor.action.clipboard{Cut,Copy,Paste}Action`
+with **no keybinding**. In the shipped bundle the registration reads
+`kbOpts: isNative ? {...} : undefined`, and `isNative` is false in web.
+That is deliberate — with no keybinding intercepting the key, Chromium
+fires its own `copy` / `cut` / `paste` events on the focused
+`textarea.inputarea` that Monaco keeps in sync with the selection, and
+the browser does the work without a clipboard permission prompt. So
+there is no command to bind and nothing for an extension to fix.
 
-What does not: physical Ctrl/Cmd+C/X/V in the editor. vscode-web
-**does not dispatch** those keys to commands so the browser can fire
-`copy` / `paste` / `cut` without a permission prompt. Binding them
-makes the workbench `preventDefault` and then **not** run the command
-(palette still works). Leaving them unbound still does not give working
-native copy here (`test-web` is Insiders with EditContext; COI also
-restricts the clipboard). Do not bind `pll.editor.*` or
-`editor.action.clipboard*Action` to those keys. PLL turns EditContext
-off through `configurationDefaults` (`editor.editContext`); that did
-not restore the keys either.
+Verified with `--coi` and clipboard permissions granted, against both
+web builds `@vscode/test-web` can serve — stable 1.136.1 (what
+vscode.dev ships) and insiders 1.137.0 — for a `.py` and a `.txt` file,
+headed and headless, with no workspace settings and with
+`editor.editContext` forced both true and false. Copy and paste
+succeeded in every combination.
 
-`pnpm run test-web:clipboard` (Playwright `keyboard.press`) is **not**
-a real OS keypress and is not evidence that copy works.
+Two things that follow:
+
+- **EditContext is a red herring.** In both builds Monaco used
+  `textarea.inputarea` regardless of `editor.editContext`
+  (`.native-edit-context` was never created), so PLL's
+  `editor.editContext` / `experimentalEditContextEnabled` defaults are
+  inert. They are kept only in case a future build flips over.
+- **Do not bind Ctrl/Cmd+C/X/V** to `pll.editor.*` or to
+  `editor.action.clipboard*Action`. There is nothing to gain — the keys
+  already work — and a binding puts a command in front of the browser's
+  native handling. If keyboard copy/paste is broken for you, a leftover
+  binding in your own `keybindings.json` is the first thing to check;
+  PLL does not write that file.
+
+`pll.editor.*` (**PLL: Editor Copy/Cut/Paste**, via
+`vscode.env.clipboard`) stays as a palette fallback. It earns its keep
+in Firefox: `supportsPaste` there is
+`document.queryCommandSupported("paste")`, which is false, so vscode-web
+registers no paste action at all — not even a palette entry or context
+menu item.
+
+### Non-QWERTY layouts (Dvorak, Colemak, …)
+
+If keyboard copy/paste does nothing in the browser, the layout is the
+cause. Fix, in **user** settings:
+
+```json
+{
+  "keyboard.dispatch": "keyCode"
+}
+```
+
+By default VS Code resolves shortcuts from the *physical* key and, in
+the browser, has no reliable way to learn your layout
+(`navigator.keyboard.getLayoutMap()` can come back empty), so it assumes
+US QWERTY. On Dvorak the `c` key is physically `KeyJ`, so Ctrl+C reads
+as Ctrl+J — which unlike Ctrl+C *is* bound in web (toggle panel), so the
+workbench swallows the key and the browser's native copy never runs.
+`keyCode` dispatch resolves by character instead, and copy works.
+
+It must be **user** settings: the setting is `APPLICATION` scope, so
+workspace settings and extension `configurationDefaults` are both
+ignored (tested). PLL therefore cannot ship this, and should not write
+it on a student's behalf. macOS/Linux only, and it changes how every
+shortcut resolves.
+
+`pnpm run test-web:clipboard` drives the real workbench in Chromium via
+Playwright and asserts select → copy → move → paste. Playwright's key
+events go through Chromium's input pipeline as trusted events, which is
+why they exercise the native clipboard path; the one thing it is not is
+a physical key event arriving from the OS.
 
 ## Configuration
 
