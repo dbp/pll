@@ -407,17 +407,28 @@ and shows one warning with:
 - **Don't ask again** — stores dismissal in workspace state.
 
 VS Code itself still recommends Microsoft's Python extension when a
-`.py` file is opened. An extension cannot turn that product tip off on
-every machine. For a course repo, add this to `.vscode/extensions.json`:
+`.py` file is opened, and **no extension can suppress that**. The
+recommendation lives in the workbench's own product config
+(`extensionRecommendations`) as `{pathGlob: "{**/*.py}", important:
+true}` with no `whenNotInstalled` list. Other languages do have one —
+Java defers to `Oracle.oracle-java`, C++ to `vscode-clangd` — so the
+opt-out mechanism exists; Python's entry just doesn't use it. Installing
+PLL therefore cannot register it as an alternative.
+
+What does work is per-workspace, as in `samples/.vscode/extensions.json`:
 
 ```json
 {
-  "unwantedRecommendations": [
-    "ms-python.python",
-    "ms-python.vscode-pylance"
-  ]
+  "recommendations": ["pll.python-language-levels"],
+  "unwantedRecommendations": ["ms-python.python", "ms-python.vscode-pylance"]
 }
 ```
+
+A user can also set `"extensions.ignoreRecommendations": true`, which
+silences *all* recommendation prompts. That one is window-scoped, so
+unlike `keyboard.dispatch` PLL could ship it in
+`configurationDefaults` — it is left out deliberately, as suppressing
+every recommendation is broader than the problem.
 
 If those extensions are already installed, the guard prompts the user to
 disable them for the workspace.

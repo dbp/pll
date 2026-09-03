@@ -1,0 +1,9 @@
+{
+  "recommendations": [
+    "pll.python-language-levels"
+  ],
+  "unwantedRecommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance"
+  ]
+}
