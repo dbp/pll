@@ -131,7 +131,13 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
   async runTests(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void> {
     await this.initialize();
     const { result } = await this.request(
-      { type: "runTests", code: request.code, fileName: request.fileName },
+      {
+        type: "runTests",
+        code: request.code,
+        fileName: request.fileName,
+        typeCheck: request.typeCheck,
+        level: request.level,
+      },
       "testResult",
     );
     deliverTestResult(result, onEvent, request.fileName);

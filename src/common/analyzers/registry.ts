@@ -1,10 +1,11 @@
 import type { Level } from "../level";
 import type { ParsedPythonError } from "../errors/pythonErrorParser";
 import { nameErrorAnalyzer } from "./nameErrorAnalyzer";
+import { typeCheckAnalyzer } from "./typeCheckAnalyzer";
 import type { AnalysisFinding, RuntimeAnalyzer } from "./types";
 
 /** Add an analyzer here to give another runtime error a friendly finding. */
-const analyzers: RuntimeAnalyzer[] = [nameErrorAnalyzer];
+const analyzers: RuntimeAnalyzer[] = [nameErrorAnalyzer, typeCheckAnalyzer];
 
 export function findRuntimeFinding(
   source: string,

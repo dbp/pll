@@ -102,11 +102,56 @@ you run the file, the current level is shown in the interactions header
 | --- | --- |
 | `#beginner` | Strictest. PLL warns about reassigning a variable, reusing a name that hides another name (including built-in names like `list`), and the `global` / `nonlocal` keywords. If it finds a problem, it **does not run** the file. |
 | `#intermediate` | Same rules about hiding names and `global` / `nonlocal`, but you **may** reassign variables inside a function. That is useful for introducing for loops, where you need mutable accumulators. Reassigning at the top of the file is still flagged. |
-| `#advanced` | No extra checks. The file runs as ordinary Python. This is the default if you omit the line. |
+| `#advanced` | No extra checks before the file runs, and type annotations follow Python's own rules (so `True` counts as `1`). This is the default if you omit the line. |
 
 The prompt at the bottom of the interactions panel uses the **same**
 level as the last run (the one shown in the header). If you have not
 run the file yet, the prompt is advanced.
+
+## Type annotations are checked as your program runs
+
+If you write annotations, PLL checks them while the program runs and stops
+with an explanation the moment a value does not match:
+
+```python
+def book_cost(num_books: int, hardcover: bool) -> float:
+    if hardcover:
+        return num_books * 25
+    return num_books * 12
+
+book_cost("three", True)
+```
+
+> `book_cost` expects `num_books` to be a whole number (`int`), but got a
+> string (`str`).
+
+You do not need to import anything, and it works at every level. What is
+checked:
+
+- the arguments you pass to a function, checked at the call
+- the value a function returns, including a function that ends without
+  returning anything when it says it returns something
+- variables you annotate, like `total: int = 0`
+- every item in an annotated `list`, `dict`, `set`, or `tuple`
+
+Functions without annotations are left completely alone. A whole number is
+accepted wherever a `float` is expected, as it is in normal Python.
+
+At `#beginner` and `#intermediate`, `True` and `False` are **not** accepted
+where `int` or `float` is annotated:
+
+```python
+#beginner
+
+shelf_count: int = True   # error: True is not a whole number here
+```
+
+Python itself counts `True` as `1`, so this is a rule PLL adds rather than
+one Python enforces — a value that is really a yes/no answer should be
+annotated `bool`. At `#advanced` this follows Python's own rule and is
+allowed.
+
+To turn this off, set `"pll.runtimeTypeChecking": false` in your settings.
 
 ## Interactive `input()`
 

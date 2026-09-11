@@ -3,11 +3,11 @@
 # This module is loaded into Pyodide once when the runtime initializes.
 # It exposes four entry points used by the TypeScript host:
 #
-#   _pll_run_file(code, filename, session_key)   -> dict
-#   _pll_repl_eval(code, session_key)            -> dict
+#   _pll_run_file(code, filename, session_key, type_check=True)   -> dict
+#   _pll_repl_eval(code, session_key, type_check=True)            -> dict
 #   _pll_repl_check(source)                      -> dict
 #   _pll_has_tests(code)                         -> bool
-#   _pll_run_tests(code, filename)               -> dict
+#   _pll_run_tests(code, filename, type_check=True)               -> dict
 #   _pll_static_analyze(code, level, filename, session_key=None) -> list[dict]
 #
 # Each returns a JSON-friendly dict / list of dicts so the JS side can
@@ -25,6 +25,7 @@
 
 import traceback as _tb_mod
 import ast as _ast
+import copy as _pll_copy
 import codeop as _codeop
 import contextlib
 import json as _pll_json
@@ -34,6 +35,128 @@ import sys as _sys
 # here and it is cwd, so open("cars.csv") works. It must not sit first on
 # sys.path or a neighboring pandas.py wins over the real package.
 _PLL_WORK_DIR = "/home/pyodide/pll_workspace"
+
+# Vendored pure-Python wheels (typeguard + typing_extensions) that the
+# worker writes into MEMFS before calling `_pll_enable_type_checking`.
+# Must match PLL_VENDOR_DIR in pythonVendor.ts.
+_PLL_VENDOR_DIR = "/pll_vendor"
+
+# Set by `_pll_enable_type_checking`. While False, `_pll_instrument_types`
+# leaves code untouched, so a program still runs - just unchecked.
+_PLL_TYPEGUARD_READY = False
+_pll_typeguard_transformer = None
+_pll_type_check_error = None
+
+# Whether a bool is rejected where int / float is annotated. Set per run
+# from the language level; see `levelRejectsBoolAsNumber` in level.ts.
+# Python counts True as 1 and both mypy and typeguard follow it, which is a
+# hole at the teaching levels: a student who annotates `int` and passes
+# `True` has almost always made a mistake. `advanced` keeps Python's rule.
+_PLL_STRICT_NUMBERS = False
+
+
+def _pll_check_strict_int(value, origin_type, args, memo):
+    """Replaces typeguard's `int` check; bools are not whole numbers here.
+
+    The wording matches typeguard's own so the host-side explainer needs
+    no special case: it sees the actual type (bool) and the expected one.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _pll_type_check_error("is not an instance of int")
+
+
+def _pll_check_strict_float(value, origin_type, args, memo):
+    """As `_pll_check_strict_int`, for the int-or-float numeric tower."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _pll_type_check_error("is neither float or int")
+
+
+def _pll_strict_number_lookup(origin_type, args, extras):
+    """typeguard checker lookup; consulted on every check, so the flag
+    can be flipped per run without re-registering."""
+    if not _PLL_STRICT_NUMBERS:
+        return None
+    if origin_type is int:
+        return _pll_check_strict_int
+    if origin_type is float:
+        return _pll_check_strict_float
+    return None
+
+
+def _pll_apply_level(level):
+    """Set the per-run strictness implied by the language level."""
+    global _PLL_STRICT_NUMBERS
+    _PLL_STRICT_NUMBERS = level in ("beginner", "intermediate")
+
+
+def _pll_enable_type_checking():
+    """Put the vendored wheels on sys.path and import typeguard.
+
+    Returns True when runtime type checking is available. A failure here
+    is deliberately not fatal: students' code must still run, so the
+    feature degrades to "no type checks" rather than breaking the editor.
+    """
+    global _PLL_TYPEGUARD_READY, _pll_typeguard_transformer, _pll_type_check_error
+    if _PLL_TYPEGUARD_READY:
+        return True
+    try:
+        for name in ("typing_extensions.whl", "typeguard.whl"):
+            path = _PLL_VENDOR_DIR + "/" + name
+            # Appended, not prepended: a real package in site-packages
+            # (Pyodide ships typing_extensions too) should still win.
+            if path not in _sys.path:
+                _sys.path.append(path)
+        from typeguard import TypeCheckError, TypeCheckMemo
+        from typeguard._checkers import checker_lookup_functions
+        from typeguard._config import CollectionCheckStrategy, global_config
+        from typeguard._functions import check_variable_assignment
+        from typeguard._transformer import TypeguardTransformer
+
+        # `list[int]` should mean *every* item is an int. typeguard only
+        # checks the first item by default, which silently accepts
+        # [1, 2, "three"] - confusing when the annotation says otherwise.
+        global_config.collection_check_strategy = CollectionCheckStrategy.ALL_ITEMS
+
+        # Referenced by name in the AST that `_PllTopLevelAnnAssign`
+        # injects, so they have to be visible in user globals.
+        _pll_initial_globals["_pll_tg_memo"] = TypeCheckMemo
+        _pll_initial_globals["_pll_tg_check_assign"] = check_variable_assignment
+        # Consulted before typeguard's builtin lookup, and gated on
+        # `_PLL_STRICT_NUMBERS` so it is a no-op at `advanced`.
+        _pll_type_check_error = TypeCheckError
+        if _pll_strict_number_lookup not in checker_lookup_functions:
+            checker_lookup_functions.insert(0, _pll_strict_number_lookup)
+
+        _pll_typeguard_transformer = TypeguardTransformer
+        _PLL_TYPEGUARD_READY = True
+    except BaseException:
+        _PLL_TYPEGUARD_READY = False
+    return _PLL_TYPEGUARD_READY
+
+
+def _pll_is_vendor_frame(filename):
+    return isinstance(filename, str) and filename.startswith(_PLL_VENDOR_DIR)
+
+
+def _pll_format_exception(exc):
+    """`format_exception`, minus frames inside the vendored type checker.
+
+    A typeguard failure otherwise ends in several frames of typeguard's
+    own checker, burying the student's line under machinery they did not
+    write. When nothing is dropped this returns the stdlib formatting
+    unchanged, so ordinary errors look exactly as they did before.
+    """
+    try:
+        frames = _tb_mod.extract_tb(exc.__traceback__)
+        kept = [f for f in frames if not _pll_is_vendor_frame(f.filename)]
+        if len(kept) == len(frames):
+            return "".join(_tb_mod.format_exception(type(exc), exc, exc.__traceback__))
+        parts = ["Traceback (most recent call last):\n"]
+        parts.extend(_tb_mod.StackSummary.from_list(kept).format())
+        parts.extend(_tb_mod.format_exception_only(type(exc), exc))
+        return "".join(parts)
+    except BaseException:
+        return "".join(_tb_mod.format_exception(type(exc), exc, exc.__traceback__))
 
 
 def _pll_protect_import_path():
@@ -212,6 +335,78 @@ def _pll_reset_session(session_key):
     return g
 
 
+class _PllTopLevelAnnAssign(_ast.NodeTransformer):
+    """Type-check annotated assignments outside functions.
+
+    typeguard instruments function arguments, return values, and
+    annotated assignments *inside* functions, but leaves
+    `total: int = "oops"` at module level unchecked. Students write those,
+    so we wrap the value in typeguard's own check to get the same wording.
+
+    Function and class bodies are skipped: typeguard already covers
+    functions, and a bare `name: str` in a class body is a field
+    declaration (dataclasses, etc.) rather than an assignment.
+    """
+
+    def visit_FunctionDef(self, node):
+        return node
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node):
+        return node
+
+    def visit_AnnAssign(self, node):
+        if node.value is None or not isinstance(node.target, _ast.Name):
+            return node
+        node.value = self._checked(node.target.id, node.value, node.annotation)
+        return node
+
+    def _checked(self, name, value, annotation):
+        """`value` -> `_pll_tg_check_assign(value, [(name, ann)], memo)`."""
+        memo = _ast.Call(
+            func=_ast.Name(id="_pll_tg_memo", ctx=_ast.Load()),
+            args=[
+                _ast.Call(func=_ast.Name(id="globals", ctx=_ast.Load()), args=[], keywords=[]),
+                _ast.Call(func=_ast.Name(id="locals", ctx=_ast.Load()), args=[], keywords=[]),
+            ],
+            keywords=[],
+        )
+        target = _ast.Tuple(
+            elts=[_ast.Constant(value=name), _pll_copy.deepcopy(annotation)],
+            ctx=_ast.Load(),
+        )
+        call = _ast.Call(
+            func=_ast.Name(id="_pll_tg_check_assign", ctx=_ast.Load()),
+            args=[value, _ast.List(elts=[target], ctx=_ast.Load()), memo],
+            keywords=[],
+        )
+        _ast.copy_location(call, value)
+        _ast.fix_missing_locations(call)
+        return call
+
+
+def _pll_parse_and_instrument(code, filename, type_check):
+    """Parse `code`, adding runtime type checks when they are available.
+
+    Instrumentation is attempted on a second parse and validated by
+    compiling it, so anything typeguard cannot handle falls back to the
+    plain tree rather than failing the run.
+    """
+    tree = _ast.parse(code, filename=filename, mode="exec")
+    if not type_check or not _PLL_TYPEGUARD_READY:
+        return tree
+    try:
+        instrumented = _ast.parse(code, filename=filename, mode="exec")
+        _pll_typeguard_transformer().visit(instrumented)
+        _PllTopLevelAnnAssign().visit(instrumented)
+        _ast.fix_missing_locations(instrumented)
+        compile(instrumented, filename, "exec")
+        return instrumented
+    except BaseException:
+        return tree
+
+
 class _PllTopLevelExprWrapper(_ast.NodeTransformer):
     """Wrap module-level expression statements so they auto-display.
 
@@ -304,7 +499,7 @@ def _pll_extract_loc(tb_str, fallback_filename):
     return line_no, col
 
 
-def _pll_run_file(code, filename, session_key):
+def _pll_run_file(code, filename, session_key, type_check=True, level="advanced"):
     stdout = _PllStream("stdout")
     stderr = _PllStream("stderr")
     result = {
@@ -322,11 +517,12 @@ def _pll_run_file(code, filename, session_key):
     # Each Run File starts with a clean slate for this session: discard any
     # names defined by a previous Run File of the same session or by REPL
     # exploration since then.
+    _pll_apply_level(level)
     _pll_protect_import_path()
     user_globals = _pll_reset_session(session_key)
     _pll_displays.clear()
     try:
-        tree = _ast.parse(code, filename=filename, mode="exec")
+        tree = _pll_parse_and_instrument(code, filename, type_check)
         _PllTopLevelExprWrapper().visit(tree)
         _ast.fix_missing_locations(tree)
         compiled = compile(tree, filename, "exec")
@@ -349,7 +545,7 @@ def _pll_run_file(code, filename, session_key):
     except SystemExit:
         result["ok"] = True
     except BaseException as e:
-        formatted = "".join(_tb_mod.format_exception(type(e), e, e.__traceback__))
+        formatted = _pll_format_exception(e)
         result["error_type"] = type(e).__name__
         result["error_message"] = str(e)
         result["traceback"] = formatted
@@ -391,6 +587,7 @@ def _pll_has_tests(code):
 
 
 _PLL_TRACE_SKIP = (
+    _PLL_VENDOR_DIR,
     "_pytest",
     "pluggy",
     "site-packages",
@@ -534,7 +731,7 @@ def _pll_iter_tests(ns):
             yield name + "::" + meth_name, _bound
 
 
-def _pll_run_tests(code, filename):
+def _pll_run_tests(code, filename, type_check=True, level="advanced"):
     """Run same-file tests (`test_*` / `Test*`) in an isolated namespace.
 
     Uses pytest only to rewrite assertions so failures show `assert 4 == 5`
@@ -562,10 +759,11 @@ def _pll_run_tests(code, filename):
         "displays": [],
     }
     _pll_displays.clear()
+    _pll_apply_level(level)
     _pll_protect_import_path()
 
     try:
-        tree = _ast.parse(code, filename=display_name, mode="exec")
+        tree = _pll_parse_and_instrument(code, display_name, type_check)
     except SyntaxError as e:
         result["internal_error"] = True
         result["error_type"] = type(e).__name__
@@ -584,7 +782,7 @@ def _pll_run_tests(code, filename):
         _pll_fix_ast_ranges(tree)
         compiled = compile(tree, display_name, "exec")
     except Exception:
-        tree = _ast.parse(code, filename=display_name, mode="exec")
+        # Assert rewriting failed; keep the type instrumentation.
         compiled = compile(tree, display_name, "exec")
 
     ns = dict(_pll_initial_globals)
@@ -595,7 +793,7 @@ def _pll_run_tests(code, filename):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             exec(compiled, ns)
     except BaseException as e:
-        formatted = "".join(_tb_mod.format_exception(type(e), e, e.__traceback__))
+        formatted = _pll_format_exception(e)
         result["internal_error"] = True
         result["error_type"] = type(e).__name__
         result["error_message"] = str(e)
@@ -644,7 +842,7 @@ def _pll_run_tests(code, filename):
 # REPL-style eval (statements + last-expression value)
 # -----------------------------------------------------------------------------
 
-def _pll_repl_eval(code, session_key):
+def _pll_repl_eval(code, session_key, type_check=True, level="advanced"):
     stdout = _PllStream("stdout")
     stderr = _PllStream("stderr")
     result = {
@@ -660,13 +858,14 @@ def _pll_repl_eval(code, session_key):
         "displays": [],
     }
     _pll_displays.clear()
+    _pll_apply_level(level)
     _pll_protect_import_path()
     user_globals = _pll_get_session(session_key)
     filename = "<repl>"
     try:
-        tree = _ast.parse(code, filename=filename, mode="exec")
+        tree = _pll_parse_and_instrument(code, filename, type_check)
     except SyntaxError as e:
-        formatted = "".join(_tb_mod.format_exception(type(e), e, e.__traceback__))
+        formatted = _pll_format_exception(e)
         result["error_type"] = type(e).__name__
         result["error_message"] = str(e)
         result["traceback"] = formatted
@@ -698,7 +897,7 @@ def _pll_repl_eval(code, session_key):
     except SystemExit:
         result["ok"] = True
     except BaseException as e:
-        formatted = "".join(_tb_mod.format_exception(type(e), e, e.__traceback__))
+        formatted = _pll_format_exception(e)
         result["error_type"] = type(e).__name__
         result["error_message"] = str(e)
         result["traceback"] = formatted

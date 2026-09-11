@@ -223,6 +223,16 @@ export class ReplSession implements vscode.Disposable {
     return session;
   }
 
+  /**
+   * Whether runs are instrumented with runtime type checks. Read per run so
+   * toggling the setting takes effect without a reload.
+   */
+  private typeCheckEnabled(): boolean {
+    return vscode.workspace
+      .getConfiguration("pll")
+      .get<boolean>("runtimeTypeChecking", true);
+  }
+
   /** The string we display as the view's header for `session`. */
   private titleFor(session: Session): string {
     return session.lastLevel
@@ -439,8 +449,10 @@ export class ReplSession implements vscode.Disposable {
       }
     }
     await this.execute(session, code, () =>
-      this.deps.runtime.replEval({ code, sessionKey: session.key }, (event) =>
-        this.handleEvent(session, event, code, "<repl>", undefined, level),
+      this.deps.runtime.replEval(
+        { code, sessionKey: session.key, typeCheck: this.typeCheckEnabled(), level },
+        (event) =>
+          this.handleEvent(session, event, code, "<repl>", undefined, level),
       ),
     );
   }
@@ -492,12 +504,18 @@ export class ReplSession implements vscode.Disposable {
     await this.execute(session, code, async () => {
       if (await this.shouldRunTests(session, code)) {
         this.setSessionBusy(session, true, "Running tests...");
-        await this.deps.runtime.runTests({ code, fileName, sessionKey: session.key }, onEvent);
+        await this.deps.runtime.runTests(
+          { code, fileName, sessionKey: session.key, typeCheck: this.typeCheckEnabled(), level },
+          onEvent,
+        );
       }
       this.setSessionBusy(session, true, "Running...");
       this.stdinSession = session;
       try {
-        await this.deps.runtime.runFile({ code, fileName, sessionKey: session.key }, onEvent);
+        await this.deps.runtime.runFile(
+          { code, fileName, sessionKey: session.key, typeCheck: this.typeCheckEnabled(), level },
+          onEvent,
+        );
       } finally {
         this.stdinSession = null;
         this.cancelStdin();

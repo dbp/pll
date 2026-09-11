@@ -45,6 +45,7 @@ src/
     ├── errorFormatter.ts          Plain-text rendering for diagnostic tooltips
     ├── diagnostics.ts             VS Code DiagnosticCollection (multi-finding)
     ├── pyodideRunner.ts           Bootstrap loader + types
+    ├── pythonVendor.ts            Bundled typeguard / typing_extensions wheels
     ├── deliverResult.ts           Translates Python results to ExecutionEvents
     ├── pyodideBootstrap.py        Real Python: run / repl-eval / tests / static analyzer
     ├── imageLib.py                Real Python: SVG image primitives + combinators
@@ -52,6 +53,7 @@ src/
     ├── analyzers/
     │   ├── types.ts               AnalysisFinding, RuntimeAnalyzer
     │   ├── nameErrorAnalyzer.ts   Runtime: NameError -> friendly finding
+    │   ├── typeCheckAnalyzer.ts   Runtime: TypeCheckError -> friendly finding
     │   ├── registry.ts            Runtime analyzer registry
     │   └── static/
     │       ├── shadowingExplainer.ts            shadowing + shadowing-builtin
@@ -60,7 +62,13 @@ src/
     │       └── registry.ts                      Wraps Python-side raw findings
     └── errors/
         ├── pythonErrorParser.ts
-        └── nameErrorExplainer.ts
+        ├── nameErrorExplainer.ts
+        └── typeCheckExplainer.ts  typeguard wording -> beginner wording
+
+vendor/
+└── python/                        Pure-Python wheels, inlined by esbuild
+    ├── typeguard-*.whl
+    └── typing_extensions-*.whl
 
 media/
 ├── interactionsView/
@@ -116,6 +124,83 @@ process (`syncHttp.ts`) so the same `pyodide-http` patch works. Both
 the load and the patch are guarded so non-networked programs never
 load the shim. Browser requests still need CORS; desktop Node fetch
 does not.
+
+## Runtime type checking
+
+Annotations are checked while the program runs, at every language level,
+unless `pll.runtimeTypeChecking` is false. The work is done by
+[typeguard](https://typeguard.readthedocs.io), which is **not** in
+Pyodide's lockfile, so `vendor/python/` holds its wheel plus
+`typing_extensions` (its only dependency). esbuild's `base64` loader
+inlines both into the bundle; the worker writes them into MEMFS under
+`/pll_vendor` and appends them to `sys.path`, where zipimport reads them
+in place — a wheel is a zip with the package at its root, so nothing is
+unpacked and no network or `micropip` step is involved.
+`typing_extensions` is pinned to the version in Pyodide's own lockfile,
+and the paths are *appended*, so a program that later pulls in Pyodide's
+copy (pandas depends on it) gets the same code either way.
+
+Checking happens by AST instrumentation, not a decorator: typeguard's
+`TypeguardTransformer` rewrites the tree before `compile`, alongside PLL's
+existing transformers. So the check runs at the point of the violation — a
+bad argument raises on entry to the callee, a bad return raises at that
+`return`. Unannotated functions are not touched at all.
+
+At `#beginner` and `#intermediate`, a `bool` is rejected where `int` or
+`float` is annotated. Python makes `bool` a subclass of `int`, and both
+mypy and typeguard follow it, so `count: int = True` is normally accepted;
+at the teaching levels that is a hole worth closing, since a student who
+annotates `int` and passes `True` has almost always made a mistake. It is
+implemented as a `checker_lookup_functions` entry (typeguard's public hook)
+that replaces the `int` and `float` checkers, gated on a module flag that
+`_pll_apply_level` sets per run from the level the host passes in — so
+`#advanced` keeps Python's own rule, and the lookup is consulted on every
+check rather than registered and unregistered. The replacements raise
+typeguard's exact wording, so the host-side explainer needs no special
+case; it only adds a note saying this is PLL's rule and not Python's.
+
+Two adjustments to typeguard's defaults:
+
+- `collection_check_strategy` is `ALL_ITEMS`. The default checks only the
+  first item, so `[1, 2, "three"]` silently satisfies `list[int]`, which
+  is indefensible when the annotation says otherwise.
+- typeguard does not instrument annotated assignments outside functions,
+  so `_PllTopLevelAnnAssign` wraps module-level `x: int = ...` in
+  typeguard's own `check_variable_assignment`, keeping the wording
+  identical to the in-function case.
+
+Instrumentation is attempted on a second parse and validated by compiling
+it, so anything typeguard cannot handle falls back to the plain tree. If
+the wheels fail to load, `_pll_enable_type_checking` returns False and
+instrumentation becomes a no-op: the program still runs, just unchecked.
+That degradation is deliberate — this must never be the reason a
+student's code will not run.
+
+### Error messages
+
+typeguard's wording is accurate but not teachable ("is not an instance
+of", "did not match any element in the union"), so `TypeCheckError` goes
+through the normal analyzer path and comes out as a finding labelled
+`TypeMismatch`:
+
+| typeguard | PLL |
+| --- | --- |
+| `argument "y" (str) is not an instance of int` | `add` expects `y` to be a whole number (`int`), but got a string (`str`). |
+| `the return value (None) is not an instance of str` | `grade` should return a string (`str`), but it finished without returning a value. |
+| `item 2 of argument "nums" (list) is not an instance of int` | `total` expects every item in `nums` to be a whole number (`int`), but item 2 is not. |
+
+Two details that decide where the squiggle lands:
+
+- An argument is checked on entry to the callee, so the innermost frame is
+  the `def` line. `typeCheckAnalyzer` blames the frame *outside* it — the
+  call — which is where the mistake actually is. Returns and assignments
+  are blamed on their own line.
+- `_pll_format_exception` drops frames inside `/pll_vendor`, so students
+  never see typeguard's internals. When nothing is dropped it returns the
+  stdlib formatting unchanged, so ordinary errors are unaffected.
+- typeguard's union failures span several lines and `parsePythonError`
+  keeps only the first, which is exactly the part naming the accepted
+  types; `typeCheckAnalyzer` recovers the rest from the traceback.
 
 ## Workspace files (`open` / `to_csv`)
 
@@ -198,9 +283,14 @@ Two of them cover the host-side TypeScript with no Pyodide involved:
   in-process worker: request/reply correlation, error propagation, live
   display streaming, the stdin round-trip.
 
+`smoke-typecheck.mjs` spans both halves: it drives the built desktop
+worker for the instrumentation and then feeds the real typeguard messages
+and tracebacks through the host-side analyzer, so the rewritten wording
+and the blamed line are both asserted.
+
 The rest boot real Pyodide in Node: `smoke-static-analyze`,
 `smoke-explainers`, `smoke-images`, `smoke-tables`, `smoke-tests`,
-`smoke-pandas` (incl. a URL read), `smoke-input`,
+`smoke-pandas` (incl. a URL read), `smoke-typecheck`, `smoke-input`,
 `smoke-workspace-files`, and `smoke-desktop-parity` (the built desktop
 worker, end to end).
 
@@ -235,7 +325,8 @@ Three options, in increasing order of how close they are to production:
    blocks the clipboard API). That does **not** make editor
    Ctrl+C/V work; see [Clipboard](#clipboard-editor-and-interactions-panel).
    The workspace is `samples/` so you can open `hello.py`, `name_error.py`,
-   `input.py` (interactive `input()`), `pandas.py` (`pd.read_csv`,
+   `input.py` (interactive `input()`), `types.py` (runtime type
+   checking), `pandas.py` (`pd.read_csv`,
    including a URL), or `files.py` (`open` / `to_csv` on a sibling CSV). First
    run downloads vscode-web into `.vscode-test-web/` (~30 MB) and
    Playwright Chromium into `~/Library/Caches/ms-playwright/` (~150 MB);

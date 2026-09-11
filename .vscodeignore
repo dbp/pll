@@ -11,6 +11,9 @@
 .DS_Store
 
 # Sources & tooling (runtime lives in dist/ + vendor/ + media/)
+# The Python wheels are inlined into dist/ by esbuild, so the
+# originals do not need to ship as well.
+vendor/python/**
 src/**
 scripts/**
 samples/**

@@ -1,6 +1,21 @@
 # Changelog
 
 ## Unreleased
+- **Type annotations are now checked while your program runs.** If a value
+  does not match an annotation, the program stops where it happened with an
+  explanation: arguments are reported at the call, return values at the
+  `return`, and annotated variables on their own line. Every item of an
+  annotated `list` / `dict` / `set` / `tuple` is checked, and a function
+  that ends without returning anything is called out specifically.
+  Functions without annotations are untouched, and a whole number is still
+  accepted where a `float` is expected. Powered by typeguard, bundled into
+  the extension, so there is nothing to install and it works offline. Set
+  `pll.runtimeTypeChecking` to false to run your code as plain Python.
+- At `#beginner` and `#intermediate`, `True` and `False` are no longer
+  accepted where `int` or `float` is annotated. Python treats `True` as
+  `1`, so this is a rule PLL adds; `#advanced` keeps Python's behaviour.
+
+## 0.0.7
 - Rewriting a file with the same contents still saves it and still
   shows the **Saved … next to this file** banner.
 - If Python fails to start, the interactions panel now says so instead
@@ -12,23 +27,13 @@
   that had comments in it.
 - Friendly errors show the headline and **How to fix**; the unused
   "what happened" / "why it happens" paragraphs were dropped.
-- **Correction to 0.0.6:** editor keyboard copy/paste on vscode-web is
-  *not* broken, and PLL is not the reason it looked that way. vscode-web
-  registers the clipboard commands with no keybinding on purpose, so the
-  browser's own copy/paste handles them; that works. Verified against
-  stable 1.136.1 (what vscode.dev ships) and insiders 1.137.0, for `.py`
-  and `.txt`, headed and headless, with `editor.editContext` both on and
-  off. `pnpm run test-web:clipboard` covers it and no longer hangs after
-  passing (it was leaking the server process, which read as a failure).
-  **PLL: Editor Copy/Cut/Paste** stay as a palette fallback — Firefox
-  registers no paste action at all.
+- **Correction to 0.0.6:** editor keyboard copy/paste on vscode-web
+  works. 0.0.6 said it was unsupported and abandoned; that was wrong.
 - Documented the one case where editor copy/paste really does fail in
   the browser: a non-QWERTY layout (Dvorak, Colemak, …), where VS Code
   web assumes QWERTY and reads Ctrl+C as another shortcut.
   `"keyboard.dispatch": "keyCode"` in **user** settings fixes it; PLL
   cannot ship the fix, as the setting is application-scoped.
-
-### Internal
 - The desktop and web hosts now share one worker-protocol client
   (`common/workerRuntime.ts`) and one worker implementation
   (`common/workerHost.ts`) instead of two near-identical copies, and

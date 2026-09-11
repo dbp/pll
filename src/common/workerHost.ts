@@ -15,6 +15,7 @@ import {
   type RunResult,
   type TestRunResult,
 } from "./pyodideRunner";
+import { PLL_VENDOR_DIR, VENDORED_WHEELS } from "./pythonVendor";
 import { waitForStdinLine } from "./stdinBuffer";
 import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "./workerProtocol";
 
@@ -55,6 +56,16 @@ export interface WorkerHostAdapter {
   stdinUnavailableMessage: string;
 }
 
+/** `atob` exists in both the browser worker and Node's worker_threads. */
+function decodeBase64(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 /**
  * Worker side of the Pyodide protocol, shared by the desktop
  * (`worker_threads`) and web (browser `Worker`) hosts. Returns the message
@@ -80,6 +91,32 @@ export function createWorkerHost(
     }
   }
 
+  /**
+   * Write the vendored wheels into MEMFS and switch on runtime type
+   * checking. Best effort: if anything here fails the interpreter is still
+   * perfectly usable, just without type checks.
+   */
+  function enableTypeChecking(instance: PyodideInstance): void {
+    try {
+      try {
+        instance.FS.mkdir(PLL_VENDOR_DIR);
+      } catch {
+        /* already there */
+      }
+      for (const wheel of VENDORED_WHEELS) {
+        instance.FS.writeFile(`${PLL_VENDOR_DIR}/${wheel.name}`, decodeBase64(wheel.base64));
+      }
+      const enable = instance.globals.get("_pll_enable_type_checking");
+      try {
+        enable();
+      } finally {
+        enable.destroy?.();
+      }
+    } catch {
+      /* type checking stays off */
+    }
+  }
+
   function readStdin(): string | null {
     if (!stdinBuffer) {
       throw new Error(adapter.stdinUnavailableMessage);
@@ -96,6 +133,9 @@ export function createWorkerHost(
         instance.runPython(PLL_IMAGE_LIB_PY);
         instance.runPython(PLL_TABLE_LIB_PY);
         instance.runPython(PYODIDE_INSTALL_PY);
+        // After PYODIDE_INSTALL_PY: it seeds `_pll_initial_globals`, which
+        // this adds the typeguard helpers to.
+        enableTypeChecking(instance);
         ensureWorkDir(instance.FS);
         pyodide = instance;
         return instance;
@@ -172,6 +212,8 @@ export function createWorkerHost(
               data.code,
               data.fileName,
               data.sessionKey,
+              data.typeCheck !== false,
+              data.level ?? "advanced",
             ]),
           );
           // Already streamed live; returning them again would duplicate.
@@ -183,6 +225,8 @@ export function createWorkerHost(
           const result = callPython<RunResult>("_pll_repl_eval", [
             data.code,
             data.sessionKey,
+            data.typeCheck !== false,
+            data.level ?? "advanced",
           ]);
           adapter.post({ id: data.id, type: "result", result });
           break;
@@ -220,6 +264,8 @@ export function createWorkerHost(
           const result = callPython<TestRunResult>("_pll_run_tests", [
             data.code,
             data.fileName,
+            data.typeCheck !== false,
+            data.level ?? "advanced",
           ]);
           adapter.post({ id: data.id, type: "testResult", result });
           break;

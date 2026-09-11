@@ -47,6 +47,18 @@ export function parseLevel(source: string): Level {
   return DEFAULT_LEVEL;
 }
 
+/**
+ * Whether a `bool` is rejected where `int` / `float` is annotated.
+ *
+ * Python counts `True` as `1`, and both mypy and typeguard follow it. At
+ * the teaching levels that is a hole: a student who annotates `int` and
+ * passes `True` has almost always made a real mistake. `advanced` keeps
+ * Python's own rule.
+ */
+export function levelRejectsBoolAsNumber(level: Level): boolean {
+  return level === "beginner" || level === "intermediate";
+}
+
 /** Whether this level runs any static analyzer checks at all. */
 export function levelHasStaticChecks(level: Level): boolean {
   return level === "beginner" || level === "intermediate";

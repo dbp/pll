@@ -11,13 +11,36 @@ export interface RawReplCheck {
 
 export type WorkerInbound =
   | { id: number; type: "init"; indexUrl: string; stdinBuffer?: SharedArrayBuffer }
-  | { id: number; type: "runFile"; code: string; fileName: string; sessionKey: string }
-  | { id: number; type: "replEval"; code: string; sessionKey: string }
+  | {
+      id: number;
+      type: "runFile";
+      code: string;
+      fileName: string;
+      sessionKey: string;
+      typeCheck?: boolean;
+      /** Language level; decides how strict the type checks are. */
+      level?: string;
+    }
+  | {
+      id: number;
+      type: "replEval";
+      code: string;
+      sessionKey: string;
+      typeCheck?: boolean;
+      level?: string;
+    }
   | { id: number; type: "checkSyntax"; code: string }
   | { id: number; type: "loadPackages"; code: string }
   | { id: number; type: "hasTests"; code: string }
   | { id: number; type: "loadPytest" }
-  | { id: number; type: "runTests"; code: string; fileName: string }
+  | {
+      id: number;
+      type: "runTests";
+      code: string;
+      fileName: string;
+      typeCheck?: boolean;
+      level?: string;
+    }
   | { id: number; type: "staticAnalyze"; code: string; level: string; fileName: string; sessionKey?: string }
   | { id: number; type: "mountWorkspace"; files: WorkspaceFile[] }
   | { id: number; type: "collectWorkspace" };
