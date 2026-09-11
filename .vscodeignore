@@ -10,6 +10,14 @@
 **/.mypy_cache/**
 .DS_Store
 
+# Pyodide caches wheels it downloads into its own indexURL directory,
+# which for the desktop host is vendor/pyodide. Those are a local cache,
+# not build output: shipping them makes the .vsix contents depend on
+# whether anyone happened to run a pandas lab on this machine. The four
+# assets the build actually copies are .js/.wasm/.zip/.json, so dropping
+# the wheels leaves exactly what esbuild.config.mjs declares.
+vendor/pyodide/*.whl
+
 # Sources & tooling (runtime lives in dist/ + vendor/ + media/)
 # The Python wheels are inlined into dist/ by esbuild, so the
 # originals do not need to ship as well.

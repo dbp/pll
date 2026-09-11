@@ -112,6 +112,16 @@ not vendored locally, so the first load of a package needs the network.
 The call is gated on the code actually containing an `import`, so plain
 REPL lines never pay a round-trip.
 
+Pyodide's Node loader **writes wheels it downloads back into `indexURL`**,
+which for the desktop host is `vendor/pyodide`. So running a pandas lab
+locally leaves `numpy-*.whl`, `pandas-*.whl` and friends sitting next to
+the four assets `copyPyodideAssets` put there. That is a cache, not build
+output: `.vscodeignore` drops `vendor/pyodide/*.whl` so the `.vsix`
+contains exactly what the build declares (5.8 MB) instead of whatever this
+machine happened to download (13.6 MB, before the exclusion). If PLL ever
+*should* ship a package, add it to `PYODIDE_ASSETS` so the build copies it
+deliberately - do not rely on the cache being warm.
+
 Pyodide does not connect Python's `urllib` to the host network, so
 `pd.read_csv(url)` / `requests` / `urllib` otherwise fail with "unknown
 url type: https". When the code imports a networked module

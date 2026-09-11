@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.0.8
 - **Type annotations are now checked while your program runs.** If a value
   does not match an annotation, the program stops where it happened with an
   explanation: arguments are reported at the call, return values at the
