@@ -147,6 +147,38 @@ Only files that arrive empty (or whitespace-only) are seeded. A `.py` with
 content was copied, generated, or restored, and prepending to it would be an
 edit nobody asked for.
 
+## Images
+
+`imageLib.py` follows HtDP's `2htdp/image`. The protocol is small: an
+`Image` has `width` and `height`, and `_render_body(x, y)` returns an SVG
+fragment drawn with its top-left at `(x, y)`. `to_svg()` renders the root
+from `(0, 0)` into `viewBox="0 0 w h"`, so **nothing may draw at a negative
+coordinate**.
+
+That matters for `overlay_xy` / `underlay_xy`, where a negative offset moves
+the second image left or up and the bounding box has to grow that way -
+shifting the composite's own origin, which the protocol has no way to
+express. `_LayeredXY` absorbs it locally: it reports the union size and
+shifts *both* children right / down by however far the box grew, so its
+parent still sees a plain top-left-at-`(x, y)` image. No other class needed
+changing, and adding `place_image` on top of it was then trivial.
+
+`crop` and `place_image` clip with an SVG `clipPath`, whose id comes from a
+module counter (`_pll_next_clip_id`) - two crops in one picture must not
+share one. Because the `<defs>` sits immediately inside the same group as
+the `clip-path` reference, the rect is in the same user space even when an
+enclosing `rotate` or `scale` has applied a transform.
+
+`beside`, `above`, `overlay` and `underlay` are the centered special cases
+of the `*_align` forms; `_pll_offset` is the single place that turns a place
+name into a coordinate. The refactor that introduced it was checked by
+rendering twelve pre-existing compositions before and after and diffing the
+SVG - byte-identical.
+
+Adding a combinator means three edits: the `_Foo(Image)` class, the public
+wrapper, and the name in `PLL_IMAGE_EXPORTS` (that list is what injects it
+into student globals with no import, via `PYODIDE_INSTALL_PY`).
+
 ## Third-party packages
 
 Before running a file or a prompt line that contains an `import`,
@@ -532,7 +564,8 @@ Three options, in increasing order of how close they are to production:
    `input.py` (interactive `input()`), `types.py` (runtime type
    checking), `pandas.py` (`pd.read_csv`,
    including a URL), `files.py` (`open` / `to_csv` on a sibling CSV), or
-   `runaway.py` (a loop that prints forever, for testing **Stop**). First
+   `runaway.py` (a loop that prints forever, for testing **Stop**), or
+   `scenes.py` (the xy / align / scene combinators). First
    run downloads vscode-web into `.vscode-test-web/` (~30 MB) and
    Playwright Chromium into `~/Library/Caches/ms-playwright/` (~150 MB);
    both are cached afterward.

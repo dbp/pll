@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+- **More picture functions, following HtDP.** `overlay_xy` and
+  `underlay_xy` place the second image at an offset (negative offsets grow
+  the picture instead of cutting it off); `beside_align`, `above_align`,
+  `overlay_align` and `underlay_align` choose which edges line up;
+  `empty_scene` and `place_image` build a fixed-size scene and put an
+  image's center at a point on it; `crop` takes a piece out of an image and
+  `frame` outlines one. See `samples/scenes.py`.
 - **The level header is now `#level beginner`** (and `#level intermediate`,
   `#level advanced`) instead of `#beginner`. Write it in lower case on the
   first non-blank line. The old bare form is no longer recognised, so files

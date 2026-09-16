@@ -276,9 +276,59 @@ class _Text(Image):
 # Combinators
 # -----------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# Alignment (HtDP's x-place / y-place)
+# -----------------------------------------------------------------------------
+
+_PLL_X_PLACES = ("left", "center", "middle", "right")
+_PLL_Y_PLACES = ("top", "center", "middle", "bottom")
+
+
+def _pll_check_place(place, allowed, who):
+    if place not in allowed:
+        raise ValueError(
+            "%s: expected one of %s, got %r"
+            % (who, ", ".join(repr(p) for p in allowed), place)
+        )
+    return place
+
+
+def _pll_offset(place, outer, inner):
+    """Where a child of size `inner` sits inside a box of size `outer`."""
+    if place in ("left", "top"):
+        return 0.0
+    if place in ("right", "bottom"):
+        return outer - inner
+    return (outer - inner) / 2.0
+
+
+_pll_clip_seq = 0
+
+
+def _pll_next_clip_id():
+    """Unique per element: two crops in one picture must not share an id."""
+    global _pll_clip_seq
+    _pll_clip_seq += 1
+    return "pllclip%d" % _pll_clip_seq
+
+
+def _pll_clipped(body, x, y, width, height):
+    """`body`, with everything outside the given rectangle clipped away."""
+    cid = _pll_next_clip_id()
+    return (
+        '<defs><clipPath id="%s">'
+        '<rect x="%g" y="%g" width="%g" height="%g"/>'
+        "</clipPath></defs>"
+        '<g clip-path="url(#%s)">%s</g>'
+    ) % (cid, x, y, width, height, cid, body)
+
+
 class _Beside(Image):
-    def __init__(self, children):
+    """Children left to right, aligned vertically by `y_place`."""
+
+    def __init__(self, children, y_place="center"):
         self._children = list(children)
+        self._y_place = y_place
 
     @property
     def width(self):
@@ -293,15 +343,18 @@ class _Beside(Image):
         cx = x
         h = self.height
         for child in self._children:
-            cy = y + (h - child.height) / 2.0
+            cy = y + _pll_offset(self._y_place, h, child.height)
             out.append(child._render_body(cx, cy))
             cx += child.width
         return "".join(out)
 
 
 class _Above(Image):
-    def __init__(self, children):
+    """Children top to bottom, aligned horizontally by `x_place`."""
+
+    def __init__(self, children, x_place="center"):
         self._children = list(children)
+        self._x_place = x_place
 
     @property
     def width(self):
@@ -316,19 +369,21 @@ class _Above(Image):
         cy = y
         w = self.width
         for child in self._children:
-            cx = x + (w - child.width) / 2.0
+            cx = x + _pll_offset(self._x_place, w, child.width)
             out.append(child._render_body(cx, cy))
             cy += child.height
         return "".join(out)
 
 
 class _Overlay(Image):
-    """First arg is on top. Children are centered together."""
+    """First arg is on top. Children aligned by (`x_place`, `y_place`)."""
 
-    def __init__(self, children):
+    def __init__(self, children, x_place="center", y_place="center"):
         if not children:
             raise ValueError("overlay needs at least one image")
         self._children = list(children)
+        self._x_place = x_place
+        self._y_place = y_place
 
     @property
     def width(self):
@@ -344,10 +399,131 @@ class _Overlay(Image):
         w = self.width
         h = self.height
         for child in reversed(self._children):
-            cx = x + (w - child.width) / 2.0
-            cy = y + (h - child.height) / 2.0
+            cx = x + _pll_offset(self._x_place, w, child.width)
+            cy = y + _pll_offset(self._y_place, h, child.height)
             out.append(child._render_body(cx, cy))
         return "".join(out)
+
+
+class _LayeredXY(Image):
+    """`first` at the origin, `second` offset by (dx, dy).
+
+    Negative offsets move `second` left / up, which grows the bounding box
+    in that direction - so the composite's own origin shifts. The class
+    absorbs that itself: it reports the union size and moves *both* children
+    right / down by however far the box grew, so the protocol's "draw with
+    your top-left at (x, y)" contract still holds for whoever renders it.
+    Nothing else in the library needs to know about negative coordinates.
+    """
+
+    def __init__(self, first, dx, dy, second, first_on_top):
+        self._first = first
+        self._second = second
+        self._dx = float(dx)
+        self._dy = float(dy)
+        self._first_on_top = first_on_top
+
+    @property
+    def width(self):
+        left = min(0.0, self._dx)
+        right = max(self._first.width, self._dx + self._second.width)
+        return right - left
+
+    @property
+    def height(self):
+        top = min(0.0, self._dy)
+        bottom = max(self._first.height, self._dy + self._second.height)
+        return bottom - top
+
+    def _render_body(self, x, y):
+        shift_x = -min(0.0, self._dx)
+        shift_y = -min(0.0, self._dy)
+        first = self._first._render_body(x + shift_x, y + shift_y)
+        second = self._second._render_body(
+            x + shift_x + self._dx, y + shift_y + self._dy
+        )
+        # Document order is painting order, so whatever is on top goes last.
+        return (second + first) if self._first_on_top else (first + second)
+
+
+class _Crop(Image):
+    """The `width` x `height` region of `image` starting at (`x`, `y`)."""
+
+    def __init__(self, x, y, width, height, image):
+        if width < 0 or height < 0:
+            raise ValueError("crop needs a width and height of at least 0")
+        self._x = float(x)
+        self._y = float(y)
+        self._w = float(width)
+        self._h = float(height)
+        self._image = image
+
+    @property
+    def width(self):
+        return self._w
+
+    @property
+    def height(self):
+        return self._h
+
+    def _render_body(self, x, y):
+        # Shift the source so the requested region lands at (x, y), then
+        # clip away everything outside it.
+        body = self._image._render_body(x - self._x, y - self._y)
+        return _pll_clipped(body, x, y, self._w, self._h)
+
+
+class _PlaceImage(Image):
+    """`image` centered at (cx, cy) on `scene`, cropped to the scene."""
+
+    def __init__(self, image, cx, cy, scene):
+        self._image = image
+        self._cx = float(cx)
+        self._cy = float(cy)
+        self._scene = scene
+
+    @property
+    def width(self):
+        return self._scene.width
+
+    @property
+    def height(self):
+        return self._scene.height
+
+    def _render_body(self, x, y):
+        ix = x + self._cx - self._image.width / 2.0
+        iy = y + self._cy - self._image.height / 2.0
+        body = self._scene._render_body(x, y) + self._image._render_body(ix, iy)
+        return _pll_clipped(body, x, y, self.width, self.height)
+
+
+class _Frame(Image):
+    """`image` with a thin outline around its bounding box."""
+
+    def __init__(self, image):
+        self._image = image
+
+    @property
+    def width(self):
+        return self._image.width
+
+    @property
+    def height(self):
+        return self._image.height
+
+    def _render_body(self, x, y):
+        # Half-pixel inset so a 1-unit stroke sits inside the bounding box
+        # instead of straddling its edge.
+        box = (
+            '<rect x="%g" y="%g" width="%g" height="%g" '
+            'fill="none" stroke="black" stroke-width="1"/>'
+        ) % (
+            x + 0.5,
+            y + 0.5,
+            max(0.0, self.width - 1.0),
+            max(0.0, self.height - 1.0),
+        )
+        return self._image._render_body(x, y) + box
 
 
 class _Rotate(Image):
@@ -528,6 +704,68 @@ def underlay(*images):
     return _Overlay(list(reversed(images)))
 
 
+def beside_align(y_place, *images):
+    """Like `beside`, aligned by "top" / "center" / "bottom"."""
+    return _Beside(images, _pll_check_place(y_place, _PLL_Y_PLACES, "beside_align"))
+
+
+def above_align(x_place, *images):
+    """Like `above`, aligned by "left" / "center" / "right"."""
+    return _Above(images, _pll_check_place(x_place, _PLL_X_PLACES, "above_align"))
+
+
+def overlay_align(x_place, y_place, *images):
+    """Like `overlay`, with both axes aligned explicitly."""
+    return _Overlay(
+        images,
+        _pll_check_place(x_place, _PLL_X_PLACES, "overlay_align"),
+        _pll_check_place(y_place, _PLL_Y_PLACES, "overlay_align"),
+    )
+
+
+def underlay_align(x_place, y_place, *images):
+    """Like `overlay_align`, but the first image is on the bottom."""
+    return _Overlay(
+        list(reversed(images)),
+        _pll_check_place(x_place, _PLL_X_PLACES, "underlay_align"),
+        _pll_check_place(y_place, _PLL_Y_PLACES, "underlay_align"),
+    )
+
+
+def overlay_xy(image1, dx, dy, image2):
+    """`image1` on top; `image2` moved `dx` right and `dy` down from it.
+
+    Negative offsets move `image2` left / up and the picture grows that way,
+    so nothing is ever cut off.
+    """
+    return _LayeredXY(image1, dx, dy, image2, first_on_top=True)
+
+
+def underlay_xy(image1, dx, dy, image2):
+    """`image1` underneath; `image2` moved `dx` right and `dy` down."""
+    return _LayeredXY(image1, dx, dy, image2, first_on_top=False)
+
+
+def place_image(image, x, y, scene):
+    """Put `image`'s *center* at (x, y) on `scene`, cropped to the scene."""
+    return _PlaceImage(image, x, y, scene)
+
+
+def crop(x, y, width, height, image):
+    """The `width` x `height` piece of `image` starting at (x, y)."""
+    return _Crop(x, y, width, height, image)
+
+
+def frame(image):
+    """`image` with a thin outline around it, to show its bounding box."""
+    return _Frame(image)
+
+
+def empty_scene(width, height):
+    """A blank white scene with an outline, to use with `place_image`."""
+    return _Frame(_Rectangle(width, height, "solid", "white"))
+
+
 def rotate(angle, image):
     return _Rotate(angle, image)
 
@@ -575,6 +813,16 @@ PLL_IMAGE_EXPORTS = [
     "above",
     "overlay",
     "underlay",
+    "beside_align",
+    "above_align",
+    "overlay_align",
+    "underlay_align",
+    "overlay_xy",
+    "underlay_xy",
+    "place_image",
+    "crop",
+    "frame",
+    "empty_scene",
     "rotate",
     "scale",
     "flip_horizontal",

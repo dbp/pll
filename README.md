@@ -216,6 +216,21 @@ Each picture has a **Save SVG** button if you want to keep it.
 **Combining and transforming:** `beside`, `above`, `overlay`, `underlay`,
 `rotate`, `scale`, `flip_horizontal`, `flip_vertical`.
 
+**Placing things exactly:** `overlay_xy` and `underlay_xy` move the *second*
+image by an offset — `overlay_xy(a, 20, 10, b)` puts `b` 20 to the right and
+10 down from `a`. Negative offsets move it left or up, and the picture grows
+that way rather than cutting anything off.
+
+**Choosing which edges line up:** `beside_align("top", ...)`,
+`above_align("left", ...)`, `overlay_align("right", "bottom", ...)`, and
+`underlay_align`. Horizontal positions are `"left"`, `"center"`, `"right"`;
+vertical are `"top"`, `"center"`, `"bottom"`.
+
+**Scenes:** `empty_scene(width, height)` is a fixed-size canvas, and
+`place_image(image, x, y, scene)` puts an image's **center** at that point
+on it, cropping anything past the edge. `crop(x, y, width, height, image)`
+takes a piece out of an image, and `frame(image)` outlines its edges.
+
 **Size:** `image_width`, `image_height`, `empty_image`.
 
 Colors can be names (`"red"`), hex (`"#ff0000"`), or tuples

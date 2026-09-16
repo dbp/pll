@@ -242,6 +242,79 @@ del _name
       "static analyzer still produces reassignment finding");
   }
 
+  console.log("\n[10] the HtDP combinators reach user globals and compose");
+  {
+    // One image per expression, so `images[i]` lines up with `cases[i]`.
+    const cases = [
+      // overlay_xy: dx/dy move image2, and negative offsets grow the box
+      // rather than clipping anything.
+      [`overlay_xy(square(50, "solid", "red"), 10, 10, square(30, "solid", "blue"))`, 50, 50],
+      [`overlay_xy(square(50, "solid", "red"), 40, 0, square(30, "solid", "blue"))`, 70, 50],
+      [`overlay_xy(square(50, "solid", "red"), -20, -20, square(30, "solid", "blue"))`, 70, 70],
+      [`underlay_xy(square(50, "solid", "red"), -20, -20, square(30, "solid", "blue"))`, 70, 70],
+      // align variants keep the same bounding box as their plain forms.
+      [`beside_align("top", rectangle(20, 60, "solid", "red"), square(20, "solid", "blue"))`, 40, 60],
+      [`above_align("left", rectangle(60, 20, "solid", "red"), square(20, "solid", "blue"))`, 60, 40],
+      [`overlay_align("left", "top", rectangle(60, 20, "solid", "red"), square(20, "solid", "blue"))`, 60, 20],
+      [`underlay_align("right", "bottom", rectangle(60, 20, "solid", "red"), square(20, "solid", "blue"))`, 60, 20],
+      // scene-shaped operations report the scene / requested size.
+      [`empty_scene(100, 80)`, 100, 80],
+      [`place_image(square(30, "solid", "blue"), 50, 40, empty_scene(100, 80))`, 100, 80],
+      [`crop(10, 10, 25, 25, square(50, "solid", "red"))`, 25, 25],
+      [`frame(square(50, "solid", "red"))`, 50, 50],
+    ];
+    for (const [code, w, h] of cases) {
+      const images = imagesOf(py(callReplEval, [code, SK]));
+      const label = code.length > 52 ? code.slice(0, 52) + "..." : code;
+      if (images.length !== 1) {
+        expect(false, `expected one image from ${label}, got ${images.length}`);
+        continue;
+      }
+      const img = images[0];
+      expect(
+        img.width === w && img.height === h,
+        `${label}: expected ${w}x${h}, got ${img.width}x${img.height}`,
+      );
+    }
+    console.log(`    ${cases.length} combinators produced the expected bounding boxes`);
+  }
+
+  console.log("\n[11] negative offsets never render outside the viewBox");
+  {
+    const code = `overlay_xy(square(50, "solid", "red"), -20, -20, square(30, "solid", "blue"))`;
+    const img = imagesOf(py(callReplEval, [code, SK]))[0];
+    // The blue square sits at the new origin and the red one is shifted in.
+    expect(/<rect x="0" y="0"[^>]*fill="blue"/.test(img.data), "image2 should land at the origin");
+    expect(/<rect x="20" y="20"[^>]*fill="red"/.test(img.data), "image1 should be shifted in by 20");
+    // Painting order: the first argument ends up on top, so it is drawn last.
+    expect(
+      img.data.indexOf("blue") < img.data.indexOf("red"),
+      "overlay_xy should paint image1 last so it is on top",
+    );
+  }
+
+  console.log("\n[12] place_image and crop clip with distinct ids");
+  {
+    const code = `beside(crop(0, 0, 10, 10, square(50, "solid", "red")), place_image(square(30, "solid", "blue"), 5, 5, empty_scene(40, 40)))`;
+    const img = imagesOf(py(callReplEval, [code, SK]))[0];
+    const ids = [...new Set((img.data.match(/id="pllclip\d+"/g) || []))];
+    expect(ids.length === 2, `two clip regions should get distinct ids, got ${ids.length}`);
+    expect(img.data.includes("clip-path"), "clipping should be applied");
+  }
+
+  console.log("\n[13] a bad alignment name is a friendly ValueError");
+  {
+    const result = py(callReplEval, [`beside_align("sideways", square(10, "solid", "red"))`, SK]);
+    expect(result.ok === false, "an invalid place should fail");
+    expect(result.error_type === "ValueError", `expected ValueError, got ${result.error_type}`);
+    expect(
+      /beside_align/.test(result.error_message || ""),
+      `the message should name the function, got ${result.error_message}`,
+    );
+    console.log(`    ${result.error_type}: ${result.error_message}`);
+  }
+
+
   callRunFile.destroy?.();
   callReplEval.destroy?.();
 
