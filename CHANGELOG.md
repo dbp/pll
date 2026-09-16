@@ -1,6 +1,23 @@
 # Changelog
 
 ## Unreleased
+- **The level header is now `#level beginner`** (and `#level intermediate`,
+  `#level advanced`) instead of `#beginner`. Write it in lower case on the
+  first non-blank line. The old bare form is no longer recognised, so files
+  using it fall back to the default.
+- **New `#level raw`, and it is the default.** A file with no level header
+  runs exactly as plain Python would - no static checks and no annotation
+  checks - with PLL's built-in libraries and the interactions panel still
+  available. Previously a file with no header was `advanced`, which checks
+  annotations.
+- **New `pll.newFileLevel` setting.** When set, a newly created `.py` file
+  starts with that `#level` line already in it, so a course can put students
+  at the right level without them having to type it. Off by default, and only
+  applies to files created empty. It is a template for new files: it does not
+  change what a file *without* a level line means, which is always `raw`.
+- **Removed the `pll.runtimeTypeChecking` setting.** Annotation checking is
+  decided by the level alone: on everywhere except `#level raw`. One
+  mechanism instead of two that could disagree.
 - **You can stop a running program.** A **Stop** button appears in the
   interactions panel while your program runs; Ctrl/Cmd+C (with nothing
   selected) and **PLL: Stop Program** do the same thing. The program ends

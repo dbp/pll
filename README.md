@@ -103,23 +103,34 @@ def test_cost():
 
 ## Language levels
 
-The first non-blank line of a file can choose how strict PLL is. After
-you run the file, the current level is shown in the interactions header
-(for example `hello.py [beginner]`).
+The first non-blank line of a file chooses how strict PLL is. After you
+run the file, the current level is shown in the interactions header (for
+example `hello.py [beginner]`).
 
 ```python
-#beginner
+#level beginner
 ```
+
+Write it exactly like that, in lower case, as the first line that is not
+blank.
 
 | Line in your file | What it does |
 | --- | --- |
-| `#beginner` | Strictest. PLL warns about reassigning a variable, reusing a name that hides another name (including built-in names like `list`), and the `global` / `nonlocal` keywords. If it finds a problem, it **does not run** the file. |
-| `#intermediate` | Same rules about hiding names and `global` / `nonlocal`, but you **may** reassign variables inside a function. That is useful for introducing for loops, where you need mutable accumulators. Reassigning at the top of the file is still flagged. |
-| `#advanced` | No extra checks before the file runs, and type annotations follow Python's own rules (so `True` counts as `1`). This is the default if you omit the line. |
+| `#level raw` | Nothing is checked. Your program runs exactly as plain Python would, with PLL's built-in libraries (images, tables) and the interactions panel still available. **This is what you get if you leave the line out.** |
+| `#level beginner` | Strictest. PLL warns about reassigning a variable, reusing a name that hides another name (including built-in names like `list`), and the `global` / `nonlocal` keywords. If it finds a problem, it **does not run** the file. Type annotations are checked as the program runs. |
+| `#level intermediate` | Same rules about hiding names and `global` / `nonlocal`, but you **may** reassign variables inside a function. That is useful for introducing for loops, where you need mutable accumulators. Reassigning at the top of the file is still flagged. Annotations are checked. |
+| `#level advanced` | No extra checks before the file runs. Annotations are still checked as the program runs, but by Python's own rules (so `True` counts as `1`). |
+
+The level is the only thing that decides what gets checked — there is no
+separate setting to keep in sync with it.
+
+If your course sets `pll.newFileLevel`, every new `.py` file you create
+starts with that level line already written in, so you do not have to
+remember it. You can always change or delete the line.
 
 The prompt at the bottom of the interactions panel uses the **same**
-level as the last run (the one shown in the header). If you have not
-run the file yet, the prompt is advanced.
+level as the last run (the one shown in the header). If you have not run
+the file yet, the prompt is raw.
 
 ## Type annotations are checked as your program runs
 
@@ -138,8 +149,8 @@ book_cost("three", True)
 > `book_cost` expects `num_books` to be a whole number (`int`), but got a
 > string (`str`).
 
-You do not need to import anything, and it works at every level. What is
-checked:
+You do not need to import anything, and it works at every level except
+`#level raw`. What is checked:
 
 - the arguments you pass to a function, checked at the call
 - the value a function returns, including a function that ends without
@@ -150,21 +161,22 @@ checked:
 Functions without annotations are left completely alone. A whole number is
 accepted wherever a `float` is expected, as it is in normal Python.
 
-At `#beginner` and `#intermediate`, `True` and `False` are **not** accepted
-where `int` or `float` is annotated:
+At `#level beginner` and `#level intermediate`, `True` and `False` are
+**not** accepted where `int` or `float` is annotated:
 
 ```python
-#beginner
+#level beginner
 
 shelf_count: int = True   # error: True is not a whole number here
 ```
 
 Python itself counts `True` as `1`, so this is a rule PLL adds rather than
 one Python enforces — a value that is really a yes/no answer should be
-annotated `bool`. At `#advanced` this follows Python's own rule and is
+annotated `bool`. At `#level advanced` this follows Python's own rule and is
 allowed.
 
-To turn this off, set `"pll.runtimeTypeChecking": false` in your settings.
+To turn annotation checking off entirely, write `#level raw` at the top of
+the file (or leave the level line out).
 
 ## Interactive `input()`
 
@@ -185,7 +197,7 @@ You can make pictures with built-in functions. You do not need to
 it in the interactions panel, in order with any `print` output.
 
 ```python
-#beginner
+#level beginner
 
 circle(50, "solid", "red")
 

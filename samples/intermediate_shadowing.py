@@ -1,4 +1,4 @@
-#intermediate
+#level intermediate
 
 # Intermediate still flags shadowing of an outer binding (or a built-in),
 # the same way beginner does.

@@ -1,4 +1,4 @@
-#intermediate
+#level intermediate
 
 # Intermediate mode allows rebinding *inside functions* so for-loop
 # accumulator patterns work, while still keeping shadowing rules and

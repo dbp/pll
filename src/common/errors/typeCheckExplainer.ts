@@ -87,7 +87,7 @@ function boolAsNumberNote(
   if (!expected.some((type) => type === "int" || type === "float")) return null;
   if (level !== undefined && !levelRejectsBoolAsNumber(level)) return null;
   return (
-    "At `#beginner` and `#intermediate`, `True` and `False` are not " +
+    "At `#level beginner` and `#level intermediate`, `True` and `False` are not " +
     "accepted as numbers, even though Python counts them as `1` and `0`."
   );
 }

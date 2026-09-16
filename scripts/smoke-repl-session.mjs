@@ -477,7 +477,7 @@ console.log("\n[4] a multi-line paste is processed one line at a time");
 
 console.log("\n[5] beginner static findings block the file and become diagnostics");
 {
-  const doc = makeDoc("beginner.py", "#beginner\nx = 1\nx = 2\n");
+  const doc = makeDoc("beginner.py", "#level beginner\nx = 1\nx = 2\n");
   const { repl, view, runtime, diagnostics } = await harness(
     {
       findings: [
@@ -526,7 +526,7 @@ console.log("\n[5] beginner static findings block the file and become diagnostic
 
 console.log("\n[6] prompt findings stay in the view and carry the session key");
 {
-  const doc = makeDoc("beginner.py", "#beginner\n");
+  const doc = makeDoc("beginner.py", "#level beginner\n");
   const { repl, view, runtime, diagnostics } = await harness(
     {
       findings: [
@@ -544,7 +544,7 @@ console.log("\n[6] prompt findings stay in the view and carry the session key");
     doc,
   );
   // A run establishes the level the prompt then uses.
-  await repl.runFile("#beginner\n", "beginner.py", doc);
+  await repl.runFile("#level beginner\n", "beginner.py", doc);
   await settle();
   const before = diagnostics.calls.length;
   view.handlers.onSubmit("list = [1]");
@@ -569,7 +569,7 @@ console.log("\n[6] prompt findings stay in the view and carry the session key");
   repl.dispose();
 }
 
-console.log("\n[7] advanced files skip static analysis entirely");
+console.log("\n[7] a file with no header is raw and skips static analysis");
 {
   const doc = makeDoc("plain.py", "print(1)\n");
   const { repl, view, runtime } = await harness({ events: () => [{ kind: "done" }] }, doc);
@@ -577,10 +577,10 @@ console.log("\n[7] advanced files skip static analysis entirely");
   await settle();
   expect(
     !runtime.calls.some((c) => c[0] === "staticAnalyze"),
-    "no header means advanced, which has no checks",
+    "no header means raw, which has no checks",
   );
   expect(runtime.calls.some((c) => c[0] === "runFile"), "the file should run");
-  expect(view.title === "plain.py [advanced]", "header should show advanced, got " + view.title);
+  expect(view.title === "plain.py [raw]", "header should show raw, got " + view.title);
   repl.dispose();
 }
 
@@ -866,7 +866,7 @@ console.log("\n[18] each file keeps its own session, swapped with the active edi
 
   __setActiveEditor({ document: a });
   await settle();
-  expect(view.title === "a.py [advanced]", "returning should restore a.py's title, got " + view.title);
+  expect(view.title === "a.py [raw]", "returning should restore a.py's title, got " + view.title);
   expect(
     texts(view, "stdout").join("") === "from a.py",
     "returning should replay a.py's entries",
@@ -915,12 +915,12 @@ console.log("\n[20] a Pyodide that will not start is reported once");
 
 console.log("\n[21] a static-analysis crash does not block the run");
 {
-  const doc = makeDoc("beginner.py", "#beginner\nprint(1)\n");
+  const doc = makeDoc("beginner.py", "#level beginner\nprint(1)\n");
   const { repl, view, runtime } = await harness({ events: () => [{ kind: "done" }] }, doc);
   runtime.staticAnalyze = async () => {
     throw new Error("analyzer exploded");
   };
-  await repl.runFile("#beginner\nprint(1)\n", "beginner.py", doc);
+  await repl.runFile("#level beginner\nprint(1)\n", "beginner.py", doc);
   await settle();
   expect(
     texts(view, "stderr").some((t) => /analyzer exploded/.test(t)),

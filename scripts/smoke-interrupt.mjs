@@ -103,8 +103,7 @@ async function main() {
       code: 'print("before")\nwhile True:\n    pass\n',
       fileName: "loop.py",
       sessionKey: "s1",
-      typeCheck: false,
-      level: "advanced",
+      level: "raw",
     });
     // Let the loop actually start before signalling.
     await sleep(500);
@@ -128,8 +127,7 @@ async function main() {
         code: 'print("still here")\n',
         fileName: "after.py",
         sessionKey: "s1",
-        typeCheck: false,
-        level: "advanced",
+        level: "raw",
       }),
       INTERRUPT_DEADLINE_MS,
       "post-interrupt run",
@@ -148,8 +146,7 @@ async function main() {
         code: 'print("clean")\n',
         fileName: "clean.py",
         sessionKey: "s1",
-        typeCheck: false,
-        level: "advanced",
+        level: "raw",
       }),
       INTERRUPT_DEADLINE_MS,
       "run after a stale signal",
@@ -170,8 +167,7 @@ async function main() {
       code: 'while True:\n    print("hello")\n',
       fileName: "noisy.py",
       sessionKey: "s1",
-      typeCheck: false,
-      level: "advanced",
+      level: "raw",
     });
     await sleep(1000);
     const duringSecond = session.displays - before;

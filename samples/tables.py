@@ -1,4 +1,4 @@
-#intermediate
+#level intermediate
 
 # PLL tables: a small Pyret-style tabular data type with simple
 # functional operations and built-in charts.

@@ -1,4 +1,4 @@
-#beginner
+#level beginner
 
 # `count` here is fine - it's defined once at the top level.
 count = 0

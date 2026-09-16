@@ -42,7 +42,10 @@ src/
     │                              REPL multi-line buffer, file runs, exec chain
     ├── interactionsView.ts        WebviewView provider for the integrated
     │                              text + image stream + input row
-    ├── level.ts                   #beginner / #intermediate / #advanced header parser
+    ├── newFileLevel.ts           Seeds new .py files with a #level line
+    ├── level.ts                   `#level raw|beginner|intermediate|advanced`
+    │                              header parser; the single source of what
+    │                              each level checks
     ├── errorFormatter.ts          Plain-text rendering for diagnostic tooltips
     ├── diagnostics.ts             VS Code DiagnosticCollection (multi-finding)
     ├── pyodideRunner.ts           Bootstrap loader + types
@@ -86,7 +89,7 @@ therefore runs in the same Python interpreter that runs the user's code,
 in both desktop and web hosts.
 
 Prompt submissions use the language level of the last Run File
-(`session.lastLevel`, shown in the interactions header), or `advanced`
+(`session.lastLevel`, shown in the interactions header), or `raw`
 if the file has not been run. At beginner/intermediate, the snippet is
 analyzed with `sessionKey` so names already bound in the session count
 as preexisting module bindings. Those findings stay in the interactions
@@ -98,6 +101,51 @@ looks like it contains tests, rewrites asserts, collects `test_*` /
 `Test*` in the file, and calls each test function. Users can still
 `import pytest` (for example `pytest.approx`) because the package is
 loaded into that interpreter.
+
+## Language levels
+
+Four levels, parsed from a `#level <name>` comment on the first non-blank
+line by `level.ts`. The syntax is exact: lower case, one space, one of the
+four names. Anything else - including the old bare `#beginner` form - is not
+a header and falls back to the default.
+
+| level | static checks | annotations checked | `bool` where a number is annotated |
+| --- | --- | --- | --- |
+| `raw` (default) | no | no | n/a |
+| `beginner` | all | yes | rejected |
+| `intermediate` | all, but reassignment only at module scope | yes | rejected |
+| `advanced` | no | yes | allowed, as in Python |
+
+`raw` is the default so that a `.py` file written without PLL in mind
+behaves exactly as CPython would; every difference has to be opted into by
+naming a level. It is also the answer to "how do I turn the checks off",
+which is why no setting does that.
+
+Three predicates in `level.ts` are the only places these rules live -
+`levelHasStaticChecks`, `levelHasTypeChecking`, `levelRejectsBoolAsNumber` -
+and `_pll_apply_level` in `pyodideBootstrap.py` mirrors the last two for the
+Python side. Adding a level means adding it to `Level`, `LEVEL_NAMES`, and
+those predicates.
+
+### Seeding new files
+
+`pll.newFileLevel` puts a `#level` line at the top of a newly created `.py`
+file (`newFileLevel.ts`, on `workspace.onDidCreateFiles`). Default `none`,
+so PLL writes nothing unless a course asks for it; the intended deployment
+is the handout's `.vscode/settings.json`.
+
+This is a **template**, not a second source of truth, and the distinction is
+the whole reason it is allowed to be a setting at all. The level still ends
+up in the file, on the first line, where the student can see and change it -
+so the same file behaves the same way everywhere. A setting that changed
+what a *headerless* file means would be the opposite: two students running
+identical code would get different answers depending on configuration
+nobody can see from the code. `DEFAULT_LEVEL` stays hardcoded to `raw` for
+that reason.
+
+Only files that arrive empty (or whitespace-only) are seeded. A `.py` with
+content was copied, generated, or restored, and prepending to it would be an
+edit nobody asked for.
 
 ## Third-party packages
 
@@ -138,8 +186,13 @@ does not.
 
 ## Runtime type checking
 
-Annotations are checked while the program runs, at every language level,
-unless `pll.runtimeTypeChecking` is false. The work is done by
+Annotations are checked while the program runs at every level except
+`#level raw`, which exists precisely so a file can opt out. There is
+deliberately **no setting** for this: the level is the only input, so
+nothing can contradict it, and the `typeCheck` flag that used to ride
+alongside `level` through the worker protocol is gone —
+`_pll_apply_level` derives `_PLL_TYPE_CHECK` from the level instead. The
+work is done by
 [typeguard](https://typeguard.readthedocs.io), which is **not** in
 Pyodide's lockfile, so `vendor/python/` holds its wheel plus
 `typing_extensions` (its only dependency). esbuild's `base64` loader
@@ -157,7 +210,7 @@ existing transformers. So the check runs at the point of the violation — a
 bad argument raises on entry to the callee, a bad return raises at that
 `return`. Unannotated functions are not touched at all.
 
-At `#beginner` and `#intermediate`, a `bool` is rejected where `int` or
+At `#level beginner` and `#level intermediate`, a `bool` is rejected where `int` or
 `float` is annotated. Python makes `bool` a subclass of `int`, and both
 mypy and typeguard follow it, so `count: int = True` is normally accepted;
 at the teaching levels that is a hole worth closing, since a student who
@@ -165,7 +218,7 @@ annotates `int` and passes `True` has almost always made a mistake. It is
 implemented as a `checker_lookup_functions` entry (typeguard's public hook)
 that replaces the `int` and `float` checkers, gated on a module flag that
 `_pll_apply_level` sets per run from the level the host passes in — so
-`#advanced` keeps Python's own rule, and the lookup is consulted on every
+`#level advanced` keeps Python's own rule, and the lookup is consulted on every
 check rather than registered and unregistered. The replacements raise
 typeguard's exact wording, so the host-side explainer needs no special
 case; it only adds a note saying this is PLL's rule and not Python's.
@@ -397,7 +450,7 @@ pnpm run smoke         # build, then the whole smoke suite (below)
 ### Smoke tests
 
 `pnpm run smoke` builds and then runs `scripts/smoke-*.mjs` in order.
-Two of them cover the host-side TypeScript with no Pyodide involved:
+Three of them cover the host-side TypeScript with no Pyodide involved:
 
 - `smoke-repl-session.mjs` — `ReplSession` against a fake runtime and a
   recording view, with `vscode` aliased to a stub: per-file sessions,
@@ -406,6 +459,9 @@ Two of them cover the host-side TypeScript with no Pyodide involved:
 - `smoke-worker-protocol.mjs` — `WorkerPythonRuntime` against a scripted
   in-process worker: request/reply correlation, error propagation, live
   display streaming, the stdin round-trip.
+- `smoke-new-file-level.mjs` — `newFileLevel.ts` against a stub filesystem:
+  which new files get a header, which are left alone, and that what it
+  writes parses back to the level that was asked for.
 
 `smoke-typecheck.mjs` spans both halves: it drives the built desktop
 worker for the instrumentation and then feeds the real typeguard messages
@@ -572,6 +628,13 @@ a physical key event arriving from the OS.
 
 - `pll.pyodideIndexUrl` — base URL for Pyodide assets (web only).
   Defaults to the matching pinned CDN build.
+- `pll.newFileLevel` — `#level` line to put in newly created `.py` files.
+  Defaults to `none`. A template for new files only; it does not change what
+  a file without a level line means (always `raw`).
+
+Note what is deliberately *absent*: there is no setting for what gets
+checked. That is the level's job, and only the level's, so nothing can
+disagree with what the file says.
 
 PLL declares `untrustedWorkspaces` and `virtualWorkspaces` support in
 `package.json`, so Restricted Mode and vscode.dev do not disable it per

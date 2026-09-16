@@ -139,7 +139,6 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
         type: "runTests",
         code: request.code,
         fileName: request.fileName,
-        typeCheck: request.typeCheck,
         level: request.level,
       },
       "testResult",

@@ -294,8 +294,7 @@ export function createWorkerHost(
               data.code,
               data.fileName,
               data.sessionKey,
-              data.typeCheck !== false,
-              data.level ?? "advanced",
+              data.level ?? "raw",
             ]),
           );
           // Already streamed live; returning them again would duplicate.
@@ -308,8 +307,7 @@ export function createWorkerHost(
           const result = callPython<RunResult>("_pll_repl_eval", [
             data.code,
             data.sessionKey,
-            data.typeCheck !== false,
-            data.level ?? "advanced",
+            data.level ?? "raw",
           ]);
           adapter.post({ id: data.id, type: "result", result });
           break;
@@ -348,8 +346,7 @@ export function createWorkerHost(
           const result = callPython<TestRunResult>("_pll_run_tests", [
             data.code,
             data.fileName,
-            data.typeCheck !== false,
-            data.level ?? "advanced",
+            data.level ?? "raw",
           ]);
           adapter.post({ id: data.id, type: "testResult", result });
           break;

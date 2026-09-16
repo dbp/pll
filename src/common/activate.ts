@@ -3,6 +3,7 @@ import { registerCommands } from "./commands";
 import { Diagnostics } from "./diagnostics";
 import { checkConflictingExtensions } from "./extensionGuard";
 import { InteractionsView } from "./interactionsView";
+import { registerNewFileLevel } from "./newFileLevel";
 import { ReplSession } from "./replSession";
 import type { PythonRuntime } from "./types";
 
@@ -23,6 +24,7 @@ export function activateWithRuntime(
     diagnostics,
     view,
     repl,
+    registerNewFileLevel(),
     { dispose: () => runtime.dispose() },
   );
 

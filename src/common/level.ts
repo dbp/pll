@@ -1,31 +1,44 @@
 /**
- * Language levels for Python files. The level is opted into via a magic
+ * Language levels for Python files. The level is opted into with a magic
  * comment on the first non-blank line of the file:
  *
- *   #beginner       -> beginner level (strictest static checks)
- *   #intermediate   -> intermediate level (shadowing checks, no global/nonlocal,
- *                      but reassignment is allowed inside functions so for-loop
- *                      accumulator patterns work)
- *   #advanced       -> advanced level (no static checks; full Python)
+ *   #level raw            -> no checks at all; plain Python plus PLL's
+ *                            built-in image / table libraries
+ *   #level beginner       -> strictest static checks, and type annotations
+ *                            checked as the program runs
+ *   #level intermediate   -> same as beginner, except reassignment is
+ *                            allowed inside functions so for-loop
+ *                            accumulator patterns work
+ *   #level advanced       -> no static checks; annotations still checked,
+ *                            but by Python's own rules
  *
- * Files with no header default to `advanced` so existing code continues to
- * run untouched.
+ * Files with no header are `raw`, so code written without PLL in mind runs
+ * exactly as it would under CPython. Every behavioral difference is opted
+ * into by naming a level, and the level is the *only* thing that decides
+ * what is checked - there is no separate setting that can disagree with it.
  */
 
-export type Level = "beginner" | "intermediate" | "advanced";
+export type Level = "raw" | "beginner" | "intermediate" | "advanced";
 
-export const DEFAULT_LEVEL: Level = "advanced";
+export const DEFAULT_LEVEL: Level = "raw";
 
-const HEADER_RE = /^#\s*([a-zA-Z]+)\s*$/;
+// Case-sensitive, and exactly one spelling: `#level beginner`. Anything
+// else falls back to the default rather than guessing at intent.
+const HEADER_RE = /^#\s*level\s+([a-z]+)\s*$/;
 
-const LEVEL_NAMES: ReadonlyArray<Level> = ["beginner", "intermediate", "advanced"];
+const LEVEL_NAMES: ReadonlyArray<Level> = [
+  "raw",
+  "beginner",
+  "intermediate",
+  "advanced",
+];
 
 /**
  * Parse the level header from the start of a Python source file.
  *
- * Skips leading blank lines so a single empty line at the top of the file
- * doesn't disable level detection. Anything other than a recognised header
- * silently falls back to the default.
+ * Skips leading blank lines so an empty first line doesn't disable level
+ * detection. Anything other than a recognised header silently falls back to
+ * the default, so a stray comment is never an error.
  */
 export function parseLevel(source: string): Level {
   const lines = source.split(/\r?\n/);
@@ -38,13 +51,24 @@ export function parseLevel(source: string): Level {
     if (!match) {
       return DEFAULT_LEVEL;
     }
-    const name = match[1].toLowerCase();
+    const name = match[1];
     for (const level of LEVEL_NAMES) {
       if (name === level) return level;
     }
     return DEFAULT_LEVEL;
   }
   return DEFAULT_LEVEL;
+}
+
+/**
+ * Whether annotations are checked while the program runs.
+ *
+ * On at every level except `raw`, which exists precisely so that a file can
+ * opt out. There is deliberately no setting for this: one mechanism, named
+ * in the file, rather than two that can contradict each other.
+ */
+export function levelHasTypeChecking(level: Level): boolean {
+  return level !== "raw";
 }
 
 /**

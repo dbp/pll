@@ -3,12 +3,15 @@
 # This module is loaded into Pyodide once when the runtime initializes.
 # It exposes four entry points used by the TypeScript host:
 #
-#   _pll_run_file(code, filename, session_key, type_check=True)   -> dict
-#   _pll_repl_eval(code, session_key, type_check=True)            -> dict
+#   _pll_run_file(code, filename, session_key, level="raw")      -> dict
+#   _pll_repl_eval(code, session_key, level="raw")               -> dict
 #   _pll_repl_check(source)                      -> dict
 #   _pll_has_tests(code)                         -> bool
-#   _pll_run_tests(code, filename, type_check=True)               -> dict
+#   _pll_run_tests(code, filename, level="raw")                  -> dict
 #   _pll_static_analyze(code, level, filename, session_key=None) -> list[dict]
+#
+# The level is the only knob: it decides both the static checks and whether
+# annotations are instrumented. `raw` is plain Python plus PLL's libraries.
 #
 # Each returns a JSON-friendly dict / list of dicts so the JS side can
 # consume the result via `proxy.toJs({ dict_converter: Object.fromEntries })`.
@@ -55,6 +58,12 @@ _pll_type_check_error = None
 # `True` has almost always made a mistake. `advanced` keeps Python's rule.
 _PLL_STRICT_NUMBERS = False
 
+# Whether annotations are instrumented at all. Set per run from the language
+# level; see `levelHasTypeChecking` in level.ts. False only at `#level raw`,
+# which exists so a file can opt out. There is no separate setting: the level
+# is the single input, so nothing can disagree with it.
+_PLL_TYPE_CHECK = False
+
 
 def _pll_check_strict_int(value, origin_type, args, memo):
     """Replaces typeguard's `int` check; bools are not whole numbers here.
@@ -85,8 +94,14 @@ def _pll_strict_number_lookup(origin_type, args, extras):
 
 
 def _pll_apply_level(level):
-    """Set the per-run strictness implied by the language level."""
-    global _PLL_STRICT_NUMBERS
+    """Set the per-run strictness implied by the language level.
+
+    The level is the only input. `raw` checks nothing; `advanced` checks
+    annotations by Python's own rules; the two teaching levels additionally
+    reject a bool where a number is annotated. Must agree with level.ts.
+    """
+    global _PLL_STRICT_NUMBERS, _PLL_TYPE_CHECK
+    _PLL_TYPE_CHECK = level != "raw"
     _PLL_STRICT_NUMBERS = level in ("beginner", "intermediate")
 
 
@@ -396,15 +411,18 @@ class _PllTopLevelAnnAssign(_ast.NodeTransformer):
         return call
 
 
-def _pll_parse_and_instrument(code, filename, type_check):
+def _pll_parse_and_instrument(code, filename):
     """Parse `code`, adding runtime type checks when they are available.
+
+    Whether to check at all comes from `_PLL_TYPE_CHECK`, which
+    `_pll_apply_level` sets from the level before this is called.
 
     Instrumentation is attempted on a second parse and validated by
     compiling it, so anything typeguard cannot handle falls back to the
     plain tree rather than failing the run.
     """
     tree = _ast.parse(code, filename=filename, mode="exec")
-    if not type_check or not _PLL_TYPEGUARD_READY:
+    if not _PLL_TYPE_CHECK or not _PLL_TYPEGUARD_READY:
         return tree
     try:
         instrumented = _ast.parse(code, filename=filename, mode="exec")
@@ -509,7 +527,7 @@ def _pll_extract_loc(tb_str, fallback_filename):
     return line_no, col
 
 
-def _pll_run_file(code, filename, session_key, type_check=True, level="advanced"):
+def _pll_run_file(code, filename, session_key, level="raw"):
     stdout = _PllStream("stdout")
     stderr = _PllStream("stderr")
     result = {
@@ -532,7 +550,7 @@ def _pll_run_file(code, filename, session_key, type_check=True, level="advanced"
     user_globals = _pll_reset_session(session_key)
     _pll_displays.clear()
     try:
-        tree = _pll_parse_and_instrument(code, filename, type_check)
+        tree = _pll_parse_and_instrument(code, filename)
         _PllTopLevelExprWrapper().visit(tree)
         _ast.fix_missing_locations(tree)
         compiled = compile(tree, filename, "exec")
@@ -741,7 +759,7 @@ def _pll_iter_tests(ns):
             yield name + "::" + meth_name, _bound
 
 
-def _pll_run_tests(code, filename, type_check=True, level="advanced"):
+def _pll_run_tests(code, filename, level="raw"):
     """Run same-file tests (`test_*` / `Test*`) in an isolated namespace.
 
     Uses pytest only to rewrite assertions so failures show `assert 4 == 5`
@@ -773,7 +791,7 @@ def _pll_run_tests(code, filename, type_check=True, level="advanced"):
     _pll_protect_import_path()
 
     try:
-        tree = _pll_parse_and_instrument(code, display_name, type_check)
+        tree = _pll_parse_and_instrument(code, display_name)
     except SyntaxError as e:
         result["internal_error"] = True
         result["error_type"] = type(e).__name__
@@ -852,7 +870,7 @@ def _pll_run_tests(code, filename, type_check=True, level="advanced"):
 # REPL-style eval (statements + last-expression value)
 # -----------------------------------------------------------------------------
 
-def _pll_repl_eval(code, session_key, type_check=True, level="advanced"):
+def _pll_repl_eval(code, session_key, level="raw"):
     stdout = _PllStream("stdout")
     stderr = _PllStream("stderr")
     result = {
@@ -873,7 +891,7 @@ def _pll_repl_eval(code, session_key, type_check=True, level="advanced"):
     user_globals = _pll_get_session(session_key)
     filename = "<repl>"
     try:
-        tree = _pll_parse_and_instrument(code, filename, type_check)
+        tree = _pll_parse_and_instrument(code, filename)
     except SyntaxError as e:
         formatted = _pll_format_exception(e)
         result["error_type"] = type(e).__name__
@@ -1197,7 +1215,7 @@ def _pll_static_analyze(code, level, filename, session_key=None):
       id, error_type, message, line_number, column, name_token, scope_kind.
 
     If `session_key` is set, names already bound in that session are treated
-    as existing module-level bindings. That way a `#beginner` prompt cannot
+    as existing module-level bindings. That way a `#level beginner` prompt cannot
     reassign a name the file (or an earlier prompt line) already defined.
     """
     if level not in ("beginner", "intermediate"):

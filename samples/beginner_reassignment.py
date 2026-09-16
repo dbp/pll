@@ -1,4 +1,4 @@
-#beginner
+#level beginner
 
 # Each name can only be assigned once per scope in beginner mode.
 

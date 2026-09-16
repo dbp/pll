@@ -96,9 +96,11 @@ export interface RunFileRequest {
   fileName: string;
   /** Opaque per-file session id; the file's globals dict is keyed by this. */
   sessionKey: string;
-  /** Instrument the code with runtime type checks. Defaults to true. */
-  typeCheck?: boolean;
-  /** Language level; decides how strict those checks are. */
+  /**
+   * Language level. The only input that decides what is checked: whether
+   * annotations are instrumented at all, and how strictly. Defaults to
+   * `raw` (nothing checked).
+   */
   level?: Level;
 }
 
@@ -106,9 +108,7 @@ export interface ReplEvalRequest {
   code: string;
   /** Opaque per-file session id; the prompt evaluates against this file's globals. */
   sessionKey: string;
-  /** Instrument the snippet with runtime type checks. Defaults to true. */
-  typeCheck?: boolean;
-  /** Language level; decides how strict those checks are. */
+  /** Language level; see `RunFileRequest.level`. */
   level?: Level;
 }
 

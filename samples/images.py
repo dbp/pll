@@ -1,4 +1,4 @@
-#beginner
+#level beginner
 
 # Bare top-level expressions are auto-displayed inline in the PLL
 # interactions view, alongside any text output.

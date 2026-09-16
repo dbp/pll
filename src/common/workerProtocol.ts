@@ -23,8 +23,7 @@ export type WorkerInbound =
       code: string;
       fileName: string;
       sessionKey: string;
-      typeCheck?: boolean;
-      /** Language level; decides how strict the type checks are. */
+      /** Language level; the only input deciding what gets checked. */
       level?: string;
     }
   | {
@@ -32,7 +31,6 @@ export type WorkerInbound =
       type: "replEval";
       code: string;
       sessionKey: string;
-      typeCheck?: boolean;
       level?: string;
     }
   | { id: number; type: "checkSyntax"; code: string }
@@ -44,7 +42,6 @@ export type WorkerInbound =
       type: "runTests";
       code: string;
       fileName: string;
-      typeCheck?: boolean;
       level?: string;
     }
   | { id: number; type: "staticAnalyze"; code: string; level: string; fileName: string; sessionKey?: string }

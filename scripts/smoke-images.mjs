@@ -234,7 +234,7 @@ del _name
   console.log("\n[9] static analyzer still works after image lib loaded");
   {
     const fn = pyodide.globals.get("_pll_static_analyze");
-    const proxy = fn(`#beginner\nx = 1\nx = 2\n`, "beginner", "t.py");
+    const proxy = fn(`#level beginner\nx = 1\nx = 2\n`, "beginner", "t.py");
     const findings = proxy.toJs({ dict_converter: Object.fromEntries });
     proxy.destroy?.();
     fn.destroy?.();

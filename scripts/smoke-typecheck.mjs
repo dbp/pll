@@ -4,7 +4,7 @@
  *
  * Drives the built desktop worker over the real protocol, so this covers
  * the whole stack: the vendored wheels being written into MEMFS and put on
- * sys.path, the AST instrumentation, the `typeCheck` flag, and the
+ * sys.path, the AST instrumentation, the level that selects it, and the
  * traceback filtering that keeps typeguard's own frames out of what a
  * student sees.
  *
@@ -93,6 +93,9 @@ async function main() {
       code,
       fileName: opts.fileName ?? "hello.py",
       sessionKey: "tc-" + session++,
+      // Annotations are only checked away from `raw`; these tests are about
+      // the checking, so default to the level that uses Python's own rules.
+      level: "advanced",
       ...opts,
     }).then((r) => r.result);
 
@@ -197,16 +200,32 @@ async function main() {
       expect(r.stdout === "ab\n", "should print ab, got " + JSON.stringify(r.stdout));
     }
 
-    console.log("\n[9] typeCheck:false runs as plain Python");
+    console.log("\n[9] #level raw runs as plain Python");
     {
       const r = await run(
         "def add(x: int, y: int) -> int:\n    return x + y\n\nprint(add(2, \"three\"))\n",
-        { typeCheck: false },
+        { level: "raw" },
       );
       console.log(`    ok=${r.ok} error=${r.error_type || "(none)"}`);
-      expect(r.error_type !== "TypeCheckError", "type checks must be off when disabled");
+      expect(r.error_type !== "TypeCheckError", "raw must not check annotations");
       // "2" + "three" is a TypeError from Python itself, not from typeguard.
       expect(r.error_type === "TypeError", "plain Python should still fail its own way, got " + r.error_type);
+
+      // And a request with no level at all must behave the same, because a
+      // file with no header is raw.
+      const bare = (
+        await send({
+          type: "runFile",
+          code: 'def add(x: int, y: int) -> int:\n    return x + y\n\nprint(add(2, "three"))\n',
+          fileName: "hello.py",
+          sessionKey: "tc-bare",
+        })
+      ).result;
+      console.log(`    no level at all -> ${bare.error_type}`);
+      expect(
+        bare.error_type === "TypeError",
+        "omitting the level should behave like raw, got " + bare.error_type,
+      );
     }
 
     console.log("\n[10] annotated assignment inside a function");
@@ -234,7 +253,12 @@ async function main() {
         "    double('four')",
         "",
       ].join("\n");
-      const reply = await send({ type: "runTests", code, fileName: "tests.py" });
+      const reply = await send({
+        type: "runTests",
+        code,
+        fileName: "tests.py",
+        level: "advanced",
+      });
       const r = reply.result;
       console.log(`    passed=${r.passed} failed=${r.failed} errors=${r.errors}`);
       const names = (r.tests || []).map((t) => `${t.name}:${t.outcome}`);
@@ -255,7 +279,12 @@ async function main() {
     console.log("\n[12] assert-based test failures still report normally");
     {
       const code = "def double(n: int) -> int:\n    return n * 3\n\ndef test_double():\n    assert double(4) == 8\n";
-      const reply = await send({ type: "runTests", code, fileName: "tests.py" });
+      const reply = await send({
+        type: "runTests",
+        code,
+        fileName: "tests.py",
+        level: "advanced",
+      });
       const r = reply.result;
       const t = (r.tests || [])[0];
       console.log(`    ${t && t.name}: ${t && t.outcome} / ${t && (t.message || "").split("\n")[0]}`);
@@ -274,12 +303,20 @@ async function main() {
         code: "def add(x: int, y: int) -> int:\n    return x + y\n",
         fileName: "hello.py",
         sessionKey: key,
+        level: "advanced",
       });
-      const reply = await send({ type: "replEval", code: 'add(1, "two")', sessionKey: key });
+      const reply = await send({
+        type: "replEval",
+        code: 'add(1, "two")',
+        sessionKey: key,
+        level: "advanced",
+      });
       const r = reply.result;
       console.log(`    ${r.error_type}: ${r.error_message}`);
       expect(r.error_type === "TypeCheckError", "prompt calls should be checked, got " + r.error_type);
-      const good = (await send({ type: "replEval", code: "add(1, 2)", sessionKey: key })).result;
+      const good = (
+        await send({ type: "replEval", code: "add(1, 2)", sessionKey: key, level: "advanced" })
+      ).result;
       expect(good.result_repr === "3", "a valid prompt call should work, got " + good.result_repr);
     }
     console.log("\n[14] beginner/intermediate reject a bool where a number is annotated");

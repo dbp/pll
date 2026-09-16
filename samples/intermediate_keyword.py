@@ -1,4 +1,4 @@
-#intermediate
+#level intermediate
 
 # `global` and `nonlocal` are not allowed at the intermediate level.
 # Pass values in as arguments and return new ones instead.

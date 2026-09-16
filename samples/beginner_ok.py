@@ -1,4 +1,4 @@
-#beginner
+#level beginner
 
 greeting = "Hello!"
 print(greeting)

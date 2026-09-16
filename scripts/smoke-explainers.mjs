@@ -18,11 +18,11 @@ const entry = join(tmp, "entry.mjs");
 writeFileSync(
   entry,
   `
-import { parseLevel } from "../src/common/level";
+import { parseLevel, levelHasTypeChecking } from "../src/common/level";
 import { enrichStaticFindings } from "../src/common/analyzers/static/registry";
 import { formatFriendlyError } from "../src/common/errorFormatter";
 
-export { parseLevel, enrichStaticFindings, formatFriendlyError };
+export { parseLevel, levelHasTypeChecking, enrichStaticFindings, formatFriendlyError };
 `,
 );
 
@@ -48,17 +48,29 @@ function expect(cond, msg) {
 }
 
 console.log("\n[parseLevel]");
-expect(mod.parseLevel("#beginner\nx=1") === "beginner", "#beginner");
-expect(mod.parseLevel("# beginner\nx=1") === "beginner", "# beginner (with space)");
-expect(mod.parseLevel("#Beginner\nx=1") === "beginner", "case-insensitive #Beginner");
-expect(mod.parseLevel("#intermediate\nx=1") === "intermediate", "#intermediate");
-expect(mod.parseLevel("# Intermediate\nx=1") === "intermediate", "case-insensitive #Intermediate");
-expect(mod.parseLevel("#advanced\nx=1") === "advanced", "#advanced");
-expect(mod.parseLevel("\n\n#beginner\n") === "beginner", "blank lines before header");
-expect(mod.parseLevel("x = 1") === "advanced", "default advanced");
-expect(mod.parseLevel("# random comment\nx=1") === "advanced", "non-level comment defaults advanced");
-// Old level name no longer recognised; falls back to default.
-expect(mod.parseLevel("#expert\nx=1") === "advanced", "#expert is no longer a level");
+expect(mod.parseLevel("#level raw\nx=1") === "raw", "#level raw");
+expect(mod.parseLevel("#level beginner\nx=1") === "beginner", "#level beginner");
+expect(mod.parseLevel("# level beginner\nx=1") === "beginner", "# level beginner (with space)");
+expect(mod.parseLevel("#level intermediate\nx=1") === "intermediate", "#level intermediate");
+expect(mod.parseLevel("#level advanced\nx=1") === "advanced", "#level advanced");
+expect(mod.parseLevel("#level  advanced \nx=1") === "advanced", "extra spaces around the name");
+expect(mod.parseLevel("\n\n#level beginner\n") === "beginner", "blank lines before header");
+// No header at all is `raw`: code written without PLL in mind runs as plain
+// Python, and every difference has to be opted into by naming a level.
+expect(mod.parseLevel("x = 1") === "raw", "no header defaults to raw");
+expect(mod.parseLevel("# random comment\nx=1") === "raw", "non-level comment defaults to raw");
+// Exactly one spelling: the bare form and any other casing are not levels.
+expect(mod.parseLevel("#beginner\nx=1") === "raw", "the bare #beginner form is gone");
+expect(mod.parseLevel("#LEVEL beginner\nx=1") === "raw", "#LEVEL is not #level");
+expect(mod.parseLevel("#level Beginner\nx=1") === "raw", "#level Beginner is not a level");
+expect(mod.parseLevel("#level expert\nx=1") === "raw", "expert is not a level");
+expect(mod.parseLevel("#level\nx=1") === "raw", "a bare #level names nothing");
+
+console.log("\n[levelHasTypeChecking]");
+expect(mod.levelHasTypeChecking("beginner") === true, "beginner checks annotations");
+expect(mod.levelHasTypeChecking("intermediate") === true, "intermediate checks annotations");
+expect(mod.levelHasTypeChecking("advanced") === true, "advanced checks annotations");
+expect(mod.levelHasTypeChecking("raw") === false, "raw checks nothing");
 
 console.log("[enrichStaticFindings]");
 const findings = mod.enrichStaticFindings(
@@ -126,8 +138,8 @@ expect(
   "reassignment fixes no longer suggest switching to #expert",
 );
 expect(
-  findings[2].howToFix.every((fix) => !/#advanced/i.test(fix)),
-  "reassignment fixes no longer suggest switching to #advanced",
+  findings[2].howToFix.every((fix) => !/#level advanced/i.test(fix)),
+  "reassignment fixes no longer suggest switching to advanced",
 );
 
 console.log("[explainers omit line 0 for preexisting session bindings]");

@@ -1,4 +1,4 @@
-#beginner
+#level beginner
 
 # PLL checks type annotations while the program runs. Uncomment any of the
 # lines marked BREAKS to see the error it reports, and where.
