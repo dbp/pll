@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { findingLocation, type FindingLocation } from "./analyzers/findingLocation";
 import type { AnalysisFinding } from "./analyzers/types";
 
 /**
@@ -79,7 +80,7 @@ export interface SerializedFinding {
   errorType: string;
   headline: string;
   howToFix: string[];
-  location: { fileName: string; line: number; column: number | null; label: string } | null;
+  location: FindingLocation | null;
 }
 export interface RawErrorEntry {
   kind: "rawError";
@@ -518,28 +519,11 @@ export class InteractionsView
  * FindingEntry objects directly without going through `appendFinding`.
  */
 export function serializeFinding(finding: AnalysisFinding): SerializedFinding {
-  let location: SerializedFinding["location"] = null;
-  if (
-    finding.lineNumber !== null &&
-    finding.fileName !== "<repl>" &&
-    finding.fileName !== "<input>"
-  ) {
-    const label =
-      finding.column !== null
-        ? `${finding.fileName}:${finding.lineNumber}:${finding.column + 1}`
-        : `${finding.fileName}:${finding.lineNumber}`;
-    location = {
-      fileName: finding.fileName,
-      line: finding.lineNumber,
-      column: finding.column,
-      label,
-    };
-  }
   return {
     errorType: finding.errorType,
     headline: finding.headline,
     howToFix: [...finding.howToFix],
-    location,
+    location: findingLocation(finding),
   };
 }
 

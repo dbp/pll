@@ -175,9 +175,13 @@ export function createWorkerHost(
     const fn = ready().globals.get(name);
     try {
       const proxy = fn(...args);
-      const result = proxy.toJs({ dict_converter: Object.fromEntries }) as T;
-      proxy.destroy?.();
-      return result;
+      try {
+        return proxy.toJs({ dict_converter: Object.fromEntries }) as T;
+      } finally {
+        // Both proxies are freed even if `toJs` throws: a PyProxy is a
+        // handle to a live Python object, so dropping one leaks it.
+        proxy.destroy?.();
+      }
     } finally {
       fn.destroy?.();
     }

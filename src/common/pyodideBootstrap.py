@@ -30,6 +30,7 @@ import codeop as _codeop
 import contextlib
 import json as _pll_json
 import sys as _sys
+import builtins as _builtins_mod
 
 # Must match PLL_WORK_DIR in memfsWorkspace.ts. Sibling files are mounted
 # here and it is cwd, so open("cars.csv") works. It must not sit first on
@@ -945,6 +946,15 @@ def _pll_repl_eval(code, session_key, type_check=True, level="advanced"):
 _PLL_SCOPE_FUNC = (_ast.FunctionDef, _ast.AsyncFunctionDef)
 _PLL_SCOPE_COMP = (_ast.ListComp, _ast.SetComp, _ast.DictComp, _ast.GeneratorExp)
 
+# Attributes `dir()` reports for the `builtins` *module object* itself. They
+# are not built-in functions, so reporting them as shadowed would be a false
+# positive with misleading wording ("`__name__` is the name of a Python
+# built-in"). Everything else `dir()` returns is a real builtin and is worth
+# flagging, including the dunder ones like `__import__`.
+_PLL_BUILTINS_MODULE_META = frozenset(
+    ("__doc__", "__loader__", "__name__", "__package__", "__spec__")
+)
+
 
 class _PllScope:
     __slots__ = ("node", "kind", "parent", "bindings")
@@ -1197,7 +1207,7 @@ def _pll_static_analyze(code, level, filename, session_key=None):
         for name in _pll_session_bound_names(session_key):
             locs = module.bindings.setdefault(name, [])
             locs.insert(0, (0, 0, "preexisting"))
-    builtins_set = {n for n in dir(__builtins__) if not n.startswith("_")}
+    builtins_set = set(dir(_builtins_mod)) - _PLL_BUILTINS_MODULE_META
 
     # Whether we flag reassignment in `scope` at this level. At beginner,
     # we flag everywhere; at intermediate, only at module scope so that

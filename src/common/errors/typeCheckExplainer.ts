@@ -1,5 +1,5 @@
 import { levelRejectsBoolAsNumber, type Level } from "../level";
-import type { BeginnerExplanation } from "./nameErrorExplainer";
+import type { BeginnerExplanation } from "./types";
 
 /**
  * Rewrites typeguard's `TypeCheckError` messages into beginner-facing

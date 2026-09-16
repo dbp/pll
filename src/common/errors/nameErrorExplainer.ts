@@ -1,11 +1,5 @@
 import type { ParsedPythonError } from "./pythonErrorParser";
-
-export interface BeginnerExplanation {
-  /** Short headline, e.g. "Python doesn't know what `foo` means." */
-  headline: string;
-  /** Concrete next steps the learner can take. */
-  howToFix: string[];
-}
+import type { BeginnerExplanation } from "./types";
 
 /**
  * Build a friendly explanation for a NameError.
