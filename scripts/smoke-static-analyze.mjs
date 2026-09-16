@@ -8,7 +8,7 @@
  *
  * Usage: node scripts/smoke-static-analyze.mjs
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -259,6 +259,29 @@ _g["x"] = 1
       interMod.some((f) => f.id === "reassignment" && f.name_token === "x"),
       "intermediate still flags top-level reassignment at the prompt",
     );
+  }
+
+  console.log("\n[13] every sample is clean at its own declared level");
+  {
+    // These exist to *demonstrate* findings, so they are expected to have
+    // them. Everything else must pass the level it asks for - a sample that
+    // cannot run is worse than no sample.
+    const demos = /reassignment|shadowing|keyword|name_error/;
+    const samples = readdirSync(resolve(ROOT, "samples")).filter((f) => f.endsWith(".py"));
+    expect(samples.length > 10, `expected to find the samples, got ${samples.length}`);
+    for (const name of samples) {
+      const code = readPy(`samples/${name}`);
+      const first = code.split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "";
+      const level = first.startsWith("#level ") ? first.slice("#level ".length) : "raw";
+      const findings = analyze(code, level, name) ?? [];
+      if (demos.test(name)) continue;
+      expect(
+        findings.length === 0,
+        `${name} declares #level ${level} but has ${findings.length} finding(s): ` +
+          findings.map((f) => `${f.id} ${f.name_token} on line ${f.line_number}`).join(", "),
+      );
+    }
+    console.log(`    checked ${samples.length} samples`);
   }
 
   fn.destroy?.();

@@ -9,7 +9,8 @@
  *   1. PYODIDE_BOOTSTRAP_PY   - runtime hooks (run/repl/static-analyze)
  *   2. PLL_IMAGE_LIB_PY    - Image class + primitives + combinators
  *   3. PLL_TABLE_LIB_PY    - Table class + functional ops + chart helpers
- *   4. PYODIDE_INSTALL_PY     - registers `pll.image` / `pll.table`
+ *   4. PYODIDE_INSTALL_PY     - registers `pll.image` / `pll.table` /
+ *                                `pll.reactor`
  *                                modules and copies public names into
  *                                `_pll_initial_globals`
  *
@@ -20,10 +21,12 @@
 import bootstrapSource from "./pyodideBootstrap.py";
 import imageLibSource from "./imageLib.py";
 import tableLibSource from "./tableLib.py";
+import reactorLibSource from "./reactorLib.py";
 
 export const PYODIDE_BOOTSTRAP_PY = bootstrapSource;
 export const PLL_IMAGE_LIB_PY = imageLibSource;
 export const PLL_TABLE_LIB_PY = tableLibSource;
+export const PLL_REACTOR_LIB_PY = reactorLibSource;
 
 /**
  * Imports whose use implies network access. Pyodide does not wire Python's
@@ -56,15 +59,20 @@ import sys as _sys, types as _types
 _pll_module = _types.ModuleType("pll")
 _pll_image_module = _types.ModuleType("pll.image")
 _pll_table_module = _types.ModuleType("pll.table")
+_pll_reactor_module = _types.ModuleType("pll.reactor")
 for _name in PLL_IMAGE_EXPORTS:
     setattr(_pll_image_module, _name, globals()[_name])
 for _name in PLL_TABLE_EXPORTS:
     setattr(_pll_table_module, _name, globals()[_name])
+for _name in PLL_REACTOR_EXPORTS:
+    setattr(_pll_reactor_module, _name, globals()[_name])
 _pll_module.image = _pll_image_module
 _pll_module.table = _pll_table_module
+_pll_module.reactor = _pll_reactor_module
 _sys.modules["pll"] = _pll_module
 _sys.modules["pll.image"] = _pll_image_module
 _sys.modules["pll.table"] = _pll_table_module
+_sys.modules["pll.reactor"] = _pll_reactor_module
 
 # Add image + table library names to the per-session globals template.
 # Each new session is initialized as a copy of this template, so every
@@ -72,6 +80,8 @@ _sys.modules["pll.table"] = _pll_table_module
 for _name in PLL_IMAGE_EXPORTS:
     _pll_initial_globals[_name] = globals()[_name]
 for _name in PLL_TABLE_EXPORTS:
+    _pll_initial_globals[_name] = globals()[_name]
+for _name in PLL_REACTOR_EXPORTS:
     _pll_initial_globals[_name] = globals()[_name]
 del _name
 `;
@@ -94,7 +104,8 @@ export type DisplayData =
   | StdoutDisplay
   | StderrDisplay
   | ImageDisplay
-  | TableDisplay;
+  | TableDisplay
+  | ReactorDisplay;
 
 export interface StdoutDisplay {
   type: "stdout";
@@ -127,6 +138,56 @@ export interface TableDisplay {
   shown_count: number;
   /** True iff the host should show a "row N of M" indicator. */
   truncated: boolean;
+}
+
+/**
+ * A reactor asking to be shown. Unlike the other displays this one is not a
+ * snapshot: the host keeps driving it by id, sending events and receiving
+ * new frames, until it is stopped or its session is reset.
+ */
+export interface ReactorDisplay {
+  type: "reactor";
+  id: string;
+  title: string;
+  /** Seconds between ticks. */
+  tick_rate: number;
+  /** Whether it has an `on_tick`, i.e. whether there is anything to play. */
+  ticking: boolean;
+  wants_keys: boolean;
+  wants_mouse: boolean;
+  /** `ws://` URL for the universe client, or null. */
+  register: string | null;
+  frame: ReactorFrame;
+  index: number;
+  length: number;
+  at_end: boolean;
+  stopped: boolean;
+  value_repr: string;
+}
+
+export interface ReactorFrame {
+  data: string;
+  width: number;
+  height: number;
+}
+
+/** Reply from `_pll_reactor_step` / `_pll_reactor_seek`. */
+export interface ReactorStepResult {
+  ok: boolean;
+  /** The reactor is no longer registered (its session was reset). */
+  gone?: boolean;
+  id?: string;
+  frame?: ReactorFrame;
+  index?: number;
+  length?: number;
+  at_end?: boolean;
+  stopped?: boolean;
+  value_repr?: string;
+  /** JSON-encoded messages the handlers asked to send to the server. */
+  messages?: string[];
+  error_type?: string;
+  error_message?: string;
+  traceback?: string;
 }
 
 export interface TestCaseData {

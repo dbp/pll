@@ -1,5 +1,5 @@
 import { deliverDisplay, deliverRunResult, deliverTestResult } from "./deliverResult";
-import type { RawStaticFinding } from "./pyodideRunner";
+import type { RawStaticFinding, ReactorStepResult } from "./pyodideRunner";
 import { signalInterrupt, tryCreateInterruptBuffer } from "./interruptBuffer";
 import { tryCreateStdinBuffer, writeStdinLine } from "./stdinBuffer";
 import type {
@@ -161,6 +161,29 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     await this.initialize();
     const { files } = await this.request({ type: "collectWorkspace" }, "workspaceFiles");
     return files;
+  }
+
+  async reactorStep(reactorId: string, event: string): Promise<ReactorStepResult> {
+    await this.initialize();
+    const { result } = await this.request(
+      { type: "reactorStep", reactorId, event },
+      "reactorFrame",
+    );
+    return result;
+  }
+
+  async reactorSeek(reactorId: string, index: number): Promise<ReactorStepResult> {
+    await this.initialize();
+    const { result } = await this.request(
+      { type: "reactorSeek", reactorId, index },
+      "reactorFrame",
+    );
+    return result;
+  }
+
+  async reactorDispose(reactorId: string): Promise<void> {
+    await this.initialize();
+    await this.request({ type: "reactorDispose", reactorId }, "reactorDisposed");
   }
 
   interrupt(): boolean {

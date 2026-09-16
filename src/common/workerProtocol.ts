@@ -1,4 +1,10 @@
-import type { DisplayData, RawStaticFinding, RunResult, TestRunResult } from "./pyodideRunner";
+import type {
+  DisplayData,
+  RawStaticFinding,
+  ReactorStepResult,
+  RunResult,
+  TestRunResult,
+} from "./pyodideRunner";
 import type { WorkspaceFile } from "./workspaceFilePolicy";
 
 export interface RawReplCheck {
@@ -46,7 +52,12 @@ export type WorkerInbound =
     }
   | { id: number; type: "staticAnalyze"; code: string; level: string; fileName: string; sessionKey?: string }
   | { id: number; type: "mountWorkspace"; files: WorkspaceFile[] }
-  | { id: number; type: "collectWorkspace" };
+  | { id: number; type: "collectWorkspace" }
+  /** Apply one event (tick / key / mouse / receive) to a running reactor. */
+  | { id: number; type: "reactorStep"; reactorId: string; event: string }
+  /** Show an earlier or later frame without applying an event. */
+  | { id: number; type: "reactorSeek"; reactorId: string; index: number }
+  | { id: number; type: "reactorDispose"; reactorId: string };
 
 export type WorkerOutbound =
   | { id: number; type: "ready" }
@@ -59,6 +70,8 @@ export type WorkerOutbound =
   | { id: number; type: "static"; result: RawStaticFinding[] }
   | { id: number; type: "workspaceReady" }
   | { id: number; type: "workspaceFiles"; files: WorkspaceFile[] }
+  | { id: number; type: "reactorFrame"; result: ReactorStepResult }
+  | { id: number; type: "reactorDisposed" }
   | { id: number; type: "error"; message: string }
   | { type: "display"; payload: DisplayData }
   | { type: "stdinRequest" };

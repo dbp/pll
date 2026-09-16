@@ -32,7 +32,7 @@ src/
     ├── workerHost.ts              Worker side of the protocol: one Pyodide
     │                              interpreter + the message dispatch
     ├── stdinBuffer.ts             SharedArrayBuffer protocol for input()
-    ├── interruptBuffer.ts        SharedArrayBuffer protocol for Stop
+    ├── interruptBuffer.ts         SharedArrayBuffer protocol for Stop
     ├── workspaceFilePolicy.ts     Which sibling files to mount / write back
     ├── workspaceFiles.ts          vscode.workspace.fs snapshot + writeback
     ├── memfsWorkspace.ts          Pyodide MEMFS mount / collect helpers
@@ -42,7 +42,7 @@ src/
     │                              REPL multi-line buffer, file runs, exec chain
     ├── interactionsView.ts        WebviewView provider for the integrated
     │                              text + image stream + input row
-    ├── newFileLevel.ts           Seeds new .py files with a #level line
+    ├── newFileLevel.ts            Seeds new .py files with a #level line
     ├── level.ts                   `#level raw|beginner|intermediate|advanced`
     │                              header parser; the single source of what
     │                              each level checks
@@ -53,6 +53,8 @@ src/
     ├── deliverResult.ts           Translates Python results to ExecutionEvents
     ├── pyodideBootstrap.py        Real Python: run / repl-eval / tests / static analyzer
     ├── imageLib.py                Real Python: SVG image primitives + combinators
+    ├── reactorLib.py              Real Python: reactor values + history
+    ├── universeClient.ts          World-side protocol, transport, failure text
     ├── tableLib.py                Real Python: Table type + charts
     ├── analyzers/
     │   ├── types.ts               AnalysisFinding, RuntimeAnalyzer
@@ -298,6 +300,76 @@ Two details that decide where the squiggle lands:
   keeps only the first, which is exactly the part naming the accepted
   types; `typeCheckAnalyzer` recovers the rest from the traceback.
 
+## Reactors (big-bang / animate) and the universe client
+
+`reactorLib.py` holds the model, which follows Pyret's reactors rather than
+Racket's `big-bang`: a reactor is a **value**, and `react` returns a new one
+instead of mutating. That choice is what makes the card's slider work -
+rewinding is just holding an earlier value - and it is also what lets
+`simulate_trace` test a reactor's logic with no clock and no drawing.
+
+**Nothing in Python runs an event loop.** The extension host owns the clock
+(`setInterval` in `ReplSession`) and calls `_pll_reactor_step` once per
+event. A loop in the worker would hold it, and the exec chain with it, for
+as long as the animation ran - the exact failure `Stop` exists for. Because
+the host drives it, the prompt stays usable while something is animating,
+and several reactors can run at once.
+
+Frame budget is not a concern: a 60-sprite frame renders and serializes in
+about 0.3ms under CPython, so even at Pyodide's 2-5x penalty there is two
+orders of magnitude of headroom at 28fps.
+
+Two details in the driver:
+
+- Frames are **dropped, not queued**, while a step is in flight
+  (`driver.inFlight`). A slow `to_draw` should make the animation choppy,
+  not build a backlog that outlives the program.
+- History is a list of `(reactor, event)` pairs with a cursor, not a list of
+  states. Rewinding and playing forward again is therefore *replay* - the
+  same values, not a recomputation that could drift if a handler is not
+  deterministic. A new event at a rewound cursor discards the frames after
+  it, like an editor's undo history.
+
+A top-level `big_bang(...)` would otherwise print the returned reactor's
+repr underneath its own card, so `interact()` marks the value it returns and
+`_pll_show_top_level` skips anything carrying `_pll_already_displayed`. A
+reactor that was *not* started still displays, as the picture for its
+current state, via the usual `_pll_image_data` duck-typing.
+
+### Universe: the client only
+
+Racket's `universe` is a TCP server plus clients, and a browser worker
+cannot listen for connections - so a faithful port is impossible. What is
+possible, and what students actually need, is the **world** half: they write
+worlds, never servers. So PLL only dials out, and the server is an ordinary
+process the course runs in any language.
+
+The protocol is deliberately ours and deliberately tiny: one JSON value per
+WebSocket text message, each way, with no envelope and no handshake. A
+conforming server is a page of code - see `samples/universe_server.mjs`,
+which is dependency-free so it can be copied anywhere.
+
+The socket lives on the **extension host**, next to the clock, so a received
+message is just another event for the same reactor driver and the Pyodide
+worker needs no networking at all. Outgoing messages come from
+`package(state, message)`; they are held (up to `MAX_UNIVERSE_BACKLOG`) if
+the socket has not opened yet, and flushed on open.
+
+There is **one** transport, in `universeClient.ts`, and it is worth saying
+why there is no per-host adapter here when everything else has one.
+`WebSocket` is a global in browser workers, and in Node from v22 - which
+`engines.vscode: ^1.101.0` guarantees (see below). Node's is undici's and
+fully spec-shaped: an `EventTarget` with `onopen` / `onmessage` / `onclose`
+/ `onerror`, close events carrying `.code`. So there is nothing to branch
+on. An earlier version feature-detected the global and fell back to an
+optional `ws` package; raising the engine floor deleted both files, the
+detection, the dependency and its esbuild `external` entry.
+
+Neither platform reports *why* a connection failed - browsers hide it on
+purpose, and Node raises an `ErrorEvent` whose `message` is empty - so
+`UNIVERSE_CONNECT_HELP` supplies the text. An empty reason in the panel is
+worse than a guess.
+
 ## Workspace files (`open` / `to_csv`)
 
 Pyodide's disk is an in-memory MEMFS. Workspace files are not there
@@ -506,6 +578,27 @@ The rest boot real Pyodide in Node: `smoke-static-analyze`,
 `smoke-workspace-files`, `smoke-interrupt`, and `smoke-desktop-parity` (the
 built desktop worker, end to end).
 
+`smoke-universe` runs the world-side client against a real WebSocket
+server, hand-rolled in the test (handshake plus text framing, about 60
+lines) so there is no dependency and so the test doubles as a statement of
+how small a conforming server is. It covers both directions, a payload past
+the 125-byte frame boundary, a server that hangs up, and an address nobody
+is listening on - asserting the failure message is not empty, since neither
+platform provides one.
+
+`pnpm run test-web:reactor` drives a real webview: that the card animates at
+roughly the tick rate, that pause / step / rewind / replay work, that an
+arrow key reaches Python, that `stop_when` stops the clock, and that the
+prompt still works while three reactors run.
+
+`pnpm run test-web:universe` starts `samples/universe_server.mjs` and runs
+`samples/universe.py` against it in the workbench, checking the card reports
+`connected`, that an arrow key's `package(...)` arrives at the server, and
+that a message from another client reaches `on_receive`. It uses the
+reference server rather than a purpose-built one, so it also verifies that
+the server we hand out works with the client we ship. (It needs port 8080,
+which is what the sample registers with.)
+
 `smoke-interrupt` covers the mechanism, because the failure it guards
 against - the worker never returning - cannot be reproduced against a fake
 runtime. It starts a real `while True: pass` in the built desktop worker and
@@ -656,6 +749,25 @@ Playwright and asserts select → copy → move → paste. Playwright's key
 events go through Chromium's input pipeline as trusted events, which is
 why they exercise the native clipboard path; the one thing it is not is
 a physical key event arriving from the OS.
+
+## Minimum VS Code version
+
+`engines.vscode` is `^1.101.0` (June 2025). That is the first release whose
+extension-host Node is 22, and therefore the first with a global
+`WebSocket` - Node 22.0 removed the `--experimental-websocket` flag and 22.4
+marked it stable. 1.101 ships Node 22.15.1.
+
+The floor is deliberately a version requirement rather than a runtime
+fallback. Supporting older builds meant a feature-detected optional `ws`
+dependency and a code path that could only ever report that universe was
+unavailable - two behaviours for one feature, which is the fragmentation
+this project tries not to accumulate. The trade is explicit: VS Code older
+than June 2025 cannot install PLL at all, rather than installing and then
+being unable to connect.
+
+`@types/vscode` stays at `^1.85.0`. It has to be **at or below**
+`engines.vscode` for `vsce` to package, and nothing here uses API added
+since.
 
 ## Configuration
 

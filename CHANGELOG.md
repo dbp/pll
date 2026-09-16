@@ -1,6 +1,24 @@
 # Changelog
 
 ## Unreleased
+- **PLL now needs VS Code 1.101 (June 2025) or newer.** That is the first
+  release whose Node has a built-in WebSocket, which is what the universe
+  client uses. Requiring it means one code path instead of a fallback that
+  could only report that connecting was unavailable.
+- **Animations and interactive programs.** `animate(draw)` and
+  `reactor(...)` build an interactive program that runs as a card in the
+  interactions panel, with `to_draw`, `on_tick`, `on_key`, `on_mouse` and
+  `stop_when`. The card has play / pause, single-step, and a slider: every
+  state is recorded, so you can rewind and play forward again. `big_bang`
+  is the same as `reactor(...).interact()`. A reactor is a value, so
+  `simulate_trace(n)` and `react(event)` let you test one without watching
+  it run. See `samples/animation.py`.
+- **Worlds can talk to a universe server.** A reactor with a `register`
+  address connects to a WebSocket server; `package(state, message)` sends,
+  `on_receive` receives, and the card shows the connection. You write
+  worlds - the server is a separate program your course runs, and there is a
+  dependency-free reference one in `samples/universe_server.mjs`. See
+  `samples/universe.py`.
 - **More picture functions, following HtDP.** `overlay_xy` and
   `underlay_xy` place the second image at an offset (negative offsets grow
   the picture instead of cutting it off); `beside_align`, `above_align`,

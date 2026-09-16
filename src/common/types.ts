@@ -1,5 +1,5 @@
 import type { Level } from "./level";
-import type { RawStaticFinding } from "./pyodideRunner";
+import type { RawStaticFinding, ReactorFrame, ReactorStepResult } from "./pyodideRunner";
 import type { WorkspaceFile } from "./workspaceFilePolicy";
 
 export interface ExecutionStdoutChunk {
@@ -56,6 +56,27 @@ export interface ExecutionErrorChunk {
   fileName: string | null;
 }
 
+/**
+ * A reactor asking to be shown. The only event that starts something
+ * ongoing: the host drives it afterwards by `id`.
+ */
+export interface ExecutionReactorChunk {
+  kind: "reactor";
+  id: string;
+  title: string;
+  tickRate: number;
+  ticking: boolean;
+  wantsKeys: boolean;
+  wantsMouse: boolean;
+  register: string | null;
+  frame: ReactorFrame;
+  index: number;
+  length: number;
+  atEnd: boolean;
+  stopped: boolean;
+  valueRepr: string;
+}
+
 export interface ExecutionDoneChunk {
   kind: "done";
 }
@@ -86,6 +107,7 @@ export type ExecutionEvent =
   | ExecutionTableChunk
   | ExecutionErrorChunk
   | ExecutionTestReportChunk
+  | ExecutionReactorChunk
   | ExecutionDoneChunk;
 
 export type ExecutionEventHandler = (event: ExecutionEvent) => void;
@@ -164,6 +186,15 @@ export interface PythonRuntime {
    * back next to the running script.
    */
   collectWorkspaceFiles(): Promise<WorkspaceFile[]>;
+  /**
+   * Apply one event to a running reactor and get the frame it produced.
+   * `event` is the JSON of `{kind, ...}`; see `Reactor.react`.
+   */
+  reactorStep(reactorId: string, event: string): Promise<ReactorStepResult>;
+  /** Show an earlier or later recorded frame, applying no event. */
+  reactorSeek(reactorId: string, index: number): Promise<ReactorStepResult>;
+  /** Forget a reactor, so its recorded states can be collected. */
+  reactorDispose(reactorId: string): Promise<void>;
   /**
    * Ask a running program to stop, by raising `KeyboardInterrupt` at the
    * interpreter's next bytecode check. Synchronous on purpose: the worker is

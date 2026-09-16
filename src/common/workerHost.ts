@@ -7,12 +7,14 @@ import {
 import {
   NETWORK_IMPORT_RE,
   PLL_IMAGE_LIB_PY,
+  PLL_REACTOR_LIB_PY,
   PLL_TABLE_LIB_PY,
   PYODIDE_BOOTSTRAP_PY,
   PYODIDE_HTTP_PATCH_PY,
   PYODIDE_INSTALL_PY,
   type DisplayData,
   type RawStaticFinding,
+  type ReactorStepResult,
   type RunResult,
   type TestRunResult,
 } from "./pyodideRunner";
@@ -191,6 +193,8 @@ export function createWorkerHost(
         instance.runPython(PYODIDE_BOOTSTRAP_PY);
         instance.runPython(PLL_IMAGE_LIB_PY);
         instance.runPython(PLL_TABLE_LIB_PY);
+        // After the image lib: `to_draw` handlers use the image primitives.
+        instance.runPython(PLL_REACTOR_LIB_PY);
         instance.runPython(PYODIDE_INSTALL_PY);
         // After PYODIDE_INSTALL_PY: it seeds `_pll_initial_globals`, which
         // this adds the typeguard helpers to.
@@ -360,6 +364,34 @@ export function createWorkerHost(
               data.sessionKey ?? null,
             ]) ?? [];
           adapter.post({ id: data.id, type: "static", result });
+          break;
+        }
+        case "reactorStep": {
+          const result = withLiveEmit(() =>
+            callPython<ReactorStepResult>("_pll_reactor_step", [
+              data.reactorId,
+              data.event,
+            ]),
+          );
+          adapter.post({ id: data.id, type: "reactorFrame", result });
+          break;
+        }
+        case "reactorSeek": {
+          const result = callPython<ReactorStepResult>("_pll_reactor_seek", [
+            data.reactorId,
+            data.index,
+          ]);
+          adapter.post({ id: data.id, type: "reactorFrame", result });
+          break;
+        }
+        case "reactorDispose": {
+          const fn = ready().globals.get("_pll_reactor_dispose");
+          try {
+            fn(data.reactorId);
+          } finally {
+            fn.destroy?.();
+          }
+          adapter.post({ id: data.id, type: "reactorDisposed" });
           break;
         }
         case "mountWorkspace": {

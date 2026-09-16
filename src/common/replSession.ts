@@ -11,7 +11,15 @@ import {
 } from "./interactionsView";
 import { DEFAULT_LEVEL, levelHasStaticChecks, parseLevel, type Level } from "./level";
 import type { RawStaticFinding } from "./pyodideRunner";
+import type { ReactorStepResult } from "./pyodideRunner";
 import type { ExecutionEvent, PythonRuntime } from "./types";
+import {
+  unavailableSocket,
+  validateUniverseUrl,
+  type UniverseConnect,
+  type UniverseSocket,
+  type UniverseStatus,
+} from "./universeClient";
 import { collectSiblingFiles, folderUri, writeBackSiblingFiles } from "./workspaceFiles";
 
 /**
@@ -37,6 +45,7 @@ export interface ReplDeps {
   runtime: PythonRuntime;
   diagnostics: Diagnostics;
   view: InteractionsView;
+  connectUniverse: UniverseConnect;
 }
 
 /**
@@ -111,6 +120,8 @@ export class ReplSession implements vscode.Disposable {
   private stdinSession: Session | null = null;
   /** Sessions with a Stop in flight, so repeated presses don't stack banners. */
   private readonly stopPending = new Set<string>();
+  /** Reactors currently shown in the panel, keyed by the Python-side id. */
+  private readonly reactors = new Map<string, ReactorDriver>();
   private stdinPending: {
     session: Session;
     prefix: string;
@@ -122,6 +133,8 @@ export class ReplSession implements vscode.Disposable {
       onSubmit: (code) => this.handleSubmit(code),
       onInterrupt: () => this.handleInterrupt(),
       onClearRequested: () => this.handleClearRequested(),
+      onReactorControl: (id, action, index) => this.handleReactorControl(id, action, index),
+      onReactorInput: (id, event) => this.handleReactorInput(id, event as ReactorEvent),
     });
     deps.runtime.setStdinHandler(() => this.provideStdin());
 
@@ -162,6 +175,9 @@ export class ReplSession implements vscode.Disposable {
   }
 
   dispose(): void {
+    for (const id of [...this.reactors.keys()]) {
+      this.disposeReactor(id, { fromPython: false });
+    }
     this.editorWatcher.dispose();
   }
 
@@ -339,6 +355,8 @@ export class ReplSession implements vscode.Disposable {
   }
 
   private clearSession(session: Session): void {
+    // Cards are going away, so their clocks must stop with them.
+    this.disposeReactorsFor(session);
     session.entries = [];
     if (this.isActive(session)) this.deps.view.clear();
   }
@@ -881,6 +899,26 @@ export class ReplSession implements vscode.Disposable {
         }
         break;
       }
+      case "reactor":
+        this.appendToSession(session, {
+          kind: "reactor",
+          id: event.id,
+          title: event.title,
+          frame: event.frame,
+          index: event.index,
+          length: event.length,
+          atEnd: event.atEnd,
+          stopped: event.stopped,
+          valueRepr: event.valueRepr,
+          ticking: event.ticking,
+          wantsKeys: event.wantsKeys,
+          wantsMouse: event.wantsMouse,
+          playing: event.ticking && !event.stopped,
+          register: event.register,
+          connection: event.register ? "connecting" : "none",
+        });
+        this.startReactor(session, event);
+        break;
       case "done":
         break;
       case "testReport":
@@ -894,6 +932,290 @@ export class ReplSession implements vscode.Disposable {
           tests: event.tests,
         });
         break;
+    }
+  }
+
+  /* -------- Reactors -------- */
+
+  /**
+   * Take ownership of a reactor the worker just showed.
+   *
+   * The clock lives here rather than in Python: a loop in the worker would
+   * hold it (and the exec chain) for the whole animation, which is the
+   * failure `Stop` exists for. Each tick is one short request instead, so
+   * the prompt stays usable while something is animating.
+   */
+  private startReactor(session: Session, event: Extract<ExecutionEvent, { kind: "reactor" }>): void {
+    const driver: ReactorDriver = {
+      id: event.id,
+      session,
+      tickRate: Math.max(0.01, event.tickRate),
+      ticking: event.ticking,
+      playing: false,
+      stopped: event.stopped,
+      timer: null,
+      inFlight: false,
+      socket: null,
+      status: "none",
+      backlog: [],
+    };
+    this.reactors.set(event.id, driver);
+    if (event.register) {
+      this.connectUniverse(driver, event.register);
+    }
+    if (event.ticking && !event.stopped) {
+      this.playReactor(driver);
+    }
+  }
+
+  /* -------- Universe (world side only) -------- */
+
+  private connectUniverse(driver: ReactorDriver, url: string): void {
+    const problem = validateUniverseUrl(url);
+    if (problem) {
+      this.setUniverseStatus(driver, "error", problem);
+      return;
+    }
+    this.setUniverseStatus(driver, "connecting", url);
+    const handlers = {
+      onOpen: () => {
+        this.setUniverseStatus(driver, "open", url);
+        const queued = driver.backlog;
+        driver.backlog = [];
+        for (const json of queued) {
+          driver.socket?.send(json);
+        }
+      },
+      onMessage: (json: string) => {
+        let message: unknown;
+        try {
+          message = JSON.parse(json);
+        } catch {
+          this.setUniverseStatus(
+            driver,
+            "error",
+            "the server sent something that is not JSON",
+          );
+          return;
+        }
+        void this.reactorEvent(driver, { kind: "receive", message });
+      },
+      onClose: (reason: string) => this.setUniverseStatus(driver, "closed", reason),
+      onError: (message: string) => this.setUniverseStatus(driver, "error", message),
+    };
+    try {
+      driver.socket = this.deps.connectUniverse(url, handlers);
+    } catch (err) {
+      driver.socket = unavailableSocket(handlers, errorMessage(err));
+    }
+  }
+
+  private setUniverseStatus(
+    driver: ReactorDriver,
+    status: UniverseStatus,
+    detail: string,
+  ): void {
+    driver.status = status;
+    this.patchReactor(driver, { connection: status, connectionDetail: detail });
+    if (status === "error") {
+      this.appendToSession(driver.session, {
+        kind: "banner",
+        text: `Universe server: ${detail}`,
+      });
+    }
+  }
+
+  private sendUniverse(driver: ReactorDriver, messages: string[]): void {
+    if (messages.length === 0) return;
+    if (!driver.socket) {
+      this.setUniverseStatus(
+        driver,
+        "error",
+        "this reactor sent a message with package(...) but has no `register` address",
+      );
+      return;
+    }
+    if (driver.status === "open") {
+      for (const json of messages) {
+        driver.socket.send(json);
+      }
+      return;
+    }
+    // Still connecting: hold them, but not forever.
+    for (const json of messages) {
+      if (driver.backlog.length < MAX_UNIVERSE_BACKLOG) {
+        driver.backlog.push(json);
+      }
+    }
+  }
+
+  private playReactor(driver: ReactorDriver): void {
+    if (driver.playing || driver.stopped || !driver.ticking) return;
+    driver.playing = true;
+    driver.timer = setInterval(
+      () => void this.reactorEvent(driver, { kind: "tick" }),
+      driver.tickRate * 1000,
+    );
+    this.patchReactor(driver, { playing: true });
+  }
+
+  private pauseReactor(driver: ReactorDriver): void {
+    if (driver.timer !== null) {
+      clearInterval(driver.timer);
+      driver.timer = null;
+    }
+    if (!driver.playing) return;
+    driver.playing = false;
+    this.patchReactor(driver, { playing: false });
+  }
+
+  /**
+   * Apply one event. Frames are *dropped* rather than queued while a step is
+   * in flight: a slow `to_draw` should make the animation choppy, not build
+   * a backlog that outlives the program.
+   */
+  private async reactorEvent(driver: ReactorDriver, event: ReactorEvent): Promise<void> {
+    if (driver.inFlight || !this.reactors.has(driver.id)) return;
+    driver.inFlight = true;
+    try {
+      const result = await this.enqueue(async () => {
+        const reply = await this.deps.runtime.reactorStep(driver.id, JSON.stringify(event));
+        this.applyReactorResult(driver, reply);
+      });
+      return result;
+    } catch (err) {
+      this.pauseReactor(driver);
+      this.feedStream(driver.session, "stderr", `Reactor error: ${errorMessage(err)}\n`);
+      this.flushStreams(driver.session);
+    } finally {
+      driver.inFlight = false;
+    }
+  }
+
+  private applyReactorResult(driver: ReactorDriver, result: ReactorStepResult): void {
+    if (result.gone) {
+      this.disposeReactor(driver.id, { fromPython: false });
+      return;
+    }
+    if (!result.ok) {
+      // A handler raised. Stop the clock and show it the same way any other
+      // runtime error is shown, so the student sees where it happened.
+      this.pauseReactor(driver);
+      this.appendToSession(driver.session, {
+        kind: "rawError",
+        errorType: result.error_type ?? "Error",
+        message: result.error_message ?? "",
+        traceback: result.traceback || `${result.error_type}: ${result.error_message}`,
+      });
+      return;
+    }
+    this.patchReactor(driver, {
+      frame: result.frame,
+      index: result.index,
+      length: result.length,
+      atEnd: result.at_end,
+      stopped: result.stopped,
+      valueRepr: result.value_repr,
+    });
+    if (result.messages && result.messages.length > 0) {
+      this.sendUniverse(driver, result.messages);
+    }
+    if (result.stopped) {
+      driver.stopped = true;
+      this.pauseReactor(driver);
+    }
+  }
+
+  /**
+   * Update a reactor's entry, and the view if that session is the one on
+   * screen. Same split as `appendToSession`: the session owns the state, the
+   * view is a projection of whichever session is visible.
+   */
+  private patchReactor(driver: ReactorDriver, patch: ReactorPatch): void {
+    for (const entry of driver.session.entries) {
+      if (entry.kind === "reactor" && entry.id === driver.id) {
+        Object.assign(entry, patch);
+        break;
+      }
+    }
+    if (this.isActive(driver.session)) {
+      this.deps.view.updateReactor(driver.id, patch);
+    }
+  }
+
+  /** From the panel: play / pause / step / back / reset / scrub. */
+  private handleReactorControl(id: string, action: string, index?: number): void {
+    const driver = this.reactors.get(id);
+    if (!driver) return;
+    if (action === "play") {
+      this.playReactor(driver);
+      return;
+    }
+    if (action === "pause") {
+      this.pauseReactor(driver);
+      return;
+    }
+    if (action === "step") {
+      this.pauseReactor(driver);
+      void this.reactorEvent(driver, { kind: "tick" });
+      return;
+    }
+    if (action === "back" || action === "reset" || action === "seek") {
+      this.pauseReactor(driver);
+      void this.seekReactor(driver, action, index);
+    }
+  }
+
+  private async seekReactor(
+    driver: ReactorDriver,
+    action: string,
+    index: number | undefined,
+  ): Promise<void> {
+    const target =
+      action === "reset" ? 0 : action === "seek" ? (index ?? 0) : (index ?? 0);
+    try {
+      await this.enqueue(async () => {
+        const reply = await this.deps.runtime.reactorSeek(driver.id, target);
+        // Seeking never stops a reactor, it only changes which frame shows.
+        this.applyReactorResult(driver, { ...reply, stopped: false });
+      });
+    } catch (err) {
+      this.feedStream(driver.session, "stderr", `Reactor error: ${errorMessage(err)}\n`);
+      this.flushStreams(driver.session);
+    }
+  }
+
+  /** From the panel: a key press or mouse event over a reactor's picture. */
+  private handleReactorInput(id: string, event: ReactorEvent): void {
+    const driver = this.reactors.get(id);
+    if (!driver || driver.stopped) return;
+    void this.reactorEvent(driver, event);
+  }
+
+  private disposeReactor(id: string, opts: { fromPython: boolean }): void {
+    const driver = this.reactors.get(id);
+    if (!driver) return;
+    this.pauseReactor(driver);
+    if (driver.socket) {
+      try {
+        driver.socket.close();
+      } catch {
+        /* already gone */
+      }
+      driver.socket = null;
+    }
+    this.reactors.delete(id);
+    if (opts.fromPython) {
+      void this.deps.runtime.reactorDispose(id).catch(() => undefined);
+    }
+  }
+
+  /** Stop and forget every reactor belonging to `session`. */
+  private disposeReactorsFor(session: Session): void {
+    for (const [id, driver] of [...this.reactors]) {
+      if (driver.session === session) {
+        this.disposeReactor(id, { fromPython: true });
+      }
     }
   }
 
@@ -958,6 +1280,48 @@ export class ReplSession implements vscode.Disposable {
     session.streamLines += 1;
     this.appendToSession(session, { kind, text });
   }
+}
+
+/** An event to feed a reactor; mirrors `Reactor.react` in reactorLib.py. */
+type ReactorEvent =
+  | { kind: "tick" }
+  | { kind: "key"; key: string }
+  | { kind: "mouse"; x: number; y: number; event: string }
+  | { kind: "receive"; message: unknown };
+
+interface ReactorPatch {
+  connection?: UniverseStatus;
+  connectionDetail?: string;
+  frame?: { data: string; width: number; height: number };
+  index?: number;
+  length?: number;
+  atEnd?: boolean;
+  stopped?: boolean;
+  valueRepr?: string;
+  playing?: boolean;
+}
+
+/**
+ * Most messages a world may queue before its socket opens. A world that
+ * sends on every tick to a server that never answers would otherwise grow
+ * this without bound.
+ */
+const MAX_UNIVERSE_BACKLOG = 100;
+
+interface ReactorDriver {
+  id: string;
+  session: Session;
+  socket: UniverseSocket | null;
+  status: UniverseStatus;
+  /** Sent once the socket opens. */
+  backlog: string[];
+  /** Seconds between ticks, floored so a typo cannot busy-loop the host. */
+  tickRate: number;
+  ticking: boolean;
+  playing: boolean;
+  stopped: boolean;
+  timer: ReturnType<typeof setInterval> | null;
+  inFlight: boolean;
 }
 
 function errorMessage(err: unknown): string {

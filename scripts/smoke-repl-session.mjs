@@ -198,6 +198,7 @@ function makeView() {
     awaitingInput: false,
     inputPrefix: "",
     registered: [],
+    reactorPatches: [],
     focusedInput: 0,
     handlers: null,
     setHandlers(h) {
@@ -228,6 +229,12 @@ function makeView() {
     setBusy(busy, status) {
       view.busy = busy;
       view.status = status;
+    },
+    updateReactor(id, patch) {
+      view.reactorPatches.push([id, patch]);
+      for (const entry of view.entries) {
+        if (entry.kind === "reactor" && entry.id === id) Object.assign(entry, patch);
+      }
     },
     setAwaitingInput(awaiting, prefix) {
       view.awaitingInput = awaiting;
@@ -270,6 +277,17 @@ function makeRuntime(script = {}) {
     calls,
     get stdinHandler() {
       return stdinHandler;
+    },
+    async reactorStep(reactorId, event) {
+      calls.push(["reactorStep", reactorId, event]);
+      return script.reactorStep?.(reactorId, JSON.parse(event)) ?? { ok: true };
+    },
+    async reactorSeek(reactorId, index) {
+      calls.push(["reactorSeek", reactorId, index]);
+      return script.reactorSeek?.(reactorId, index) ?? { ok: true };
+    },
+    async reactorDispose(reactorId) {
+      calls.push(["reactorDispose", reactorId]);
     },
     interrupt() {
       calls.push(["interrupt"]);
@@ -365,14 +383,37 @@ function makeDoc(name, code = "") {
 }
 
 /** Build a session manager with recorders, focused on `doc`. */
+/**
+ * Fake universe transport. Tests drive it through the returned record:
+ * `sockets` is every connection attempt, each with the handlers the session
+ * installed and the messages it has sent.
+ */
+function makeUniverse() {
+  const sockets = [];
+  const connectUniverse = (url, handlers) => {
+    const socket = {
+      url,
+      handlers,
+      sent: [],
+      closed: false,
+      send(json) { socket.sent.push(json); },
+      close() { socket.closed = true; },
+    };
+    sockets.push(socket);
+    return socket;
+  };
+  return { sockets, connectUniverse };
+}
+
 async function harness(script = {}, doc = makeDoc("hello.py")) {
   __setActiveEditor(doc ? { document: doc } : undefined);
   const runtime = makeRuntime(script);
+  const { sockets, connectUniverse } = makeUniverse();
   const view = makeView();
   const diagnostics = makeDiagnostics();
-  const repl = new ReplSession({ runtime, view, diagnostics });
+  const repl = new ReplSession({ runtime, view, diagnostics, connectUniverse });
   await settle();
-  return { repl, runtime, view, diagnostics, doc };
+  return { repl, runtime, view, diagnostics, doc, sockets };
 }
 
 const texts = (view, kind) =>
@@ -1093,6 +1134,230 @@ console.log("\n[28] the output budget resets for the next run");
     !view.entries.some((e) => e.kind === "banner" && /Output stopped/.test(e.text)),
     "a small second run must not inherit the previous run's budget",
   );
+  repl.dispose();
+}
+
+/* ---------------------------------------------------------------- */
+/* Reactors                                                         */
+/* ---------------------------------------------------------------- */
+
+/** The reactor event a worker emits when `interact()` runs. */
+function reactorEvent(over = {}) {
+  return {
+    kind: "reactor",
+    id: "r1",
+    title: "test",
+    tickRate: 0.02,
+    ticking: true,
+    wantsKeys: false,
+    wantsMouse: false,
+    register: null,
+    frame: { data: "<svg/>", width: 10, height: 10 },
+    index: 0,
+    length: 1,
+    atEnd: true,
+    stopped: false,
+    valueRepr: "0",
+    ...over,
+  };
+}
+
+/** A runtime whose reactor steps count up, like an on_tick of n + 1. */
+function countingReactor(extra = {}) {
+  let n = 0;
+  return {
+    events: (kind) => (kind === "runFile" ? [reactorEvent(extra.event), { kind: "done" }] : []),
+    reactorStep: (_id, event) => {
+      if (event.kind === "tick") n += 1;
+      return {
+        ok: true, frame: { data: `<svg id="${n}"/>`, width: 10, height: 10 },
+        index: n, length: n + 1, at_end: true, stopped: extra.stopAt === n,
+        value_repr: String(n), messages: extra.send ? [JSON.stringify(extra.send)] : [],
+      };
+    },
+    reactorSeek: (_id, index) => ({
+      ok: true, frame: { data: "<svg/>", width: 10, height: 10 },
+      index, length: n + 1, at_end: false, stopped: false, value_repr: String(index),
+    }),
+    ...extra.script,
+  };
+}
+
+console.log("\n[29] a reactor becomes a live card and ticks on its own");
+{
+  const { repl, view, runtime, doc } = await harness(countingReactor());
+  await repl.runFile("animate(...)", "hello.py", doc);
+  await settle();
+  const card = view.entries.find((e) => e.kind === "reactor");
+  expect(card !== undefined, "a reactor entry should be appended");
+  expect(card.playing === true, "a ticking reactor should start playing");
+  await new Promise((r) => setTimeout(r, 200));
+  const ticks = runtime.calls.filter((c) => c[0] === "reactorStep").length;
+  expect(ticks > 1, `the clock should have ticked more than once, got ${ticks}`);
+  expect(card.index > 0, `the entry should track the frame, got ${card.index}`);
+  repl.dispose();
+}
+
+console.log("\n[30] pause stops the clock; step advances exactly one frame");
+{
+  const { repl, view, runtime, doc } = await harness(countingReactor());
+  await repl.runFile("animate(...)", "hello.py", doc);
+  await settle();
+  view.handlers.onReactorControl("r1", "pause");
+  await new Promise((r) => setTimeout(r, 150));
+  const paused = runtime.calls.filter((c) => c[0] === "reactorStep").length;
+  await new Promise((r) => setTimeout(r, 150));
+  expect(
+    runtime.calls.filter((c) => c[0] === "reactorStep").length === paused,
+    "no ticks should happen while paused",
+  );
+  view.handlers.onReactorControl("r1", "step");
+  await settle();
+  expect(
+    runtime.calls.filter((c) => c[0] === "reactorStep").length === paused + 1,
+    "step should be exactly one more tick",
+  );
+  view.handlers.onReactorControl("r1", "seek", 0);
+  await settle();
+  const seeks = runtime.calls.filter((c) => c[0] === "reactorSeek");
+  expect(seeks.length === 1 && seeks[0][2] === 0, "seek should reach the runtime with its index");
+  repl.dispose();
+}
+
+console.log("\n[31] stop_when halts the clock");
+{
+  const { repl, view, runtime, doc } = await harness(countingReactor({ stopAt: 2 }));
+  await repl.runFile("animate(...)", "hello.py", doc);
+  await new Promise((r) => setTimeout(r, 300));
+  const card = view.entries.find((e) => e.kind === "reactor");
+  expect(card.stopped === true, "the card should show as stopped");
+  expect(card.playing === false, "a stopped reactor should not be playing");
+  const settled = runtime.calls.filter((c) => c[0] === "reactorStep").length;
+  await new Promise((r) => setTimeout(r, 200));
+  expect(
+    runtime.calls.filter((c) => c[0] === "reactorStep").length === settled,
+    "no further ticks after stop_when",
+  );
+  repl.dispose();
+}
+
+console.log("\n[32] key and mouse input reach the reactor");
+{
+  const { repl, view, runtime, doc } = await harness(
+    countingReactor({ event: { ticking: false, wantsKeys: true, wantsMouse: true } }),
+  );
+  await repl.runFile("reactor(...)", "hello.py", doc);
+  await settle();
+  view.handlers.onReactorInput("r1", { kind: "key", key: "left" });
+  await settle();
+  view.handlers.onReactorInput("r1", { kind: "mouse", x: 3, y: 4, event: "button-down" });
+  await settle();
+  const sent = runtime.calls.filter((c) => c[0] === "reactorStep").map((c) => JSON.parse(c[2]));
+  expect(
+    sent.some((e) => e.kind === "key" && e.key === "left"),
+    "the key event should reach the runtime",
+  );
+  expect(
+    sent.some((e) => e.kind === "mouse" && e.x === 3 && e.event === "button-down"),
+    "the mouse event should reach the runtime",
+  );
+  repl.dispose();
+}
+
+console.log("\n[33] a registered world connects, receives, and sends");
+{
+  const { repl, view, runtime, doc, sockets } = await harness(
+    countingReactor({
+      event: { ticking: false, register: "ws://localhost:9999" },
+      send: { hello: 1 },
+    }),
+  );
+  await repl.runFile("reactor(...)", "hello.py", doc);
+  await settle();
+  expect(sockets.length === 1, `one connection should be opened, got ${sockets.length}`);
+  expect(sockets[0].url === "ws://localhost:9999", "the register address should be used");
+  const card = view.entries.find((e) => e.kind === "reactor");
+  expect(card.connection === "connecting", `should start connecting, got ${card.connection}`);
+
+  sockets[0].handlers.onOpen();
+  await settle();
+  expect(card.connection === "open", `should report open, got ${card.connection}`);
+
+  // A message from the server becomes a `receive` event.
+  sockets[0].handlers.onMessage(JSON.stringify({ from: "server" }));
+  await settle();
+  const received = runtime.calls
+    .filter((c) => c[0] === "reactorStep")
+    .map((c) => JSON.parse(c[2]))
+    .filter((e) => e.kind === "receive");
+  expect(received.length === 1, "the server message should become one receive event");
+  expect(received[0].message.from === "server", "the payload should arrive unchanged");
+  // ...and package(...) on that step sent one back.
+  expect(
+    sockets[0].sent.includes(JSON.stringify({ hello: 1 })),
+    `package(...) should be sent, got ${JSON.stringify(sockets[0].sent)}`,
+  );
+  repl.dispose();
+}
+
+console.log("\n[34] messages sent before the socket opens are held, not lost");
+{
+  const { repl, view, doc, sockets } = await harness(
+    countingReactor({
+      event: { ticking: false, register: "ws://localhost:9999" },
+      send: { early: true },
+    }),
+  );
+  await repl.runFile("reactor(...)", "hello.py", doc);
+  await settle();
+  view.handlers.onReactorInput("r1", { kind: "key", key: "a" });
+  await settle();
+  expect(sockets[0].sent.length === 0, "nothing should be sent before the socket opens");
+  sockets[0].handlers.onOpen();
+  await settle();
+  expect(
+    sockets[0].sent.includes(JSON.stringify({ early: true })),
+    "the held message should be flushed on open",
+  );
+  repl.dispose();
+}
+
+console.log("\n[35] a bad register address is reported, and nothing is dialled");
+{
+  const { repl, view, doc, sockets } = await harness(
+    countingReactor({ event: { ticking: false, register: "http://not-a-socket" } }),
+  );
+  await repl.runFile("reactor(...)", "hello.py", doc);
+  await settle();
+  expect(sockets.length === 0, "an invalid address should not be dialled");
+  const card = view.entries.find((e) => e.kind === "reactor");
+  expect(card.connection === "error", `should report an error, got ${card.connection}`);
+  expect(
+    view.entries.some((e) => e.kind === "banner" && /ws:\/\/ or wss:\/\//.test(e.text)),
+    "the student should be told what a register address looks like",
+  );
+  repl.dispose();
+}
+
+console.log("\n[36] re-running the file stops the old reactor and closes its socket");
+{
+  const { repl, runtime, doc, sockets } = await harness(
+    countingReactor({ event: { register: "ws://localhost:9999" } }),
+  );
+  await repl.runFile("animate(...)", "hello.py", doc);
+  await settle();
+  await repl.runFile("animate(...)", "hello.py", doc);
+  await settle();
+  expect(sockets[0].closed === true, "the previous world's socket should be closed");
+  expect(
+    runtime.calls.some((c) => c[0] === "reactorDispose" && c[1] === "r1"),
+    "the previous reactor should be disposed in Python",
+  );
+  const before = runtime.calls.filter((c) => c[0] === "reactorStep").length;
+  await new Promise((r) => setTimeout(r, 200));
+  // The second run re-used id "r1", so only one clock may be running.
+  const rate = runtime.calls.filter((c) => c[0] === "reactorStep").length - before;
+  expect(rate > 0 && rate < 40, `exactly one clock should be running, saw ${rate} ticks`);
   repl.dispose();
 }
 

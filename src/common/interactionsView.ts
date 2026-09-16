@@ -37,6 +37,7 @@ export type Entry =
   | TableEntry
   | FindingEntry
   | RawErrorEntry
+  | ReactorEntry
   | TestReportEntry;
 
 export interface BannerEntry {
@@ -97,6 +98,37 @@ export interface TestCaseView {
   stdout: string | null;
 }
 
+/**
+ * A reactor's card. Unlike every other entry this one is *live*: the host
+ * keeps patching it as frames arrive, and it sends controls and input back.
+ */
+export interface ReactorEntry {
+  kind: "reactor";
+  id: string;
+  title: string;
+  frame: { data: string; width: number; height: number };
+  /** Frame number being shown, and how many have been recorded. */
+  index: number;
+  length: number;
+  /** Whether the shown frame is the latest one (vs. rewound). */
+  atEnd: boolean;
+  stopped: boolean;
+  /** `repr()` of the current state, shown under the picture. */
+  valueRepr: string;
+  ticking: boolean;
+  wantsKeys: boolean;
+  wantsMouse: boolean;
+  playing: boolean;
+  /** Universe server this world is registered with, if any. */
+  register: string | null;
+  connection: "none" | "connecting" | "open" | "closed" | "error";
+  /** Why the connection is in that state, when there is something to say. */
+  connectionDetail?: string;
+}
+
+/** Fields of a `ReactorEntry` the host may update in place. */
+export type ReactorPatch = Partial<Omit<ReactorEntry, "kind" | "id" | "title">>;
+
 export interface TestReportEntry {
   kind: "testReport";
   fileName: string;
@@ -120,6 +152,11 @@ interface HostMessageAppend {
 interface HostMessageAppendMany {
   type: "appendMany";
   entries: Entry[];
+}
+interface HostMessageReactorPatch {
+  type: "reactorPatch";
+  id: string;
+  patch: ReactorPatch;
 }
 interface HostMessageClear {
   type: "clear";
@@ -163,6 +200,7 @@ interface HostMessageFocus {
 type HostToView =
   | HostMessageAppend
   | HostMessageAppendMany
+  | HostMessageReactorPatch
   | HostMessageClear
   | HostMessagePrompt
   | HostMessageBusy
@@ -191,6 +229,10 @@ export interface InteractionsHandlers {
   onSubmit(code: string): void;
   onInterrupt(): void;
   onClearRequested(): void;
+  /** play / pause / step / back / reset / seek on a reactor card. */
+  onReactorControl(id: string, action: string, index?: number): void;
+  /** A key press or mouse event over a reactor's picture. */
+  onReactorInput(id: string, event: unknown): void;
 }
 
 /**
@@ -295,6 +337,22 @@ export class InteractionsView
     }
   }
 
+  /**
+   * Patch a live reactor card in place. Sent immediately rather than through
+   * the append batch: a frame supersedes the previous frame, so batching
+   * them would only mean showing stale ones.
+   */
+  updateReactor(id: string, patch: ReactorPatch): void {
+    if (this.mode !== "session") return;
+    for (const entry of this.entries) {
+      if (entry.kind === "reactor" && entry.id === id) {
+        Object.assign(entry, patch);
+        break;
+      }
+    }
+    this.post({ type: "reactorPatch", id, patch });
+  }
+
   clear(): void {
     if (this.mode !== "session") return;
     this.entries = [];
@@ -389,6 +447,10 @@ export class InteractionsView
       fileName?: string;
       line?: number;
       column?: number;
+      id?: string;
+      action?: string;
+      index?: number;
+      event?: unknown;
     };
     switch (m.type) {
       case "ready":
@@ -409,6 +471,16 @@ export class InteractionsView
         break;
       case "clearRequested":
         this.handlers?.onClearRequested();
+        break;
+      case "reactorControl":
+        if (typeof m.id === "string" && typeof m.action === "string") {
+          this.handlers?.onReactorControl(m.id, m.action, m.index);
+        }
+        break;
+      case "reactorInput":
+        if (typeof m.id === "string" && m.event && typeof m.event === "object") {
+          this.handlers?.onReactorInput(m.id, m.event);
+        }
         break;
       case "openLocation":
         if (typeof m.fileName === "string" && typeof m.line === "number") {

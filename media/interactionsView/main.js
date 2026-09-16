@@ -9,6 +9,7 @@
 // Host -> view messages:
 //   { type: "append", entry }                - append to current session
 //   { type: "appendMany", entries }          - append a batch (bursts of output)
+//   { type: "reactorPatch", id, patch }      - update a live reactor card
 //   { type: "clear" }                        - clear current session entries
 //   { type: "prompt", kind }                 - change prompt for current
 //   { type: "busy", busy, status? }          - busy state for current
@@ -58,6 +59,8 @@
   const statusEl = document.getElementById("status");
   const clearBtn = document.getElementById("clear");
   const stopBtn = document.getElementById("stop");
+  /** Live reactor cards by id -> the parts a patch has to touch. */
+  const reactorCards = new Map();
 
   let historyIdx = -1;
   /** Buffer of the user's draft when they start scrolling history. */
@@ -121,6 +124,7 @@
   }
 
   function clearStream() {
+    reactorCards.clear();
     state.entries = [];
     persist();
     renderAll();
@@ -191,6 +195,157 @@
     if (stickToBottom) scrollToBottom();
   }
 
+  /* ---- Reactors --------------------------------------------------- */
+
+  /** DOM key names -> the names HtDP hands to `on_key`. */
+  function reactorKeyName(event) {
+    const named = {
+      ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down",
+      Enter: "\r", Tab: "\t", Backspace: "\b", Escape: "escape", Delete: "delete",
+      Home: "home", End: "end", PageUp: "prior", PageDown: "next",
+    };
+    if (named[event.key]) return named[event.key];
+    // Modifier-only presses would fire repeatedly while held and mean
+    // nothing on their own, so they are not events.
+    if (event.key.length !== 1) return null;
+    return event.key;
+  }
+
+  function renderReactor(entry) {
+    const div = document.createElement("div");
+    div.className = "entry reactor";
+
+    const head = document.createElement("div");
+    head.className = "rxHead";
+    const title = document.createElement("span");
+    title.className = "rxTitle";
+    title.textContent = entry.title;
+    const value = document.createElement("code");
+    value.className = "rxValue";
+    // Only worlds registered with a universe server have a connection to
+    // report, so this stays hidden otherwise.
+    const link = document.createElement("span");
+    link.className = "rxLink";
+    link.hidden = !entry.register;
+    head.append(title, link, value);
+
+    // `tabindex` so the picture can take keyboard focus; without it a key
+    // press would go to the prompt instead.
+    const stage = document.createElement("div");
+    stage.className = "rxStage";
+    if (entry.wantsKeys) stage.tabIndex = 0;
+    stage.innerHTML = entry.frame.data;
+
+    const bar = document.createElement("div");
+    bar.className = "rxBar";
+    const send = (action, index) =>
+      vscode.postMessage({ type: "reactorControl", id: entry.id, action, index });
+
+    const reset = button("⏮", "Back to the first frame", () => send("reset"));
+    const back = button("◀", "Previous frame", () =>
+      send("back", Math.max(0, (card.index || 0) - 1)));
+    const play = button("▶", "Play", () => send(card.playing ? "pause" : "play"));
+    const step = button("▶❙", "One frame forward", () => send("step"));
+    const scrub = document.createElement("input");
+    scrub.type = "range";
+    scrub.className = "rxScrub";
+    scrub.min = "0";
+    scrub.addEventListener("input", () => send("seek", Number(scrub.value)));
+    const counter = document.createElement("span");
+    counter.className = "rxCounter";
+    bar.append(reset, back, play, step, scrub, counter);
+
+    div.append(head, stage, bar);
+
+    const card = {
+      entry, stage, value, link, play, scrub, counter, step, back, reset,
+      index: entry.index, length: entry.length, playing: entry.playing,
+    };
+    reactorCards.set(entry.id, card);
+
+    if (entry.wantsKeys) {
+      stage.addEventListener("keydown", (event) => {
+        const key = reactorKeyName(event);
+        if (key === null) return;
+        // Arrows and space would otherwise scroll the panel.
+        event.preventDefault();
+        vscode.postMessage({
+          type: "reactorInput", id: entry.id, event: { kind: "key", key },
+        });
+      });
+    }
+    if (entry.wantsMouse) {
+      const at = (event, kind) => {
+        const box = stage.getBoundingClientRect();
+        vscode.postMessage({
+          type: "reactorInput",
+          id: entry.id,
+          event: {
+            kind: "mouse",
+            x: Math.round(event.clientX - box.left),
+            y: Math.round(event.clientY - box.top),
+            event: kind,
+          },
+        });
+      };
+      stage.addEventListener("mousedown", (e) => at(e, "button-down"));
+      stage.addEventListener("mouseup", (e) => at(e, "button-up"));
+      stage.addEventListener("mousemove", (e) => at(e, e.buttons ? "drag" : "move"));
+      stage.addEventListener("mouseenter", (e) => at(e, "enter"));
+      stage.addEventListener("mouseleave", (e) => at(e, "leave"));
+    }
+
+    patchReactorCard(entry.id, entry);
+    return div;
+  }
+
+  function button(label, title, onClick) {
+    const el = document.createElement("button");
+    el.textContent = label;
+    el.title = title;
+    el.addEventListener("click", onClick);
+    return el;
+  }
+
+  /** Apply a patch to a live card, touching only what changed. */
+  function patchReactorCard(id, patch) {
+    const card = reactorCards.get(id);
+    if (!card) return;
+    Object.assign(card.entry, patch);
+    const e = card.entry;
+    if (patch.frame) card.stage.innerHTML = patch.frame.data;
+    if (patch.valueRepr !== undefined) card.value.textContent = patch.valueRepr;
+    if (e.register) {
+      const labels = {
+        connecting: "connecting\u2026", open: "connected",
+        closed: "disconnected", error: "connection failed", none: "",
+      };
+      card.link.hidden = false;
+      card.link.textContent = labels[e.connection] || "";
+      card.link.dataset.state = e.connection;
+      card.link.title = e.connectionDetail
+        ? `${e.register} - ${e.connectionDetail}`
+        : e.register;
+    }
+    if (patch.index !== undefined) card.index = patch.index;
+    if (patch.length !== undefined) card.length = patch.length;
+    if (patch.playing !== undefined) card.playing = patch.playing;
+
+    card.play.textContent = card.playing ? "❙❙" : "▶";
+    card.play.title = card.playing ? "Pause" : "Play";
+    card.play.disabled = !e.ticking || (e.stopped && e.atEnd);
+    card.step.disabled = !e.ticking;
+    card.back.disabled = card.index <= 0;
+    card.reset.disabled = card.index <= 0;
+    const last = Math.max(0, card.length - 1);
+    card.scrub.max = String(last);
+    card.scrub.value = String(Math.min(card.index, last));
+    card.scrub.disabled = last === 0;
+    card.counter.textContent = e.stopped
+      ? `frame ${card.index} of ${last} · stopped`
+      : `frame ${card.index} of ${last}`;
+  }
+
   function scrollToBottom() {
     stream.scrollTop = stream.scrollHeight;
   }
@@ -207,6 +362,7 @@
       case "finding":     return renderFinding(entry);
       case "rawError":    return renderRawError(entry);
       case "testReport":  return renderTestReport(entry);
+      case "reactor":     return renderReactor(entry);
       default: {
         const div = document.createElement("div");
         div.className = "entry";
@@ -673,6 +829,19 @@
       case "appendMany":
         if (state.mode !== "session") return;
         appendEntries(msg.entries);
+        break;
+      case "reactorPatch":
+        if (state.mode !== "session") return;
+        // Mirror into `state.entries` too, so a webview reload redraws the
+        // frame we are actually on rather than the first one.
+        for (const entry of state.entries) {
+          if (entry.kind === "reactor" && entry.id === msg.id) {
+            Object.assign(entry, msg.patch);
+            break;
+          }
+        }
+        patchReactorCard(msg.id, msg.patch);
+        persist();
         break;
       case "clear":
         if (state.mode !== "session") return;

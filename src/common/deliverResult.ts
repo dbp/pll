@@ -77,6 +77,24 @@ export function deliverDisplay(
         source: fileName,
       });
       break;
+    case "reactor":
+      onEvent({
+        kind: "reactor",
+        id: display.id,
+        title: display.title,
+        tickRate: display.tick_rate,
+        ticking: display.ticking,
+        wantsKeys: display.wants_keys,
+        wantsMouse: display.wants_mouse,
+        register: display.register,
+        frame: display.frame,
+        index: display.index,
+        length: display.length,
+        atEnd: display.at_end,
+        stopped: display.stopped,
+        valueRepr: display.value_repr,
+      });
+      break;
     case "table":
       onEvent({
         kind: "table",

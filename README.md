@@ -268,6 +268,95 @@ You can also `import pandas as pd` and read a CSV from a URL with
 browser. In the browser, the site must allow cross-origin requests
 (CORS).
 
+## Animations and interactive programs
+
+A **reactor** is an interactive program: a starting state, a function that
+draws it, and functions that change it when something happens. It shows up
+as a card right in the interactions panel.
+
+The quickest way in is `animate`, where the state is just a frame counter:
+
+```python
+scene = empty_scene(320, 140)
+
+animate(lambda n: place_image(circle(14, "solid", "crimson"), (n * 4) % 320, 70, scene))
+```
+
+The long form names each handler:
+
+```python
+reactor(
+    init=(160, 70),
+    to_draw=lambda spot: place_image(star(18, "solid", "gold"), spot[0], spot[1], scene),
+    on_key=move,          # move(state, key) -> new state
+    title="Arrow keys",
+).interact()
+```
+
+| Handler | Called with | When |
+| --- | --- | --- |
+| `to_draw` | `(state)` | every frame; must return an image |
+| `on_tick` | `(state)` | on the clock |
+| `on_key` | `(state, key)` | a key press — `"left"`, `"a"`, `" "`, … |
+| `on_mouse` | `(state, x, y, event)` | `"button-down"`, `"button-up"`, `"drag"`, `"move"`, `"enter"`, `"leave"` |
+| `stop_when` | `(state)` | after each change; `True` ends it |
+| `on_receive` | `(state, message)` | a message from a server (see below) |
+
+Also `tick_rate` (seconds between ticks, default about 1/28) and `title`.
+Each handler returns the **new state**. Click the picture before using the
+keyboard, so the keys go to the reactor and not the prompt.
+
+### Playing, pausing, and rewinding
+
+The card has play / pause, a single-step button, and a slider. Every state
+the reactor passes through is recorded, so you can drag the slider back to
+watch what happened and then play forward again from there.
+
+`big_bang(init, ...)` is the same as `reactor(...).interact()`.
+
+### Testing a reactor without watching it
+
+A reactor is a value, so you can run it without any of the animation:
+
+```python
+countdown = reactor(init=10, to_draw=..., on_tick=lambda n: n - 1,
+                    stop_when=lambda n: n <= 0)
+
+countdown.simulate_trace(20).get_trace()   # [10, 9, 8, ..., 0]
+countdown.get_value()                      # 10 — the original is unchanged
+countdown.react({"kind": "tick"}).get_value()   # 9
+```
+
+`react` returns a *new* reactor, so this works in tests and at the prompt.
+
+## Talking to a universe server
+
+A reactor with a `register` address is a **world**: it connects to a server
+and can send and receive messages.
+
+```python
+reactor(
+    init=...,
+    to_draw=...,
+    on_key=lambda state, key: package(new_state, {"at": [x, y]}),
+    on_receive=lambda state, message: ...,
+    register="ws://localhost:8080",
+).interact()
+```
+
+`package(state, message)` returns the new state **and** sends a message.
+Whatever the server sends back arrives at `on_receive`. The card shows
+whether it is connected.
+
+You write worlds; the server is a separate program your course runs. There
+is a small reference server in `samples/universe_server.mjs` — run it with
+`node universe_server.mjs`. Messages are JSON, one value per message, in
+each direction.
+
+In the browser, a page served over `https` (including vscode.dev) can only
+reach a `wss://` address — except on `localhost`, which is allowed either
+way.
+
 ## Files next to your program
 
 `open("data.csv")` and `pd.read_csv("data.csv")` read files that sit in

@@ -36,10 +36,12 @@ function expect(cond, msg) {
 function talk(worker) {
   let nextId = 1;
   let displays = 0;
+  let streamed = "";
   const pending = new Map();
   worker.on("message", (msg) => {
     if (msg.type === "display") {
       displays += 1;
+      if (msg.payload?.type === "stdout") streamed += msg.payload.text;
       return;
     }
     if (msg.type === "stdinRequest") return;
@@ -56,6 +58,27 @@ function talk(worker) {
   return {
     get displays() {
       return displays;
+    },
+    get streamed() {
+      return streamed;
+    },
+    /**
+     * Wait until the program has actually started.
+     *
+     * Signalling on a timer is a race the worker wins: `runFile` clears any
+     * pending interrupt before it runs (so a stale Stop cannot kill the
+     * *next* program), and if the worker had not dequeued the request yet,
+     * that clear wipes the signal and the loop runs forever. Waiting for
+     * the program's own output removes the race.
+     */
+    async waitForOutput(text, ms = 20000) {
+      const deadline = Date.now() + ms;
+      while (!streamed.includes(text)) {
+        if (Date.now() > deadline) {
+          throw new Error(`no ${JSON.stringify(text)} within ${ms}ms`);
+        }
+        await sleep(25);
+      }
     },
     send(payload) {
       const id = nextId++;
@@ -105,8 +128,8 @@ async function main() {
       sessionKey: "s1",
       level: "raw",
     });
-    // Let the loop actually start before signalling.
-    await sleep(500);
+    // Proof the loop is running, rather than a hopeful sleep.
+    await session.waitForOutput("before");
     signal();
     const { result } = await withDeadline(run, INTERRUPT_DEADLINE_MS, "interrupted run");
     expect(result.ok === false, `interrupted run should not be ok, got ok=${result.ok}`);
@@ -169,6 +192,8 @@ async function main() {
       sessionKey: "s1",
       level: "raw",
     });
+    await session.waitForOutput("hello");
+    // Now that it is definitely running, measure a second of it.
     await sleep(1000);
     const duringSecond = session.displays - before;
     signal();

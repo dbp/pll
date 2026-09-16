@@ -322,6 +322,11 @@ def _pll_show_top_level(value):
     """
     if value is None:
         return
+    # A reactor pushed its own card when it was started; printing its repr
+    # as well would be noise. Duck-typed like the display protocols, so the
+    # bootstrap still knows nothing about reactorLib.
+    if getattr(value, "_pll_already_displayed", False):
+        return
     payload = _pll_extract_display(value)
     if payload is not None:
         _pll_push(payload)

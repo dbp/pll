@@ -6,6 +6,7 @@ import { InteractionsView } from "./interactionsView";
 import { registerNewFileLevel } from "./newFileLevel";
 import { ReplSession } from "./replSession";
 import type { PythonRuntime } from "./types";
+import { connectUniverse } from "./universeClient";
 
 /**
  * Shared activation for both hosts. The desktop and web entrypoints differ
@@ -17,7 +18,7 @@ export function activateWithRuntime(
 ): void {
   const diagnostics = new Diagnostics(context.extensionUri);
   const view = new InteractionsView(context.extensionUri);
-  const repl = new ReplSession({ runtime, diagnostics, view });
+  const repl = new ReplSession({ runtime, diagnostics, view, connectUniverse });
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(InteractionsView.viewType, view),
