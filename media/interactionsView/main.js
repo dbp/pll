@@ -8,6 +8,7 @@
 //
 // Host -> view messages:
 //   { type: "append", entry }                - append to current session
+//   { type: "appendMany", entries }          - append a batch (bursts of output)
 //   { type: "clear" }                        - clear current session entries
 //   { type: "prompt", kind }                 - change prompt for current
 //   { type: "busy", busy, status? }          - busy state for current
@@ -56,6 +57,7 @@
   const textarea = /** @type {HTMLTextAreaElement} */ (document.getElementById("input"));
   const statusEl = document.getElementById("status");
   const clearBtn = document.getElementById("clear");
+  const stopBtn = document.getElementById("stop");
 
   let historyIdx = -1;
   /** Buffer of the user's draft when they start scrolling history. */
@@ -89,6 +91,8 @@
     inputRow.classList.toggle("busy", blocked);
     inputRow.classList.toggle("awaiting-input", state.awaitingInput);
     textarea.disabled = blocked;
+    // Only offered while a program is actually running.
+    stopBtn.hidden = !blocked;
     if (!blocked && state.mode === "session") {
       requestAnimationFrame(() => textarea.focus());
     }
@@ -166,10 +170,24 @@
   }
 
   function appendEntry(entry) {
-    state.entries.push(entry);
-    persist();
+    appendEntries([entry]);
+  }
+
+  /**
+   * Append a batch of entries with one persist, one DOM insertion and one
+   * scroll. Doing those per entry is what made a printing loop unusable:
+   * `persist()` serializes the whole entry log, so it is O(n) per call.
+   */
+  function appendEntries(entries) {
+    if (!entries || entries.length === 0) return;
     if (empty.parentNode) empty.parentNode.removeChild(empty);
-    stream.appendChild(buildEntryNode(entry));
+    const fragment = document.createDocumentFragment();
+    for (const entry of entries) {
+      state.entries.push(entry);
+      fragment.appendChild(buildEntryNode(entry));
+    }
+    stream.appendChild(fragment);
+    persist();
     if (stickToBottom) scrollToBottom();
   }
 
@@ -622,6 +640,23 @@
     vscode.postMessage({ type: "clearRequested" });
   });
 
+  stopBtn.addEventListener("click", () => {
+    vscode.postMessage({ type: "interrupt" });
+  });
+
+  // While a program runs the textarea is disabled, so its own Ctrl/Cmd+C
+  // handler cannot fire. Catch the key on the document instead, and only
+  // while blocked, so it never competes with copying from the stream.
+  document.addEventListener("keydown", (event) => {
+    if (!state.busy || state.awaitingInput) return;
+    if (event.key !== "c" || !(event.ctrlKey || event.metaKey)) return;
+    if (event.shiftKey || event.altKey) return;
+    const selection = window.getSelection();
+    if (selection && String(selection).length > 0) return;
+    event.preventDefault();
+    vscode.postMessage({ type: "interrupt" });
+  });
+
   stream.addEventListener("scroll", () => {
     const slack = 16;
     stickToBottom = (stream.scrollHeight - stream.scrollTop - stream.clientHeight) <= slack;
@@ -634,6 +669,10 @@
       case "append":
         if (state.mode !== "session") return;
         appendEntry(msg.entry);
+        break;
+      case "appendMany":
+        if (state.mode !== "session") return;
+        appendEntries(msg.entries);
         break;
       case "clear":
         if (state.mode !== "session") return;

@@ -11,10 +11,12 @@ import {
   PYODIDE_BOOTSTRAP_PY,
   PYODIDE_HTTP_PATCH_PY,
   PYODIDE_INSTALL_PY,
+  type DisplayData,
   type RawStaticFinding,
   type RunResult,
   type TestRunResult,
 } from "./pyodideRunner";
+import { clearInterrupt } from "./interruptBuffer";
 import { PLL_VENDOR_DIR, VENDORED_WHEELS } from "./pythonVendor";
 import { waitForStdinLine } from "./stdinBuffer";
 import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "./workerProtocol";
@@ -29,6 +31,8 @@ export interface PyodideInstance {
     autoEOF?: boolean;
     isatty?: boolean;
   }): void;
+  /** Poll this buffer for pending signals; a 2 raises `KeyboardInterrupt`. */
+  setInterruptBuffer(buffer: Uint8Array): void;
   FS: MemFS;
   globals: {
     get(name: string): PyCallable;
@@ -56,6 +60,13 @@ export interface WorkerHostAdapter {
   stdinUnavailableMessage: string;
 }
 
+/**
+ * How long live stdout/stderr may be buffered before it is posted. Small
+ * enough that an `input()` prompt still appears promptly, large enough that
+ * a runaway print loop cannot starve the extension host.
+ */
+const LIVE_FLUSH_MS = 50;
+
 /** `atob` exists in both the browser worker and Node's worker_threads. */
 function decodeBase64(base64: string): Uint8Array {
   const binary = atob(base64);
@@ -82,13 +93,54 @@ export function createWorkerHost(
   let pytestPromise: Promise<unknown> | null = null;
   let httpPatchPromise: Promise<void> | null = null;
   let stdinBuffer: SharedArrayBuffer | null = null;
+  let interruptBuffer: SharedArrayBuffer | null = null;
+  /** Buffered live stream text, waiting to be posted as one message. */
+  let livePending: { type: "stdout" | "stderr"; text: string } | null = null;
+  let liveLastPost = 0;
 
+  function flushLive(): void {
+    if (!livePending) {
+      return;
+    }
+    const payload = livePending;
+    livePending = null;
+    liveLastPost = Date.now();
+    adapter.post({ type: "display", payload });
+  }
+
+  /**
+   * Stream one display to the host, coalescing consecutive stdout/stderr
+   * writes into at most one message per `LIVE_FLUSH_MS`.
+   *
+   * Without this, `while True: print("hello")` posts a few hundred thousand
+   * messages per second. The extension host cannot drain them faster than
+   * the worker produces them, so its queue grows without bound and the Stop
+   * the student presses is never processed - the one moment it has to work.
+   * Images and tables flush the pending text first so the interleaved order
+   * of output and cards is preserved exactly.
+   */
   function emitDisplay(json: string): void {
+    let payload: DisplayData;
     try {
-      adapter.post({ type: "display", payload: JSON.parse(String(json)) });
+      payload = JSON.parse(String(json)) as DisplayData;
     } catch {
       /* malformed payload: skip */
+      return;
     }
+    if (payload.type === "stdout" || payload.type === "stderr") {
+      if (livePending && livePending.type === payload.type) {
+        livePending.text += payload.text;
+      } else {
+        flushLive();
+        livePending = { type: payload.type, text: payload.text };
+      }
+      if (Date.now() - liveLastPost >= LIVE_FLUSH_MS) {
+        flushLive();
+      }
+      return;
+    }
+    flushLive();
+    adapter.post({ type: "display", payload });
   }
 
   /**
@@ -121,6 +173,10 @@ export function createWorkerHost(
     if (!stdinBuffer) {
       throw new Error(adapter.stdinUnavailableMessage);
     }
+    // The prompt of `input("Choice: ")` is unflushed stdout. It has to reach
+    // the host before this thread parks, or the student is asked for a line
+    // with nothing on screen telling them what for.
+    flushLive();
     return waitForStdinLine(stdinBuffer, () => adapter.post({ type: "stdinRequest" }));
   }
 
@@ -129,6 +185,9 @@ export function createWorkerHost(
       initPromise = (async () => {
         const instance = await adapter.loadPyodide(indexUrl);
         instance.setStdin({ stdin: readStdin, autoEOF: true });
+        if (interruptBuffer) {
+          instance.setInterruptBuffer(new Uint8Array(interruptBuffer));
+        }
         instance.runPython(PYODIDE_BOOTSTRAP_PY);
         instance.runPython(PLL_IMAGE_LIB_PY);
         instance.runPython(PLL_TABLE_LIB_PY);
@@ -188,15 +247,32 @@ export function createWorkerHost(
   }
 
   /**
+   * Drop a pending Stop before running anything. Without this, a Stop that
+   * arrived after the interpreter finished (or one it never polled) would
+   * raise `KeyboardInterrupt` in whatever the student ran next.
+   */
+  function dropPendingInterrupt(): void {
+    if (interruptBuffer) {
+      clearInterrupt(interruptBuffer);
+    }
+  }
+
+  /**
    * `_pll_live_emit` streams every stdout write and every image/table to the
    * host as it happens, so an `input()` prompt shows up before the program
    * blocks. Only enabled around a file run, where blocking is possible.
    */
   function withLiveEmit<T>(run: () => T): T {
     ready().globals.set("_pll_live_emit", emitDisplay);
+    livePending = null;
+    // Zero, not `Date.now()`, so a run's first output is posted immediately.
+    liveLastPost = 0;
     try {
       return run();
     } finally {
+      // The result's own `displays` are dropped by the caller, so anything
+      // still buffered here is the only copy of the tail of the output.
+      flushLive();
       ready().runPython("_pll_live_emit = None");
     }
   }
@@ -206,11 +282,13 @@ export function createWorkerHost(
       switch (data.type) {
         case "init": {
           stdinBuffer = data.stdinBuffer ?? null;
+          interruptBuffer = data.interruptBuffer ?? null;
           await ensurePyodide(data.indexUrl);
           adapter.post({ id: data.id, type: "ready" });
           break;
         }
         case "runFile": {
+          dropPendingInterrupt();
           const result = withLiveEmit(() =>
             callPython<RunResult>("_pll_run_file", [
               data.code,
@@ -226,6 +304,7 @@ export function createWorkerHost(
           break;
         }
         case "replEval": {
+          dropPendingInterrupt();
           const result = callPython<RunResult>("_pll_repl_eval", [
             data.code,
             data.sessionKey,
@@ -264,6 +343,7 @@ export function createWorkerHost(
           break;
         }
         case "runTests": {
+          dropPendingInterrupt();
           await ensurePytest();
           const result = callPython<TestRunResult>("_pll_run_tests", [
             data.code,

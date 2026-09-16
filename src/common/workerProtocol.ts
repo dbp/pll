@@ -10,7 +10,13 @@ export interface RawReplCheck {
 }
 
 export type WorkerInbound =
-  | { id: number; type: "init"; indexUrl: string; stdinBuffer?: SharedArrayBuffer }
+  | {
+      id: number;
+      type: "init";
+      indexUrl: string;
+      stdinBuffer?: SharedArrayBuffer;
+      interruptBuffer?: SharedArrayBuffer;
+    }
   | {
       id: number;
       type: "runFile";

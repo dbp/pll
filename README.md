@@ -56,6 +56,19 @@ level as that run (the one shown in the header).
 - **Ctrl+L** (Windows) or **Cmd+L** (Mac) clears the interactions panel.
   You can also run **PLL: Clear Interactions**.
 
+### Stopping a program
+
+If a program runs longer than you expect - a loop that never ends, say -
+click **Stop** in the interactions panel. **Ctrl+C** (with nothing selected)
+and **PLL: Stop Program** in the Command Palette do the same thing. The
+program stops with a `KeyboardInterrupt`, and anything it printed first is
+kept.
+
+This works for ordinary Python code. If your program is stuck inside a
+library (a very long `pandas` operation, for example), or if it catches
+`KeyboardInterrupt` itself, PLL will tell you it could not stop it - reload
+the window in that case.
+
 ## Tests
 
 You can put tests in the **same file** as the code they check. A test is
@@ -257,6 +270,7 @@ also appears in the editor title bar when a `.py` file is open.
 | **PLL: Run Python File** | Run tests (if any), then run the file. |
 | **PLL: Show Interactions** | Open the interactions panel. |
 | **PLL: Start REPL** | Open the interactions panel (same as Show Interactions). |
+| **PLL: Stop Program** | Stop the program that is running. |
 | **PLL: Clear Interactions** | Clear the panel. |
 
 ## Copy and paste

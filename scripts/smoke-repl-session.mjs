@@ -162,7 +162,7 @@ async function load() {
   writeFileSync(
     join(tmp, "entry.mjs"),
     `
-export { ReplSession } from "../src/common/replSession";
+export { ReplSession, STOP_TIMEOUT_MS, MAX_STREAM_LINES_PER_RUN } from "../src/common/replSession";
 export * as vscodeStub from "./vscode.mjs";
 `,
   );
@@ -181,7 +181,7 @@ export * as vscodeStub from "./vscode.mjs";
   return mod;
 }
 
-const { ReplSession, vscodeStub } = await load();
+const { ReplSession, STOP_TIMEOUT_MS, MAX_STREAM_LINES_PER_RUN, vscodeStub } = await load();
 const { Uri, __setActiveEditor, files, written } = vscodeStub;
 
 /* ---------------------------------------------------------------- */
@@ -270,6 +270,11 @@ function makeRuntime(script = {}) {
     calls,
     get stdinHandler() {
       return stdinHandler;
+    },
+    interrupt() {
+      calls.push(["interrupt"]);
+      // `script.noInterruptChannel` mimics a host with no SharedArrayBuffer.
+      return !script.noInterruptChannel;
     },
     async initialize() {
       calls.push(["initialize"]);
@@ -924,6 +929,169 @@ console.log("\n[21] a static-analysis crash does not block the run");
   expect(
     runtime.calls.some((c) => c[0] === "runFile"),
     "a broken analyzer should not stop the file from running",
+  );
+  repl.dispose();
+}
+
+/* ---------------------------------------------------------------- */
+/* Stopping a running program                                       */
+/* ---------------------------------------------------------------- */
+
+/** A run that stays busy until the returned `release` is called. */
+function gatedHarnessScript(extra = {}) {
+  let release;
+  const gate = new Promise((r) => {
+    release = r;
+  });
+  return {
+    release: () => release(),
+    script: {
+      ...extra,
+      events: (kind) =>
+        kind === "runFile" ? [async () => { await gate; }, { kind: "done" }] : [{ kind: "done" }],
+    },
+  };
+}
+
+console.log("\n[22] Ctrl+C while a program runs asks the runtime to interrupt it");
+{
+  const { release, script } = gatedHarnessScript();
+  const { repl, view, runtime, doc } = await harness(script);
+  const run = repl.runFile("while True:\n    pass\n", "hello.py", doc);
+  await settle();
+  expect(view.busy === true, "the session should be busy while the program runs");
+  view.handlers.onInterrupt();
+  await settle();
+  expect(
+    runtime.calls.some((c) => c[0] === "interrupt"),
+    "onInterrupt while busy should call runtime.interrupt()",
+  );
+  expect(view.status === "Stopping...", `status should read "Stopping...", got ${view.status}`);
+  expect(
+    !view.entries.some((e) => e.kind === "banner" && e.text === "KeyboardInterrupt"),
+    "a running program should not get the abandoned-snippet banner",
+  );
+  release();
+  await run;
+  await settle();
+  repl.dispose();
+}
+
+console.log("\n[23] the palette command stops the program too");
+{
+  const { release, script } = gatedHarnessScript();
+  const { repl, runtime, doc } = await harness(script);
+  const run = repl.runFile("while True:\n    pass\n", "hello.py", doc);
+  await settle();
+  repl.stopActiveProgram();
+  await settle();
+  expect(
+    runtime.calls.filter((c) => c[0] === "interrupt").length === 1,
+    "stopActiveProgram should interrupt exactly once",
+  );
+  release();
+  await run;
+  await settle();
+  repl.dispose();
+}
+
+console.log("\n[24] with no interrupt channel the user is told, not left guessing");
+{
+  const { release, script } = gatedHarnessScript({ noInterruptChannel: true });
+  const { repl, view, doc } = await harness(script);
+  const run = repl.runFile("while True:\n    pass\n", "hello.py", doc);
+  await settle();
+  view.handlers.onInterrupt();
+  await settle();
+  expect(
+    view.entries.some((e) => e.kind === "banner" && /Cannot stop the program/.test(e.text)),
+    "a missing SharedArrayBuffer should produce an explanatory banner",
+  );
+  release();
+  await run;
+  await settle();
+  repl.dispose();
+}
+
+console.log("\n[25] a Stop that never lands is reported instead of failing silently");
+{
+  const { release, script } = gatedHarnessScript();
+  const { repl, view, doc } = await harness(script);
+  const run = repl.runFile("while True:\n    pass\n", "hello.py", doc);
+  await settle();
+  view.handlers.onInterrupt();
+  await settle();
+  expect(
+    !view.entries.some((e) => e.kind === "banner" && /has not stopped/.test(e.text)),
+    "the warning must not appear immediately",
+  );
+  await new Promise((r) => setTimeout(r, STOP_TIMEOUT_MS + 200));
+  expect(
+    view.entries.some((e) => e.kind === "banner" && /has not stopped/.test(e.text)),
+    "a program still running after the deadline should produce a warning banner",
+  );
+  release();
+  await run;
+  await settle();
+  repl.dispose();
+}
+
+console.log("\n[26] a Stop after the program ended does not warn");
+{
+  const { release, script } = gatedHarnessScript();
+  const { repl, view, doc } = await harness(script);
+  const run = repl.runFile("print(1)\n", "hello.py", doc);
+  await settle();
+  view.handlers.onInterrupt();
+  await settle();
+  release();
+  await run;
+  await settle();
+  await new Promise((r) => setTimeout(r, STOP_TIMEOUT_MS + 200));
+  expect(
+    !view.entries.some((e) => e.kind === "banner" && /has not stopped/.test(e.text)),
+    "a finished program must not be reported as stuck",
+  );
+  repl.dispose();
+}
+
+console.log("\n[27] runaway output is capped so the panel stays usable");
+{
+  const flood = "hello\n".repeat(MAX_STREAM_LINES_PER_RUN + 1000);
+  const { repl, view, doc } = await harness({
+    events: (kind) => (kind === "runFile" ? [{ kind: "stdout", text: flood }, { kind: "done" }] : []),
+  });
+  await repl.runFile('while True:\n    print("hello")\n', "hello.py", doc);
+  await settle();
+  const printed = view.entries.filter((e) => e.kind === "stdout").length;
+  expect(
+    printed === MAX_STREAM_LINES_PER_RUN,
+    `expected ${MAX_STREAM_LINES_PER_RUN} rendered lines, got ${printed}`,
+  );
+  const notices = view.entries.filter(
+    (e) => e.kind === "banner" && /Output stopped after/.test(e.text),
+  );
+  expect(notices.length === 1, `expected exactly one truncation notice, got ${notices.length}`);
+  console.log(`    rendered ${printed} of ${MAX_STREAM_LINES_PER_RUN + 1000} lines, one notice`);
+  repl.dispose();
+}
+
+console.log("\n[28] the output budget resets for the next run");
+{
+  const { repl, view, doc } = await harness({
+    events: (kind) => (kind === "runFile" ? [{ kind: "stdout", text: "a\n" }, { kind: "done" }] : []),
+  });
+  await repl.runFile("print('a')", "hello.py", doc);
+  await settle();
+  await repl.runFile("print('a')", "hello.py", doc);
+  await settle();
+  expect(
+    view.entries.filter((e) => e.kind === "stdout").length === 1,
+    "each Run File clears the panel, so the second run shows its own line",
+  );
+  expect(
+    !view.entries.some((e) => e.kind === "banner" && /Output stopped/.test(e.text)),
+    "a small second run must not inherit the previous run's budget",
   );
   repl.dispose();
 }

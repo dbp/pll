@@ -28,6 +28,9 @@ export function registerCommands(
     vscode.commands.registerCommand("pll.clearInteractions", () =>
       services.view.clear(),
     ),
+    vscode.commands.registerCommand("pll.stopProgram", () =>
+      services.repl.stopActiveProgram(),
+    ),
     vscode.commands.registerCommand("pll.editor.copy", () =>
       editorCopy().catch(reportError),
     ),

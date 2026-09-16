@@ -32,10 +32,11 @@ src/
     ├── workerHost.ts              Worker side of the protocol: one Pyodide
     │                              interpreter + the message dispatch
     ├── stdinBuffer.ts             SharedArrayBuffer protocol for input()
+    ├── interruptBuffer.ts        SharedArrayBuffer protocol for Stop
     ├── workspaceFilePolicy.ts     Which sibling files to mount / write back
     ├── workspaceFiles.ts          vscode.workspace.fs snapshot + writeback
     ├── memfsWorkspace.ts          Pyodide MEMFS mount / collect helpers
-    ├── commands.ts                Run File / Show Interactions / Clear commands
+    ├── commands.ts                Run File / Show Interactions / Clear / Stop
     ├── editorClipboard.ts         Palette PLL: Editor Copy/Cut/Paste (no keys)
     ├── replSession.ts             Drives the interactions view: init,
     │                              REPL multi-line buffer, file runs, exec chain
@@ -270,6 +271,119 @@ On the **web** host this needs **cross-origin isolation**
 `Atomics.wait` does not freeze the extension host. If a SAB cannot be
 created, `input()` raises instead of hanging.
 
+## Stopping a running program
+
+A program that never finishes used to wedge the whole extension. The worker
+sits inside a synchronous `runPython`, so it cannot read another message,
+`request()` never settles, and `ReplSession`'s exec chain never advances -
+so every later run, in every file, waits behind it. Only a window reload
+recovered.
+
+`interruptBuffer.ts` is the fix, and it is the same shape as
+`stdinBuffer.ts`: a one-byte `SharedArrayBuffer` passed to the worker on
+`init` and handed to Pyodide via `setInterruptBuffer`. Writing SIGINT (2)
+into it makes the interpreter raise `KeyboardInterrupt` at its next bytecode
+check. It has to be shared memory for the same reason stdin does - the
+thread we need to reach is blocked.
+
+The Python side needed no changes. `_pll_run_file` already catches
+`BaseException`, so an interrupt arrives as an ordinary error result
+(`error_type: "KeyboardInterrupt"`) with the `finally` still capturing
+whatever the program printed first. It finds no analyzer and renders as a
+plain error entry.
+
+`PythonRuntime.interrupt()` is synchronous - there is no point posting a
+message to a blocked thread - and returns false when no buffer could be
+created, so the host can say so rather than appear to work. The worker
+clears the buffer before every run, so a Stop that arrived just after a
+program finished cannot fire into the next one.
+
+Two limits are inherent to the mechanism, and PLL reports them rather than
+hiding them: the check happens between Python bytecodes, so a tight loop
+inside a C extension does not yield until it returns, and student code with
+a bare `except:` can swallow the interrupt exactly as it would in CPython.
+If the program is still running `STOP_TIMEOUT_MS` after a Stop, the
+interactions view says so and points at reloading the window. Terminating
+and respawning the worker would cover those cases; it is deliberately not
+implemented, because one interpreter is shared by every session and killing
+it discards all of their globals.
+
+### Why output has to be throttled
+
+Making Stop actually work needed two limits that have nothing to do with
+signals. `while True: print("hello")` calls `_pll_live_emit` on every write,
+which posted a few hundred thousand `display` messages per second - faster
+than the extension host could drain them, so its queue grew without bound
+and the Stop the student pressed was never processed. The interrupt was
+working the whole time; nothing ever got around to asking for it.
+
+`workerHost` therefore coalesces consecutive stdout/stderr writes into at
+most one message per `LIVE_FLUSH_MS` (50ms), turning that same second of
+output into about 20 messages. Images and tables flush the pending text
+first, so the interleaving of output and cards is unchanged, and `readStdin`
+flushes before parking on the SAB - otherwise the prompt of
+`input("Choice: ")` could sit in the buffer while the program waits for a
+line the student has not been asked for. `smoke-interrupt` asserts both the
+message count and that the live stream still delivers every byte exactly
+once.
+
+Coalescing alone is not enough, because every layer below it still did work
+per line. Four limits are involved, and they fall into two kinds - **rate**
+limits, which bound work per unit time, and an **accumulation** limit, which
+bounds the total. Each is load-bearing; none substitutes for another:
+
+| constant / change | kind | bounds |
+| --- | --- | --- |
+| `LIVE_FLUSH_MS` (50ms, workerHost) | rate | worker -> host messages |
+| `APPEND_FLUSH_MS` (16ms, interactionsView) | rate | host -> webview messages |
+| `_pll_push` live/batch split | accumulation | the Python display list |
+| `MAX_STREAM_LINES_PER_RUN` (5000) | accumulation | entries and DOM nodes |
+
+`APPEND_FLUSH_MS` was the largest single win. Each append used to be its own
+IPC hop, after which the view called `persist()` - `vscode.setState` over
+the whole entry log, so O(n) per entry - and forced a layout by scrolling.
+Batched into one `appendMany`, that is one persist, one `DocumentFragment`
+insertion and one scroll per frame. Anything that is not an append flushes
+the queue first, so a `clear` or `busy` update cannot overtake output that
+was already produced; `clear` and `showSession` discard the queue instead,
+since its entries are gone or already included in the replay.
+
+The `_pll_push` split matters for a subtler reason. It used to append to
+`_pll_displays` *and* emit live, but in live mode the host discards
+`result["displays"]` - so a printing loop built a multi-million entry list
+that was copied by `list()`, converted dict-by-dict to JS by `toJs`, and
+then dropped. That cost grows with total output, not with its rate, so no
+amount of rate limiting touches it.
+
+Measurements, from `pnpm run test-web:stop` with a 6s soak (click to
+`KeyboardInterrupt`):
+
+| configuration | Stop latency |
+| --- | --- |
+| per-entry appends (original) | 16,976 ms |
+| batched appends, `_pll_displays` still accumulating | 3,453 ms |
+| both fixed | 341 ms |
+| both fixed, `MAX_STREAM_LINES_PER_RUN` removed | panel wedged; Playwright could not even count its DOM nodes after 1.5s of output |
+
+That last row is why the cap stays. With the rate limits in place each
+*message* is cheap, but every line is still a DOM node and an entry in the
+view's `state.entries`, which `persist()` reserializes per batch - so
+unbounded output is quadratic again, and the DOM alone kills the panel. The
+cap is the only limit that bounds the total.
+
+Worth recording how misleading the guesses were. `feedStream`'s repeated
+`substring` looks quadratic and was the first suspect; V8's sliced strings
+make it about 1.6ms per 67 KiB chunk, roughly 3% of one core. Measure here
+rather than reason about it.
+
+The affordance is a **Stop** button in the input row, shown only while a
+program runs, plus Ctrl/Cmd+C in the panel and **PLL: Stop Program**. The
+button is not decoration: while a program runs the input `textarea` is
+`disabled`, and a disabled textarea receives no key events, so the panel's
+existing Ctrl+C handler cannot fire. `main.js` therefore also listens on the
+document while blocked, skipping the interrupt when there is a selection so
+copying output still works.
+
 ## Development
 
 ```bash
@@ -301,8 +415,32 @@ and the blamed line are both asserted.
 The rest boot real Pyodide in Node: `smoke-static-analyze`,
 `smoke-explainers`, `smoke-images`, `smoke-tables`, `smoke-tests`,
 `smoke-pandas` (incl. a URL read), `smoke-typecheck`, `smoke-input`,
-`smoke-workspace-files`, and `smoke-desktop-parity` (the built desktop
-worker, end to end).
+`smoke-workspace-files`, `smoke-interrupt`, and `smoke-desktop-parity` (the
+built desktop worker, end to end).
+
+`smoke-interrupt` covers the mechanism, because the failure it guards
+against - the worker never returning - cannot be reproduced against a fake
+runtime. It starts a real `while True: pass` in the built desktop worker and
+interrupts it through the buffer.
+
+`pnpm run test-web:stop` covers the *click*, in the real workbench with a
+real webview, and it is not redundant: the bug that shipped first was not
+the signal but the flood. A printing loop saturated the extension host, so
+the button was visible and enabled and the click still never arrived.
+Nothing below the webview can catch that. The script opens
+`samples/runaway.py`, runs it, clicks **Stop**, and checks the program ends
+with `KeyboardInterrupt`, the output notice appears, and the prompt still
+accepts a submission afterwards. Setting `LIVE_FLUSH_MS` to 0 and
+`MAX_STREAM_LINES_PER_RUN` very high makes it fail again, with Playwright
+timing out on the click itself.
+
+It asserts a `STOP_LATENCY_BUDGET_MS` (3000ms) on the time from click to
+`KeyboardInterrupt`, which matters more than it sounds: with per-entry
+appends the Stop *did* eventually land, so a test that only waited for the
+interrupt passed while the feature was unusable. It also soaks for
+`STOP_SOAK_MS` (4s) before clicking, because the accumulation costs are
+invisible if you press Stop immediately - that soak is what exposed
+`_pll_displays`.
 
 ### Desktop extension
 
@@ -337,7 +475,8 @@ Three options, in increasing order of how close they are to production:
    The workspace is `samples/` so you can open `hello.py`, `name_error.py`,
    `input.py` (interactive `input()`), `types.py` (runtime type
    checking), `pandas.py` (`pd.read_csv`,
-   including a URL), or `files.py` (`open` / `to_csv` on a sibling CSV). First
+   including a URL), `files.py` (`open` / `to_csv` on a sibling CSV), or
+   `runaway.py` (a loop that prints forever, for testing **Stop**). First
    run downloads vscode-web into `.vscode-test-web/` (~30 MB) and
    Playwright Chromium into `~/Library/Caches/ms-playwright/` (~150 MB);
    both are cached afterward.

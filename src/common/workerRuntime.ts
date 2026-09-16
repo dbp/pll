@@ -1,5 +1,6 @@
 import { deliverDisplay, deliverRunResult, deliverTestResult } from "./deliverResult";
 import type { RawStaticFinding } from "./pyodideRunner";
+import { signalInterrupt, tryCreateInterruptBuffer } from "./interruptBuffer";
 import { tryCreateStdinBuffer, writeStdinLine } from "./stdinBuffer";
 import type {
   ExecutionEventHandler,
@@ -50,6 +51,7 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
   private readonly pending = new Map<number, Pending>();
   private initPromise: Promise<void> | null = null;
   private stdinBuffer: SharedArrayBuffer | null = null;
+  private interruptBuffer: SharedArrayBuffer | null = null;
   private stdinHandler: (() => Promise<string | null>) | null = null;
   /** Event sink for the in-flight runFile, so live displays can stream. */
   private live: { onEvent: ExecutionEventHandler; fileName: string } | null = null;
@@ -73,11 +75,13 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
       onError: (err) => this.rejectAllPending(err),
     });
     this.stdinBuffer = tryCreateStdinBuffer();
+    this.interruptBuffer = tryCreateInterruptBuffer();
     await this.request(
       {
         type: "init",
         indexUrl,
         ...(this.stdinBuffer ? { stdinBuffer: this.stdinBuffer } : {}),
+        ...(this.interruptBuffer ? { interruptBuffer: this.interruptBuffer } : {}),
       },
       "ready",
     );
@@ -160,6 +164,14 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     return files;
   }
 
+  interrupt(): boolean {
+    if (!this.interruptBuffer) {
+      return false;
+    }
+    signalInterrupt(this.interruptBuffer);
+    return true;
+  }
+
   setStdinHandler(handler: (() => Promise<string | null>) | null): void {
     this.stdinHandler = handler;
   }
@@ -169,6 +181,7 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     this.worker = null;
     this.initPromise = null;
     this.stdinBuffer = null;
+    this.interruptBuffer = null;
     this.live = null;
     this.rejectAllPending(new Error("Runtime disposed"));
   }

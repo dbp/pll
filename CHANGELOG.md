@@ -1,6 +1,20 @@
 # Changelog
 
 ## Unreleased
+- **You can stop a running program.** A **Stop** button appears in the
+  interactions panel while your program runs; Ctrl/Cmd+C (with nothing
+  selected) and **PLL: Stop Program** do the same thing. The program ends
+  with a `KeyboardInterrupt` and keeps whatever it printed first. Before
+  this, a loop that never ended blocked every later run and only a window
+  reload recovered. If a program cannot be stopped - stuck inside a library
+  call, or catching `KeyboardInterrupt` itself - PLL now says so instead of
+  appearing to do nothing.
+- Programs that print in a tight loop no longer make the interactions panel
+  (and Stop) unresponsive. Live output is batched on its way out of Python
+  and again on its way into the panel, a run no longer keeps a copy of output
+  it has already streamed, and a single run renders at most 5000 lines before
+  saying it stopped showing them. Stopping such a program now takes about a
+  third of a second instead of upwards of fifteen.
 
 ## 0.0.8
 - **Type annotations are now checked while your program runs.** If a value

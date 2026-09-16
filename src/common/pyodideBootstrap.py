@@ -211,14 +211,23 @@ _pll_live_emit = None
 
 
 def _pll_push(payload):
-    """Record a display payload and, if a live hook is set, emit it now."""
-    _pll_displays.append(payload)
+    """Emit a display payload live, or record it for the end of the run.
+
+    Exactly one of the two: when a live hook is installed the host streams
+    each payload as it happens and then discards `result["displays"]`
+    (see `withLiveEmit` / the `runFile` case in workerHost.ts), so also
+    accumulating them costs memory and a large FFI conversion for a list
+    nobody reads. A program printing in a loop built a multi-million entry
+    list that was copied and converted to JS purely to be dropped.
+    """
     emit = _pll_live_emit
-    if emit is not None:
-        try:
-            emit(_pll_json.dumps(payload))
-        except Exception:
-            pass
+    if emit is None:
+        _pll_displays.append(payload)
+        return
+    try:
+        emit(_pll_json.dumps(payload))
+    except Exception:
+        pass
 
 
 class _PllStream:

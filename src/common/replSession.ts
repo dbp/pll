@@ -14,6 +14,25 @@ import type { RawStaticFinding } from "./pyodideRunner";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 import { collectSiblingFiles, folderUri, writeBackSiblingFiles } from "./workspaceFiles";
 
+/**
+ * How long to wait after a Stop before telling the student it did not work.
+ * A KeyboardInterrupt lands at the interpreter's next bytecode check, which
+ * for ordinary Python is immediate; anything still running after this is
+ * stuck somewhere the interrupt cannot reach.
+ */
+export const STOP_TIMEOUT_MS = 3000;
+
+/**
+ * Most lines of program output rendered for a single run.
+ *
+ * The worker coalesces its stream messages, but `feedStream` still turns
+ * each line into its own entry and its own webview message, so a runaway
+ * `print` loop would put hundreds of thousands of nodes into the panel and
+ * starve the extension host - exactly when Stop needs to be responsive.
+ * Well above anything a normal exercise prints.
+ */
+export const MAX_STREAM_LINES_PER_RUN = 5000;
+
 export interface ReplDeps {
   runtime: PythonRuntime;
   diagnostics: Diagnostics;
@@ -53,6 +72,16 @@ interface Session {
    * set is currently in effect after a run.
    */
   lastLevel: Level | null;
+  /**
+   * Incremented at the start of each run. `requestStop` captures it so its
+   * "did not stop" check cannot fire against a later run that happens to be
+   * busy by then.
+   */
+  runSeq: number;
+  /** Lines of program output rendered so far in the current run. */
+  streamLines: number;
+  /** Whether this run already reported that output was cut off. */
+  streamTruncated: boolean;
 }
 
 /**
@@ -80,6 +109,8 @@ export class ReplSession implements vscode.Disposable {
    * calls `provideStdin` while that run is blocked in the worker.
    */
   private stdinSession: Session | null = null;
+  /** Sessions with a Stop in flight, so repeated presses don't stack banners. */
+  private readonly stopPending = new Set<string>();
   private stdinPending: {
     session: Session;
     prefix: string;
@@ -119,6 +150,15 @@ export class ReplSession implements vscode.Disposable {
     this.setActive(session.key);
     this.cancelStdin();
     return this.enqueue(() => this.executeFile(session, code, fileName, document));
+  }
+
+  /**
+   * Stop whatever the visible session is running. Same behavior as Ctrl+C in
+   * the interactions panel, reachable from the command palette and the
+   * panel's Stop button.
+   */
+  stopActiveProgram(): void {
+    this.handleInterrupt();
   }
 
   dispose(): void {
@@ -217,6 +257,9 @@ export class ReplSession implements vscode.Disposable {
         continuationLines: [],
         continuing: false,
         lastLevel: null,
+        runSeq: 0,
+        streamLines: 0,
+        streamTruncated: false,
       };
       this.sessions.set(key, session);
     }
@@ -322,17 +365,66 @@ export class ReplSession implements vscode.Disposable {
   }
 
   private handleInterrupt(): void {
+    // Blocked in `input()`: cancelling the read is the interrupt.
     if (this.isAwaitingInputOnActive()) {
       this.fulfillStdin(null);
       return;
     }
     const session = this.activeSession();
-    if (session?.continuing) {
+    if (!session) {
+      return;
+    }
+    // A program is running: ask the interpreter to raise KeyboardInterrupt.
+    if (session.busy) {
+      this.requestStop(session);
+      return;
+    }
+    // Otherwise the only thing to abandon is a half-typed multi-line snippet.
+    if (session.continuing) {
       session.continuationLines = [];
       session.continuing = false;
       this.appendToSession(session, { kind: "banner", text: "KeyboardInterrupt" });
       this.setSessionPrompt(session, "primary");
     }
+  }
+
+  /**
+   * Ask the worker to stop the running program.
+   *
+   * The interpreter checks for signals between bytecodes, so this cannot
+   * reach a tight loop inside a C extension (a long numpy call), and student
+   * code with a bare `except:` can swallow the KeyboardInterrupt just as it
+   * would in CPython. Neither case may look like Stop silently did nothing,
+   * so we check back and say what happened.
+   */
+  private requestStop(session: Session): void {
+    if (!this.deps.runtime.interrupt()) {
+      this.appendToSession(session, {
+        kind: "banner",
+        text:
+          "Cannot stop the program in this window (SharedArrayBuffer is unavailable). " +
+          "Reload the window to recover.",
+      });
+      return;
+    }
+    if (this.stopPending.has(session.key)) {
+      return;
+    }
+    this.stopPending.add(session.key);
+    const runSeq = session.runSeq;
+    this.setSessionBusy(session, true, "Stopping...");
+    setTimeout(() => {
+      this.stopPending.delete(session.key);
+      if (!session.busy || session.runSeq !== runSeq) {
+        return;
+      }
+      this.appendToSession(session, {
+        kind: "banner",
+        text:
+          "The program has not stopped. It may be inside a library call, or catching " +
+          "KeyboardInterrupt. Reload the window (Developer: Reload Window) to recover.",
+      });
+    }, STOP_TIMEOUT_MS);
   }
 
   private handleClearRequested(): void {
@@ -439,6 +531,8 @@ export class ReplSession implements vscode.Disposable {
 
   private async executeRepl(session: Session, code: string): Promise<void> {
     const level = session.lastLevel ?? DEFAULT_LEVEL;
+    session.runSeq += 1;
+    this.resetStreamBudget(session);
     this.setSessionBusy(session, true, "Starting...");
     if (levelHasStaticChecks(level)) {
       this.setSessionBusy(session, true, "Checking...");
@@ -467,6 +561,8 @@ export class ReplSession implements vscode.Disposable {
     // REPL buffer, reset to the primary prompt, and clear the visible stream.
     session.continuationLines = [];
     session.continuing = false;
+    session.runSeq += 1;
+    this.resetStreamBudget(session);
     this.setSessionPrompt(session, "primary");
     this.clearSession(session);
     this.setSessionBusy(session, true, "Starting...");
@@ -825,7 +921,7 @@ export class ReplSession implements vscode.Disposable {
     let buf = session.streams[kind] + text;
     let idx: number;
     while ((idx = buf.indexOf("\n")) !== -1) {
-      this.appendToSession(session, { kind, text: buf.substring(0, idx) });
+      this.appendStreamLine(session, kind, buf.substring(0, idx));
       buf = buf.substring(idx + 1);
     }
     session.streams[kind] = buf;
@@ -836,9 +932,41 @@ export class ReplSession implements vscode.Disposable {
       const text = session.streams[kind];
       if (text.length > 0) {
         session.streams[kind] = "";
-        this.appendToSession(session, { kind, text });
+        this.appendStreamLine(session, kind, text);
       }
     }
+  }
+
+  private resetStreamBudget(session: Session): void {
+    session.streamLines = 0;
+    session.streamTruncated = false;
+  }
+
+  /**
+   * Append one line of output, unless this run has already produced more
+   * than we will render. Reports the cut-off once so output never just stops
+   * without explanation, and keeps pointing at Stop, since a run that hits
+   * this is usually a loop the student wants to end.
+   */
+  private appendStreamLine(
+    session: Session,
+    kind: "stdout" | "stderr",
+    text: string,
+  ): void {
+    if (session.streamLines >= MAX_STREAM_LINES_PER_RUN) {
+      if (!session.streamTruncated) {
+        session.streamTruncated = true;
+        this.appendToSession(session, {
+          kind: "banner",
+          text:
+            `Output stopped after ${MAX_STREAM_LINES_PER_RUN} lines. ` +
+            "If the program is still running, press Stop to end it.",
+        });
+      }
+      return;
+    }
+    session.streamLines += 1;
+    this.appendToSession(session, { kind, text });
   }
 }
 

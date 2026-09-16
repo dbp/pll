@@ -117,6 +117,10 @@ interface HostMessageAppend {
   type: "append";
   entry: Entry;
 }
+interface HostMessageAppendMany {
+  type: "appendMany";
+  entries: Entry[];
+}
 interface HostMessageClear {
   type: "clear";
 }
@@ -158,6 +162,7 @@ interface HostMessageFocus {
 }
 type HostToView =
   | HostMessageAppend
+  | HostMessageAppendMany
   | HostMessageClear
   | HostMessagePrompt
   | HostMessageBusy
@@ -188,6 +193,18 @@ export interface InteractionsHandlers {
   onClearRequested(): void;
 }
 
+/**
+ * How long appends may wait to be sent as one batch.
+ *
+ * Every message to a webview costs an IPC hop, and the view then persists
+ * its state and scrolls per message. A program printing in a loop produced
+ * one of each per line, which starved the extension host badly enough that
+ * a Stop click took ~17 seconds to be processed. One frame of latency is
+ * imperceptible for interactive output and collapses a burst into a single
+ * message.
+ */
+const APPEND_FLUSH_MS = 16;
+
 const VIEW_ID = "pllInteractionsView";
 
 export class InteractionsView
@@ -217,6 +234,10 @@ export class InteractionsView
   // requests coming from the webview's error-location links.
   private readonly fileMap = new Map<string, vscode.Uri>();
 
+  // Appends waiting to be sent as one `appendMany`.
+  private pendingAppends: Entry[] = [];
+  private appendTimer: ReturnType<typeof setTimeout> | null = null;
+
   // Optional callbacks - the session manager installs these.
   private handlers: InteractionsHandlers | null = null;
 
@@ -241,6 +262,8 @@ export class InteractionsView
    */
   showSession(state: SessionDisplayState): void {
     this.mode = "session";
+    // The replay carries every entry, so anything queued is already in it.
+    this.dropPendingAppends();
     this.title = state.title;
     this.entries = [...state.entries];
     this.prompt = state.prompt;
@@ -266,12 +289,18 @@ export class InteractionsView
   append(entry: Entry): void {
     if (this.mode !== "session") return;
     this.entries.push(entry);
-    this.post({ type: "append", entry });
+    this.pendingAppends.push(entry);
+    if (this.appendTimer === null) {
+      this.appendTimer = setTimeout(() => this.flushAppends(), APPEND_FLUSH_MS);
+    }
   }
 
   clear(): void {
     if (this.mode !== "session") return;
     this.entries = [];
+    // Queued appends belong to entries that no longer exist; sending them
+    // after a clear would resurrect them.
+    this.dropPendingAppends();
     this.post({ type: "clear" });
   }
 
@@ -452,12 +481,38 @@ export class InteractionsView
     };
   }
 
+  private dropPendingAppends(): void {
+    this.pendingAppends = [];
+    if (this.appendTimer !== null) {
+      clearTimeout(this.appendTimer);
+      this.appendTimer = null;
+    }
+  }
+
+  private flushAppends(): void {
+    if (this.appendTimer !== null) {
+      clearTimeout(this.appendTimer);
+      this.appendTimer = null;
+    }
+    if (this.pendingAppends.length === 0) return;
+    const entries = this.pendingAppends;
+    this.pendingAppends = [];
+    this.send({ type: "appendMany", entries });
+  }
+
+  /** Send `msg`, after any queued appends so nothing overtakes them. */
   private post(msg: HostToView): void {
+    this.flushAppends();
+    this.send(msg);
+  }
+
+  private send(msg: HostToView): void {
     if (!this.view || !this.webviewReady) return;
     void this.view.webview.postMessage(msg);
   }
 
   dispose(): void {
+    this.dropPendingAppends();
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
     this.view = null;
@@ -503,6 +558,7 @@ export class InteractionsView
       <textarea id="input" rows="1" autocomplete="off" spellcheck="false"
         autocapitalize="off" wrap="soft"></textarea>
       <span id="status" class="status"></span>
+      <button id="stop" title="Stop the running program (Ctrl/Cmd+C)" hidden>Stop</button>
     </div>
   </div>
   <script nonce="${nonce}" src="${scriptUri}"></script>

@@ -446,6 +446,19 @@ body.mode-empty #inputRow {
   min-height: 1.45em;
 }
 
+/* Stop button: present only while a program is running (main.js toggles
+ * `hidden`), so it never competes with the prompt for attention. Tinted with
+ * the error colour because it aborts work, not because anything is wrong. */
+#inputRow #stop {
+  margin-top: 1px;
+  color: var(--vscode-errorForeground, #f48771);
+  border-color: var(--vscode-errorForeground, #f48771);
+}
+
+#inputRow #stop[hidden] {
+  display: none;
+}
+
 #inputRow .status {
   flex: 0 0 auto;
   font-family: var(--vscode-font-family, sans-serif);

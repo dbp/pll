@@ -165,6 +165,14 @@ export interface PythonRuntime {
    */
   collectWorkspaceFiles(): Promise<WorkspaceFile[]>;
   /**
+   * Ask a running program to stop, by raising `KeyboardInterrupt` at the
+   * interpreter's next bytecode check. Synchronous on purpose: the worker is
+   * blocked inside `runPython` and would not read a message until it
+   * returned. Returns false when there is no interrupt channel (no
+   * `SharedArrayBuffer`), so callers can say so rather than appear to work.
+   */
+  interrupt(): boolean;
+  /**
    * Register the handler used when a running program calls `input()`.
    * Both hosts block the Pyodide worker until this resolves with a line
    * (no trailing newline) or `null` (EOF / cancel).
