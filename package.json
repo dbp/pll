@@ -1,8 +1,8 @@
 {
   "name": "python-language-levels",
   "displayName": "Python Language Levels",
-  "description": "Beginner-friendly integrated Python REPL with inline images, language levels, and friendly errors. Powered by Pyodide. Works in desktop VS Code and vscode.dev.",
-  "version": "0.0.8",
+  "description": "Beginner-friendly Python in the editor: an integrated REPL with inline images, tables and animations, language levels, and friendly errors. Powered by Pyodide. Works in desktop VS Code and vscode.dev.",
+  "version": "0.1.0",
   "publisher": "pll",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -20,7 +20,10 @@
     "beginner",
     "repl",
     "pyodide",
-    "learning"
+    "learning",
+    "animation",
+    "htdp",
+    "images"
   ],
   "engines": {
     "vscode": "^1.101.0"

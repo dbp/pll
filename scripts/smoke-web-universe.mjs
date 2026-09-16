@@ -25,6 +25,35 @@ let ok = true;
 const expect = (c, m) => { if (!c) { console.error("  FAIL: " + m); ok = false; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Refuse to start if a port is already taken. `vscode-test-web` prints
+ * "Listening on" regardless, so without this a stale server from an earlier
+ * run surfaces 90 seconds later as an unexplained `page.goto` timeout - and
+ * the universe server would silently fail to bind, so the world could not
+ * connect for a reason nothing would report.
+ */
+async function requireFreePort(port, what) {
+  const { createServer } = await import("node:net");
+  await new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", (err) =>
+      reject(
+        new Error(
+          err.code === "EADDRINUSE"
+            ? `port ${port} (${what}) is already in use - stop whatever is ` +
+              `holding it and try again.`
+            : String(err),
+        ),
+      ),
+    );
+    probe.once("listening", () => probe.close(() => resolve()));
+    probe.listen(port, "127.0.0.1");
+  });
+}
+
+await requireFreePort(Number(WS_PORT), "universe server");
+await requireFreePort(Number(PORT), "vscode-test-web");
+
 // 1. The reference server students would be given.
 const srvLog = [];
 const universe = spawn("node", ["samples/universe_server.mjs"], {

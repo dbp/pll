@@ -15,6 +15,30 @@
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 const PORT = process.env.VSCODE_WEB_PORT || "3017";
+/**
+ * Refuse to start if the port is already taken. `vscode-test-web` prints
+ * "Listening on" regardless, so without this a stale server from an earlier
+ * run surfaces 90 seconds later as an unexplained `page.goto` timeout.
+ */
+async function requireFreePort(port) {
+  const { createServer } = await import("node:net");
+  await new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", (err) =>
+      reject(
+        new Error(
+          err.code === "EADDRINUSE"
+            ? `port ${port} is already in use - another vscode-test-web is still ` +
+              `running. Stop it (or set ${"VSCODE_WEB_PORT"}) and try again.`
+            : String(err),
+        ),
+      ),
+    );
+    probe.once("listening", () => probe.close(() => resolve()));
+    probe.listen(port, "127.0.0.1");
+  });
+}
+
 function startServer() {
   const c = spawn("npx", ["vscode-test-web", "--browser=none", "--quality=insiders", "--coi",
     "--extensionDevelopmentPath=.", `--port=${PORT}`, "samples"],
@@ -32,6 +56,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // `|| null`, not `??`: an empty VSCODE_WEB_URL means "start one".
 const REUSE = process.env.VSCODE_WEB_URL || null;
+if (!REUSE) await requireFreePort(Number(PORT));
 const server = REUSE ? null : await startServer();
 const browser = await chromium.launch({
   headless: !process.env.VSCODE_WEB_HEADED,

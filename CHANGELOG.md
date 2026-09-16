@@ -1,10 +1,28 @@
 # Changelog
 
 ## Unreleased
+
+## 0.1.0 (2026-09-16)
+
+### Breaking
+- **The level header is now `#level beginner`** (and `#level intermediate`,
+  `#level advanced`) instead of `#beginner`. Write it in lower case on the
+  first non-blank line. The old bare form is no longer recognised, so files
+  using it fall back to the default.
+- **New `#level raw`, and it is the default.** A file with no level header
+  runs exactly as plain Python would - no static checks and no annotation
+  checks - with PLL's built-in libraries and the interactions panel still
+  available. Previously a file with no header was `advanced`, which checks
+  annotations.
+- **Removed the `pll.runtimeTypeChecking` setting.** Annotation checking is
+  decided by the level alone: on everywhere except `#level raw`. One
+  mechanism instead of two that could disagree.
 - **PLL now needs VS Code 1.101 (June 2025) or newer.** That is the first
   release whose Node has a built-in WebSocket, which is what the universe
   client uses. Requiring it means one code path instead of a fallback that
   could only report that connecting was unavailable.
+
+### Added
 - **Animations and interactive programs.** `animate(draw)` and
   `reactor(...)` build an interactive program that runs as a card in the
   interactions panel, with `to_draw`, `on_tick`, `on_key`, `on_mouse` and
@@ -19,30 +37,6 @@
   worlds - the server is a separate program your course runs, and there is a
   dependency-free reference one in `samples/universe_server.mjs`. See
   `samples/universe.py`.
-- **More picture functions, following HtDP.** `overlay_xy` and
-  `underlay_xy` place the second image at an offset (negative offsets grow
-  the picture instead of cutting it off); `beside_align`, `above_align`,
-  `overlay_align` and `underlay_align` choose which edges line up;
-  `empty_scene` and `place_image` build a fixed-size scene and put an
-  image's center at a point on it; `crop` takes a piece out of an image and
-  `frame` outlines one. See `samples/scenes.py`.
-- **The level header is now `#level beginner`** (and `#level intermediate`,
-  `#level advanced`) instead of `#beginner`. Write it in lower case on the
-  first non-blank line. The old bare form is no longer recognised, so files
-  using it fall back to the default.
-- **New `#level raw`, and it is the default.** A file with no level header
-  runs exactly as plain Python would - no static checks and no annotation
-  checks - with PLL's built-in libraries and the interactions panel still
-  available. Previously a file with no header was `advanced`, which checks
-  annotations.
-- **New `pll.newFileLevel` setting.** When set, a newly created `.py` file
-  starts with that `#level` line already in it, so a course can put students
-  at the right level without them having to type it. Off by default, and only
-  applies to files created empty. It is a template for new files: it does not
-  change what a file *without* a level line means, which is always `raw`.
-- **Removed the `pll.runtimeTypeChecking` setting.** Annotation checking is
-  decided by the level alone: on everywhere except `#level raw`. One
-  mechanism instead of two that could disagree.
 - **You can stop a running program.** A **Stop** button appears in the
   interactions panel while your program runs; Ctrl/Cmd+C (with nothing
   selected) and **PLL: Stop Program** do the same thing. The program ends
@@ -51,12 +45,30 @@
   reload recovered. If a program cannot be stopped - stuck inside a library
   call, or catching `KeyboardInterrupt` itself - PLL now says so instead of
   appearing to do nothing.
+- **More picture functions, following HtDP.** `overlay_xy` and
+  `underlay_xy` place the second image at an offset (negative offsets grow
+  the picture instead of cutting it off); `beside_align`, `above_align`,
+  `overlay_align` and `underlay_align` choose which edges line up;
+  `empty_scene` and `place_image` build a fixed-size scene and put an
+  image's center at a point on it; `crop` takes a piece out of an image and
+  `frame` outlines one. See `samples/scenes.py`.
+- **New `pll.newFileLevel` setting.** When set, a newly created `.py` file
+  starts with that `#level` line already in it, so a course can put students
+  at the right level without them having to type it. Off by default, and only
+  applies to files created empty. It is a template for new files: it does not
+  change what a file *without* a level line means, which is always `raw`.
+
+### Fixed
 - Programs that print in a tight loop no longer make the interactions panel
   (and Stop) unresponsive. Live output is batched on its way out of Python
   and again on its way into the panel, a run no longer keeps a copy of output
   it has already streamed, and a single run renders at most 5000 lines before
   saying it stopped showing them. Stopping such a program now takes about a
   third of a second instead of upwards of fifteen.
+- At `#level beginner` and `#level intermediate`, assigning to a name like
+  `__import__` is now reported as shadowing a built-in. The check used to
+  skip every name starting with `_`, which was meant to skip module
+  metadata (`__name__`, `__doc__`) and skipped real built-ins too.
 
 ## 0.0.8
 - **Type annotations are now checked while your program runs.** If a value

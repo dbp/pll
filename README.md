@@ -10,6 +10,9 @@ desktop VS Code. You do **not** need to install Python on your computer.
 
 ## Install
 
+PLL needs VS Code **1.101 (June 2025) or newer**. If you are installing VS
+Code now, you have it; if yours is older, update it first.
+
 1. Open VS Code (desktop or [vscode.dev](https://vscode.dev)).
 2. Open the Extensions view (the four squares in the left sidebar).
 3. Search for **Python Language Levels**.
