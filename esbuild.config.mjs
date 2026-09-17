@@ -90,6 +90,85 @@ const desktopWorkerOptions = {
   target: ["node18"],
 };
 
+const cliVersion = JSON.parse(
+  fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
+).version;
+
+/**
+ * The `pll` command line, published to npm as `pll-python`.
+ *
+ * Same worker, same Python, same analyzers as the extension - only the view
+ * differs. `pyodide` is external here rather than bundled: the package
+ * depends on it for the .wasm and stdlib assets anyway, so bundling the
+ * loader as well would just double it up.
+ */
+const cliOptions = {
+  ...baseOptions,
+  entryPoints: ["src/cli/bin.ts"],
+  outfile: "dist-cli/cli.cjs",
+  platform: "node",
+  format: "cjs",
+  target: ["node22"],
+  external: ["pyodide"],
+  banner: { js: "#!/usr/bin/env node" },
+  define: { PLL_CLI_VERSION: JSON.stringify(cliVersion) },
+};
+
+/** The desktop worker verbatim; only its output path differs. */
+const cliWorkerOptions = {
+  ...baseOptions,
+  entryPoints: ["src/desktop/pyodideWorker.ts"],
+  outfile: "dist-cli/worker.cjs",
+  platform: "node",
+  format: "cjs",
+  target: ["node22"],
+  external: ["pyodide"],
+};
+
+/**
+ * Assemble `dist-cli/` into something `npm publish` can take, so the CLI
+ * needs no second source tree and no monorepo: its manifest is generated
+ * from the extension's, which keeps name, version and links in step.
+ */
+function writeCliPackage() {
+  const root = JSON.parse(
+    fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
+  );
+  const manifest = {
+    name: "pll-python",
+    version: root.version,
+    description:
+      "Run Python with PLL's language levels from the command line: level " +
+      "checks, in-file tests, friendly errors and the built-in image and " +
+      "table libraries, all on Pyodide. No Python install needed.",
+    license: root.license,
+    repository: root.repository,
+    homepage: root.homepage,
+    bugs: root.bugs,
+    keywords: ["python", "education", "beginner", "pyodide", "cli", "htdp"],
+    bin: { pll: "./cli.cjs" },
+    files: ["cli.cjs", "worker.cjs", "README.md"],
+    // Node 22, not pyodide's own `>=18`: 18 and 20 are both past end of
+    // life, so 22 is the oldest Node we could actually support. It also
+    // matches the extension, which gets Node 22 via VS Code 1.101 - one
+    // floor for the whole project rather than two.
+    engines: { node: ">=22" },
+    dependencies: { pyodide: root.devDependencies.pyodide },
+  };
+  const dest = path.join(process.cwd(), "dist-cli");
+  fs.mkdirSync(dest, { recursive: true });
+  fs.writeFileSync(
+    path.join(dest, "package.json"),
+    JSON.stringify(manifest, null, 2) + "\n",
+  );
+  fs.copyFileSync(
+    path.join(process.cwd(), "src", "cli", "README.md"),
+    path.join(dest, "README.md"),
+  );
+  fs.chmodSync(path.join(dest, "cli.cjs"), 0o755);
+  console.log(`[esbuild] assembled dist-cli/ for pll-python@${manifest.version}`);
+}
+
 /** Policy + MEMFS helpers for smoke tests (not part of the extension). */
 const testLibOptions = {
   ...baseOptions,
@@ -105,6 +184,8 @@ const allConfigs = [
   desktopWorkerOptions,
   webExtensionOptions,
   webWorkerOptions,
+  cliOptions,
+  cliWorkerOptions,
   testLibOptions,
 ];
 
@@ -116,5 +197,6 @@ if (watch) {
   console.log("[esbuild] watching...");
 } else {
   await Promise.all(allConfigs.map((c) => esbuild.build(c)));
+  writeCliPackage();
   console.log("[esbuild] build complete");
 }

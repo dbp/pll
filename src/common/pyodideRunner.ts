@@ -36,6 +36,14 @@ export const PLL_REACTOR_LIB_PY = reactorLibSource;
  * (see PYODIDE_HTTP_PATCH_PY). `pandas` is included because its readers take
  * URLs. Programs that import nothing networked never load the shim.
  */
+/**
+ * Whether code imports anything at all. Gates `loadPackagesFromImports`, so
+ * a plain expression never pays a worker round-trip. Shared because the two
+ * hosts must agree: if one detects an import and the other doesn't, the same
+ * file works in the editor and fails at the command line.
+ */
+export const ANY_IMPORT_RE = /(^|\n)[ \t]*(import|from)[ \t]+\S/;
+
 export const NETWORK_IMPORT_RE =
   /(^|\n)[ \t]*(?:import|from)[ \t]+(?:pandas|requests|urllib|urllib3|httpx|aiohttp|http)\b/;
 

@@ -1,0 +1,213 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import type { AnalysisFinding } from "../common/analyzers/types";
+import { formatFriendlyError } from "../common/errorFormatter";
+import type { ExecutionEvent } from "../common/types";
+
+/**
+ * The CLI's "view": `ExecutionEvent`s as text.
+ *
+ * Stream discipline matters more here than in the panel, because output
+ * gets piped and diffed. The program's own stdout goes to stdout and
+ * nothing else does; everything PLL says *about* the run - findings, test
+ * results, banners, placeholders - goes to stderr. So `pll hw.py > out.txt`
+ * captures exactly what the program printed, which is what an autograder
+ * wants.
+ */
+export interface ViewOptions {
+  /** Write images here as .svg instead of printing a placeholder. */
+  saveImagesDir?: string;
+  /** Suppress PLL's own commentary, keeping only program output. */
+  quiet: boolean;
+  color: boolean;
+}
+
+const ESC = String.fromCharCode(27);
+
+export class CliView {
+  /** True once the program raised, so the exit code can reflect it. */
+  public sawError = false;
+  /** Failing + erroring tests across all reports. */
+  public testFailures = 0;
+  private imageCount = 0;
+
+  constructor(private readonly opts: ViewOptions) {}
+
+  private paint(code: string, text: string): string {
+    return this.opts.color ? `${ESC}[${code}m${text}${ESC}[0m` : text;
+  }
+
+  private dim(text: string): string {
+    return this.paint("2", text);
+  }
+
+  private red(text: string): string {
+    return this.paint("31", text);
+  }
+
+  private green(text: string): string {
+    return this.paint("32", text);
+  }
+
+  /** PLL's own commentary. Always stderr, silenced by --quiet. */
+  note(text: string): void {
+    if (!this.opts.quiet) {
+      process.stderr.write(text + "\n");
+    }
+  }
+
+  /** Something the user must see even under --quiet. */
+  problem(text: string): void {
+    process.stderr.write(text + "\n");
+  }
+
+  /** Static-analysis findings, in the same words the editor uses. */
+  findings(findings: ReadonlyArray<AnalysisFinding>): void {
+    for (const finding of findings) {
+      const lines = formatFriendlyError(finding);
+      this.problem(this.red(lines[0]));
+      for (const line of lines.slice(1)) {
+        this.problem(line);
+      }
+      this.problem("");
+    }
+  }
+
+  /** A friendly finding for a runtime error, in place of the traceback. */
+  runtimeFinding(finding: AnalysisFinding): void {
+    this.sawError = true;
+    const lines = formatFriendlyError(finding);
+    this.problem(this.red(lines[0]));
+    for (const line of lines.slice(1)) {
+      this.problem(line);
+    }
+  }
+
+  handle(event: ExecutionEvent): void {
+    switch (event.kind) {
+      case "stdout":
+        process.stdout.write(event.text);
+        break;
+      case "stderr":
+        process.stderr.write(event.text);
+        break;
+      case "result":
+        if (event.repr !== null && event.repr !== undefined) {
+          process.stdout.write(event.repr + "\n");
+        }
+        break;
+      case "image":
+        this.image(event.svg, event.width, event.height);
+        break;
+      case "table":
+        process.stdout.write(renderTable(event) + "\n");
+        break;
+      case "reactor": {
+        // Nothing drives the clock here, so it would never animate. Say so
+        // rather than printing a still frame that looks broken.
+        // `animate(...)` leaves the title at its default, and
+        // `[reactor "reactor" ...]` reads like a mistake.
+        const which = event.title === "reactor" ? "reactor" : `reactor "${event.title}"`;
+        this.note(
+          this.dim(`[${which} needs the editor's interactions panel; not run here]`),
+        );
+        break;
+      }
+      case "testReport":
+        this.testReport(event);
+        break;
+      case "error": {
+        this.sawError = true;
+        const body = event.traceback || `${event.errorType}: ${event.message}`;
+        process.stderr.write(this.red(body.trimEnd()) + "\n");
+        break;
+      }
+      case "done":
+        break;
+    }
+  }
+
+  private image(svg: string, width: number, height: number): void {
+    this.imageCount += 1;
+    const dir = this.opts.saveImagesDir;
+    if (!dir) {
+      this.note(
+        this.dim(`[image ${width}x${height}; pass --save-images to write it out]`),
+      );
+      return;
+    }
+    const target = path.join(dir, `image-${this.imageCount}.svg`);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(target, svg, "utf8");
+      this.note(this.dim(`[image ${width}x${height} -> ${target}]`));
+    } catch (err) {
+      this.problem(`Could not write ${target}: ${errText(err)}`);
+    }
+  }
+
+  private testReport(event: Extract<ExecutionEvent, { kind: "testReport" }>): void {
+    const bad = event.failed + event.errors;
+    this.testFailures += bad;
+    const summary =
+      `${event.passed} passed` +
+      (event.failed ? `, ${event.failed} failed` : "") +
+      (event.errors ? `, ${event.errors} errored` : "") +
+      (event.skipped ? `, ${event.skipped} skipped` : "");
+    this.problem((bad === 0 ? this.green("tests: ") : this.red("tests: ")) + summary);
+    for (const test of event.tests) {
+      if (test.outcome === "passed") {
+        this.note(this.dim(`  ok   ${test.name}`));
+        continue;
+      }
+      const where = test.lineNumber === null ? "" : ` (line ${test.lineNumber})`;
+      this.problem(this.red(`  ${test.outcome.toUpperCase()} ${test.name}${where}`));
+      for (const line of (test.message ?? "").split("\n")) {
+        if (line.trim()) {
+          this.problem("        " + line);
+        }
+      }
+    }
+  }
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * A table as fixed-width text.
+ *
+ * Tables are deliberately *not* a no-op like images: their content is
+ * already text, and the Python side has pre-formatted every cell, so the
+ * terminal can show the same thing the panel shows.
+ */
+export function renderTable(table: {
+  columns: string[];
+  rows: string[][];
+  rowCount: number;
+  shownCount: number;
+  truncated: boolean;
+}): string {
+  const widths = table.columns.map((name, i) =>
+    Math.max(name.length, ...table.rows.map((row) => (row[i] ?? "").length), 0),
+  );
+  const line = (cells: string[]) =>
+    cells.map((cell, i) => cell.padEnd(widths[i])).join("  ").trimEnd();
+  const out = [
+    line(table.columns),
+    widths
+      .map((w) => "-".repeat(w))
+      .join("  ")
+      .trimEnd(),
+  ];
+  for (const row of table.rows) {
+    out.push(line(table.columns.map((_, i) => row[i] ?? "")));
+  }
+  out.push(
+    table.truncated
+      ? `(${table.shownCount} of ${table.rowCount} rows)`
+      : `(${table.rowCount} row${table.rowCount === 1 ? "" : "s"})`,
+  );
+  return out.join("\n");
+}

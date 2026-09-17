@@ -8,40 +8,41 @@ import {
 } from "../common/workerRuntime";
 import type { WorkerOutbound } from "../common/workerProtocol";
 
+export interface NodeRuntimePaths {
+  /** Directories to look for Pyodide's assets in, most preferred first. */
+  indexUrlCandidates: string[];
+  /** The bundled worker entry to spawn. */
+  workerPath: string;
+  /** Shown when no candidate holds the assets. */
+  missingAssetsHint: string;
+}
+
 /**
- * Desktop host: Pyodide lives in a `worker_threads` Worker so `input()` can
- * block without freezing the extension host, and so live output can stream
- * the same way as the web worker. Assets are loaded from disk.
+ * Node host: Pyodide lives in a `worker_threads` Worker so `input()` can
+ * block without freezing the caller, and so live output can stream the same
+ * way as the web worker. Assets are loaded from disk.
+ *
+ * Shared by the VS Code desktop extension and the `pll` command line, which
+ * differ only in where their assets and worker bundle sit - hence the paths
+ * being injected rather than derived here.
  */
 export class DesktopPyodideRuntime extends WorkerPythonRuntime {
-  constructor(private readonly extensionPath: string) {
+  constructor(private readonly paths: NodeRuntimePaths) {
     super();
   }
 
   protected resolveIndexUrl(): string {
-    const candidates = [
-      path.join(this.extensionPath, "vendor", "pyodide"),
-      path.join(this.extensionPath, "node_modules", "pyodide"),
-    ];
-    const found = candidates.find((dir) =>
+    const found = this.paths.indexUrlCandidates.find((dir) =>
       fs.existsSync(path.join(dir, "pyodide.asm.wasm")),
     );
     if (!found) {
-      throw new Error(
-        "Pyodide runtime assets not found. Run `pnpm run build` to copy them into vendor/pyodide.",
-      );
+      throw new Error(this.paths.missingAssetsHint);
     }
     return found;
   }
 
   protected spawn(handlers: WorkerHandlers): WorkerHandle {
-    const workerPath = path.join(
-      this.extensionPath,
-      "dist",
-      "desktop",
-      "pyodideWorker.js",
-    );
-    const worker = new Worker(workerPath);
+    const worker = new Worker(this.paths.workerPath);
     worker.on("message", (msg: WorkerOutbound) => handlers.onMessage(msg));
     worker.on("error", (err) =>
       handlers.onError(err instanceof Error ? err : new Error(String(err))),

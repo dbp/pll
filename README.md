@@ -423,6 +423,25 @@ If another Python extension is installed and might add confusing
 messages, PLL may ask whether to disable it **for this workspace**. That
 does not uninstall the extension.
 
+## Running programs without the editor
+
+The same language levels are available as a command-line tool, so a program
+behaves the same on a terminal as it does in the panel:
+
+```bash
+npx pll-python hw.py
+```
+
+The level still comes from the file's own `#level` line, tests still run
+first, and errors are worded the same way. Pictures cannot be drawn in a
+terminal (each prints a note, or use `--save-images`) and reactors do not
+animate, but tables print as text and everything else is the same code.
+
+Exit codes make it usable for marking: `0` ran and tests passed, `1` the
+program raised, `2` level checks blocked it, `3` a test failed.
+
+See [the CLI readme](src/cli/README.md) for the full options.
+
 ## For course staff and contributors
 
 How PLL is built, how to run it from source, and how the editor

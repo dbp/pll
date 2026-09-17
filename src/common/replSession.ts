@@ -11,7 +11,7 @@ import {
 } from "./interactionsView";
 import { DEFAULT_LEVEL, levelHasStaticChecks, parseLevel, type Level } from "./level";
 import type { RawStaticFinding } from "./pyodideRunner";
-import type { ReactorStepResult } from "./pyodideRunner";
+import { ANY_IMPORT_RE, type ReactorStepResult } from "./pyodideRunner";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 import {
   unavailableSocket,
@@ -710,7 +710,7 @@ export class ReplSession implements vscode.Disposable {
    * import itself surfaces the error when the code runs.
    */
   private async ensurePackagesForRun(session: Session, code: string): Promise<void> {
-    if (!/(^|\n)[ \t]*(import|from)[ \t]+\S/.test(code)) {
+    if (!ANY_IMPORT_RE.test(code)) {
       return;
     }
     this.setSessionBusy(session, true, "Loading libraries...");

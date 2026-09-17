@@ -5,7 +5,9 @@ students using the extension. For how to *use* PLL, see [README.md](README.md).
 
 PLL runs Python with [Pyodide](https://pyodide.org) inside VS Code. The
 same interactions UI works in **desktop VS Code** (Node host) and
-**vscode.dev** (web extension host).
+**vscode.dev** (web extension host), and the same checks run on the command
+line via the `pll-python` npm package (a third host; see
+[Command line](#command-line-pll-python)).
 
 ## Layout
 
@@ -24,6 +26,13 @@ src/
 ├── desktop/pyodideRuntime.ts      Spawns the Node worker; finds vendor/pyodide
 ├── desktop/xhrPolyfill.ts         Sync XMLHttpRequest for pyodide-http
 ├── desktop/syncHttp.ts            Child-process fetch used by the XHR polyfill
+├── cli/bin.ts                     `pll` entry point: exit codes
+├── cli/main.ts                    Argument parsing, SIGINT -> interrupt
+├── cli/run.ts                     One file, in the editor's order
+├── cli/view.ts                    ExecutionEvents as text
+├── cli/files.ts                   Sibling files over node:fs
+├── cli/stdin.ts                   Line reader for input()
+├── cli/runtime.ts                 The Node host, pointed at this package
 └── common/
     ├── activate.ts                Shared activation for both hosts
     ├── workerProtocol.ts          Shared worker message types
@@ -57,6 +66,7 @@ src/
     ├── universeClient.ts          World-side protocol, transport, failure text
     ├── tableLib.py                Real Python: Table type + charts
     ├── analyzers/
+    │   ├── runtimeFinding.ts      Error event -> finding (both hosts)
     │   ├── types.ts               AnalysisFinding, RuntimeAnalyzer
     │   ├── nameErrorAnalyzer.ts   Runtime: NameError -> friendly finding
     │   ├── typeCheckAnalyzer.ts   Runtime: TypeCheckError -> friendly finding
@@ -578,6 +588,13 @@ The rest boot real Pyodide in Node: `smoke-static-analyze`,
 `smoke-workspace-files`, `smoke-interrupt`, and `smoke-desktop-parity` (the
 built desktop worker, end to end).
 
+`smoke-cli` runs the built `pll` binary as a child process on fixtures in a
+temp folder, which is the only way to cover what a user actually invokes:
+argument handling, the split between program output and commentary, all five
+exit codes, stdin, sibling files, and the two things that cannot work in a
+terminal. It also checks Ctrl+C stops a runaway loop, signalling once the
+program has demonstrably started rather than on a timer.
+
 `smoke-universe` runs the world-side client against a real WebSocket
 server, hand-rolled in the test (handshake plus text framing, about 60
 lines) so there is no dependency and so the test doubles as a statement of
@@ -749,6 +766,84 @@ Playwright and asserts select → copy → move → paste. Playwright's key
 events go through Chromium's input pipeline as trusted events, which is
 why they exercise the native clipboard path; the one thing it is not is
 a physical key event arriving from the OS.
+
+## Command line (`pll-python`)
+
+`pll hw.py` runs a file with the same language levels, the same analyzers
+and the same wording as the editor. It exists because the architecture
+already allowed it: **everything below the orchestrator is `vscode`-free**.
+Of the modules in `common/`, only nine import `vscode`, and the CLI needs
+none of them - it reuses the worker protocol, all four Python libraries,
+every analyzer and explainer, `errorFormatter` (which already renders plain
+text), `level.ts`, and the stdin and interrupt buffers verbatim.
+
+It is a third host beside `desktop/` and `web/`, and replaces exactly three
+things:
+
+| Editor | Command line |
+| --- | --- |
+| `interactionsView.ts` (webview) | `cli/view.ts` (text on stdout/stderr) |
+| `workspaceFiles.ts` (`vscode.workspace.fs`) | `cli/files.ts` (`node:fs`) |
+| `ReplSession` (sessions, exec chain, reactor driver) | `cli/run.ts` (one linear run) |
+
+Two things were pulled out rather than copied, because drift would be a real
+bug: `ANY_IMPORT_RE` (if one host detects an import and the other doesn't,
+the same file works in the editor and fails at the terminal) and
+`findingForErrorEvent` (the traceback-first, event-fields-fill-gaps order
+that decides which line gets blamed). `DesktopPyodideRuntime` now takes its
+asset and worker paths instead of deriving them, so both Node hosts share
+the spawn; `desktop/pyodideWorker.ts` is reused **verbatim**, only bundled
+to a second output path.
+
+What is left duplicated is the *sequence* in `cli/run.ts` - level checks,
+packages, mount, tests, run, write back - about twenty lines. That is
+deliberate: an abstraction covering both would have to satisfy a stateful,
+multi-session, asynchronous view *and* a one-shot command, and the shared
+part is the policy underneath, which already is shared.
+
+### Behaviour that differs, and why
+
+- **Images do not render.** A terminal cannot draw SVG, so each prints
+  `[image WxH]`, or `--save-images DIR` writes them out. Silence would look
+  like a bug.
+- **Reactors do not run.** Nothing drives the clock, so they would never
+  animate; they print a note and the program continues. Their logic is
+  still testable, because `simulate_trace(n)` needs no clock.
+- **Tables do print**, as text. Unlike images their content is already
+  text, and the Python side pre-formats every cell, so nothing is lost.
+- **There is no `--level` flag.** The level lives in the file, so a file
+  behaves the same everywhere; a flag would be exactly the fragmentation
+  the level mechanism exists to avoid.
+
+### Streams and exit codes
+
+The program's own stdout is the only thing on stdout; everything PLL says
+*about* the run goes to stderr. So `pll hw.py > out.txt` captures exactly
+what the program printed. Exit codes are distinct so an autograder can tell
+the cases apart: `0` ok, `1` the program raised, `2` level checks blocked
+it, `3` a test failed, `64` bad usage.
+
+### Packaging
+
+`pnpm run build` also assembles `dist-cli/`: two bundles, a generated
+`package.json` (name, version and links derived from the extension's, so
+they cannot drift), and the CLI readme. `pnpm run cli:pack` produces the
+tarball; `cli:publish` publishes it. There is no second source tree and no
+monorepo - the npm package is a build artifact.
+
+The package declares `node >=22`, which is a support decision rather than a
+technical floor: the CLI bundle contains no `WebSocket` reference at all -
+`universeClient.ts` is only reachable through `activate.ts` and
+`replSession.ts`, neither of which the CLI imports - and `pyodide` itself
+only asks for `>=18`. But 18 and 20 are both past end of life, so 22 is the
+oldest Node we could support, and it matches what the extension already gets
+from VS Code 1.101. One floor for the project instead of two.
+
+`pyodide` is a real dependency rather than bundled, since the package needs
+its `.wasm` and stdlib assets anyway; `require.resolve("pyodide")` finds
+them at run time. That keeps the tarball at about 134 kB. Pyodide's Node
+loader caches any wheels it downloads into that directory, so the first
+`import pandas` needs the network and later ones do not.
 
 ## Minimum VS Code version
 

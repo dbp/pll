@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- **New `pll-python` npm package: the same language levels on the command
+  line.** `npx pll-python hw.py` runs a file with the level from its own
+  `#level` line, its in-file tests, and the same friendly errors as the
+  editor - no Python installation, because it is the same Pyodide worker.
+  Tables print as text; pictures print a note (or `--save-images`) and
+  reactors do not animate, since a terminal cannot show either. Exit codes
+  distinguish a level rejection from a failing test from a crash, so it can
+  be used for marking.
 
 ## 0.1.0 (2026-09-16)
 
