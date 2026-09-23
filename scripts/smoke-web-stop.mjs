@@ -19,6 +19,7 @@
  */
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
+import { openFile } from "./webbench.mjs";
 
 const PORT = process.env.VSCODE_WEB_PORT ?? "3014";
 const URL = process.env.VSCODE_WEB_URL ?? `http://localhost:${PORT}`;
@@ -90,12 +91,9 @@ async function main() {
 
     await page.goto(URL, { waitUntil: "domcontentloaded" });
     await page.locator(".monaco-workbench").waitFor({ state: "visible" });
-    await page.locator(".monaco-list-row", { hasText: SAMPLE }).first().waitFor({
-      state: "visible",
-    });
     // Let activation and the extension host settle before running anything.
     await page.waitForTimeout(4000);
-    await page.locator(".monaco-list-row", { hasText: SAMPLE }).first().dblclick();
+    await openFile(page, SAMPLE);
     await page.locator(".monaco-editor .view-line", { hasText: "while True" }).first().waitFor();
     console.log(`1 opened ${SAMPLE}`);
 
@@ -108,6 +106,19 @@ async function main() {
     await stop.waitFor({ state: "visible", timeout: 120_000 });
     console.log("3 Stop button is visible while the loop runs");
 
+    // Wait for the program to be *printing* before starting the clock. The
+    // Stop button appears as soon as the session is busy, which on a first
+    // run is while Pyodide is still booting - soak from there and the
+    // latency below measures the boot, not the click. That is exactly how
+    // this failed once: 1 entry node after a 4s soak, and a "3466ms" stop
+    // that was really a program which had not started yet.
+    await panel(page)
+      .locator("#stream")
+      .getByText("hello", { exact: false })
+      .first()
+      .waitFor({ state: "visible", timeout: 120_000 });
+    console.log("   program is printing; starting the soak");
+
     // The whole point: does a click get through while output is pouring in,
     // and *promptly*? "It stops eventually" is the bug, not the fix - a
     // KeyboardInterrupt lands at the next bytecode check, so the only thing
@@ -118,6 +129,12 @@ async function main() {
       .locator("#stream")
       .evaluate((el) => el.childElementCount, undefined, { timeout: 20_000 });
     console.log(`4 panel holds ${nodes} entry nodes after the soak`);
+    if (nodes <= 100) {
+      throw new Error(
+        `the soak should have flooded the panel, got ${nodes} node(s) - the ` +
+          "latency below would be measuring something other than a busy host",
+      );
+    }
 
     const clickedAt = Date.now();
     await stop.click();

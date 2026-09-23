@@ -35,6 +35,16 @@ function fixture(name, ...lines) {
 }
 
 /** Run the CLI. Returns { code, stdout, stderr }. */
+/**
+ * Longest any fixture here should take, Pyodide boot included.
+ *
+ * There is a hard timeout because a `pll` that does not exit is a real
+ * failure mode - the interrupt case waits on a process ending - and without
+ * one the whole suite simply hangs, with nothing said about where or why.
+ * Loud and with the output so far beats silent forever.
+ */
+const RUN_TIMEOUT_MS = 120_000;
+
 function run(args, { stdin = "", signalAfter = null, signal = "SIGINT" } = {}) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(process.execPath, [CLI, "--no-color", ...args], {
@@ -44,6 +54,11 @@ function run(args, { stdin = "", signalAfter = null, signal = "SIGINT" } = {}) {
     let stdout = "";
     let stderr = "";
     let timer = null;
+    let timedOut = false;
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, RUN_TIMEOUT_MS);
     child.stdout.on("data", (b) => {
       stdout += b.toString();
       // Signal only once the program is demonstrably running, rather than
@@ -56,7 +71,8 @@ function run(args, { stdin = "", signalAfter = null, signal = "SIGINT" } = {}) {
     child.on("error", reject);
     child.on("close", (code, sig) => {
       if (timer) clearTimeout(timer);
-      resolvePromise({ code, signal: sig, stdout, stderr });
+      clearTimeout(deadline);
+      resolvePromise({ code, signal: sig, stdout, stderr, timedOut });
     });
     if (stdin) child.stdin.write(stdin);
     child.stdin.end();
@@ -227,6 +243,12 @@ async function main() {
     // interrupt buffer, Python raises KeyboardInterrupt at the next check.
     const file = fixture("loop.py", 'print("running", flush=True)', "while True:", "    pass");
     const r = await run([file], { signalAfter: "running" });
+    expect(
+      !r.timedOut,
+      `pll did not exit within ${RUN_TIMEOUT_MS}ms of the interrupt. ` +
+        `stdout=${JSON.stringify(r.stdout.slice(-200))} ` +
+        `stderr=${JSON.stringify(r.stderr.slice(-400))}`,
+    );
     expect(r.code !== null, `the process should exit on its own, got signal ${r.signal}`);
     expect(/KeyboardInterrupt/.test(r.stderr), `expected KeyboardInterrupt, got ${r.stderr.slice(0, 200)}`);
     console.log(`    interrupted; exit=${r.code}`);

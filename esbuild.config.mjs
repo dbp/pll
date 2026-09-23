@@ -1,6 +1,17 @@
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 import * as esbuild from "esbuild";
+
+const require = createRequire(import.meta.url);
+
+/**
+ * The exact Pyodide installed here - the same build whose assets are copied
+ * into `vendor/pyodide` and whose version the web host's CDN default names.
+ */
+const PYODIDE_VERSION = JSON.parse(
+  fs.readFileSync(require.resolve("pyodide/package.json"), "utf8"),
+).version;
 
 /** Files loadPyodide fetches from indexURL (JS loader is bundled into dist/). */
 const PYODIDE_ASSETS = [
@@ -153,7 +164,15 @@ function writeCliPackage() {
     // matches the extension, which gets Node 22 via VS Code 1.101 - one
     // floor for the whole project rather than two.
     engines: { node: ">=22" },
-    dependencies: { pyodide: root.devDependencies.pyodide },
+    // Exact, not the `^` range this repo develops against. The extension
+    // ships one specific Pyodide - vendored for desktop, named in the CDN
+    // default for web - and `examplar build` compiles bytecode with
+    // whatever this package resolves. A caret range let a fresh install
+    // pull a newer patch than the extension has, which is how a bundle
+    // could come to be built by a different interpreter than the one that
+    // runs it. `built.magic` would catch that, but the point of building
+    // bundles with this tool is that it cannot arise.
+    dependencies: { pyodide: PYODIDE_VERSION },
   };
   const dest = path.join(process.cwd(), "dist-cli");
   fs.mkdirSync(dest, { recursive: true });

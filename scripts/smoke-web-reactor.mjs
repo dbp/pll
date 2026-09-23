@@ -14,6 +14,7 @@
  */
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
+import { openFile } from "./webbench.mjs";
 const PORT = process.env.VSCODE_WEB_PORT || "3017";
 /**
  * Refuse to start if the port is already taken. `vscode-test-web` prints
@@ -66,10 +67,8 @@ const page = await (await browser.newContext()).newPage();
 page.setDefaultTimeout(90_000);
 await page.goto(REUSE ?? `http://localhost:${PORT}`, { waitUntil: "domcontentloaded" });
 await page.locator(".monaco-workbench").waitFor({ state: "visible" });
-await page.locator(".monaco-list-row", { hasText: "animation.py" }).first().waitFor({ state: "visible" });
 await sleep(4000);
-await page.locator(".monaco-list-row", { hasText: "animation.py" }).first().dblclick();
-await sleep(1200);
+await openFile(page, "animation.py");
 await page.getByRole("button", { name: "PLL: Run Python File" }).click();
 
 const cards = panel(page).locator(".entry.reactor");

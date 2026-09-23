@@ -37,6 +37,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { openFile } from "./webbench.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
@@ -253,7 +254,6 @@ const page = await (await browser.newContext()).newPage();
 page.setDefaultTimeout(90_000);
 await page.goto(`http://localhost:${PORT}`, { waitUntil: "domcontentloaded" });
 await page.locator(".monaco-workbench").waitFor({ state: "visible" });
-await page.locator(".monaco-list-row", { hasText: "good.py" }).first().waitFor({ state: "visible" });
 await sleep(4000);
 
 /**
@@ -263,8 +263,8 @@ await sleep(4000);
  * function it is about instead of pattern-matching one wall of text.
  */
 async function runAndCards(name, timeout = 150_000) {
-  await page.locator(".monaco-list-row", { hasText: name }).first().dblclick();
-  await sleep(1500);
+  await openFile(page, name);
+  await sleep(300);
   await page.getByRole("button", { name: "PLL: Run Python File" }).click();
   const all = panel(page).locator(".entry.examplar.ex-function");
   await all.last().waitFor({ state: "visible", timeout });
