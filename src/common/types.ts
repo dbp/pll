@@ -1,5 +1,11 @@
 import type { Level } from "./level";
-import type { RawStaticFinding, ReactorFrame, ReactorStepResult } from "./pyodideRunner";
+import type {
+  ExamplarBuildResult,
+  ExamplarRunResult,
+  RawStaticFinding,
+  ReactorFrame,
+  ReactorStepResult,
+} from "./pyodideRunner";
 import type { WorkspaceFile } from "./workspaceFilePolicy";
 
 export interface ExecutionStdoutChunk {
@@ -186,6 +192,15 @@ export interface PythonRuntime {
    * back next to the running script.
    */
   collectWorkspaceFiles(): Promise<WorkspaceFile[]>;
+  /**
+   * Compile Examplar wheats and chaffs into a bundle. `sources` is the JSON
+   * of `{wheats: {id: source}, chaffs: {id: source}}`. Authoring only; the
+   * bytecode is produced by *this* interpreter so its magic number matches
+   * by construction.
+   */
+  examplarBuild(sources: string): Promise<ExamplarBuildResult>;
+  /** Run a student's tests against every implementation in a bundle. */
+  examplarRun(testSource: string, bundle: string): Promise<ExamplarRunResult>;
   /**
    * Apply one event to a running reactor and get the frame it produced.
    * `event` is the JSON of `{kind, ...}`; see `Reactor.react`.

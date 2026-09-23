@@ -33,6 +33,8 @@ src/
 ├── cli/files.ts                   Sibling files over node:fs
 ├── cli/stdin.ts                   Line reader for input()
 ├── cli/runtime.ts                 The Node host, pointed at this package
+├── cli/examplar.ts                `pll examplar build --verify`
+├── cli/bundleStore.ts             On-disk bundle cache
 └── common/
     ├── activate.ts                Shared activation for both hosts
     ├── workerProtocol.ts          Shared worker message types
@@ -63,7 +65,10 @@ src/
     ├── pyodideBootstrap.py        Real Python: run / repl-eval / tests / static analyzer
     ├── imageLib.py                Real Python: SVG image primitives + combinators
     ├── reactorLib.py              Real Python: reactor values + history
+    ├── examplarLib.py             Real Python: wheat/chaff build + run
     ├── universeClient.ts          World-side protocol, transport, failure text
+    ├── examplarSource.ts          #examplar directive, fetch + cache
+    ├── vscodeBundleStore.ts       Bundle cache in globalState (web included)
     ├── tableLib.py                Real Python: Table type + charts
     ├── analyzers/
     │   ├── runtimeFinding.ts      Error event -> finding (both hosts)
@@ -75,7 +80,7 @@ src/
     │       ├── shadowingExplainer.ts            shadowing + shadowing-builtin
     │       ├── reassignmentExplainer.ts         reassignment
     │       ├── disallowedKeywordExplainer.ts    `global` / `nonlocal`
-    │       └── registry.ts                      Wraps Python-side raw findings
+    │       └── registry.ts        Wraps Python-side raw findings
     └── errors/
         ├── pythonErrorParser.ts
         ├── nameErrorExplainer.ts
@@ -588,6 +593,35 @@ The rest boot real Pyodide in Node: `smoke-static-analyze`,
 `smoke-workspace-files`, `smoke-interrupt`, and `smoke-desktop-parity` (the
 built desktop worker, end to end).
 
+`smoke-examplar` covers the directive and the fetch path against a real
+HTTP server, because what matters there is conditional requests and what
+happens when the server is *gone* - neither of which a hand-written fake
+would get right by accident. `smoke-examplar-build` drives
+`pll examplar build` for the authoring half, including that a bundle
+contains no source text, that `--verify` refuses an unsound one, and that a
+suite with a program attached to it still produces a verdict.
+
+`samples/examplar_bundle` is the worked example of the authoring workflow -
+two wheats, six chaffs, and the staff suite that verifies them - and
+`smoke-examplar-build` [9] keeps it honest: the bundle must verify, and
+`samples/examplar.py` must pass every wheat while still missing chaffs 2-5.
+Documentation rots, and this is documentation that a change to a wheat could
+quietly break.
+
+`pnpm run test-web:examplar` is the only test that sees the two halves meet.
+It builds a bundle with the CLI, serves it from a correctly configured
+localhost server, and runs four files in the workbench: a finished suite, a
+suite with a gap in one function and nothing at all for the other, a test
+that expects the wrong answer, and a test that opens a data file - the last
+of which also checks that one function being held back leaves the other
+scored. Three things only it can check - that CLI-built bytecode
+loads in the extension's Pyodide (the whole claim behind compiling inside
+Pyodide), that the fetch survives the browser's CORS rules (the cached badge
+on the second run is the assertion), and that the cards reach the screen
+naming a disagreeing test without its assertion, and a missed chaff by id
+alone. It builds the bundle each run rather than checking a fixture in,
+which would rot the next time Pyodide moves.
+
 `smoke-cli` runs the built `pll` binary as a child process on fixtures in a
 temp folder, which is the only way to cover what a user actually invokes:
 argument handling, the split between program output and commentary, all five
@@ -844,6 +878,209 @@ its `.wasm` and stdlib assets anyway; `require.resolve("pyodide")` finds
 them at run time. That keeps the tarball at about 134 kB. Pyodide's Node
 loader caches any wheels it downloads into that directory, so the first
 `import pandas` needs the network and later ones do not.
+
+## Examplar (wheats and chaffs)
+
+[Examplar](https://dl.acm.org/doi/10.1145/3291279.3339408) assesses a test
+suite rather than an implementation. A `#examplar <url>` directive names a
+bundle of known-good implementations (**wheats**, on which every test must
+pass) and known-bad ones (**chaffs**, each of which must be caught).
+
+Everything is **per function**, because that is the unit a student works in.
+A chaff declares which function it breaks - the author says so, by which
+directory it lives in - and a chaff is judged **only by the tests of that
+function**. A broken test of `total` fails on a chaff of `shout` too, and
+crediting that would score the student for a signal with nothing to do with
+the function.
+
+Within a function it runs in **two phases, and the second is gated on the
+first**: coverage is only measured once every test of that function *passes*
+on every wheat. A test that disagrees with a correct implementation is
+wrong, and a wrong test fails on *everything* - so it would "catch" every
+chaff of its function and the number would flatter the student for their own
+bug. A test that *raised* is no better: it raises the same way on every
+implementation. Nothing short of a pass counts, because a suite is a
+measuring instrument only once every test in it runs and agrees.
+`_pll_examplar_run` returns `chaffs_skipped` - the function names it gave up
+on - and does not run those chaffs at all.
+
+Gating per function is the point of the split. A wrong test of `initials`
+says nothing about how well `longest` is tested, so it must not hold that
+report back; and a function with no tests gets a card that says only
+*"No tests yet."* rather than a global count with a footnote contradicting
+it.
+
+That has a sharp edge worth knowing: the phase runs with the workspace
+unmounted, so a test that opens a data file can never pass here, and its
+function is held at phase one until the student changes it. The card says
+exactly why (see the hint below), but it is a real cost of the unmount
+rather than a detail.
+
+Implementations travel as `.pyc` bytecode inside a single JSON bundle -
+one URL, because every wheat and chaff defines the *same* function names and
+so cannot come from one file:
+
+```json
+{ "examplar": 2,
+  "built": { "python": "3.13.2", "magic": "f30d0d0a" },
+  "provides": ["shout", "total"],
+  "wheats": [{ "id": "reference", "pyc": "<base64>" }],
+  "chaffs": [{ "id": "1", "targets": "shout", "pyc": "<base64>" }] }
+```
+
+`targets` comes from the authoring layout - `chaffs/shout/1.py` - rather
+than from inference. Nothing can work it out reliably: a chaff is a whole
+file, and the functions it leaves alone still differ from a wheat's by
+whitespace. The author knows, so the author says.
+
+Bytecode is tied to the Python minor version, so bundles are compiled
+**inside Pyodide** by `pll examplar build` - the CLI pins the same Pyodide
+the extension does, which makes the magic number match by construction
+rather than by asking course staff to keep a matching CPython. `built.magic`
+is carried so a stale bundle reports *"built for Python 3.9 and cannot run
+here"* instead of `ValueError: bad marshal data`.
+
+`examplarLib.py` holds both primitives, shared by the editor and the command
+line: `_pll_examplar_build` (authoring) and `_pll_examplar_run`, which execs
+the student's file, overlays an implementation so its names win, and calls
+each `test_*`. That overlay *is* the Examplar semantics - their tests are
+judged against the given implementation, not their own attempt.
+
+Two details that earn their place:
+
+- The student's tests are compiled **once**, through pytest's
+  `rewrite_asserts`, and the code object reused for every implementation, so
+  N chaffs cost one compile. The rewriting is for `--verify`, where the
+  reader is the author: `assert 'HI!' == 'hi!'` is what tells them their own
+  test is wrong.
+- **Say which thing is wrong, never what is right.** Chaff failure messages
+  describe the planted bug, so students get caught/missed and an id. Wheat
+  failure messages state the correct *answer*, so students get the failing
+  test's name and nothing more - a card carrying `assert 'HI!' == 'hi!'` is
+  an oracle, and the assignment can be read off it one deliberately-wrong
+  test at a time. Both messages survive on the raw result for `--verify`;
+  neither is copied into an entry, so neither can reach the webview.
+
+`--verify` checks the property nothing else can: the author's own suite
+passes on every wheat and fails on every chaff. A chaff no test catches
+would silently never count.
+
+### A card per function
+
+`buildExamplarEntries` returns one entry per provided function, and the
+panel renders each as a card headed by the function name, with a line per
+phase: *"Against correct implementations: ..."* then *"Against buggy
+implementations: ..."*. The function **leads** the header and "Examplar"
+sits small on the right - the function is what the student is working on and
+what tells one card from the next.
+
+`ExamplarEntry` is a union on `card` (`function` | `failed`), so a
+whole-bundle problem collapses to one card rather than a row of
+half-populated ones. Attribution decides which card a test lands on, and it
+is closed over the student's own helpers: a test that calls
+`check(name, expected)` which calls `initials` belongs on the `initials`
+card, and a plain free-variable scan would file it under nothing and
+silently leave it off every card. It stops at a provided name rather than
+descending into it - during the phase that name is the bundle's function.
+
+Where the bundle came from is that small label's `title`, not a visible
+badge of its own. It
+used to read *"known implementations (cached)"*, which was misleading: cached
+here means a 304, so the bundle is *current* rather than stale. The case
+worth saying out loud - an unreachable server and a fallback to an older copy
+- already gets a banner.
+
+### The phase in the editor
+
+`runFile` resolves the directive *before* it starts executing, so a fetch
+failure is reported once, and then runs the phase as the first thing inside
+the execution:
+
+```
+static checks -> [ unmount -> examplarRun -> remount ] -> own tests -> the program
+```
+
+The workspace is **unmounted** for the phase (`mountWorkspaceFiles([])`).
+A bundle is code from a URL; a course is trusted, but there is no reason for
+it to be able to read - or rewrite - a student's data files while it runs.
+The siblings go back before anything of the student's runs.
+
+That unmount has a student-visible cost, and three decisions pay for it:
+
+- **Only the student's *definitions* run in the phase.** Their file is their
+  program as well as their tests, and the phase wants the second half of
+  that. It is also run once per implementation, so running the program too
+  would mean one copy of every side effect per wheat and chaff - and a
+  top-level `input()` would block the check forever, because nothing is
+  listening for stdin during it. `_pll_examplar_compile_tests` keeps the
+  top-level statements that bind names (imports, `def`, `class`,
+  assignments) and compiles **one code object per statement**, so a
+  definition that cannot load here - `DATA = open("data.csv").read()` - costs
+  only itself instead of the whole verdict. Anything that needed it then
+  raises its own `NameError`, which says so.
+- **A test that *raised* is not a test that is wrong.** `fail` and `error`
+  are different verdicts on the phase-one card: a test that fails an
+  assertion on a
+  known-correct implementation expects the wrong answer, while a test that
+  raised never got as far as having an expectation. Saying "you expect the
+  wrong answer" over a `FileNotFoundError` would be a false accusation. When
+  one of those errors is a file-access error, it adds the one thing the
+  student cannot deduce - that their files are not there during the check.
+- **A test that raised catches nothing.** It raises the same way on every
+  implementation, so crediting it would score the student for a signal made
+  entirely of our own unmounting. It is excluded from the chaff count. A test
+  that *disagrees* still counts: it ran, and it did tell them apart.
+
+`runExamplarPhase` returns whether the student defines every name the bundle
+provides (`student_defines`, recorded before the overlay). That gates only
+the *other* test phase: running a file's `test_*` against the code in that
+same file needs that code to exist, or every test reports a `NameError`
+under a perfectly good verdict. Nothing is said about its absence, because
+writing tests before any implementation is the point rather than a mistake.
+
+### What a course server has to send
+
+On the desktop the fetch happens in Node. In the **web** build the extension
+host is a browser, so a bundle is a cross-origin request and three headers
+are load-bearing:
+
+| Header | Without it |
+| --- | --- |
+| `Access-Control-Allow-Origin` | no bundle at all |
+| `Access-Control-Expose-Headers: ETag` | `headers.get("etag")` reads null, so nothing is ever cached |
+| `Access-Control-Allow-Headers: If-None-Match` | the conditional request fails its preflight, so students stay pinned to the copy they cached first |
+
+`If-None-Match` is not a CORS-safelisted *request* header, so the second and
+every later fetch is preflighted; `ETag` is not a safelisted *response*
+header, so it is invisible to script unless exposed. Both failures are
+silent and neither breaks the feature outright, which is exactly why
+`test-web:examplar` asserts the cached badge on a second run rather than
+trusting the code to be right.
+
+### How hidden the implementations are
+
+Measured, not assumed: `inspect.getsource` raises, but `co_consts` shows
+literals, `dis` works, and the bundle can simply be read back out of MEMFS.
+Bytecode is a speed bump. This is accepted rather than overlooked - the
+autograder holds the grade, so the in-editor check needs to be fast and
+honest, not secret. Compiling to a wasm extension module would be genuinely
+opaque but pins *four* things (`cp313`, the Pyodide ABI, emscripten, wasm32)
+where `.pyc` pins one, and Cython-compiled Python is not byte-identical to
+interpreted Python - a wheat that behaves differently from the autograder's
+would be far worse than a readable one.
+
+### The directive
+
+`#examplar <url>` is matched as a whole line, anywhere in the file, and two
+of them is an error rather than "first wins". It is deliberately *not* part
+of a header block: `parseLevel` has strict, tested semantics, and this way
+adding the directive cannot perturb how a file's level is read. Only `https`
+is accepted, except on localhost for authoring.
+
+Bundles are fetched host-side with a conditional request and cached by URL.
+Offline with a cached copy is a note; offline without one is an error and
+the file still runs - the same fail-open stance as every other optional
+layer here.
 
 ## Minimum VS Code version
 

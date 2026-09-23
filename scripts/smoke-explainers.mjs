@@ -142,6 +142,91 @@ expect(
   "reassignment fixes no longer suggest switching to advanced",
 );
 
+console.log("[shadowing-library explainer]");
+{
+  const libFindings = mod.enrichStaticFindings(
+    [
+      {
+        id: "shadowing-library",
+        error_type: "Shadowing",
+        message: "`circle` is already defined by the image library",
+        line_number: 3,
+        column: 0,
+        name_token: "circle",
+        scope_kind: "module",
+        library: "image",
+      },
+      {
+        id: "shadowing-library",
+        error_type: "Shadowing",
+        message: "`table` is already defined by the table library",
+        line_number: 8,
+        column: 4,
+        name_token: "table",
+        scope_kind: "function",
+        library: "table",
+      },
+      {
+        id: "shadowing-library",
+        error_type: "Shadowing",
+        message: "`animate` is already defined by the reactor library",
+        line_number: 12,
+        column: 0,
+        name_token: "animate",
+        scope_kind: "module",
+        library: "reactor",
+      },
+      {
+        // Bootstrap-only harnesses (no pll package registered) label the
+        // name "library" generically; the explainer must not crash on it.
+        id: "shadowing-library",
+        error_type: "Shadowing",
+        message: "`circle` is already defined by the library",
+        line_number: 15,
+        column: 0,
+        name_token: "circle",
+        scope_kind: "module",
+      },
+    ],
+    "beginner",
+    "test.py",
+  );
+  expect(libFindings.length === 4, "4 shadowing-library findings");
+  expect(libFindings[0].errorType === "Shadowing", "shadowing-library errorType");
+  expect(
+    libFindings[0].headline.includes("`circle` is already defined by the image library"),
+    "image library headline names the library",
+  );
+  expect(
+    libFindings[1].headline.includes("table library"),
+    "table library headline",
+  );
+  expect(
+    libFindings[2].headline.includes("reactor library"),
+    "reactor library headline",
+  );
+  expect(
+    libFindings[3].headline.includes("PLL libraries"),
+    "missing library label falls back to 'the PLL libraries'",
+  );
+  expect(
+    libFindings[0].howToFix.length >= 2,
+    "shadowing-library offers at least 2 fixes",
+  );
+  expect(
+    libFindings[0].howToFix.some((fix) => fix.includes("my_circle")),
+    "fix suggests a concrete alternative name",
+  );
+  expect(libFindings[0].origin === "static", "origin = static");
+  expect(libFindings[0].level === "beginner", "level = beginner");
+
+  // The friendly CLI/error formatter renders it like any other finding.
+  const lines = mod.formatFriendlyError(libFindings[0]);
+  expect(lines[0].startsWith("Shadowing:"), "first line is errorType + headline");
+  expect(lines.some((l) => l.includes("at test.py:3:1")), "shows location");
+  expect(lines.some((l) => l.includes("How to fix:")), "shows How to fix section");
+}
+
 console.log("[explainers omit line 0 for preexisting session bindings]");
 {
   const preexisting = mod.enrichStaticFindings(

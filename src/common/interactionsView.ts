@@ -38,6 +38,7 @@ export type Entry =
   | FindingEntry
   | RawErrorEntry
   | ReactorEntry
+  | ExamplarEntry
   | TestReportEntry;
 
 export interface BannerEntry {
@@ -128,6 +129,87 @@ export interface ReactorEntry {
 
 /** Fields of a `ReactorEntry` the host may update in place. */
 export type ReactorPatch = Partial<Omit<ReactorEntry, "kind" | "id" | "title">>;
+
+/**
+ * An Examplar verdict: the student's tests judged against known-good and
+ * known-bad implementations.
+ *
+ * Wheat failures carry their assertion message, because that is what tells
+ * a student their *expectation* is wrong. Missed chaffs carry only an id -
+ * the failure messages describe the planted bug, and revealing it would
+ * hand over the test they were meant to write.
+ */
+/** A failing test and whatever it had to say about it. */
+export interface ExamplarTestFailure {
+  test: string;
+  message: string;
+}
+
+/**
+ * One Examplar verdict, as its own card.
+ *
+ * A card per **function**, because that is the unit a student works in.
+ * Within it, two phases that answer different questions and mean opposite
+ * things: *are your tests for this function right?*, judged against correct
+ * implementations, and *are they thorough?*, judged against buggy ones. The
+ * second waits for the first, per function - a wrong test of `initials`
+ * says nothing about how well `longest` is tested and must not hold its
+ * report back.
+ *
+ * Neither half says more than it has to. A disagreement gives the test's
+ * name, not its assertion, because `assert 'HI!' == 'hi!'` states the
+ * correct answer - a student could read the specification off this card one
+ * deliberately-wrong test at a time. A buggy implementation that got
+ * through gives its id, because its failure message describes the bug it
+ * plants. Both are the same rule: say which thing is wrong, never what is
+ * right.
+ */
+export type ExamplarEntry = ExamplarFunctionEntry | ExamplarFailedEntry;
+
+interface ExamplarEntryBase {
+  kind: "examplar";
+  /** Where the implementations came from; shown as the header's tooltip. */
+  url: string;
+  /** True when the bundle came from the store rather than the network. */
+  cached: boolean;
+}
+
+/** How one provided function's tests fared. */
+export interface ExamplarFunctionEntry extends ExamplarEntryBase {
+  card: "function";
+  /** The provided function this card is about. Heads the card. */
+  name: string;
+  /** How many of the student's tests exercise it. Zero is the tests-first state. */
+  testCount: number;
+  /** True when all of them passed on every correct implementation. */
+  allPass: boolean;
+  /**
+   * Names - and only names - of tests whose expectation is wrong. The
+   * assertion is deliberately absent; see the note above.
+   */
+  failures: string[];
+  /**
+   * Tests that raised, so they never got as far as an expectation. These
+   * do keep their message: `FileNotFoundError: ... 'data.csv'` says why the
+   * student's own test could not run and reveals nothing about the answer.
+   */
+  errors: ExamplarTestFailure[];
+  /** Why those could not run, when it is worth explaining. */
+  hint?: string;
+  /** Buggy implementations of this function, and how many were caught. */
+  total: number;
+  caught: number;
+  /** Ids - and only ids - of the ones no test caught. */
+  missed: string[];
+  /** True when phase one has not passed here, so coverage was not measured. */
+  pending: boolean;
+}
+
+/** Neither phase ran anywhere: the bundle would not have it. */
+export interface ExamplarFailedEntry extends ExamplarEntryBase {
+  card: "failed";
+  problem: string;
+}
 
 export interface TestReportEntry {
   kind: "testReport";

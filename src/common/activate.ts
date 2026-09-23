@@ -7,6 +7,7 @@ import { registerNewFileLevel } from "./newFileLevel";
 import { ReplSession } from "./replSession";
 import type { PythonRuntime } from "./types";
 import { connectUniverse } from "./universeClient";
+import { createMementoStore } from "./vscodeBundleStore";
 
 /**
  * Shared activation for both hosts. The desktop and web entrypoints differ
@@ -18,7 +19,13 @@ export function activateWithRuntime(
 ): void {
   const diagnostics = new Diagnostics(context.extensionUri);
   const view = new InteractionsView(context.extensionUri);
-  const repl = new ReplSession({ runtime, diagnostics, view, connectUniverse });
+  const repl = new ReplSession({
+    runtime,
+    diagnostics,
+    view,
+    connectUniverse,
+    bundleStore: createMementoStore(context.globalState),
+  });
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(InteractionsView.viewType, view),

@@ -278,6 +278,15 @@ function makeRuntime(script = {}) {
     get stdinHandler() {
       return stdinHandler;
     },
+    async examplarRun(testSource, bundle) {
+      calls.push(["examplarRun", testSource, bundle]);
+      if (script.examplarThrows) throw new Error("boom");
+      return script.examplarResult ?? { ok: true, provides: [], wheats: [], chaffs: [] };
+    },
+    async examplarBuild(sources) {
+      calls.push(["examplarBuild", sources]);
+      return { ok: true };
+    },
     async reactorStep(reactorId, event) {
       calls.push(["reactorStep", reactorId, event]);
       return script.reactorStep?.(reactorId, JSON.parse(event)) ?? { ok: true };
@@ -409,11 +418,20 @@ async function harness(script = {}, doc = makeDoc("hello.py")) {
   __setActiveEditor(doc ? { document: doc } : undefined);
   const runtime = makeRuntime(script);
   const { sockets, connectUniverse } = makeUniverse();
+  // In-memory bundle store; `script.bundles` seeds it per test.
+  const bundles = new Map(Object.entries(script.bundles ?? {}));
+  const bundleStore = {
+    read: (url) => Promise.resolve(bundles.get(url)),
+    write: (url, entry) => {
+      bundles.set(url, entry);
+      return Promise.resolve();
+    },
+  };
   const view = makeView();
   const diagnostics = makeDiagnostics();
-  const repl = new ReplSession({ runtime, view, diagnostics, connectUniverse });
+  const repl = new ReplSession({ runtime, view, diagnostics, connectUniverse, bundleStore });
   await settle();
-  return { repl, runtime, view, diagnostics, doc, sockets };
+  return { repl, runtime, view, diagnostics, doc, sockets, bundles };
 }
 
 const texts = (view, kind) =>
@@ -1358,6 +1376,351 @@ console.log("\n[36] re-running the file stops the old reactor and closes its soc
   // The second run re-used id "r1", so only one clock may be running.
   const rate = runtime.calls.filter((c) => c[0] === "reactorStep").length - before;
   expect(rate > 0 && rate < 40, `exactly one clock should be running, saw ${rate} ticks`);
+  repl.dispose();
+}
+
+/* ---------------------------------------------------------------- */
+/* Examplar                                                         */
+/* ---------------------------------------------------------------- */
+
+const EX_URL = "https://course.example/hw3.json";
+
+/**
+ * An examplarRun reply, shaped like the real primitive's.
+ *
+ * `failing` tests fail on the wheat, `raising` tests error on it, `missed`
+ * chaffs pass. Chaffs belong to a function and are judged only by that
+ * function's tests, and phase two is gated per function - so the fixture
+ * has to reproduce both, or it would be testing replies the worker cannot
+ * produce.
+ */
+function examplarReply({
+  tests = ["test_a"],
+  failing = [],
+  raising = [],
+  missed = [],
+  defines = [],
+  provides = ["shout"],
+  // test -> the provided names it exercises. Everything, by default.
+  attribution = null,
+} = {}) {
+  const attributed = attribution ?? Object.fromEntries(tests.map((t) => [t, provides]));
+  const outcome = (name, bad) =>
+    raising.includes(name)
+      ? { outcome: "error", message: `FileNotFoundError: [Errno 44] No such file or directory: 'data.csv'` }
+      : bad.includes(name)
+        ? { outcome: "fail", message: `assert 'X' == 'Y' for ${name}` }
+        : { outcome: "pass", message: null };
+  const outcomes = (names, bad) => Object.fromEntries(names.map((t) => [t, outcome(t, bad)]));
+
+  const settled = provides.filter((fn) => {
+    const mine = tests.filter((t) => (attributed[t] ?? []).includes(fn));
+    return mine.length > 0 && mine.every((t) => !failing.includes(t) && !raising.includes(t));
+  });
+  const chaffs = [];
+  for (const fn of provides) {
+    if (!settled.includes(fn)) continue;
+    const mine = tests.filter((t) => (attributed[t] ?? []).includes(fn));
+    for (const id of ["1", "2"]) {
+      const key = `${fn}/${id}`;
+      chaffs.push({
+        id,
+        targets: fn,
+        loaded: true,
+        tests: outcomes(mine, missed.includes(key) ? [] : mine),
+        student_defines: defines,
+      });
+    }
+  }
+  return {
+    ok: true,
+    provides,
+    attribution: attributed,
+    wheats: [
+      { id: "reference", loaded: true, tests: outcomes(tests, failing), student_defines: defines },
+    ],
+    chaffs,
+    chaffs_skipped: provides.filter((fn) => !settled.includes(fn)),
+  };
+}
+
+/** The card for one function, from the most recent run. */
+const fnCard = (view, name) =>
+  view.entries.filter((e) => e.kind === "examplar" && e.name === name).at(-1);
+
+const withBundle = (extra = {}) => ({
+  bundles: { [EX_URL]: { json: JSON.stringify({ examplar: 2 }) } },
+  events: (kind) => (kind === "runFile" ? [{ kind: "done" }] : []),
+  ...extra,
+});
+const EX_SRC = [`#examplar ${EX_URL}`, "", "def test_a():", '    assert shout("hi") == "HI!"'].join("\n");
+
+console.log("\n[37] the workspace is unmounted while the known implementations run");
+{
+  // The decision this asserts: a bundle is code from a URL, so it must not
+  // see - or be able to rewrite - the student's data files.
+  files.set("file:/work/data.csv", "a,b\n1,2\n");
+  const { repl, runtime, doc } = await harness(withBundle({ examplarResult: examplarReply() }));
+  await repl.runFile(EX_SRC, "hw.py", doc);
+  await settle();
+  const seq = runtime.calls
+    .filter((c) => c[0] === "mountWorkspaceFiles" || c[0] === "examplarRun")
+    .map((c) => (c[0] === "examplarRun" ? "examplarRun" : `mount(${c[1] || "-"})`));
+  console.log(`    ${seq.join(" -> ")}`);
+  const at = seq.indexOf("examplarRun");
+  expect(at > 0, `examplarRun should have happened, got ${seq.join(",")}`);
+  expect(seq[at - 1] === "mount(-)", `the mount before it must be empty, got ${seq[at - 1]}`);
+  expect(seq[at + 1] === "mount(data.csv)", `siblings must be restored after, got ${seq[at + 1]}`);
+  files.clear();
+  repl.dispose();
+}
+
+console.log("\n[38] a clean suite is reported as agreeing, with the bugs it caught");
+{
+  const { repl, view, doc } = await harness(
+    withBundle({
+      examplarResult: examplarReply({
+        tests: ["test_shout", "test_total"],
+        provides: ["shout", "total"],
+        attribution: { test_shout: ["shout"], test_total: ["total"] },
+      }),
+    }),
+  );
+  await repl.runFile(EX_SRC, "hw.py", doc);
+  await settle();
+  // One card per provided function - that is the unit a student works in.
+  const cards = view.entries.filter((e) => e.kind === "examplar");
+  expect(
+    cards.map((c) => c.name).join(",") === "shout,total",
+    `expected a card per function, got ${JSON.stringify(cards.map((c) => c.name))}`,
+  );
+  for (const card of cards) {
+    expect(card.allPass === true, `${card.name}: agrees with the correct implementations`);
+    expect(card.testCount === 1, `${card.name}: only its own tests count, got ${card.testCount}`);
+    expect(card.caught === 2 && card.total === 2, `${card.name}: caught ${card.caught}/${card.total}`);
+    expect(card.missed.length === 0, `${card.name}: nothing missed`);
+    expect(card.url === EX_URL && card.cached === true, "it records where the bundle came from");
+  }
+  console.log(`    ${cards.length} function card(s), each agreeing and catching 2 of 2`);
+  repl.dispose();
+}
+
+console.log("\n[39] a test that disagrees is named, and nothing more");
+{
+  const { repl, view, doc } = await harness(
+    withBundle({ examplarResult: examplarReply({ failing: ["test_a"] }) }),
+  );
+  await repl.runFile(EX_SRC, "hw.py", doc);
+  await settle();
+  const card = fnCard(view, "shout");
+  expect(card.allPass === false, "a failure means the test is wrong");
+  expect(card.failures.join(",") === "test_a", `named, got ${JSON.stringify(card.failures)}`);
+  // The name, and *only* the name. `assert 'X' == 'Y'` states the correct
+  // answer, so a card carrying it would let a student read the whole
+  // specification off it, one deliberately-wrong test at a time.
+  expect(
+    !JSON.stringify(card).includes("assert"),
+    `no assertion may reach the card, got ${JSON.stringify(card)}`,
+  );
+  expect(
+    !JSON.stringify(card).includes("'Y'"),
+    `nor the expected value, got ${JSON.stringify(card)}`,
+  );
+  // Phase two waits for phase one: a wrong test fails on everything, so a
+  // coverage number here would flatter the student for their own bug.
+  expect(card.pending === true, "coverage must not be reported next to a wrong test");
+  expect(card.total === 0, `and nothing was even run, got ${card.total}`);
+  console.log(`    named ${card.failures.join(", ")}, with nothing about the answer`);
+  console.log("    coverage withheld until the suite is right");
+  repl.dispose();
+}
+
+console.log("\n[40] a test that raised is not a test that is wrong");
+{
+  // The phase runs with the workspace unmounted, so a test that opens a data
+  // file cannot work there. Reporting that as "you expect the wrong answer"
+  // would be an accusation, and a false one.
+  const { repl, view, doc } = await harness(
+    withBundle({
+      examplarResult: examplarReply({ tests: ["test_a", "test_b"], raising: ["test_a"] }),
+    }),
+  );
+  await repl.runFile(EX_SRC, "hw.py", doc);
+  await settle();
+  const card = fnCard(view, "shout");
+  expect(card.failures.length === 0, "an error is not a disagreement");
+  expect(card.errors.length === 1, `one error, got ${card.errors.length}`);
+  expect(card.errors[0].test === "test_a", `named: ${card.errors[0].test}`);
+  expect(card.allPass === false, "and the suite is not clean either");
+  expect(/files next to your program/.test(card.hint ?? ""), `expected the unmount hint, got ${card.hint}`);
+  // A test that raised did not pass, so phase two waits for it just as it
+  // does for one that disagreed. A suite is only a measuring instrument
+  // once every test in it runs *and* agrees.
+  expect(card.pending === true, "an error withholds coverage too");
+  console.log(`    ${card.errors[0].test}: ${card.errors[0].message}`);
+  console.log("    coverage withheld: an error is not a pass either");
+
+  // And it holds up only its own function. A broken test of `total` used
+  // to withhold `shout`'s coverage as well, which is what splitting the
+  // cards by function is for.
+  const split = await harness(
+    withBundle({
+      examplarResult: examplarReply({
+        tests: ["test_shout", "test_total"],
+        raising: ["test_total"],
+        provides: ["shout", "total"],
+        attribution: { test_shout: ["shout"], test_total: ["total"] },
+        missed: ["shout/2"],
+      }),
+    }),
+  );
+  await split.repl.runFile(EX_SRC, "hw.py", split.doc);
+  await settle();
+  const shout = fnCard(split.view, "shout");
+  const total = fnCard(split.view, "total");
+  expect(!shout.pending && shout.caught === 1 && shout.missed.join(",") === "2",
+    `shout should be scored regardless, got ${shout.caught}/${shout.total} missed=${shout.missed}`);
+  expect(total.pending === true && total.errors.length === 1,
+    "and total should be the one held back");
+  console.log(`    shout: caught ${shout.caught} of ${shout.total}; total: waiting on its own test`);
+
+  // A test that disagrees on one reference and raises on another is a
+  // disagreement: that is the half the student can act on.
+  const both = await harness(
+    withBundle({
+      examplarResult: (() => {
+        const reply = examplarReply({ failing: ["test_a"] });
+        reply.wheats.push({
+          id: "alternative",
+          loaded: true,
+          tests: { test_a: { outcome: "error", message: "TypeError: nope" } },
+          student_defines: [],
+        });
+        return reply;
+      })(),
+    }),
+  );
+  await both.repl.runFile(EX_SRC, "hw.py", both.doc);
+  await settle();
+  const mixed = fnCard(both.view, "shout");
+  expect(mixed.failures.join(",") === "test_a", "counted once, as a disagreement");
+  expect(mixed.pending === true, "and a disagreement gates coverage");
+  expect(mixed.errors.length === 0, `and not also as an error, got ${JSON.stringify(mixed.errors)}`);
+  // An error that is not about files gets no hint, since the hint would not
+  // be true.
+  expect(mixed.hint === undefined, `no hint here, got ${mixed.hint}`);
+  console.log("    a mixed verdict is reported as the disagreement it is");
+  repl.dispose();
+  both.repl.dispose();
+  split.repl.dispose();
+}
+
+console.log("\n[41] a missed chaff names the id and nothing else");
+{
+  const { repl, view, doc } = await harness(
+    withBundle({ examplarResult: examplarReply({ missed: ["shout/2"] }) }),
+  );
+  await repl.runFile(EX_SRC, "hw.py", doc);
+  await settle();
+  const card = fnCard(view, "shout");
+  expect(card.missed.join(",") === "2", `missed: ${card.missed}`);
+  expect(card.caught === 1, `caught: ${card.caught}`);
+  // The whole point of reporting only ids: no chaff message may leak.
+  expect(
+    !JSON.stringify(card).includes("assert"),
+    `no chaff assertion may reach the card, got ${JSON.stringify(card)}`,
+  );
+  console.log(`    missed ${card.missed.join(", ")} with no hint as to why`);
+  repl.dispose();
+}
+
+console.log("\n[42] tests-first is the normal case: a verdict, and no noise");
+{
+  const { repl, view, runtime, doc } = await harness(
+    withBundle({ examplarResult: examplarReply({ defines: [] }), hasTests: true }),
+  );
+  await repl.runFile(EX_SRC, "hw.py", doc);
+  await settle();
+  expect(
+    !runtime.calls.some((c) => c[0] === "runTests"),
+    "their tests cannot run against an implementation they have not written",
+  );
+  // Silence, deliberately: writing tests before any implementation of your
+  // own is the point, so there is nothing to explain. (A cache note can
+  // still appear here, since the fixture has no server to reach.)
+  const banners = view.entries.filter((e) => e.kind === "banner").map((e) => e.text);
+  expect(
+    banners.every((text) => /could not reach/.test(text)),
+    `the offline note is the only banner allowed here, got ${JSON.stringify(banners)}`,
+  );
+  expect(
+    view.entries.some((e) => e.kind === "examplar"),
+    "the verdict card is the feedback, and it is still there",
+  );
+
+  // Once they have written it, their own tests run too.
+  const second = await harness(
+    withBundle({ examplarResult: examplarReply({ defines: ["shout"] }) }),
+  );
+  await second.repl.runFile(EX_SRC, "hw.py", second.doc);
+  await settle();
+  expect(
+    second.runtime.calls.some((c) => c[0] === "hasTests"),
+    "with an implementation present, the normal test path is reached",
+  );
+  console.log("    verdict with no implementation; own tests attempted once written");
+  repl.dispose();
+  second.repl.dispose();
+}
+
+console.log("\n[43] a broken bundle never stops the file from running");
+{
+  const two = [`#examplar ${EX_URL}`, `#examplar ${EX_URL}`, 'print("hi")'].join("\n");
+  const dup = await harness(withBundle());
+  await dup.repl.runFile(two, "hw.py", dup.doc);
+  await settle();
+  expect(
+    dup.view.entries.some((e) => e.kind === "banner" && /more than one/.test(e.text)),
+    "two directives should be reported",
+  );
+  expect(dup.runtime.calls.some((c) => c[0] === "runFile"), "and the file still runs");
+  dup.repl.dispose();
+
+  // Nothing cached and no network: a banner, and the file still runs.
+  const cold = await harness({ events: () => [{ kind: "done" }] });
+  await cold.repl.runFile(EX_SRC, "hw.py", cold.doc);
+  await settle();
+  expect(
+    cold.view.entries.some(
+      (e) => e.kind === "banner" && /Could not load the known implementations/.test(e.text),
+    ),
+    "an unreachable bundle should be reported",
+  );
+  expect(cold.runtime.calls.some((c) => c[0] === "runFile"), "and the file still runs");
+  expect(
+    !cold.view.entries.some((e) => e.kind === "examplar"),
+    "with no verdict card, since there was no verdict",
+  );
+
+  // And a crash in the phase becomes a card with a problem, not a lost run.
+  const boom = await harness(withBundle({ examplarThrows: true }));
+  await boom.repl.runFile(EX_SRC, "hw.py", boom.doc);
+  await settle();
+  const card = boom.view.entries.find((e) => e.kind === "examplar" && e.card === "failed");
+  expect(card?.problem === "boom", `expected the problem on the card, got ${card?.problem}`);
+  expect(boom.runtime.calls.some((c) => c[0] === "runFile"), "and the file still runs");
+  console.log("    duplicate directive, unreachable bundle, and a crash - file ran every time");
+  cold.repl.dispose();
+  boom.repl.dispose();
+}
+
+console.log("\n[44] no directive means no Examplar at all");
+{
+  const { repl, view, runtime, doc } = await harness({ events: () => [{ kind: "done" }] });
+  await repl.runFile('print("plain")', "hw.py", doc);
+  await settle();
+  expect(!view.entries.some((e) => e.kind === "examplar"), "no card");
+  expect(!runtime.calls.some((c) => c[0] === "examplarRun"), "and nothing is run");
   repl.dispose();
 }
 

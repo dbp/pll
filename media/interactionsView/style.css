@@ -562,3 +562,81 @@ body.mode-empty #inputRow {
 .entry.reactor .rxLink[data-state="error"] {
   color: var(--vscode-errorForeground, #f48771);
 }
+
+/* Examplar ---------------------------------------------------- */
+
+.entry.examplar {
+  border: 1px solid var(--vscode-panel-border, #444);
+  border-left: 3px solid var(--vscode-focusBorder, #0078d4);
+  border-radius: 4px;
+  padding: 6px 9px 8px;
+  margin: 6px 0;
+}
+
+/* One card per function, but all of them are one run, so they stack into a
+   single outline with a rule between each. */
+.entry.examplar.ex-function:has(+ .entry.examplar.ex-function) {
+  margin-bottom: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.entry.examplar.ex-function + .entry.examplar.ex-function {
+  margin-top: 0;
+  border-top: none;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.entry.examplar .exHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+/* The function this card is about. It leads the header: it is what the
+   student is working on, and what tells one card from the next. */
+.entry.examplar .exTitle {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Which feature this came from, and - on hover - which bundle. */
+.entry.examplar .exSource {
+  font-family: var(--vscode-font-family, sans-serif);
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground, #999);
+}
+
+.entry.examplar .exLine {
+  margin: 2px 0;
+}
+
+.entry.examplar .exGood { color: var(--vscode-testing-iconPassed, #3fb950); }
+.entry.examplar .exBad  { color: var(--vscode-errorForeground, #f48771); }
+.entry.examplar .exWarn { color: var(--vscode-editorWarning-foreground, #cca700); }
+.entry.examplar .exNote { color: var(--vscode-descriptionForeground, #999); }
+
+/* A failing test: its name, then the assertion that explains why. */
+.entry.examplar .exFailure {
+  margin: 3px 0 5px 12px;
+}
+
+.entry.examplar .exFailure code {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+/* A test that could not run is not a test that is wrong, so it does not
+   get the error colour. */
+.entry.examplar .exFailureWarn code {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.entry.examplar .exFailure pre {
+  margin: 1px 0 0 0;
+  white-space: pre-wrap;
+  color: var(--vscode-descriptionForeground, #bbb);
+}

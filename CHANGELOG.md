@@ -1,6 +1,39 @@
 # Changelog
 
 ## Unreleased
+- **Your tests can be checked against known implementations.** Put
+  `#examplar <url>` in a file and every run adds a card per function, each
+  answering two questions about your tests of it: **against correct
+  implementations**, do they all pass? **Against buggy implementations**, how
+  many do they catch? A function you have not tested says just "No tests
+  yet." rather than scoring you at something you have not started, and each
+  function is judged on its own. It
+  works before you have written any code of your own, which is the point —
+  write the tests first. Neither card says more than it has to: a test that
+  disagrees with a correct implementation is *named*, but not told what the
+  right answer was, and a buggy implementation nothing caught gives up its id
+  and nothing else. Say which thing is wrong, never what is right — otherwise
+  the card is an oracle you can read the assignment off.
+
+  Two phases, and the second waits for the first, per function: no coverage
+  number is reported for a function until every test of it *passes* on the
+  correct implementations. A test that expects the wrong answer fails on the
+  buggy ones too, and so does a test that cannot run — either way it would
+  look as though it had caught them.
+- **Examplar bundles can be authored.** `pll examplar build hw3/ -o hw3.json`
+  compiles known-good ("wheat") and known-bad ("chaff") implementations into
+  one bundle of Python bytecode, ready to publish at a URL. A chaff goes in
+  `chaffs/<function>/`, named after the function it breaks, since the
+  student's report is per function. Its id is its filename and the one thing
+  students see about a chaff they missed, so number them rather than naming
+  them after the bug. `--verify`
+  runs your own suite against the bundle and refuses to write it unless the
+  suite passes on every wheat and fails on every chaff.
+
+  Serving a bundle to the **web** build needs CORS:
+  `Access-Control-Allow-Origin`, `Access-Control-Expose-Headers: ETag` (or
+  nothing is ever cached) and `Access-Control-Allow-Headers: If-None-Match`
+  (or students stay pinned to the copy they cached first).
 - **New `pll-python` npm package: the same language levels on the command
   line.** `npx pll-python hw.py` runs a file with the level from its own
   `#level` line, its in-file tests, and the same friendly errors as the

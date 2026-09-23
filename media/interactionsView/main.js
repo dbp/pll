@@ -195,6 +195,120 @@
     if (stickToBottom) scrollToBottom();
   }
 
+  /* ---- Examplar ---------------------------------------------------- */
+
+  /**
+   * One Examplar verdict.
+   *
+   * A card per **function**, because that is the unit a student works in,
+   * and because a global count with a "but you have no tests for `total`"
+   * footnote underneath is a card arguing with itself. Within it, the two
+   * phases as two labelled lines: *are these tests right?*, against correct
+   * implementations, then *are they thorough?*, against buggy ones.
+   *
+   * Neither line says more than it has to. A disagreement gives the test's
+   * name, not its assertion, which would state the correct answer; a buggy
+   * implementation that got through gives its id, not its failure message,
+   * which would describe the bug. Say which thing is wrong, never what is
+   * right.
+   */
+  function renderExamplar(entry) {
+    const div = document.createElement("div");
+    div.className = "entry examplar ex-" + (entry.card ?? "failed");
+
+    const head = document.createElement("div");
+    head.className = "exHead";
+    const title = document.createElement("span");
+    title.className = "exTitle";
+    title.textContent = entry.card === "function" ? entry.name : "Your tests";
+    const source = document.createElement("span");
+    source.className = "exSource";
+    source.textContent = "Examplar";
+    // A 304 means the bundle is current, not stale, so being served from the
+    // store is not worth a badge - but it is worth being able to check.
+    source.title = entry.cached ? `${entry.url} (cached copy)` : entry.url;
+    head.append(title, source);
+    div.append(head);
+
+    const line = (klass, text) => {
+      const el = document.createElement("div");
+      el.className = "exLine " + klass;
+      el.textContent = text;
+      div.append(el);
+    };
+
+    if (entry.card !== "function") {
+      line("exBad", entry.problem);
+      return div;
+    }
+
+    if (entry.testCount === 0) {
+      line("exNote", "No tests yet.");
+      return div;
+    }
+
+    const CORRECT = "Against correct implementations: ";
+    const BUGGY = "Against buggy implementations: ";
+    const total = entry.testCount;
+    /** "your test" when there is one of them, "2 of your 5 tests" otherwise. */
+    const some = (n) => (total === 1 ? "your test" : `${n} of your ${total} tests`);
+    /** English needs the verb to agree with that. */
+    const does = (n) => (n === 1 ? "s" : "");
+
+    if (entry.allPass) {
+      line(
+        "exGood",
+        total === 1
+          ? `${CORRECT}your test passes.`
+          : `${CORRECT}all ${total} of your tests pass.`,
+      );
+    }
+    if (entry.failures.length > 0) {
+      const n = entry.failures.length;
+      line("exBad", `${CORRECT}${some(n)} expect${does(n)} the wrong answer:`);
+      // The name, and nothing else. The assertion would state the correct
+      // answer, which would let a student read the specification off this
+      // card one deliberately-wrong test at a time.
+      for (const test of entry.failures) {
+        const item = document.createElement("div");
+        item.className = "exFailure exFailureBad";
+        const name = document.createElement("code");
+        name.textContent = test;
+        item.append(name);
+        div.append(item);
+      }
+    }
+    // Separate, and worded as a fact rather than a fault: a test that raised
+    // never got as far as having an expectation, so telling the student it
+    // expects the wrong answer would be wrong.
+    if ((entry.errors ?? []).length > 0) {
+      line("exWarn", `${CORRECT}${some(entry.errors.length)} could not run here:`);
+      for (const { test, message } of entry.errors) {
+        const item = document.createElement("div");
+        item.className = "exFailure exFailureWarn";
+        const name = document.createElement("code");
+        name.textContent = test;
+        const msg = document.createElement("pre");
+        msg.textContent = message;
+        item.append(name, msg);
+        div.append(item);
+      }
+      if (entry.hint) line("exNote", entry.hint);
+    }
+
+    if (entry.pending) {
+      line("exNote", `${BUGGY}waiting until all your tests of ${entry.name} pass.`);
+    } else if (entry.caught === entry.total) {
+      line("exGood", `${BUGGY}caught all ${entry.total}.`);
+    } else {
+      line(
+        "exWarn",
+        `${BUGGY}caught ${entry.caught} of ${entry.total} - missed ${entry.missed.join(", ")}.`,
+      );
+    }
+    return div;
+  }
+
   /* ---- Reactors --------------------------------------------------- */
 
   /** DOM key names -> the names HtDP hands to `on_key`. */
@@ -363,6 +477,7 @@
       case "rawError":    return renderRawError(entry);
       case "testReport":  return renderTestReport(entry);
       case "reactor":     return renderReactor(entry);
+      case "examplar":    return renderExamplar(entry);
       default: {
         const div = document.createElement("div");
         div.className = "entry";

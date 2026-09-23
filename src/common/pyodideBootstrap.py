@@ -952,7 +952,9 @@ def _pll_repl_eval(code, session_key, level="raw"):
 #
 #   beginner:
 #     1. Shadowing:        a binding whose name appears in any enclosing
-#                          scope or is the name of a Python built-in.
+#                          scope, is the name of a Python built-in, or is
+#                          provided by a PLL library (image / table /
+#                          reactor - the names every session starts with).
 #     2. Reassignment:     a name bound more than once within the *same*
 #                          scope. Suppressed for names already flagged as
 #                          shadowing in that scope (fix the shadow first).
@@ -995,7 +997,9 @@ class _PllScope:
         self.node = node
         self.kind = kind        # "module" | "function" | "lambda" | "class" | "comprehension"
         self.parent = parent    # _PllScope | None
-        self.bindings = {}      # name -> [(lineno, col, kind), ...]
+        # name -> [(lineno, col, kind, module), ...]. `module` is set only
+        # for import bindings: the module the name was imported from.
+        self.bindings = {}
 
 
 def _pll_arg_names(args):
@@ -1030,8 +1034,8 @@ class _PllScopeBuilder:
             self._walk(stmt, module)
         return module
 
-    def _add(self, scope, name, lineno, col, kind):
-        scope.bindings.setdefault(name, []).append((lineno, col, kind))
+    def _add(self, scope, name, lineno, col, kind, module=None):
+        scope.bindings.setdefault(name, []).append((lineno, col, kind, module))
 
     def _add_target(self, target, scope, kind):
         if isinstance(target, _ast.Name):
@@ -1088,12 +1092,12 @@ class _PllScopeBuilder:
         if isinstance(node, _ast.Import):
             for alias in node.names:
                 name = alias.asname or alias.name.split(".", 1)[0]
-                self._add(scope, name, node.lineno, node.col_offset, "import")
+                self._add(scope, name, node.lineno, node.col_offset, "import", alias.name)
             return
         if isinstance(node, _ast.ImportFrom):
             for alias in node.names:
                 name = alias.asname or alias.name
-                self._add(scope, name, node.lineno, node.col_offset, "importfrom")
+                self._add(scope, name, node.lineno, node.col_offset, "importfrom", node.module)
             return
         if isinstance(node, _ast.NamedExpr):
             # Walrus :=
@@ -1213,6 +1217,45 @@ def _pll_session_bound_names(session_key):
     return names
 
 
+def _pll_predefined_library_names():
+    """Public names every session starts with, mapped to their library.
+
+    PYODIDE_INSTALL_PY seeds `_pll_initial_globals` with the image / table
+    / reactor exports, so those names (`circle`, `rectangle`, `table`,
+    `animate`, ...) are bound before the student writes anything. A student
+    definition that reuses one is shadowing, exactly like a built-in - just
+    with wording that says where the name comes from. The label is derived
+    from the registered `pll` package when it is loaded, and falls back to
+    the generic "library" otherwise (e.g. bootstrap-only test harnesses).
+    """
+    public = {n for n in _pll_initial_globals if not n.startswith("_")}
+    labels = {}
+    pll = _sys.modules.get("pll")
+    if pll is not None:
+        for lib in ("image", "table", "reactor"):
+            mod = getattr(pll, lib, None)
+            if mod is None:
+                continue
+            for n in public:
+                if hasattr(mod, n):
+                    labels[n] = lib
+    return {n: labels.get(n, "library") for n in public}
+
+
+def _pll_is_pll_import_loc(loc):
+    """True when a binding loc tuple imports from a `pll` module.
+
+    `from pll.image import circle` re-binds the library's own value, so it
+    shadows nothing and must not be flagged.
+    """
+    kind, module = loc[2], loc[3]
+    return (
+        kind in ("import", "importfrom")
+        and isinstance(module, str)
+        and (module == "pll" or module.startswith("pll."))
+    )
+
+
 def _pll_static_analyze(code, level, filename, session_key=None):
     """Run static checks for `level` over `code` and return findings.
 
@@ -1238,8 +1281,9 @@ def _pll_static_analyze(code, level, filename, session_key=None):
         module = builder.scopes[0]
         for name in _pll_session_bound_names(session_key):
             locs = module.bindings.setdefault(name, [])
-            locs.insert(0, (0, 0, "preexisting"))
+            locs.insert(0, (0, 0, "preexisting", None))
     builtins_set = set(dir(_builtins_mod)) - _PLL_BUILTINS_MODULE_META
+    library_names = _pll_predefined_library_names()
 
     # Whether we flag reassignment in `scope` at this level. At beginner,
     # we flag everywhere; at intermediate, only at module scope so that
@@ -1272,6 +1316,18 @@ def _pll_static_analyze(code, level, filename, session_key=None):
         # ---- Shadowing first ----
         for name, locs in scope.bindings.items():
             first_loc = locs[0]
+            # A binding imported from a `pll` module re-binds the library's
+            # own value and shadows nothing; a "preexisting" marker records
+            # a name the session already bound (REPL analysis) rather than
+            # one this code defines. Report at the first binding that
+            # actually (re)defines the name; when there is none, this name
+            # has nothing to report here.
+            defining_loc = None
+            for loc in locs:
+                if not _pll_is_pll_import_loc(loc) and loc[2] != "preexisting":
+                    defining_loc = loc
+                    break
+            report_loc = defining_loc if defining_loc is not None else first_loc
             if name in enclosing:
                 shadowed_in_scope.add(name)
                 outer = enclosing[name]
@@ -1279,24 +1335,37 @@ def _pll_static_analyze(code, level, filename, session_key=None):
                     "id": "shadowing",
                     "error_type": "Shadowing",
                     "message": "`%s` is already defined in an outer scope" % name,
-                    "line_number": first_loc[0],
-                    "column": first_loc[1],
+                    "line_number": report_loc[0],
+                    "column": report_loc[1],
                     "name_token": name,
                     "scope_kind": scope.kind,
                     "outer_line_number": outer[0],
                     "outer_column": outer[1],
                     "outer_scope_kind": outer[2],
                 })
-            elif name in builtins_set:
+            elif name in builtins_set and defining_loc is not None:
                 shadowed_in_scope.add(name)
                 findings.append({
                     "id": "shadowing-builtin",
                     "error_type": "Shadowing",
                     "message": "`%s` is the name of a Python built-in" % name,
-                    "line_number": first_loc[0],
-                    "column": first_loc[1],
+                    "line_number": defining_loc[0],
+                    "column": defining_loc[1],
                     "name_token": name,
                     "scope_kind": scope.kind,
+                })
+            elif name in library_names and defining_loc is not None:
+                shadowed_in_scope.add(name)
+                lib = library_names[name]
+                findings.append({
+                    "id": "shadowing-library",
+                    "error_type": "Shadowing",
+                    "message": "`%s` is already defined by the %s library" % (name, lib),
+                    "line_number": defining_loc[0],
+                    "column": defining_loc[1],
+                    "name_token": name,
+                    "scope_kind": scope.kind,
+                    "library": lib,
                 })
 
         # ---- Then reassignment (skip names already shadow-flagged) ----

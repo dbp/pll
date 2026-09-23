@@ -22,11 +22,13 @@ import bootstrapSource from "./pyodideBootstrap.py";
 import imageLibSource from "./imageLib.py";
 import tableLibSource from "./tableLib.py";
 import reactorLibSource from "./reactorLib.py";
+import examplarLibSource from "./examplarLib.py";
 
 export const PYODIDE_BOOTSTRAP_PY = bootstrapSource;
 export const PLL_IMAGE_LIB_PY = imageLibSource;
 export const PLL_TABLE_LIB_PY = tableLibSource;
 export const PLL_REACTOR_LIB_PY = reactorLibSource;
+export const PLL_EXAMPLAR_LIB_PY = examplarLibSource;
 
 /**
  * Imports whose use implies network access. Pyodide does not wire Python's
@@ -198,6 +200,80 @@ export interface ReactorStepResult {
   traceback?: string;
 }
 
+/**
+ * An Examplar bundle: one URL's worth of known-good ("wheat") and
+ * known-bad ("chaff") implementations, as `.pyc` bytecode.
+ */
+export interface ExamplarBundle {
+  /** Format version; `1` today. */
+  examplar: number;
+  /** What built it, so a stale bundle can say so instead of failing oddly. */
+  built: { python: string; magic: string };
+  /** Public names every implementation defines. */
+  provides: string[];
+  wheats: ExamplarImplementation[];
+  chaffs: ExamplarImplementation[];
+}
+
+export interface ExamplarImplementation {
+  id: string;
+  /** base64 of the marshalled code object. */
+  pyc: string;
+}
+
+export interface ExamplarBuildResult {
+  ok: boolean;
+  bundle?: ExamplarBundle;
+  error?: string;
+}
+
+export interface ExamplarTestOutcome {
+  outcome: "pass" | "fail" | "error";
+  /**
+   * pytest's rewritten assertion text, when it failed. For `--verify` only -
+   * it states the correct answer, so it never reaches a student's card.
+   */
+  message: string | null;
+}
+
+export interface ExamplarImplResult {
+  id: string;
+  /** For a chaff: the provided function it breaks. Unset on wheats. */
+  targets?: string;
+  /**
+   * False when the *implementation* would not load. The student's own file
+   * cannot fail this way: its definitions are loaded one at a time, and one
+   * that raises is skipped.
+   */
+  loaded: boolean;
+  tests: Record<string, ExamplarTestOutcome>;
+  /**
+   * Provided names the student's own file defines, recorded before the
+   * implementation was overlaid. Empty early on, when they have written
+   * tests and no code yet.
+   */
+  student_defines: string[];
+  error_type?: string;
+  error_message?: string;
+  traceback?: string;
+}
+
+export interface ExamplarRunResult {
+  ok: boolean;
+  error?: string;
+  provides?: string[];
+  /** test name -> the provided names it exercises. */
+  attribution?: Record<string, string[]>;
+  wheats?: ExamplarImplResult[];
+  chaffs?: ExamplarImplResult[];
+  /**
+   * Functions whose chaffs were not run - either their tests did not all
+   * pass, or there are no tests for them yet. Coverage is only measured
+   * where the suite has been shown to be correct.
+   */
+  chaffs_skipped?: string[];
+}
+
 export interface TestCaseData {
   name: string;
   outcome: string;
@@ -244,6 +320,8 @@ export interface RawStaticFinding {
   outer_line_number?: number | null;
   outer_column?: number | null;
   outer_scope_kind?: string | null;
+  /** For "shadowing-library": which library owns the name ("image" | "table" | "reactor" | "library"). */
+  library?: string | null;
   /** For "disallowed-keyword": which keyword was used. */
   keyword?: "global" | "nonlocal";
   /** For "disallowed-keyword": names declared in the statement. */

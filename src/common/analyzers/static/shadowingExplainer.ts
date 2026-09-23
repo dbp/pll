@@ -89,3 +89,53 @@ export function explainShadowingBuiltin(
     level,
   };
 }
+
+/** Friendly noun for the library a predefined name comes from. */
+function libraryNoun(library: string | null | undefined): string {
+  switch (library) {
+    case "image":
+      return "the image library";
+    case "table":
+      return "the table library";
+    case "reactor":
+      return "the reactor library";
+    default:
+      return "the PLL libraries";
+  }
+}
+
+/**
+ * Build an AnalysisFinding for "name shadows a library function" - a name
+ * every session starts with, like `circle` or `rectangle` (image library),
+ * `table` (table library), or `animate` (reactor library).
+ */
+export function explainShadowingLibrary(
+  raw: RawStaticFinding,
+  level: Level,
+  fileName: string,
+): AnalysisFinding {
+  const name = raw.name_token ?? "this name";
+  const noun = libraryNoun(raw.library);
+  const headline = `\`${name}\` is already defined by ${noun}.`;
+
+  return {
+    id: "shadowing-library",
+    errorType: "Shadowing",
+    message: raw.message,
+    headline,
+    howToFix: [
+      `Pick a different name for your definition - for example \`my_${name}\`,` +
+        ` \`${name}_value\`, or a word that describes what yours represents.`,
+      `If you meant to use the library's \`${name}\`, call it directly instead of` +
+        ` defining a new \`${name}\` of your own.`,
+    ],
+    fileName,
+    lineNumber: raw.line_number,
+    column: raw.column,
+    nameToken: raw.name_token,
+    severity: "error",
+    raw: JSON.stringify(raw),
+    origin: "static",
+    level,
+  };
+}

@@ -1,5 +1,7 @@
 import type {
   DisplayData,
+  ExamplarBuildResult,
+  ExamplarRunResult,
   RawStaticFinding,
   ReactorStepResult,
   RunResult,
@@ -57,7 +59,11 @@ export type WorkerInbound =
   | { id: number; type: "reactorStep"; reactorId: string; event: string }
   /** Show an earlier or later frame without applying an event. */
   | { id: number; type: "reactorSeek"; reactorId: string; index: number }
-  | { id: number; type: "reactorDispose"; reactorId: string };
+  | { id: number; type: "reactorDispose"; reactorId: string }
+  /** Compile wheats and chaffs into a bundle (authoring). */
+  | { id: number; type: "examplarBuild"; sources: string }
+  /** Run a student's tests against every implementation in a bundle. */
+  | { id: number; type: "examplarRun"; testSource: string; bundle: string };
 
 export type WorkerOutbound =
   | { id: number; type: "ready" }
@@ -72,6 +78,8 @@ export type WorkerOutbound =
   | { id: number; type: "workspaceFiles"; files: WorkspaceFile[] }
   | { id: number; type: "reactorFrame"; result: ReactorStepResult }
   | { id: number; type: "reactorDisposed" }
+  | { id: number; type: "examplarBuilt"; result: ExamplarBuildResult }
+  | { id: number; type: "examplarRan"; result: ExamplarRunResult }
   | { id: number; type: "error"; message: string }
   | { type: "display"; payload: DisplayData }
   | { type: "stdinRequest" };

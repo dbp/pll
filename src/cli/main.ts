@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { runExamplar } from "./examplar";
 import { createCliRuntime } from "./runtime";
 import { EXIT, runFile } from "./run";
 import { createLineReader } from "./stdin";
@@ -13,6 +14,9 @@ const USAGE = `pll - run Python with PLL's language levels, outside the editor
 The level comes from the file's own \`#level\` line, exactly as in the
 editor; there is deliberately no flag to override it, so a file behaves the
 same everywhere.
+
+Subcommands
+  examplar build       author an Examplar bundle; see \`pll examplar --help\`
 
 Options
   --no-tests           do not run the file's \`test_*\` functions first
@@ -31,6 +35,11 @@ Exit codes
   1  the program raised       3  a test failed
 `;
 
+/** Colour only when stderr is a terminal, and never when NO_COLOR is set. */
+function colorDefault(): boolean {
+  return process.stderr.isTTY === true && !process.env.NO_COLOR;
+}
+
 interface Args {
   file?: string;
   runTests: boolean;
@@ -46,8 +55,7 @@ export function parseArgs(argv: string[]): Args {
   const args: Args = {
     runTests: true,
     quiet: false,
-    // Colour only when stderr is a terminal, and never when NO_COLOR is set.
-    color: process.stderr.isTTY === true && !process.env.NO_COLOR,
+    color: colorDefault(),
     help: false,
     version: false,
   };
@@ -85,6 +93,30 @@ export function parseArgs(argv: string[]): Args {
 }
 
 export async function main(argv: string[]): Promise<number> {
+  // Dispatch subcommands before flag parsing, so `examplar` is never taken
+  // for a file name. Global flags may come first (`pll --no-color examplar
+  // ...`), so look at the first non-option token rather than argv[0]. An
+  // option's *value* can also be a bare token, but none of them could
+  // plausibly be "examplar", so this cannot misfire.
+  const firstPositional = argv.find((arg) => !arg.startsWith("-"));
+  if (firstPositional === "examplar") {
+    const at = argv.indexOf("examplar");
+    const leading = argv.slice(0, at);
+    const view = new CliView({
+      quiet: leading.includes("-q") || leading.includes("--quiet"),
+      color: colorDefault() && !leading.includes("--no-color"),
+    });
+    const runtime = createCliRuntime();
+    try {
+      return await runExamplar(runtime, view, argv.slice(at + 1));
+    } catch (err) {
+      view.problem(`pll: ${err instanceof Error ? err.message : String(err)}`);
+      return EXIT.usage;
+    } finally {
+      runtime.dispose();
+    }
+  }
+
   const args = parseArgs(argv);
   if (args.help) {
     process.stdout.write(USAGE);

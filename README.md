@@ -104,6 +104,72 @@ def test_cost():
     assert 0.1 + 0.2 == pytest.approx(0.3)
 ```
 
+## Checking your tests against known implementations
+
+Sometimes an assignment asks you to write the **tests first**, before you
+write the code. In that case there is nothing of your own to run them
+against yet — so PLL can run them against implementations your course wrote:
+some that are known to be correct, and some that are known to be wrong.
+
+Your course gives you a line to put in the file:
+
+```python
+#examplar https://cs2000.example/hw3.json
+```
+
+Then every time you run the file, the panel shows **one card per function**,
+each answering the two questions Examplar asks about your tests of it, in
+order.
+
+**Against correct implementations — are your tests right?**
+
+- **All 5 of your tests pass.** Your tests of this function agree with
+  working code. That is what you want.
+- **2 of your 5 tests expect the wrong answer**, and it names them. One of
+  *your* tests is wrong, not the code. You are not told what the right answer
+  is — that would make this card an oracle you could read the assignment off,
+  one deliberately-wrong test at a time. Go back to what the function is
+  supposed to do and work out what that test should say.
+
+**Against buggy implementations — are your tests thorough?**
+
+- **Caught 6 of 8 — missed 3, 7.** Your tests spotted six of the buggy
+  versions of this function. Two slipped through, so your tests have a gap.
+  You are told only which ones, never what is wrong with them — working that
+  out is the exercise.
+
+A function you have not tested at all gets a card saying just **No tests
+yet.**, rather than a score at something you have not started. Each function
+is judged on its own: a wrong test of `initials` holds up the `initials`
+card and leaves `longest` alone.
+
+Until **every** one of your tests of a function passes on the correct
+implementations, its card says it is waiting rather than giving you a
+number. A test that expects the wrong answer fails on the buggy versions
+too, and so does a test that cannot run, so either way it would look as
+though you had caught them. Get them passing first, then find out how much
+they cover.
+
+You do not need to have written any code of your own for this. It works from
+the moment you have one `test_` function, which is the point.
+
+Two things to know:
+
+- **Your program does not run during this check.** Only your definitions are
+  loaded, so a `print` at the bottom of your file happens once, afterwards,
+  where it always did.
+- **Files next to your program are not available during it.** A test that
+  opens `data.csv` cannot run in the check; the card says so rather than
+  telling you the test is wrong. It still runs normally afterwards — but
+  because it never passes here, it does hold up that function's coverage.
+
+Nothing here is a grade. It tells you where your tests are thin while you
+still have time to fix them.
+
+There is a worked example in [`samples/examplar.py`](samples/examplar.py),
+with the implementations it is checked against in
+[`samples/examplar_bundle/`](samples/examplar_bundle/README.md).
+
 ## Language levels
 
 The first non-blank line of a file chooses how strict PLL is. After you
@@ -439,6 +505,15 @@ animate, but tables print as text and everything else is the same code.
 
 Exit codes make it usable for marking: `0` ran and tests passed, `1` the
 program raised, `2` level checks blocked it, `3` a test failed.
+
+It also builds the Examplar bundles above, which has to happen there rather
+than with a local `python`: the bytecode in a bundle must match the
+interpreter that will run it, and the CLI pins the same Pyodide the extension
+does.
+
+```bash
+pll examplar build hw3/ -o hw3.json --verify staff_tests.py
+```
 
 See [the CLI readme](src/cli/README.md) for the full options.
 

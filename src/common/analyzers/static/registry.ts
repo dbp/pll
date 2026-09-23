@@ -1,7 +1,11 @@
 import type { Level } from "../../level";
 import type { RawStaticFinding } from "../../pyodideRunner";
 import type { AnalysisFinding } from "../types";
-import { explainShadowing, explainShadowingBuiltin } from "./shadowingExplainer";
+import {
+  explainShadowing,
+  explainShadowingBuiltin,
+  explainShadowingLibrary,
+} from "./shadowingExplainer";
 import { explainReassignment } from "./reassignmentExplainer";
 import { explainDisallowedKeyword } from "./disallowedKeywordExplainer";
 
@@ -15,6 +19,7 @@ export type StaticExplainer = (
 const explainers: Record<string, StaticExplainer> = {
   shadowing: explainShadowing,
   "shadowing-builtin": explainShadowingBuiltin,
+  "shadowing-library": explainShadowingLibrary,
   reassignment: explainReassignment,
   "disallowed-keyword": explainDisallowedKeyword,
 };

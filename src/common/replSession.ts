@@ -6,12 +6,22 @@ import { parsePythonError } from "./errors/pythonErrorParser";
 import {
   type InteractionsView,
   type Entry,
+  type ExamplarEntry,
   type PromptKind,
   serializeFinding,
 } from "./interactionsView";
 import { DEFAULT_LEVEL, levelHasStaticChecks, parseLevel, type Level } from "./level";
 import type { RawStaticFinding } from "./pyodideRunner";
-import { ANY_IMPORT_RE, type ReactorStepResult } from "./pyodideRunner";
+import {
+  ANY_IMPORT_RE,
+  type ExamplarRunResult,
+  type ReactorStepResult,
+} from "./pyodideRunner";
+import {
+  loadBundle,
+  parseExamplarDirective,
+  type BundleStore,
+} from "./examplarSource";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 import {
   unavailableSocket,
@@ -46,6 +56,8 @@ export interface ReplDeps {
   diagnostics: Diagnostics;
   view: InteractionsView;
   connectUniverse: UniverseConnect;
+  /** Where fetched Examplar bundles are cached between runs. */
+  bundleStore: BundleStore;
 }
 
 /**
@@ -605,8 +617,25 @@ export class ReplSession implements vscode.Disposable {
 
     const onEvent = (event: ExecutionEvent) =>
       this.handleEvent(session, event, code, fileName, document, level);
+    // Resolved before `execute` so a fetch failure is reported once, and so
+    // the phase can run before the student's own tests.
+    const known = await this.loadExamplar(session, code);
     await this.execute(session, code, async () => {
-      if (await this.shouldRunTests(session, code)) {
+      // Examplar runs whenever the directive is present - writing tests
+      // before any implementation of their own is the point, not a
+      // special case. What `ownCodeIsComplete` decides is only whether the
+      // *other* test phase makes sense: running a file's `test_*` against
+      // the code in that same file needs that code to exist, or every test
+      // reports a NameError under a perfectly good verdict. Nothing is said
+      // about its absence, because early on absence is the normal state.
+      let ownCodeIsComplete = true;
+      if (known) {
+        ownCodeIsComplete = await this.runExamplarPhase(session, code, known);
+        // The phase unmounted the workspace; put the siblings back before
+        // anything of the student's runs.
+        await this.syncWorkspaceIn(session);
+      }
+      if (ownCodeIsComplete && (await this.shouldRunTests(session, code))) {
         this.setSessionBusy(session, true, "Running tests...");
         await this.deps.runtime.runTests(
           { code, fileName, sessionKey: session.key, level },
@@ -933,6 +962,104 @@ export class ReplSession implements vscode.Disposable {
         });
         break;
     }
+  }
+
+  /* -------- Examplar -------- */
+
+  /**
+   * Resolve `#examplar <url>` into a bundle, or nothing.
+   *
+   * Every failure here is a banner and a `null`: a missing or unreachable
+   * bundle must not stop the student's file from running, which is the same
+   * fail-open stance as the type checker and the static analyzer.
+   */
+  private async loadExamplar(
+    session: Session,
+    code: string,
+  ): Promise<{ url: string; json: string; cached: boolean } | null> {
+    const directive = parseExamplarDirective(code);
+    if (directive.kind === "none") {
+      return null;
+    }
+    if (directive.kind === "error") {
+      this.appendToSession(session, {
+        kind: "banner",
+        text: `Line ${directive.line}: ${directive.message}`,
+      });
+      return null;
+    }
+    this.setSessionBusy(session, true, "Loading implementations...");
+    const load = await loadBundle(directive.url, this.deps.bundleStore);
+    if (load.note) {
+      this.appendToSession(session, {
+        kind: "banner",
+        text: `Known implementations: ${load.note}`,
+      });
+    }
+    if (!load.json) {
+      this.appendToSession(session, {
+        kind: "banner",
+        text: `Could not load the known implementations from ${directive.url}: ${load.error}`,
+      });
+      return null;
+    }
+    return { url: directive.url, json: load.json, cached: load.fromCache };
+  }
+
+  /**
+   * Run the student's tests against every wheat and chaff.
+   *
+   * The workspace is **unmounted** first. A bundle is code fetched from a
+   * URL, and although a course is trusted there is no reason for it to be
+   * able to read - or rewrite - the student's data files while it runs.
+   * `mountWorkspaceFiles([])` is the unmount: it replaces whatever was
+   * mounted with nothing. The caller restores the siblings afterwards.
+   *
+   * Returns whether the student has written every function the bundle
+   * provides, which decides if running their tests against their *own* code
+   * makes sense yet.
+   */
+  private async runExamplarPhase(
+    session: Session,
+    code: string,
+    bundle: { url: string; json: string; cached: boolean },
+  ): Promise<boolean> {
+    this.setSessionBusy(session, true, "Checking your tests...");
+    try {
+      await this.deps.runtime.mountWorkspaceFiles([]);
+    } catch {
+      /* nothing mounted is the state we wanted anyway */
+    }
+    // Not for the messages - the card deliberately shows none - but because
+    // a student's own tests may `import pytest` for `pytest.approx`, which
+    // the README recommends for comparing floats. Without it that import
+    // raises, the definition is skipped, and every test using it reports as
+    // one that could not run.
+    try {
+      await this.deps.runtime.ensurePytest();
+    } catch {
+      /* float comparisons may misreport; the rest of the verdict stands */
+    }
+
+    let result: ExamplarRunResult;
+    try {
+      result = await this.deps.runtime.examplarRun(code, bundle.json);
+    } catch (err) {
+      this.appendToSession(session, {
+        kind: "examplar",
+        card: "failed",
+        url: bundle.url,
+        cached: bundle.cached,
+        problem: errorMessage(err),
+      });
+      return false;
+    }
+    for (const entry of buildExamplarEntries(bundle, result)) {
+      this.appendToSession(session, entry);
+    }
+    const provides = result.provides ?? [];
+    const defines = result.wheats?.[0]?.student_defines ?? [];
+    return provides.length > 0 && provides.every((name) => defines.includes(name));
   }
 
   /* -------- Reactors -------- */
@@ -1322,6 +1449,119 @@ interface ReactorDriver {
   stopped: boolean;
   timer: ReturnType<typeof setInterval> | null;
   inFlight: boolean;
+}
+
+/**
+ * Turn a raw Examplar result into cards - one per provided function.
+ *
+ * Two summarising decisions live here. A test that fails on *any* correct
+ * implementation is reported once: the student needs to know the test is
+ * wrong, not which of several equivalent references disagreed. And a buggy
+ * implementation contributes only its id, because its failure messages
+ * describe the bug it plants.
+ */
+function buildExamplarEntries(
+  bundle: { url: string; json: string; cached: boolean },
+  result: ExamplarRunResult,
+): ExamplarEntry[] {
+  const base = {
+    kind: "examplar" as const,
+    url: bundle.url,
+    cached: bundle.cached,
+  };
+  const failed = (problem: string): ExamplarEntry[] => [
+    { ...base, card: "failed", problem },
+  ];
+  if (!result.ok) {
+    return failed(result.error ?? "the known implementations could not be run");
+  }
+  const wheats = result.wheats ?? [];
+  const unloadable = wheats.find((w) => !w.loaded);
+  if (unloadable) {
+    // Only the bundle can fail this way, so this is a message for whoever
+    // built it rather than for the student.
+    return failed(
+      `a known correct implementation could not be loaded ` +
+        `(${unloadable.error_type}: ${unloadable.error_message}). ` +
+        `The bundle may need rebuilding.`,
+    );
+  }
+
+  // Two different verdicts, because they are two different lessons. A test
+  // that *fails* an assertion on a correct implementation expects the wrong
+  // answer. A test that *raises* did not get far enough to have an opinion -
+  // most often because the phase runs with the workspace unmounted, so a
+  // file it opens is not there. Saying "you expect the wrong answer" over a
+  // `FileNotFoundError` would be an accusation, and a false one.
+  const disagreed = new Set<string>();
+  const raised = new Map<string, string>();
+  for (const wheat of wheats) {
+    for (const [test, outcome] of Object.entries(wheat.tests)) {
+      if (outcome.outcome === "fail") {
+        disagreed.add(test);
+      } else if (outcome.outcome === "error" && !raised.has(test)) {
+        raised.set(test, outcome.message ?? outcome.outcome);
+      }
+    }
+  }
+  // A test that disagrees with one reference and raises on another is a
+  // disagreement: that is the half the student can act on.
+  for (const test of disagreed) {
+    raised.delete(test);
+  }
+
+  const attribution = result.attribution ?? {};
+  const chaffs = result.chaffs ?? [];
+  const skipped = new Set(result.chaffs_skipped ?? []);
+  return (result.provides ?? []).map((name) => {
+    const tests = Object.entries(attribution)
+      .filter(([, names]) => names.includes(name))
+      .map(([test]) => test);
+    const failures = tests.filter((test) => disagreed.has(test));
+    const errors = tests
+      .filter((test) => raised.has(test))
+      .map((test) => ({ test, message: raised.get(test) as string }));
+    const mine = chaffs.filter((c) => c.targets === name);
+    const missed = mine
+      .filter((c) => c.loaded && Object.values(c.tests).every((t) => t.outcome === "pass"))
+      .map((c) => c.id);
+    return {
+      ...base,
+      card: "function" as const,
+      name,
+      testCount: tests.length,
+      allPass: tests.length > 0 && failures.length === 0 && errors.length === 0,
+      failures,
+      errors,
+      hint: errors.some((e) => isFileAccessError(e.message)) ? UNMOUNTED_HINT : undefined,
+      total: mine.length,
+      caught: mine.length - missed.length,
+      missed,
+      // The primitive gates phase two per function, so `mine` is normally
+      // already empty here. Deciding again from this function's own verdict
+      // rather than trusting the flag keeps a coverage number from ever
+      // appearing beside a test that did not pass.
+      pending: failures.length > 0 || errors.length > 0 || skipped.has(name),
+    };
+  });
+}
+
+/**
+ * Why a test that opens a file cannot run during the phase.
+ *
+ * Shown only when a test actually tripped over it, because out of that
+ * context it is a confusing thing to read: the file plainly *is* next to
+ * their program, and it works everywhere else.
+ */
+const UNMOUNTED_HINT =
+  "Your tests are checked on their own, so files next to your program are not " +
+  "available while that happens.";
+
+/** True for the errors Python raises when a path is not there to be opened. */
+function isFileAccessError(message: string): boolean {
+  return /^(FileNotFoundError|IsADirectoryError|NotADirectoryError|PermissionError):/.test(
+    message,
+  );
 }
 
 function errorMessage(err: unknown): string {

@@ -6,6 +6,7 @@ import {
 } from "./memfsWorkspace";
 import {
   NETWORK_IMPORT_RE,
+  PLL_EXAMPLAR_LIB_PY,
   PLL_IMAGE_LIB_PY,
   PLL_REACTOR_LIB_PY,
   PLL_TABLE_LIB_PY,
@@ -13,6 +14,8 @@ import {
   PYODIDE_HTTP_PATCH_PY,
   PYODIDE_INSTALL_PY,
   type DisplayData,
+  type ExamplarBuildResult,
+  type ExamplarRunResult,
   type RawStaticFinding,
   type ReactorStepResult,
   type RunResult,
@@ -195,6 +198,9 @@ export function createWorkerHost(
         instance.runPython(PLL_TABLE_LIB_PY);
         // After the image lib: `to_draw` handlers use the image primitives.
         instance.runPython(PLL_REACTOR_LIB_PY);
+        // After the bootstrap: it borrows `_pll_fix_ast_ranges` for pytest's
+        // assertion rewriting.
+        instance.runPython(PLL_EXAMPLAR_LIB_PY);
         instance.runPython(PYODIDE_INSTALL_PY);
         // After PYODIDE_INSTALL_PY: it seeds `_pll_initial_globals`, which
         // this adds the typeguard helpers to.
@@ -392,6 +398,21 @@ export function createWorkerHost(
             fn.destroy?.();
           }
           adapter.post({ id: data.id, type: "reactorDisposed" });
+          break;
+        }
+        case "examplarBuild": {
+          const result = callPython<ExamplarBuildResult>("_pll_examplar_build", [
+            data.sources,
+          ]);
+          adapter.post({ id: data.id, type: "examplarBuilt", result });
+          break;
+        }
+        case "examplarRun": {
+          const result = callPython<ExamplarRunResult>("_pll_examplar_run", [
+            data.testSource,
+            data.bundle,
+          ]);
+          adapter.post({ id: data.id, type: "examplarRan", result });
           break;
         }
         case "mountWorkspace": {
