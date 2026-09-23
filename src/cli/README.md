@@ -32,7 +32,7 @@ print(greeting)
 | Line in the file | What it does |
 | --- | --- |
 | `#level raw` | Nothing checked. Plain Python plus PLL's libraries. This is what you get with no line at all. |
-| `#level beginner` | Warns about reassigning a variable, hiding another name (including built-ins like `list`), and `global` / `nonlocal`. Type annotations are checked as the program runs. If it finds a problem, the file does **not** run. |
+| `#level beginner` | Warns about reassigning a variable, hiding another name (a built-in like `list`, or one of PLL's own like `circle`), and `global` / `nonlocal`. Type annotations are checked as the program runs. If it finds a problem, the file does **not** run. |
 | `#level intermediate` | Same, but reassignment is allowed inside a function. |
 | `#level advanced` | No pre-run checks; annotations still checked, by Python's own rules. |
 

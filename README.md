@@ -186,7 +186,7 @@ blank.
 | Line in your file | What it does |
 | --- | --- |
 | `#level raw` | Nothing is checked. Your program runs exactly as plain Python would, with PLL's built-in libraries (images, tables) and the interactions panel still available. **This is what you get if you leave the line out.** |
-| `#level beginner` | Strictest. PLL warns about reassigning a variable, reusing a name that hides another name (including built-in names like `list`), and the `global` / `nonlocal` keywords. If it finds a problem, it **does not run** the file. Type annotations are checked as the program runs. |
+| `#level beginner` | Strictest. PLL warns about reassigning a variable, reusing a name that hides another name (a built-in like `list`, or one of PLL's own like `circle`), and the `global` / `nonlocal` keywords. If it finds a problem, it **does not run** the file. Type annotations are checked as the program runs. |
 | `#level intermediate` | Same rules about hiding names and `global` / `nonlocal`, but you **may** reassign variables inside a function. That is useful for introducing for loops, where you need mutable accumulators. Reassigning at the top of the file is still flagged. Annotations are checked. |
 | `#level advanced` | No extra checks before the file runs. Annotations are still checked as the program runs, but by Python's own rules (so `True` counts as `1`). |
 

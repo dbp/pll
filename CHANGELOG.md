@@ -1,47 +1,65 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 (2026-09-23)
+
+### Added
 - **Your tests can be checked against known implementations.** Put
   `#examplar <url>` in a file and every run adds a card per function, each
-  answering two questions about your tests of it: **against correct
-  implementations**, do they all pass? **Against buggy implementations**, how
-  many do they catch? A function you have not tested says just "No tests
-  yet." rather than scoring you at something you have not started, and each
-  function is judged on its own. It
-  works before you have written any code of your own, which is the point —
-  write the tests first. Neither card says more than it has to: a test that
-  disagrees with a correct implementation is *named*, but not told what the
-  right answer was, and a buggy implementation nothing caught gives up its id
-  and nothing else. Say which thing is wrong, never what is right — otherwise
-  the card is an oracle you can read the assignment off.
+  answering two questions about your tests of that function. *Against
+  correct implementations:* do they all pass? *Against buggy
+  implementations:* how many do they catch? It works before you have written
+  any code of your own, which is the point — write the tests first.
 
-  Two phases, and the second waits for the first, per function: no coverage
-  number is reported for a function until every test of it *passes* on the
-  correct implementations. A test that expects the wrong answer fails on the
-  buggy ones too, and so does a test that cannot run — either way it would
-  look as though it had caught them.
+  Neither answer says more than it has to. A test that disagrees with a
+  correct implementation is **named**, but you are not told what the right
+  answer was; a buggy implementation that nothing caught gives up its id and
+  nothing else. Say which thing is wrong, never what is right — otherwise
+  the card is an oracle you can read the assignment off one
+  deliberately-wrong test at a time.
+
+  The second question waits for the first, and per function: no coverage
+  number for a function until every test of it *passes*. A test that expects
+  the wrong answer fails on the buggy versions too, and so does a test that
+  cannot run, so either way it would look as though you had caught them. A
+  function with no tests yet says just "No tests yet." rather than scoring
+  you at something you have not started.
 - **Examplar bundles can be authored.** `pll examplar build hw3/ -o hw3.json`
   compiles known-good ("wheat") and known-bad ("chaff") implementations into
   one bundle of Python bytecode, ready to publish at a URL. A chaff goes in
   `chaffs/<function>/`, named after the function it breaks, since the
-  student's report is per function. Its id is its filename and the one thing
-  students see about a chaff they missed, so number them rather than naming
-  them after the bug. `--verify`
-  runs your own suite against the bundle and refuses to write it unless the
-  suite passes on every wheat and fails on every chaff.
+  student's report is per function; its id is its filename and the one thing
+  students ever see about one they missed, so number them rather than naming
+  them after the bug. `--verify` runs your own suite against the bundle and
+  refuses to write it unless that suite passes on every wheat and fails on
+  every chaff.
 
-  Serving a bundle to the **web** build needs CORS:
+  `samples/examplar_bundle/` is a worked example — two wheats, six chaffs
+  and a staff suite — with `samples/examplar.py` as the student's side of
+  it. Serving a bundle to the **web** build needs CORS:
   `Access-Control-Allow-Origin`, `Access-Control-Expose-Headers: ETag` (or
   nothing is ever cached) and `Access-Control-Allow-Headers: If-None-Match`
   (or students stay pinned to the copy they cached first).
+  `samples/examplar_serve.mjs` is a dependency-free server that gets those
+  right.
 - **New `pll-python` npm package: the same language levels on the command
   line.** `npx pll-python hw.py` runs a file with the level from its own
   `#level` line, its in-file tests, and the same friendly errors as the
-  editor - no Python installation, because it is the same Pyodide worker.
+  editor — no Python installation, because it is the same Pyodide worker.
   Tables print as text; pictures print a note (or `--save-images`) and
   reactors do not animate, since a terminal cannot show either. Exit codes
   distinguish a level rejection from a failing test from a crash, so it can
   be used for marking.
+- **Redefining a name the PLL libraries provide is now reported** at
+  `#level beginner` and `#level intermediate`. `circle`, `rectangle`,
+  `table`, `animate` and the rest are bound in every file before you write
+  anything, so `def rectangle(w, h)` shadows one of them exactly as
+  `list = [1]` shadows a built-in — and the message says which library the
+  name came from. See `samples/beginner_library_shadowing.py`.
+
+### Fixed
+- **A shadowing finding now points at your own definition**, rather than at
+  wherever the name happened to be bound first. Using a built-in or a
+  library name without defining one of your own is not a finding at all.
 
 ## 0.1.0 (2026-09-16)
 
