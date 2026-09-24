@@ -72,104 +72,6 @@ library (a very long `pandas` operation, for example), or if it catches
 `KeyboardInterrupt` itself, PLL will tell you it could not stop it - reload
 the window in that case.
 
-## Tests
-
-You can put tests in the **same file** as the code they check. A test is
-a function whose name starts with `test_`. Use `assert` to check that
-something is true:
-
-```python
-def add(x, y):
-    return x + y
-
-def test_add():
-    assert add(2, 3) == 5
-```
-
-When you click **PLL: Run Python File**, PLL runs the tests first and
-shows a pass/fail card in the interactions panel. If a test fails, you
-can click it to jump to that test. After the tests, PLL still runs the
-rest of the file so you can use your functions at the prompt.
-
-You do not need a separate test file, and you do not need to run
-`pytest` in a terminal.
-
-For decimal (floating-point) numbers, exact `==` can be unreliable.
-Import `pytest` and use `pytest.approx`:
-
-```python
-import pytest
-
-def test_cost():
-    assert 0.1 + 0.2 == pytest.approx(0.3)
-```
-
-## Checking your tests against known implementations
-
-Sometimes an assignment asks you to write the **tests first**, before you
-write the code. In that case there is nothing of your own to run them
-against yet — so PLL can run them against implementations your course wrote:
-some that are known to be correct, and some that are known to be wrong.
-
-Your course gives you a line to put in the file:
-
-```python
-#examplar https://cs2000.example/hw3.json
-```
-
-Then every time you run the file, the panel shows **one card per function**,
-each answering the two questions Examplar asks about your tests of it, in
-order.
-
-**Against correct implementations — are your tests right?**
-
-- **All 5 of your tests pass.** Your tests of this function agree with
-  working code. That is what you want.
-- **2 of your 5 tests expect the wrong answer**, and it names them. One of
-  *your* tests is wrong, not the code. You are not told what the right answer
-  is — that would make this card an oracle you could read the assignment off,
-  one deliberately-wrong test at a time. Go back to what the function is
-  supposed to do and work out what that test should say.
-
-**Against buggy implementations — are your tests thorough?**
-
-- **Caught 6 of 8 — missed 3, 7.** Your tests spotted six of the buggy
-  versions of this function. Two slipped through, so your tests have a gap.
-  You are told only which ones, never what is wrong with them — working that
-  out is the exercise.
-
-A function you have not tested at all gets a card saying just **No tests
-yet.**, rather than a score at something you have not started. Each function
-is judged on its own: a wrong test of `initials` holds up the `initials`
-card and leaves `longest` alone.
-
-Until **every** one of your tests of a function passes on the correct
-implementations, its card says it is waiting rather than giving you a
-number. A test that expects the wrong answer fails on the buggy versions
-too, and so does a test that cannot run, so either way it would look as
-though you had caught them. Get them passing first, then find out how much
-they cover.
-
-You do not need to have written any code of your own for this. It works from
-the moment you have one `test_` function, which is the point.
-
-Two things to know:
-
-- **Your program does not run during this check.** Only your definitions are
-  loaded, so a `print` at the bottom of your file happens once, afterwards,
-  where it always did.
-- **Files next to your program are not available during it.** A test that
-  opens `data.csv` cannot run in the check; the card says so rather than
-  telling you the test is wrong. It still runs normally afterwards — but
-  because it never passes here, it does hold up that function's coverage.
-
-Nothing here is a grade. It tells you where your tests are thin while you
-still have time to fix them.
-
-There is a worked example in [`samples/examplar.py`](samples/examplar.py),
-with the implementations it is checked against in
-[`samples/examplar_bundle/`](samples/examplar_bundle/README.md).
-
 ## Language levels
 
 The first non-blank line of a file chooses how strict PLL is. After you
@@ -247,17 +149,83 @@ allowed.
 To turn annotation checking off entirely, write `#level raw` at the top of
 the file (or leave the level line out).
 
-## Interactive `input()`
+## Tests
 
-`input()` asks for a line in the interactions panel, in desktop VS Code
-and in the browser. The prompt string prints first, then you type a
-reply and press Enter. **Ctrl+C** (with nothing selected) cancels and
-the program gets an `EOFError`.
+You can put tests in the **same file** as the code they check. A test is
+a function whose name starts with `test_`. Use `assert` to check that
+something is true:
 
 ```python
-name = input("What is your name? ")
-print("Hello,", name)
+def add(x, y):
+    return x + y
+
+def test_add():
+    assert add(2, 3) == 5
 ```
+
+When you click **PLL: Run Python File**, PLL runs the tests first and
+shows a pass/fail card in the interactions panel. If a test fails, you
+can click it to jump to that test. After the tests, PLL still runs the
+rest of the file so you can use your functions at the prompt.
+
+You do not need a separate test file, and you do not need to run
+`pytest` in a terminal.
+
+For decimal (floating-point) numbers, exact `==` can be unreliable.
+Import `pytest` and use `pytest.approx`:
+
+```python
+import pytest
+
+def test_cost():
+    assert 0.1 + 0.2 == pytest.approx(0.3)
+```
+
+## Checking your tests against your course's code
+
+Some assignments ask you to write the **tests first**, before the code. There
+is nothing of your own to run them against yet — so PLL can run them against
+code your course wrote: implementations known to be correct, and
+implementations known to contain a bug.
+
+Your course gives you a line to put at the top of the file:
+
+```python
+#examplar https://example.edu/hw3.json
+```
+
+After that, every run adds a card for each function the assignment asks for:
+
+```
+total                                                        Examplar
+  Against correct implementations: all 3 of your tests pass.
+  Against buggy implementations: caught 4 of 6 - missed 2, 5.
+```
+
+The first line asks whether your tests are **right** — do they agree with
+code that works? The second asks whether they are **thorough** — how many of
+the deliberately broken versions did they notice? One `test_` function is
+enough to start; you do not need to have written any of the assignment.
+
+**It will not tell you the answer.** If a test expects the wrong thing you
+are told *which* test, never what it should have said — otherwise you could
+read the assignment straight off the card, one deliberately-wrong test at a
+time. A buggy version you missed gives up its number and nothing else.
+Working out what you failed to check is the exercise.
+
+Coverage only appears once every test of that function passes, because a
+wrong test fails on the buggy versions too and would look as though it had
+caught them. Each function is scored on its own, and one you have not
+started says simply "No tests yet."
+
+Two things to know. Your program does not run during the check — only your
+definitions are loaded, so a `print` at the end of your file still happens
+once, right afterwards. And files next to your program are not available
+during it, so a test that opens `data.csv` cannot run there; the card says
+so rather than calling that test wrong.
+
+None of this is a grade. It shows you where your tests are thin while you
+still have time to do something about it.
 
 ## Images
 
@@ -417,14 +385,26 @@ reactor(
 Whatever the server sends back arrives at `on_receive`. The card shows
 whether it is connected.
 
-You write worlds; the server is a separate program your course runs. There
-is a small reference server in `samples/universe_server.mjs` — run it with
-`node universe_server.mjs`. Messages are JSON, one value per message, in
-each direction.
+You write worlds; the server is a separate program your course runs, in
+whatever language they like. Messages are JSON, one value per message, in
+each direction — so a conforming server is small, and your course will give
+you one to run.
 
 In the browser, a page served over `https` (including vscode.dev) can only
 reach a `wss://` address — except on `localhost`, which is allowed either
 way.
+
+## Interactive `input()`
+
+`input()` asks for a line in the interactions panel, in desktop VS Code
+and in the browser. The prompt string prints first, then you type a
+reply and press Enter. **Ctrl+C** (with nothing selected) cancels and
+the program gets an `EOFError`.
+
+```python
+name = input("What is your name? ")
+print("Hello,", name)
+```
 
 ## Files next to your program
 
@@ -506,18 +486,12 @@ animate, but tables print as text and everything else is the same code.
 Exit codes make it usable for marking: `0` ran and tests passed, `1` the
 program raised, `2` level checks blocked it, `3` a test failed.
 
-It also builds the Examplar bundles above, which has to happen there rather
-than with a local `python`: the bytecode in a bundle must match the
-interpreter that will run it, and the CLI pins the same Pyodide the extension
-does.
-
-```bash
-pll examplar build hw3/ -o hw3.json --verify staff_tests.py
-```
-
-See [the CLI readme](src/cli/README.md) for the full options.
+Course staff can also build Examplar bundles with it. See
+[pll-python on npm](https://www.npmjs.com/package/pll-python) for that and
+the full list of options.
 
 ## For course staff and contributors
 
-How PLL is built, how to run it from source, and how the editor
-defaults work are documented in [ARCHITECTURE.md](ARCHITECTURE.md).
+How PLL is built, how to run it from source, how to author Examplar
+bundles, and how the editor defaults work are documented in the
+[repository](https://github.com/dbp/pll).
