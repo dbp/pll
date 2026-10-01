@@ -11,17 +11,51 @@ import type { BeginnerExplanation } from "./types";
  * ("Did you mean: ...?"). We strip those out of the headline and
  * surface them separately if present.
  */
+/**
+ * Which kind of name problem this is.
+ *
+ * "Never heard of it" and "not assigned yet" need opposite advice: the
+ * second is a name the student spelled correctly, so telling them to check
+ * the spelling sends them looking for a mistake that is not there. What is
+ * wrong is the *order*.
+ */
+function unboundKind(message: string): "free" | "local" | null {
+  const m = message.match(/cannot access (free|local) variable '/);
+  return m ? (m[1] as "free" | "local") : null;
+}
+
 export function explainNameError(parsed: ParsedPythonError): BeginnerExplanation {
+  const named = parsed.nameToken !== null;
   const name = parsed.nameToken ?? "this name";
   const didYouMean = extractDidYouMean(parsed.message);
+
+  const unbound = unboundKind(parsed.message);
+  if (unbound !== null) {
+    return {
+      headline: `\`${name}\` has not been given a value yet on this line.`,
+      howToFix: [
+        `Move the line that sets \`${name}\` above this one.`,
+        unbound === "local"
+          ? `If you meant a \`${name}\` from outside this function: assigning to ` +
+            `it anywhere inside makes it local to the whole function, so the ` +
+            `outer one is not visible here. Pass it in as a parameter instead.`
+          : `The \`${name}\` here belongs to the function around this one, ` +
+            `which sets it after this line runs.`,
+      ],
+    };
+  }
 
   const headline = `Python doesn't know what \`${name}\` means.`;
 
   const howToFix: string[] = [
     `Check the spelling of \`${name}\` (Python is case-sensitive).`,
     `Make sure \`${name}\` is defined before this line runs.`,
-    `If \`${name}\` should be text, put it in quotes: \`\"${name}\"\`.`,
   ];
+  // Only worth saying when there is a real name to quote; `put "this name"
+  // in quotes` is advice about the placeholder rather than about the code.
+  if (named) {
+    howToFix.push(`If \`${name}\` should be text, put it in quotes: \`\"${name}\"\`.`);
+  }
 
   if (didYouMean.length > 0) {
     howToFix.unshift(

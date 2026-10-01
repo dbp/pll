@@ -865,6 +865,15 @@ they cannot drift), and the CLI readme. `pnpm run cli:pack` produces the
 tarball; `cli:publish` publishes it. There is no second source tree and no
 monorepo - the npm package is a build artifact.
 
+`cli:publish` goes through `scripts/publish-cli.mjs`, which checks
+`npm whoami` and runs `npm login --auth-type=web` first when there is no
+token. That check is not politeness: an unauthorised `npm publish` is
+answered with **404**, because the registry will not tell someone who may
+not be allowed to see a package whether it exists. So "you have no token"
+and "no such package" are the same message, and the script says which it
+is instead of leaving that to be guessed. Rehearse with
+`node scripts/publish-cli.mjs --dry-run`.
+
 The package declares `node >=22`, which is a support decision rather than a
 technical floor: the CLI bundle contains no `WebSocket` reference at all -
 `universeClient.ts` is only reachable through `activate.ts` and

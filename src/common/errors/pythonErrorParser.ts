@@ -141,8 +141,16 @@ export function parsePythonError(
   }
 
   let nameToken: string | null = null;
-  if (errorType === "NameError") {
-    const nm = message.match(/name '([^']+)' is not defined/);
+  if (errorType === "NameError" || errorType === "UnboundLocalError") {
+    // Three wordings, not one. Python says `name 'x' is not defined` for a
+    // name it has never seen, and `cannot access free/local variable 'x'
+    // where it is not associated with a value` for one it knows about but
+    // that has not been assigned yet. Matching only the first left the
+    // name unknown, and the report fell back to a placeholder: "Python
+    // doesn't know what `this name` means".
+    const nm =
+      message.match(/name '([^']+)' is not defined/) ??
+      message.match(/cannot access (?:free|local) variable '([^']+)'/);
     if (nm) {
       nameToken = nm[1];
     }

@@ -21,8 +21,17 @@ writeFileSync(
 import { parseLevel, levelHasTypeChecking } from "../src/common/level";
 import { enrichStaticFindings } from "../src/common/analyzers/static/registry";
 import { formatFriendlyError } from "../src/common/errorFormatter";
+import { findRuntimeFinding } from "../src/common/analyzers/registry";
+import { parsePythonError } from "../src/common/errors/pythonErrorParser";
 
-export { parseLevel, levelHasTypeChecking, enrichStaticFindings, formatFriendlyError };
+export {
+  parseLevel,
+  levelHasTypeChecking,
+  enrichStaticFindings,
+  formatFriendlyError,
+  findRuntimeFinding,
+  parsePythonError,
+};
 `,
 );
 
@@ -336,6 +345,80 @@ const lines = mod.formatFriendlyError(findings[1]);
 expect(lines[0].startsWith("Shadowing:"), "first line is errorType + headline");
 expect(lines.some((l) => l.includes("at test.py:15:1")), "shows location");
 expect(lines.some((l) => l.includes("How to fix:")), "shows How to fix section");
+
+console.log("[name errors: a name with no value is named, not called `this name`]");
+{
+  /** Build a finding from a traceback the way the hosts do. */
+  const finding = (traceback, source) =>
+    mod.findRuntimeFinding(source, "lab.py", "beginner", mod.parsePythonError(traceback, source));
+
+  // The Lab 10 shape: an inner function reads a name the enclosing function
+  // assigns later. Only `name 'x' is not defined` was matched before, so the
+  // name was unknown and the report read "Python doesn't know what `this
+  // name` means" - four times over, in a file where `title` is right there.
+  const free = finding(
+    [
+      'Traceback (most recent call last):',
+      '  File "lab.py", line 3, in inner',
+      "    return title",
+      "           ^^^^^",
+      "NameError: cannot access free variable 'title' where it is not associated with a value",
+    ].join("\n"),
+    "def outer():\n    def inner():\n        return title\n    inner()\n    title = 1\n",
+  );
+  expect(free !== null, "a free-variable NameError should be explained");
+  expect(free.nameToken === "title", `the name should be found, got ${free.nameToken}`);
+  expect(/`title`/.test(free.headline), `the headline should name it: ${free.headline}`);
+  expect(!/this name/.test(free.headline + free.howToFix.join(" ")), "no placeholder anywhere");
+  // A name spelled correctly needs advice about order, not spelling.
+  expect(
+    !free.howToFix.some((line) => /spelling/.test(line)),
+    `spelling advice is wrong here: ${JSON.stringify(free.howToFix)}`,
+  );
+  expect(
+    free.howToFix.some((line) => /Move the line that sets/.test(line)),
+    `expected advice about order: ${JSON.stringify(free.howToFix)}`,
+  );
+
+  // `UnboundLocalError` is the same mistake under a different type, and was
+  // not handled at all - it fell through to a bare traceback.
+  const local = finding(
+    [
+      'Traceback (most recent call last):',
+      '  File "lab.py", line 2, in f',
+      "    print(count)",
+      "          ^^^^^",
+      "UnboundLocalError: cannot access local variable 'count' where it is not associated with a value",
+    ].join("\n"),
+    "def f():\n    print(count)\n    count = 1\n",
+  );
+  expect(local !== null, "an UnboundLocalError should be explained too");
+  expect(local.nameToken === "count", `the name should be found, got ${local.nameToken}`);
+  expect(local.errorType === "UnboundLocalError", `keep Python's type: ${local.errorType}`);
+  expect(
+    local.howToFix.some((line) => /local to the whole function/.test(line)),
+    `expected the assigning-makes-it-local note: ${JSON.stringify(local.howToFix)}`,
+  );
+
+  // A genuinely unknown name still gets the spelling advice.
+  const unknown = finding(
+    [
+      'Traceback (most recent call last):',
+      '  File "lab.py", line 1, in <module>',
+      "    print(Totl)",
+      "          ^^^^",
+      "NameError: name 'Totl' is not defined",
+    ].join("\n"),
+    "print(Totl)\n",
+  );
+  expect(unknown.nameToken === "Totl", `got ${unknown.nameToken}`);
+  expect(/doesn't know what `Totl`/.test(unknown.headline), `headline: ${unknown.headline}`);
+  expect(
+    unknown.howToFix.some((line) => /spelling/.test(line)),
+    "an unknown name does want the spelling check",
+  );
+  console.log("    free, local and unknown names each named and advised correctly");
+}
 
 rmSync(tmp, { recursive: true, force: true });
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **A name used before it had a value was not named.** Python words that one
+  as `cannot access free variable 'title' ...`, which PLL did not recognise,
+  so the report read "Python doesn't know what `this name` means" — in a file
+  where `title` is right there. It now names the variable, and says to move
+  the line that sets it rather than to check a spelling that was already
+  correct. `UnboundLocalError` is explained too, where before it fell
+  through to a bare traceback.
+
 ## 0.2.0 (2026-09-30)
 
 ### Breaking
