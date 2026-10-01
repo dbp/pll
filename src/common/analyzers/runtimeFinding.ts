@@ -26,10 +26,14 @@ export function findingForErrorEvent(
 ): AnalysisFinding | null {
   const traceback = event.traceback || `${event.errorType}: ${event.message}`;
   const parsed = parsePythonError(traceback);
-  if (parsed.lineNumber === null && event.lineNumber !== null) {
+  // `!= null` rather than `!== null`: the event's numbers come from a
+  // Python dict, where a missing key reaches JS as `undefined`. That passed
+  // a `!== null` test and was copied across as a location, which is how the
+  // command line came to print `n.py:1:NaN`.
+  if (parsed.lineNumber === null && event.lineNumber != null) {
     parsed.lineNumber = event.lineNumber;
   }
-  if (parsed.column === null && event.column !== null) {
+  if (parsed.column === null && event.column != null) {
     parsed.column = event.column;
   }
   if (parsed.fileName === null && event.fileName) {

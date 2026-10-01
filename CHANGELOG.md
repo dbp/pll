@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.2 (2026-09-23)
+
+### Fixed
+- **`pll-python` now pins the exact Pyodide the extension uses.** It asked
+  for `^0.29.3`, so a fresh install could resolve a newer patch than the
+  extension ships — and an Examplar bundle is bytecode, which has to match
+  the interpreter that will run it. Nothing was broken in practice (0.29.3
+  and 0.29.5 are both CPython 3.13.2, so their bytecode is interchangeable),
+  but "matches by construction" is the whole reason bundles are built with
+  this tool, and a range could not promise it.
+- **The extension package no longer carries the command-line tool.**
+  `dist-cli/` was being packed into the `.vsix`: about 420 kB the extension
+  never loads, plus whatever tarball the last `npm pack` happened to leave
+  behind.
+
+### Changed
+- **The README is reorganised.** Language levels and annotation checking now
+  come before tests, so everything that talks about `#level` appears after
+  the section that introduces it; `input()` sits beside the section on files
+  next to your program. The Examplar section is shorter, shows the card
+  rather than listing every message it can print, and no longer points at
+  files in the repository — those are dead links from the extension page.
+
 ## 0.1.1 (2026-09-23)
 
 ### Added

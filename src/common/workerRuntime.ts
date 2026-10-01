@@ -148,7 +148,7 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
       },
       "testResult",
     );
-    deliverTestResult(result, onEvent, request.fileName);
+    deliverTestResult(result, onEvent, request.fileName, request.level);
   }
 
   async staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]> {

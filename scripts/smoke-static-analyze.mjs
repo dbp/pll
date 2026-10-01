@@ -489,6 +489,50 @@ _g = _pll_get_session("smoke-lib")
     );
   }
 
+  console.log(
+    "\n[16] a name bound in a class body is a field, not a shadowed variable",
+  );
+  {
+    // `id: int` in a dataclass declares a field. `id` everywhere else still
+    // finds the built-in, so there is nothing shadowed - but it was being
+    // reported, telling students to rename a perfectly good field.
+    const fields = analyze(
+      [
+        "from dataclasses import dataclass",
+        "",
+        "@dataclass",
+        "class Dog:",
+        "    id: int",
+        "    list: str",
+        "    name: str",
+        "",
+      ].join("\n"),
+      "beginner",
+      "t.py",
+    );
+    expect(fields.length === 0, `class fields must be clean, got ${JSON.stringify(fields)}`);
+
+    // A plain assignment in a class body is an attribute too.
+    const attr = analyze("class Box:\n    sum = 0\n", "beginner", "t.py");
+    expect(attr.length === 0, `class attributes must be clean, got ${JSON.stringify(attr)}`);
+
+    // The class's own name is bound in the enclosing scope, and is still
+    // checked there.
+    const named = analyze("class list:\n    pass\n", "beginner", "t.py");
+    expect(
+      named.length === 1 && named[0].id === "shadowing-builtin",
+      `a class named after a built-in is still caught, got ${JSON.stringify(named)}`,
+    );
+
+    // And a module-level `id = 5` is still shadowing.
+    const module = analyze("id = 5\n", "beginner", "t.py");
+    expect(
+      module.length === 1 && module[0].id === "shadowing-builtin",
+      `a real rebinding is still caught, got ${JSON.stringify(module)}`,
+    );
+    console.log("    fields and attributes clean; class names and rebindings still caught");
+  }
+
   fn.destroy?.();
 
   if (process.exitCode) {

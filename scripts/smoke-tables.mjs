@@ -296,6 +296,167 @@ table(["i"], [[i] for i in range(500)])
       "image display still emitted via new protocol");
   }
 
+  console.log("\n[11] every Pyret chart has a PLL counterpart that renders");
+  {
+    // The set `public-resources/static/cs2000.arr` hands a course, so a
+    // chart an assignment asks for is one PLL can draw.
+    const setup = `t = table(["city", "region", "pop", "temp"], [
+    ["Boston", "NE", 650, 51.0],
+    ["Providence", "NE", 190, 52.0],
+    ["Austin", "S", 970, 69.0],
+    ["Dallas", "S", 1300, 67.0],
+    ["Boise", "W", 240, 52.0]])
+`;
+    const calls = {
+      bar_chart: 't.bar_chart("city", "pop")',
+      scatter_chart: 't.scatter_chart("pop", "temp")',
+      scatter_plot: 't.scatter_plot("pop", "temp")',
+      line_chart: 't.line_chart("pop", "temp")',
+      labeled_scatter_plot: 't.labeled_scatter_plot("region", "pop", "temp")',
+      pie_chart: 't.pie_chart("city", "pop")',
+      dot_plot: 't.dot_plot("temp")',
+      labeled_dot_plot: 't.labeled_dot_plot("region", "temp")',
+      freq_bar_chart: 't.freq_bar_chart("region")',
+      box_plot: 't.box_plot("pop")',
+      lr_plot: 't.lr_plot("pop", "temp")',
+      labeled_lr_plot: 't.labeled_lr_plot("region", "pop", "temp")',
+      histogram_bins: 't.histogram("pop", bins=3)',
+      histogram_bin_width: 't.histogram("pop", bin_width=250)',
+      function_plot: "function_plot(lambda x: x * x, -3, 3)",
+    };
+    for (const [name, call] of Object.entries(calls)) {
+      const result = py(callRunFile, setup + call, `${name}.py`, SK);
+      expect(result.ok === true, `${name} ran: ${result.error_message ?? ""}`);
+      const shown = result.displays?.[0];
+      expect(shown?.type === "image", `${name} emitted an image display`);
+      expect(
+        typeof shown?.data === "string" &&
+          shown.data.startsWith("<svg") &&
+          shown.data.trimEnd().endsWith("</svg>"),
+        `${name} produced a complete svg`,
+      );
+      expect(shown.width > 0 && shown.height > 0, `${name} reported a size`);
+    }
+    console.log(`    ${Object.keys(calls).length} chart kinds render`);
+
+    // The fit is the part with an answer to check rather than a picture.
+    const fit = py(
+      callRunFile,
+      setup + 'print(tuple(round(v, 4) for v in t.linear_regression("pop", "temp")))',
+      "fit.py",
+      SK,
+    );
+    expect(fit.ok === true && fit.stdout.includes("0.0161"), `slope: ${fit.stdout}`);
+    expect(fit.stdout.includes("0.7286"), `r-squared: ${fit.stdout}`);
+
+    // A dot plot and a box plot are strips, not squares: their height is
+    // set by the data, not by the chart constant.
+    const strip = py(callRunFile, setup + 't.box_plot("pop")', "strip.py", SK);
+    expect(strip.displays[0].height < 320, `box plot should be short, got ${strip.displays[0].height}`);
+  }
+
+  console.log("\n[12] charts refuse what they cannot draw, and say why");
+  {
+    for (const [code, kind] of [
+      ['table(["a"], [["x"]]).box_plot("a")', "TypeError"],
+      ['table(["a", "b"], [["x", -1]]).pie_chart("a", "b")', "ValueError"],
+      ['table(["a", "b"], [["x", 0]]).pie_chart("a", "b")', "ValueError"],
+      ['table(["a", "b"], [[1, 2], [1, 3]]).lr_plot("a", "b")', "ValueError"],
+      ['table(["a"], [[1]]).histogram("a", bin_width=0)', "ValueError"],
+      ["function_plot(lambda x: x, 3, 3)", "ValueError"],
+    ]) {
+      const result = py(callRunFile, code, "bad.py", SK);
+      expect(
+        result.ok === false && result.error_type === kind,
+        `${code} -> ${kind}, got ${result.error_type}: ${result.error_message}`,
+      );
+    }
+    console.log("    six refusals, each with its own reason");
+  }
+
+  console.log("\n[13] load_table reads a CSV, and tables compare by value");
+  {
+    // `JSON.stringify` builds the Python string literal: JSON's string
+    // syntax is a subset of Python's, so the quoted CSV field survives
+    // without a layer of hand-escaping to get wrong.
+    const csv = [
+      "name,mpg,note",
+      'vw,29,"cheap, small"',
+      "honda,33,reliable",
+      "ford,18,",
+      "",
+    ].join("\n");
+    const code = [
+      'with open("cars.csv", "w") as f:',
+      `    f.write(${JSON.stringify(csv)})`,
+      't = load_table("cars.csv")',
+      "print(t.columns())",
+      'print(t.column("mpg"))',
+      'print(t.column("note"))',
+      // Every column is text, so charting one is a two-step job on purpose.
+      'print(t.transform_column("mpg", float).column("mpg"))',
+      'print(t.transform_column("mpg", float).mean("mpg"))',
+      "try:",
+      '    t.histogram("mpg")',
+      "except TypeError as e:",
+      '    print("hint:", "transform_column" in str(e))',
+      'print(t == load_table("cars.csv"))',
+      'print(t == table(["name"], [["vw"]]))',
+      'print(table(["a", "b"], [[1, 2]]) == table(["b", "a"], [[2, 1]]))',
+      'print(table(["a"], [[1]]) == table(["a"], [[1.0]]))',
+      'print(repr(table(["a"], [[1], [2]])))',
+    ].join("\n");
+    const result = py(callRunFile, code, "load.py", SK);
+    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    const lines = (result.stdout ?? "").trim().split("\n");
+    expect(lines[0] === "['name', 'mpg', 'note']", `columns: ${lines[0]}`);
+    // Every cell is text, as Pyret's `load-table` gives it to you - a
+    // column that looks numeric is not converted behind the program's back.
+    expect(lines[1] === "['29', '33', '18']", `numbers arrive as text: ${lines[1]}`);
+    // The quoted comma has to survive, and a blank cell is the empty string.
+    expect(lines[2] === "['cheap, small', 'reliable', '']", `text column: ${lines[2]}`);
+    // Conversion is one explicit step.
+    expect(lines[3] === "[29.0, 33.0, 18.0]", `transform_column: ${lines[3]}`);
+    expect(lines[4].startsWith("26.66"), `mean after converting: ${lines[4]}`);
+    // And charting text says what to do about it, since this is now the
+    // normal way to meet that error.
+    expect(lines[5] === "hint: True", `the error should suggest the fix: ${lines[5]}`);
+    expect(lines[6] === "True", "a table equals one loaded from the same file");
+    expect(lines[7] === "False", "and not a different table");
+    expect(lines[8] === "False", "column order is part of the table");
+    expect(lines[9] === "True", "cells compare as Python values, so 1 == 1.0");
+    // The repr is what a failed `assert t == expected` prints, so it has to
+    // show the data rather than just the shape.
+    expect(lines[10] === "table(['a'], [[1], [2]])", `repr: ${lines[10]}`);
+    console.log("    csv arrives as text, converts explicitly, compares by value");
+  }
+
+  console.log("\n[14] load_table explains what went wrong");
+  {
+    // Separate statements, not `write(...) or load_table(...)`: `write`
+    // returns the character count, so `or` would short-circuit and the
+    // load would never run.
+    const write = (name, body) =>
+      [`with open("${name}", "w") as f:`, `    f.write(${JSON.stringify(body)})`, ""].join("\n");
+    for (const [code, kind, needle] of [
+      ['load_table("nope.csv")', "FileNotFoundError", "no file called"],
+      ['load_table("ftp://h/a.csv")', "ValueError", "not a ftp:// one"],
+      ["load_table(42)", "TypeError", "as a string"],
+      [write("e.csv", "") + 'load_table("e.csv")', "ValueError", "no rows"],
+      [write("d.csv", "a,a\n1,2\n") + 'load_table("d.csv")', "ValueError", "two columns called"],
+      [write("r.csv", "a,b\n1\n") + 'load_table("r.csv")', "ValueError", "but there are 2 columns"],
+      [write("h.csv", "a,,b\n1,2,3\n") + 'load_table("h.csv")', "ValueError", "has no name"],
+    ]) {
+      const result = py(callRunFile, code, "lterr.py", SK);
+      expect(
+        result.ok === false && result.error_type === kind &&
+          (result.error_message ?? "").includes(needle),
+        `${kind}/${needle}, got ${result.error_type}: ${result.error_message}`,
+      );
+    }
+    console.log("    seven bad inputs, each named precisely");
+  }
+
   callRunFile.destroy?.();
   callReplEval.destroy?.();
 

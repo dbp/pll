@@ -271,7 +271,23 @@ takes a piece out of an image, and `frame(image)` outlines its edges.
 **Size:** `image_width`, `image_height`, `empty_image`.
 
 Colors can be names (`"red"`), hex (`"#ff0000"`), or tuples
-`(red, green, blue)` with values from 0 to 255.
+`(red, green, blue)` with values from 0 to 255. Anything else is an error
+rather than an invisible shape — but note that a *misspelled* name (`"rd"`)
+still draws nothing, because PLL does not keep a list of every colour name.
+
+### Loading a picture
+
+`load_image` reads a picture from a file next to your program or from an
+address, working out which from what you give it:
+
+```python
+cat = load_image("cat.png")
+cat = load_image("https://example.edu/cat.png")
+```
+
+It gives you an ordinary picture, so everything above works on it —
+`scale`, `rotate`, `beside`, `place_image` and the rest. PNG, JPEG, GIF,
+WebP and SVG files are understood.
 
 ## Tables and charts
 
@@ -294,16 +310,73 @@ people.bar_chart("name", "age", title="Age")
 Tables show up as a card you can scroll, with a **Save CSV** button.
 Charts show up as images.
 
-Useful methods include `filter`, `transform_column`, `add_column`,
+### Loading a CSV
+
+`load_table` reads a CSV, either from a file next to your program or from
+an address — it works out which from what you give it:
+
+```python
+cars = load_table("cars.csv")
+cars = load_table("https://example.edu/cars.csv")
+```
+
+The first row names the columns, and **every value arrives as text** —
+including the ones that look like numbers. An empty cell is `""`. Convert a
+column when you want to chart it or average it:
+
+```python
+cars = load_table("cars.csv").transform_column("mpg", float)
+cars.histogram("mpg")
+```
+
+That is one more line than guessing which columns are numbers, and it is
+the line that says what you meant: a column of years or postcodes is not
+something to do arithmetic on, and one stray `n/a` would otherwise change
+what the whole column holds.
+
+### Methods
+
+Useful ones include `filter`, `transform_column`, `add_column`,
 `order_by`, `select_columns`, `head`, `columns`, `length`, `row`,
-`column`, `sum`, `mean`, `min`, and `max`. Charts: `bar_chart`,
-`scatter_chart`, `line_chart`, `histogram`.
+`column`, `sum`, `mean`, `min`, and `max`. For a median, a standard
+deviation or anything else of that sort, use a column with Python's own
+`statistics` module.
+
+Two tables are `==` when they have the same columns, in the same order,
+holding the same values — so you can test a function that builds a table
+by comparing it with the table you expect.
+
+### Charts
+
+| Chart | What it shows |
+| --- | --- |
+| `bar_chart(labels, values)` | one bar per row |
+| `freq_bar_chart(column)` | one bar per distinct value, counting the rows |
+| `pie_chart(labels, values)` | each row's share of the total |
+| `scatter_plot(x, y)` | one point per row |
+| `line_chart(x, y)` | points joined in order of `x` |
+| `dot_plot(column)` | one dot per row, stacked where rows share a value |
+| `box_plot(column)` | quartiles, whiskers and outliers |
+| `histogram(column)` | counts per bucket — `bins=` how many, or `bin_width=` how wide |
+| `lr_plot(x, y)` | a scatter plot with the line of best fit, and r² in the title |
+
+`labeled_scatter_plot`, `labeled_dot_plot` and `labeled_lr_plot` take an
+extra first argument: a column to colour the points by, with a key. Every
+chart takes an optional `title=`. `linear_regression(x, y)` gives you the
+slope, intercept and r² as numbers instead of a picture.
+
+To draw a function rather than a table, `function_plot` takes the function
+and the range to draw it over:
+
+```python
+function_plot(lambda x: x * x, -3, 3)
+```
 
 If you already know pandas, `my_table.to_pandas()` gives you a DataFrame.
 You can also `import pandas as pd` and read a CSV from a URL with
 `pd.read_csv("https://...")`. That works in desktop VS Code and in the
 browser. In the browser, the site must allow cross-origin requests
-(CORS).
+(CORS) — the same goes for `load_table` with an address.
 
 ## Animations and interactive programs
 

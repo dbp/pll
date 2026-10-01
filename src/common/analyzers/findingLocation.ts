@@ -34,14 +34,22 @@ export function findingLocation(finding: AnalysisFinding): FindingLocation | nul
   if (finding.fileName === "<repl>" || finding.fileName === "<input>") {
     return null;
   }
+  // `!== null` was not enough. A column can also arrive `undefined` - the
+  // Python result simply has no such key on some paths - and `undefined`
+  // passes that test, so the label came out as `file.py:3:NaN`. Ask for a
+  // real number instead of ruling out one way of not being one.
+  const column =
+    typeof finding.column === "number" && Number.isFinite(finding.column)
+      ? finding.column
+      : null;
   const label =
-    finding.column !== null
-      ? `${finding.fileName}:${finding.lineNumber}:${finding.column + 1}`
+    column !== null
+      ? `${finding.fileName}:${finding.lineNumber}:${column + 1}`
       : `${finding.fileName}:${finding.lineNumber}`;
   return {
     fileName: finding.fileName,
     line: finding.lineNumber,
-    column: finding.column,
+    column,
     label,
   };
 }

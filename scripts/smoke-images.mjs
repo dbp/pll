@@ -315,6 +315,121 @@ del _name
   }
 
 
+  console.log("\n[14] load_image reads a picture and it composes like any other");
+  {
+    const SVG_FIXTURE =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="60"/>';
+    // The PNG is built in Python rather than checked in: the point is that
+    // the loader reads real bytes and finds the size in the header, and a
+    // fixture would only add a binary file to maintain.
+    const png = [
+      "import struct, zlib",
+      "def png(w, h):",
+      '    ihdr = struct.pack(">II", w, h) + bytes([8, 6, 0, 0, 0])',
+      '    chunk = struct.pack(">I", len(ihdr)) + b"IHDR" + ihdr',
+      '    chunk += struct.pack(">I", zlib.crc32(b"IHDR" + ihdr))',
+      '    return b"\\x89PNG\\r\\n\\x1a\\n" + chunk',
+      'with open("pic.png", "wb") as f:',
+      "    f.write(png(40, 25))",
+    ].join("\n");
+    const code = [
+      png,
+      'pic = load_image("pic.png")',
+      "print(image_width(pic), image_height(pic))",
+      "print(image_width(scale(2, pic)), image_height(scale(2, pic)))",
+      'print(image_width(beside(pic, square(10, "solid", "red"))))',
+      'print("data:image/png;base64," in pic.to_svg())',
+      // An SVG is read from its attributes rather than a binary header.
+      'with open("v.svg", "w") as f:',
+      `    f.write(${JSON.stringify(SVG_FIXTURE)})`,
+      'print(image_width(load_image("v.svg")), image_height(load_image("v.svg")))',
+    ].join("\n");
+    const result = py(callRunFile, [code, "loadimg.py", SK]);
+    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    const lines = (result.stdout ?? "").trim().split("\n");
+    expect(lines[0] === "40 25", `png size from the header: ${lines[0]}`);
+    expect(lines[1] === "80 50", `scales like a drawn shape: ${lines[1]}`);
+    expect(lines[2] === "50", `composes with the combinators: ${lines[2]}`);
+    // Embedded, not linked: a saved .svg has to keep working on its own.
+    expect(lines[3] === "True", "the bytes travel inside the svg");
+    // `image_width` reports whole pixels, as it does for a drawn shape.
+    expect(lines[4] === "80 60", `svg size from its attributes: ${lines[4]}`);
+    console.log("    png read, scaled, composed; svg read from attributes");
+  }
+
+  console.log("\n[15] load_image says what it cannot read");
+  {
+    for (const [code, kind, needle] of [
+      ['load_image("nope.png")', "FileNotFoundError", "no file called"],
+      ['load_image("gopher://h/a.png")', "ValueError", "not a gopher:// one"],
+      ["load_image(7)", "TypeError", "as a string"],
+      [
+        ['with open("t.txt", "w") as f:', '    f.write("not a picture")', 'load_image("t.txt")'].join("\n"),
+        "ValueError",
+        "PNG, JPEG, GIF",
+      ],
+      [
+        ['with open("z.png", "wb") as f:', "    f.write(b\"\")", 'load_image("z.png")'].join("\n"),
+        "ValueError",
+        "is empty",
+      ],
+    ]) {
+      const result = py(callRunFile, [code, "liderr.py", SK]);
+      expect(
+        result.ok === false && result.error_type === kind &&
+          (result.error_message ?? "").includes(needle),
+        `${kind}/${needle}, got ${result.error_type}: ${result.error_message}`,
+      );
+    }
+    console.log("    five bad inputs, each named precisely");
+  }
+
+  console.log("\n[16] a non-colour or a misspelled mode is refused, not drawn");
+  {
+    // SVG ignores a paint value it cannot parse, so these used to draw an
+    // invisible shape and say nothing.
+    for (const [code, needle] of [
+      ['rectangle(30, 40, "solid", 50)', "is not a colour"],
+      ['rectangle(30, 40, "solid", "50")', "is not a colour"],
+      ['circle(10, "solid", None)', "is not a colour"],
+      ['text("hi", 12, 7)', "is not a colour"],
+      ["line(5, 5, {})", "is not a colour"],
+      ['circle(10, "solid", ("r", 0, 0))', "have to be numbers"],
+      ['circle(10, "solid", (300, 0, 0))', "runs from 0 to 255"],
+      ['circle(10, "sloid", "red")', 'expected "solid" or "outline"'],
+      ['regular_polygon(10, 5, "filled", "red")', 'expected "solid" or "outline"'],
+    ]) {
+      const result = py(callRunFile, [code, "color.py", SK]);
+      expect(
+        result.ok === false && result.error_type === "ValueError" &&
+          (result.error_message ?? "").includes(needle),
+        `${code} -> ${needle}, got ${result.error_type}: ${result.error_message}`,
+      );
+      // The message has to name the function the student called, not an
+      // internal helper.
+      expect(
+        (result.error_message ?? "").startsWith(code.split("(")[0] + ":"),
+        `${code} should be blamed on its own call: ${result.error_message}`,
+      );
+    }
+    console.log("    nine bad colours and modes, each blamed on its own call");
+
+    // And every documented form still works.
+    const good = [
+      '"red"', '"#ff0000"', '"#f00"', '"rgb(1, 2, 3)"',
+      "(10, 20, 30)", "(10, 20, 30, 0.5)", "(10, 20, 30, 255)",
+    ];
+    const result = py(callRunFile, [
+      good.map((c) => `circle(5, "solid", ${c})`).join("\n") + "\nempty_image\n",
+      "goodcolor.py",
+      SK,
+    ]);
+    expect(result.ok === true, `documented colours still work: ${result.error_message ?? ""}`);
+    expect(imagesOf(result).length === good.length + 1,
+      `expected ${good.length + 1} images, got ${imagesOf(result).length}`);
+    console.log(`    ${good.length} colour spellings still accepted`);
+  }
+
   callRunFile.destroy?.();
   callReplEval.destroy?.();
 

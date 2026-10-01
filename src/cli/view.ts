@@ -167,6 +167,17 @@ export class CliView {
           this.problem("        " + line);
         }
       }
+      // What the test printed before it failed. The editor's card shows
+      // this, and a `print` put there to see what a function returned is
+      // the first debugging tool a beginner is taught - so leaving it out
+      // here quietly broke that lesson on the command line.
+      const printed = (test.stdout ?? "").replace(/\s+$/, "");
+      if (printed) {
+        this.problem(this.dim("        output:"));
+        for (const line of printed.split("\n")) {
+          this.problem(this.dim("          " + line));
+        }
+      }
     }
   }
 }

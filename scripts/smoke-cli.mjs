@@ -254,6 +254,50 @@ async function main() {
     console.log(`    interrupted; exit=${r.code}`);
   }
 
+  console.log("\n[12] a failing test shows what it printed, and a friendly message");
+  {
+    // A `print` inside a test to see what a function returned is the first
+    // debugging tool a beginner is taught. The editor's card showed it; the
+    // command line dropped it, so that lesson did not survive the move.
+    const file = fixture(
+      "day5.py",
+      "#level beginner",
+      "",
+      "def shout(word: str) -> str:",
+      "    return None",
+      "",
+      "def test_shout():",
+      // Printed *before* the call that raises - `print(shout("hi"))` would
+      // evaluate the argument first and never print anything.
+      '    print("about to call shout")',
+      '    assert shout("hi") == "HI!"',
+    );
+    const r = await run([file]);
+    expect(r.code === 3, `expected exit 3, got ${r.code}: ${r.stderr}`);
+    expect(/output:/.test(r.stderr), `the test's own output should be shown: ${r.stderr}`);
+    expect(/about to call shout/.test(r.stderr), `including what it printed: ${r.stderr}`);
+    // And typeguard's own wording must not reach the report.
+    expect(
+      !/is not an instance of/.test(r.stderr),
+      `typeguard's wording should be rewritten: ${r.stderr}`,
+    );
+    expect(/should return a string/.test(r.stderr), `expected PLL's wording: ${r.stderr}`);
+    console.log("    printed output shown, wording rewritten");
+  }
+
+  console.log("\n[13] a NameError's location has no NaN in it");
+  {
+    // The column arrives from a Python dict, where a missing key is
+    // `undefined` - which passed a `!== null` guard and was printed as
+    // `n.py:1:NaN`.
+    const file = fixture("nm.py", "print(Totl)");
+    const r = await run([file]);
+    expect(r.code === 1, `expected exit 1, got ${r.code}`);
+    expect(!/NaN/.test(r.stderr), `no NaN in the location: ${r.stderr}`);
+    expect(/nm\.py:1/.test(r.stderr), `the location should still be there: ${r.stderr}`);
+    console.log("    location printed without NaN");
+  }
+
   rmSync(work, { recursive: true, force: true });
   if (!ok) {
     console.error("\nsmoke-cli: FAILED");

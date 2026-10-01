@@ -12,6 +12,9 @@
 #   Construction:
 #     table(columns, rows)            list-of-rows constructor
 #     table_from_columns(d)           dict-of-columns constructor
+#     load_table(source)              read a CSV, from a path or a URL.
+#                                     Every cell is text, as in Pyret;
+#                                     convert with transform_column.
 #
 #   Inspection:
 #     t.columns()                     -> list[str]
@@ -36,16 +39,41 @@
 #     t.max(name)
 #     t.count()                       row count (alias for length)
 #
-#   Charts (return Image-compatible objects that auto-display):
-#     t.bar_chart(x_name, y_name, title=None)
-#     t.scatter_chart(x_name, y_name, title=None)
-#     t.line_chart(x_name, y_name, title=None)
-#     t.histogram(name, bins=10, title=None)
+#   Charts (return Image-compatible objects that auto-display). The set
+#   matches what the Pyret charting library gives a course, so an
+#   assignment written against one can be run against the other:
+#     t.bar_chart(x_name, y_name)             one bar per row
+#     t.freq_bar_chart(name)                  one bar per distinct value
+#     t.pie_chart(label_name, value_name)
+#     t.scatter_chart(x, y) / t.scatter_plot(x, y)
+#     t.labeled_scatter_plot(label_name, x, y)
+#     t.line_chart(x, y)
+#     t.dot_plot(name) / t.labeled_dot_plot(label_name, name)
+#     t.box_plot(name)                        quartiles, whiskers, outliers
+#     t.histogram(name, bins=10, bin_width=None)
+#     t.lr_plot(x, y) / t.labeled_lr_plot(label_name, x, y)
+#     function_plot(f, x_min, x_max)          module-level; needs no table
+#   All take an optional `title=`.
+#
+#   Statistics behind the charts:
+#     t.linear_regression(x, y)       -> (slope, intercept, r_squared)
+#   Anything else - median, stdev, modes - is Python's `statistics`.
+#
+#   Equality:
+#     t1 == t2                        same columns in the same order, same
+#                                     values. `repr` shows the rows, since
+#                                     that is what a failed test prints.
 #
 #   Escape hatch:
 #     t.to_pandas()                   -> pandas.DataFrame (lazy import)
 
+import csv as _csv
+import io as _io
 import math as _math
+
+#: Rows `repr(table)` shows before truncating. Enough to see what differs
+#: in a failed comparison, few enough not to bury the rest of the message.
+_REPR_ROWS = 6
 
 
 # -----------------------------------------------------------------------------
@@ -292,12 +320,136 @@ class Table:
         sy = [p[1] for p in pairs]
         return _PllChart(_render_xy_chart(sx, sy, x, y, title, mode="line"))
 
-    def histogram(self, name, bins=10, title=None):
-        """Histogram of `name` (numeric)."""
+    def histogram(self, name, bins=10, bin_width=None, title=None):
+        """Histogram of `name` (numeric).
+
+        `bins` counts the buckets; `bin_width` sets how wide each one is
+        instead, which is how the same chart is asked for in Pyret and is
+        usually what the data calls for ("group ages by 5").
+        """
+        values = self._numeric_column(name, "histogram")
+        if bin_width is not None:
+            if bin_width <= 0:
+                raise ValueError("bin_width must be greater than 0")
+            if not values:
+                bins = 1
+            else:
+                span = max(values) - min(values)
+                bins = max(1, int(_math.ceil(span / bin_width))) if span > 0 else 1
         if bins < 1:
             raise ValueError("bins must be >= 1")
-        values = self._numeric_column(name, "histogram")
         return _PllChart(_render_histogram(values, bins, name, title))
+
+    # ---- Charts: the rest of the Pyret set ----
+
+    def scatter_plot(self, x, y, title=None):
+        """Scatter plot of x vs y. Another name for `scatter_chart`."""
+        return self.scatter_chart(x, y, title)
+
+    def labeled_scatter_plot(self, labels, x, y, title=None):
+        """Scatter plot with the points coloured and keyed by `labels`."""
+        self._require_column(labels)
+        xs = self._numeric_column(x, "labeled_scatter_plot")
+        ys = self._numeric_column(y, "labeled_scatter_plot")
+        names = [_format_cell(v) for v in self._data[labels]]
+        return _PllChart(
+            _render_xy_chart(xs, ys, x, y, title, mode="scatter", labels=names)
+        )
+
+    def pie_chart(self, labels, values, title=None):
+        """Pie chart: one slice per row, sized by `values`."""
+        self._require_column(labels)
+        amounts = self._numeric_column(values, "pie_chart")
+        for amount in amounts:
+            if amount < 0:
+                raise ValueError(
+                    "a pie chart cannot show a negative value; column %r "
+                    "contains %g" % (values, amount)
+                )
+        names = [_format_cell(v) for v in self._data[labels]]
+        return _PllChart(_render_pie_chart(names, amounts, title))
+
+    def dot_plot(self, name, title=None):
+        """One dot per row along `name`, stacked where rows share a value."""
+        values = self._numeric_column(name, "dot_plot")
+        if not values:
+            raise ValueError("dot_plot needs at least one row")
+        return _PllChart(_render_dot_plot(values, None, name, title))
+
+    def labeled_dot_plot(self, labels, name, title=None):
+        """`dot_plot`, with the dots coloured and keyed by `labels`."""
+        self._require_column(labels)
+        values = self._numeric_column(name, "labeled_dot_plot")
+        if not values:
+            raise ValueError("labeled_dot_plot needs at least one row")
+        names = [_format_cell(v) for v in self._data[labels]]
+        return _PllChart(_render_dot_plot(values, names, name, title))
+
+    def freq_bar_chart(self, name, title=None):
+        """How often each distinct value of `name` appears.
+
+        Unlike `bar_chart` this needs one column, not two: it counts the
+        rows itself. The column can hold anything - counting words is the
+        usual reason to reach for it.
+        """
+        self._require_column(name)
+        counts = {}
+        for value in self._data[name]:
+            key = _format_cell(value)
+            counts[key] = counts.get(key, 0) + 1
+        if not counts:
+            raise ValueError("freq_bar_chart needs at least one row")
+        keys = sorted(counts, key=_sort_key)
+        return _PllChart(
+            _render_bar_chart(keys, [float(counts[k]) for k in keys], name, "count", title)
+        )
+
+    def box_plot(self, name, title=None):
+        """Box and whisker plot of `name`: quartiles, range and outliers."""
+        values = self._numeric_column(name, "box_plot")
+        if not values:
+            raise ValueError("box_plot needs at least one row")
+        return _PllChart(_render_box_plot(values, name, title))
+
+    def lr_plot(self, x, y, title=None):
+        """Scatter plot with the line of best fit, and r-squared in the title."""
+        xs = self._numeric_column(x, "lr_plot")
+        ys = self._numeric_column(y, "lr_plot")
+        slope, intercept, r_squared = _pll_linear_fit(xs, ys)
+        line = ([min(xs), max(xs)], [slope * min(xs) + intercept, slope * max(xs) + intercept])
+        return _PllChart(
+            _render_xy_chart(
+                xs, ys, x, y,
+                title if title is not None else _fit_title(slope, intercept, r_squared),
+                mode="scatter", lines=[line],
+            )
+        )
+
+    def labeled_lr_plot(self, labels, x, y, title=None):
+        """`lr_plot`, with the points coloured and keyed by `labels`."""
+        self._require_column(labels)
+        xs = self._numeric_column(x, "labeled_lr_plot")
+        ys = self._numeric_column(y, "labeled_lr_plot")
+        slope, intercept, r_squared = _pll_linear_fit(xs, ys)
+        line = ([min(xs), max(xs)], [slope * min(xs) + intercept, slope * max(xs) + intercept])
+        names = [_format_cell(v) for v in self._data[labels]]
+        return _PllChart(
+            _render_xy_chart(
+                xs, ys, x, y,
+                title if title is not None else _fit_title(slope, intercept, r_squared),
+                mode="scatter", labels=names, lines=[line],
+            )
+        )
+
+    def linear_regression(self, x, y):
+        """(slope, intercept, r_squared) for `y` against `x`.
+
+        The numbers behind `lr_plot`, for when you want to talk about the
+        fit rather than look at it.
+        """
+        xs = self._numeric_column(x, "linear_regression")
+        ys = self._numeric_column(y, "linear_regression")
+        return _pll_linear_fit(xs, ys)
 
     # ---- Display protocol ----
 
@@ -329,14 +481,45 @@ class Table:
         import pandas as _pd  # noqa: F401  (raises ImportError if unavailable)
         return _pd.DataFrame({c: list(self._data[c]) for c in self._columns})
 
+    # ---- Equality ----
+
+    def __eq__(self, other):
+        """Same columns, in the same order, holding the same values.
+
+        Column order counts: two tables that display differently are not
+        the same table. Cells compare as Python values, so `1 == 1.0` and a
+        loaded CSV's `29` equals a literal `29`.
+        """
+        if not isinstance(other, Table):
+            return NotImplemented
+        if self._columns != other._columns or self._length != other._length:
+            return False
+        return all(self._data[c] == other._data[c] for c in self._columns)
+
+    # Defining `__eq__` makes a class unhashable unless it says otherwise,
+    # and that is the right default here: a table's cells can be lists or
+    # other unhashable values, so there is no honest hash to give.
+    __hash__ = None
+
     # ---- Repr ----
 
     def __repr__(self):
-        return "<Table %d rows x %d columns: %s>" % (
-            self._length,
-            len(self._columns),
-            ", ".join(self._columns),
-        )
+        """A readable rendering, because this is what a failed test prints.
+
+        The old summary (`<Table 3 rows x 2 columns: name, mpg>`) is the
+        same for any two tables of the same shape, which is exactly the
+        case `assert t == expected` fails in. Rows are truncated so a big
+        table cannot flood a message.
+        """
+        head = ", ".join(repr(c) for c in self._columns)
+        shown = min(self._length, _REPR_ROWS)
+        rows = []
+        for i in range(shown):
+            rows.append("[" + ", ".join(repr(self._data[c][i]) for c in self._columns) + "]")
+        body = ", ".join(rows)
+        if self._length > shown:
+            body += ", ... (%d more rows)" % (self._length - shown)
+        return "table([%s], [%s])" % (head, body)
 
     # ---- Helpers ----
 
@@ -352,9 +535,17 @@ class Table:
         for v in self._data[name]:
             f = _to_number(v)
             if f is None:
+                hint = ""
+                if isinstance(v, str):
+                    # By far the most likely cause: the table came from a
+                    # CSV, where every column is text until converted.
+                    hint = (
+                        ". If this came from load_table, convert it first: "
+                        "t.transform_column(%r, float)" % name
+                    )
                 raise TypeError(
-                    "%s needs a numeric column; column %r contains %r"
-                    % (op, name, v)
+                    "%s needs a numeric column; column %r contains %r%s"
+                    % (op, name, v, hint)
                 )
             out.append(f)
         return out
@@ -389,6 +580,111 @@ def table_from_columns(data):
     if n is None:
         n = 0
     return Table._from_columns(cols, data, n)
+
+
+def load_table(source):
+    """Read a CSV into a table, from a file beside your program or a URL.
+
+    Which one is worked out from the text: anything starting `http://` or
+    `https://` is fetched, anything else is a file name.
+
+        load_table("cars.csv")
+        load_table("https://example.edu/cars.csv")
+
+    The first row names the columns. **Every cell arrives as text**, the
+    way Pyret's `load-table` gives it to you, including ones that look like
+    numbers; an empty cell is the empty string. Convert a column when you
+    want to chart or average it:
+
+        cars = load_table("cars.csv").transform_column("mpg", float)
+
+    Guessing which columns are numeric reads well in the easy case and
+    badly in the rest: a column of years or zip codes becomes arithmetic
+    nobody asked for, a stray "n/a" silently turns a numeric column back
+    into text, and either way what a table holds depends on the file
+    rather than on the program. Converting explicitly is one more line and
+    says what it means.
+    """
+    text = _pll_read_source(source, "load_table")
+    # `csv` rather than `split(",")`: quoted fields containing commas and
+    # newlines are ordinary in real data, and getting them wrong shifts
+    # every later column without saying anything.
+    reader = _csv.reader(_io.StringIO(text))
+    try:
+        rows = [row for row in reader if row and any(cell.strip() for cell in row)]
+    except _csv.Error as e:
+        raise ValueError("Could not read %r as a CSV: %s" % (source, e)) from None
+    if not rows:
+        raise ValueError("%r has no rows in it." % source)
+
+    header = [name.strip() for name in rows[0]]
+    if len(header) != len(set(header)):
+        seen = set()
+        for name in header:
+            if name in seen:
+                raise ValueError(
+                    "%r has two columns called %r. Column names have to be "
+                    "different, so give one of them another name." % (source, name)
+                )
+            seen.add(name)
+    blank = [i for i, name in enumerate(header) if not name]
+    if blank:
+        raise ValueError(
+            "Column %d of %r has no name in the first row." % (blank[0] + 1, source)
+        )
+
+    raw = {name: [] for name in header}
+    for line_number, row in enumerate(rows[1:], start=2):
+        if len(row) != len(header):
+            raise ValueError(
+                "Line %d of %r has %d value(s) but there are %d columns (%s)."
+                % (line_number, source, len(row), len(header), ", ".join(header))
+            )
+        for name, cell in zip(header, row):
+            raw[name].append(cell)
+
+    return Table._from_columns(header, raw, len(rows) - 1)
+
+
+def function_plot(f, x_min, x_max, steps=200, title=None):
+    """Plot `f` over the range `x_min` to `x_max`.
+
+    The range is required, unlike Pyret's `function-plot`, which borrows a
+    window from the chart it is drawn into. There is no such window here,
+    and guessing one would quietly decide what the picture shows.
+
+        function_plot(lambda x: x * x, -3, 3)
+    """
+    if x_max <= x_min:
+        raise ValueError("function_plot needs x_max to be greater than x_min")
+    if steps < 2:
+        raise ValueError("function_plot needs at least 2 steps")
+    xs = []
+    ys = []
+    for i in range(steps + 1):
+        x = x_min + (x_max - x_min) * i / steps
+        try:
+            y = f(x)
+        except Exception as e:
+            raise ValueError(
+                "function_plot could not work out the value at x=%g (%s: %s)"
+                % (x, type(e).__name__, e)
+            ) from None
+        value = _to_number(y)
+        if value is None:
+            # A gap - a vertical asymptote, say - rather than a whole
+            # failed plot. Drawing what is defined is more use than nothing.
+            continue
+        xs.append(x)
+        ys.append(value)
+    if len(xs) < 2:
+        raise ValueError(
+            "function_plot found no numbers to draw between x=%g and x=%g"
+            % (x_min, x_max)
+        )
+    return _PllChart(
+        _render_xy_chart(xs, ys, "x", "y", title, mode="line", markers=False)
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -471,12 +767,12 @@ class _PllChart:
         return "<Chart %dx%d>" % (self._payload["width"], self._payload["height"])
 
 
-def _plot_box():
+def _plot_box(height=None):
     """Inner plotting rectangle: (x, y, w, h)."""
     x = _CHART_MARGIN_L
     y = _CHART_MARGIN_T
     w = _CHART_W - _CHART_MARGIN_L - _CHART_MARGIN_R
-    h = _CHART_H - _CHART_MARGIN_T - _CHART_MARGIN_B
+    h = (_CHART_H if height is None else height) - _CHART_MARGIN_T - _CHART_MARGIN_B
     return x, y, w, h
 
 
@@ -523,9 +819,10 @@ def _format_tick(v):
     return "%g" % v
 
 
-def _chart_frame(title, x_label, y_label, body_svg):
+def _chart_frame(title, x_label, y_label, body_svg, height=None):
     """Wrap chart body SVG with title + axis labels + outer <svg>."""
-    px, py, pw, ph = _plot_box()
+    chart_h = _CHART_H if height is None else height
+    px, py, pw, ph = _plot_box(height)
     title_svg = ""
     if title:
         title_svg = (
@@ -536,7 +833,7 @@ def _chart_frame(title, x_label, y_label, body_svg):
     x_label_svg = (
         '<text x="%d" y="%d" text-anchor="middle" '
         'font-size="11" font-style="italic">%s</text>'
-    ) % (px + pw / 2, _CHART_H - 8, _xml_escape(x_label))
+    ) % (px + pw / 2, chart_h - 8, _xml_escape(x_label))
 
     # y-label rotated 90deg, anchored on the left margin
     y_label_svg = (
@@ -552,11 +849,11 @@ def _chart_frame(title, x_label, y_label, body_svg):
         "%s%s%s%s</svg>"
     ) % (
         _CHART_W,
-        _CHART_H,
+        chart_h,
         _CHART_W,
-        _CHART_H,
+        chart_h,
         _CHART_W,
-        _CHART_H,
+        chart_h,
         title_svg,
         x_label_svg,
         y_label_svg,
@@ -587,8 +884,8 @@ def _draw_y_axis(lo, hi, ticks):
     return "".join(parts) + "".join(text_parts)
 
 
-def _draw_x_axis_numeric(lo, hi, ticks):
-    px, py, pw, ph = _plot_box()
+def _draw_x_axis_numeric(lo, hi, ticks, height=None):
+    px, py, pw, ph = _plot_box(height)
     parts = ['<g stroke="#bbb" stroke-width="1" fill="none">']
     text_parts = []
     for t in ticks:
@@ -666,7 +963,130 @@ def _render_bar_chart(labels, values, x_label, y_label, title):
     }
 
 
-def _render_xy_chart(xs, ys, x_label, y_label, title, mode):
+#: Series colours, reused for labelled groups and pie slices. Ordered so
+#: neighbouring series stay distinguishable rather than shading into one
+#: another.
+_PALETTE = (
+    "#4f8cff", "#f2994a", "#27ae60", "#eb5757",
+    "#9b51e0", "#2d9cdb", "#f2c94c", "#56ccf2",
+)
+
+
+def _palette(i):
+    return _PALETTE[i % len(_PALETTE)]
+
+
+def _plain_frame(title, body_svg, width=_CHART_W, height=_CHART_H):
+    """An outer <svg> with a title and no axes, for charts that have none."""
+    title_svg = ""
+    if title:
+        title_svg = (
+            '<text x="%d" y="%d" text-anchor="middle" '
+            'font-size="13" font-weight="600">%s</text>'
+        ) % (width / 2, _CHART_MARGIN_T - 12, _xml_escape(title))
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" '
+        'viewBox="0 0 %d %d" font-family="sans-serif" '
+        'shape-rendering="geometricPrecision">'
+        '<rect x="0" y="0" width="%d" height="%d" fill="white"/>'
+        "%s%s</svg>"
+    ) % (width, height, width, height, width, height, title_svg, body_svg)
+
+
+def _legend_width(entries):
+    """How wide the key needs to be: swatch, gap, text, padding.
+
+    A shared estimate, because the caller positions the panel and the
+    panel draws itself - and when the two disagreed by a few pixels the
+    last letter of a short label was clipped off the edge of the chart.
+    """
+    longest = max(len(str(label)) for _, label in entries)
+    return 24.0 + longest * 6.2
+
+
+def _render_legend(entries, x, y):
+    """A colour/label key, on a backing panel so it stays readable on data."""
+    if not entries:
+        return ""
+    rows = []
+    box_w = _legend_width(entries)
+    box_h = 6 + len(entries) * 14
+    rows.append(
+        '<rect x="%g" y="%g" width="%g" height="%g" fill="white" '
+        'fill-opacity="0.85" stroke="#ddd"/>' % (x, y, box_w, box_h)
+    )
+    for i, (color, label) in enumerate(entries):
+        cy = y + 10 + i * 14
+        rows.append('<rect x="%g" y="%g" width="8" height="8" fill="%s"/>'
+                    % (x + 5, cy - 6, color))
+        rows.append(
+            '<text x="%g" y="%g" font-size="10" fill="#333">%s</text>'
+            % (x + 18, cy + 1, _xml_escape(label))
+        )
+    return "".join(rows)
+
+
+def _pll_linear_fit(xs, ys):
+    """Least-squares fit. Returns (slope, intercept, r_squared)."""
+    n = len(xs)
+    if n < 2:
+        raise ValueError("a line of best fit needs at least two rows")
+    mean_x = _sum_numeric(xs) / n
+    mean_y = _sum_numeric(ys) / n
+    sxx = _sum_numeric([(x - mean_x) ** 2 for x in xs])
+    sxy = _sum_numeric([(x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)])
+    if sxx == 0:
+        raise ValueError(
+            "a line of best fit needs the x values to vary; they are all %g"
+            % mean_x
+        )
+    slope = sxy / sxx
+    intercept = mean_y - slope * mean_x
+    ss_tot = _sum_numeric([(y - mean_y) ** 2 for y in ys])
+    ss_res = _sum_numeric([(y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys)])
+    # All y equal: the line goes through every point, so it explains
+    # everything there is to explain.
+    r_squared = 1.0 if ss_tot == 0 else 1.0 - ss_res / ss_tot
+    return slope, intercept, r_squared
+
+
+def _fit_title(slope, intercept, r_squared):
+    """Pyret's wording, so a course can use either and read the same thing."""
+    sign = "+" if intercept >= 0 else "-"
+    return "y=%.3fx %s %.3f;     r-sq: %.3f" % (
+        slope, sign, abs(intercept), r_squared,
+    )
+
+
+def _quartiles(values):
+    """(q1, median, q3) by linear interpolation.
+
+    The same rule as `statistics.quantiles(..., method="inclusive")` and
+    numpy's default percentile, so a student can check the box by hand
+    against what those report.
+    """
+    ordered = sorted(values)
+    n = len(ordered)
+
+    def at(fraction):
+        if n == 1:
+            return ordered[0]
+        pos = fraction * (n - 1)
+        low = int(_math.floor(pos))
+        high = min(low + 1, n - 1)
+        return ordered[low] + (ordered[high] - ordered[low]) * (pos - low)
+
+    return at(0.25), at(0.5), at(0.75)
+
+
+def _render_xy_chart(xs, ys, x_label, y_label, title, mode, labels=None, lines=(), markers=True):
+    """Points, optionally grouped by label and overlaid with fitted lines.
+
+    One renderer for scatter, line, labelled scatter and the regression
+    plots: they differ only in how points are coloured and whether a line
+    is drawn through them, so the axis and tick work is not worth
+    duplicating four times.
+    """
     px, py, pw, ph = _plot_box()
     if not xs:
         body = ""
@@ -676,8 +1096,12 @@ def _render_xy_chart(xs, ys, x_label, y_label, title, mode):
             "data": _chart_frame(title, x_label, y_label, body),
         }
 
-    x_lo, x_hi = min(xs), max(xs)
-    y_lo, y_hi = min(ys), max(ys)
+    # A fitted line can reach past the points, so the axes have to cover it
+    # too or it would be clipped at the edge of the box.
+    all_x = list(xs) + [x for line in lines for x in line[0]]
+    all_y = list(ys) + [y for line in lines for y in line[1]]
+    x_lo, x_hi = min(all_x), max(all_x)
+    y_lo, y_hi = min(all_y), max(all_y)
     x_ticks, x_lo_n, x_hi_n = _nice_ticks(x_lo, x_hi, target=6)
     y_ticks, y_lo_n, y_hi_n = _nice_ticks(y_lo, y_hi, target=5)
 
@@ -697,21 +1121,222 @@ def _render_xy_chart(xs, ys, x_label, y_label, title, mode):
             '<path d="%s" fill="none" stroke="#4f8cff" stroke-width="2" '
             'stroke-linejoin="round" stroke-linecap="round"/>' % path
         )
-        for sx, sy in coords:
-            body.append(
-                '<circle cx="%g" cy="%g" r="2.5" fill="#4f8cff"/>' % (sx, sy)
-            )
-    else:
+        if markers:
+            for sx, sy in coords:
+                body.append(
+                    '<circle cx="%g" cy="%g" r="2.5" fill="#4f8cff"/>' % (sx, sy)
+                )
+    elif labels is None:
         for x, y in zip(xs, ys):
             sx, sy = to_px(x, y)
             body.append(
                 '<circle cx="%g" cy="%g" r="3" fill="#4f8cff" opacity="0.7"/>'
                 % (sx, sy)
             )
+    else:
+        # One colour per distinct label, in the order they first appear, so
+        # the key reads in the same order as the table.
+        order = []
+        for label in labels:
+            if label not in order:
+                order.append(label)
+        colors = {label: _palette(i) for i, label in enumerate(order)}
+        for x, y, label in zip(xs, ys, labels):
+            sx, sy = to_px(x, y)
+            body.append(
+                '<circle cx="%g" cy="%g" r="3.5" fill="%s" opacity="0.85"/>'
+                % (sx, sy, colors[label])
+            )
+        legend = [(colors[label], label) for label in order]
+        # Above a handful of series a key is a wall of text; the colours
+        # still separate the groups.
+        if len(legend) <= 8:
+            body.append(
+                _render_legend(legend, px + pw - _legend_width(legend) - 4, py + 4)
+            )
+
+    for line_xs, line_ys in lines:
+        coords = [to_px(x, y) for x, y in zip(line_xs, line_ys)]
+        if len(coords) < 2:
+            continue
+        body.append(
+            '<path d="%s" fill="none" stroke="#eb5757" stroke-width="2"/>'
+            % ("M " + " L ".join("%g %g" % (sx, sy) for sx, sy in coords))
+        )
     return {
         "width": _CHART_W,
         "height": _CHART_H,
         "data": _chart_frame(title, x_label, y_label, "".join(body)),
+    }
+
+
+def _render_pie_chart(labels, values, title):
+    """Slices plus a key, with each slice's share of the total."""
+    total = _sum_numeric(values)
+    if total <= 0:
+        raise ValueError(
+            "a pie chart needs the values to add up to more than zero; they "
+            "add up to %g" % total
+        )
+    cx, cy = _CHART_W * 0.32, _CHART_MARGIN_T + 124
+    radius = 108
+    body = []
+    legend = []
+    angle = -_math.pi / 2  # start at twelve o'clock
+    for i, (label, value) in enumerate(zip(labels, values)):
+        if value <= 0:
+            continue
+        share = value / total
+        sweep = share * 2 * _math.pi
+        end = angle + sweep
+        color = _palette(i)
+        if share >= 0.999:
+            # A single slice is a whole circle: an arc from a point back to
+            # itself draws nothing at all.
+            body.append('<circle cx="%g" cy="%g" r="%g" fill="%s"/>' % (cx, cy, radius, color))
+        else:
+            x1, y1 = cx + radius * _math.cos(angle), cy + radius * _math.sin(angle)
+            x2, y2 = cx + radius * _math.cos(end), cy + radius * _math.sin(end)
+            body.append(
+                '<path d="M %g %g L %g %g A %g %g 0 %d 1 %g %g Z" fill="%s" '
+                'stroke="white" stroke-width="1"/>'
+                % (cx, cy, x1, y1, radius, radius, 1 if sweep > _math.pi else 0, x2, y2, color)
+            )
+        legend.append((color, "%s (%.1f%%)" % (label, share * 100)))
+        angle = end
+    body.append(_render_legend(legend, _CHART_W * 0.62, _CHART_MARGIN_T + 4))
+    return {
+        "width": _CHART_W,
+        "height": _CHART_H,
+        "data": _plain_frame(title, "".join(body)),
+    }
+
+
+#: A box plot has one row of data, so it gets a strip like the dot plot
+#: rather than a square with the box stranded in the middle of it.
+_BOX_PLOT_H = _CHART_MARGIN_T + 96 + _CHART_MARGIN_B
+
+
+def _render_box_plot(values, name, title):
+    """A box from the quartiles, whiskers to 1.5*IQR, outliers as points."""
+    px, py, pw, ph = _plot_box(_BOX_PLOT_H)
+    q1, median, q3 = _quartiles(values)
+    iqr = q3 - q1
+    inside = [v for v in values if q1 - 1.5 * iqr <= v <= q3 + 1.5 * iqr]
+    low = min(inside) if inside else min(values)
+    high = max(inside) if inside else max(values)
+    outliers = [v for v in values if v < low or v > high]
+
+    ticks, lo_n, hi_n = _nice_ticks(min(values), max(values), target=6)
+
+    def to_x(v):
+        if hi_n <= lo_n:
+            return px + pw / 2
+        return px + (v - lo_n) / (hi_n - lo_n) * pw
+
+    mid = py + ph * 0.58
+    half = ph * 0.26
+    body = [_draw_x_axis_numeric(lo_n, hi_n, ticks, _BOX_PLOT_H)]
+    body.append(
+        '<line x1="%g" y1="%g" x2="%g" y2="%g" stroke="#444"/>'
+        % (to_x(low), mid, to_x(high), mid)
+    )
+    for v in (low, high):
+        body.append(
+            '<line x1="%g" y1="%g" x2="%g" y2="%g" stroke="#444"/>'
+            % (to_x(v), mid - half * 0.5, to_x(v), mid + half * 0.5)
+        )
+    body.append(
+        '<rect x="%g" y="%g" width="%g" height="%g" fill="#4f8cff" '
+        'fill-opacity="0.35" stroke="#4f8cff"/>'
+        % (to_x(q1), mid - half, max(to_x(q3) - to_x(q1), 1.0), half * 2)
+    )
+    body.append(
+        '<line x1="%g" y1="%g" x2="%g" y2="%g" stroke="#1b4fa0" stroke-width="2"/>'
+        % (to_x(median), mid - half, to_x(median), mid + half)
+    )
+    for v in outliers:
+        body.append(
+            '<circle cx="%g" cy="%g" r="3" fill="none" stroke="#eb5757"/>'
+            % (to_x(v), mid)
+        )
+    summary = "min %s  q1 %s  median %s  q3 %s  max %s" % tuple(
+        _format_tick(v) for v in (low, q1, median, q3, high)
+    )
+    body.append(
+        '<text x="%g" y="%g" font-size="10" fill="#555" text-anchor="middle">%s</text>'
+        % (px + pw / 2, py + 10, _xml_escape(summary))
+    )
+    return {
+        "width": _CHART_W,
+        "height": _BOX_PLOT_H,
+        "data": _chart_frame(title, name, "", "".join(body), _BOX_PLOT_H),
+    }
+
+
+_DOT_RADIUS = 5.0
+
+
+def _render_dot_plot(values, labels, name, title):
+    """One dot per row, stacked where rows share a value.
+
+    Sized to the tallest stack rather than to `_CHART_H`, and with no
+    y-axis. Stacking says "two rows had this value", which is not a
+    quantity to put a scale against - and a full-height square left the
+    dots marooned on the bottom axis under an empty y-axis labelled
+    "count".
+    """
+    tallest = 1
+    tally = {}
+    for v in values:
+        tally[v] = tally.get(v, 0) + 1
+        tallest = max(tallest, tally[v])
+    stack_h = tallest * (_DOT_RADIUS * 2 + 1) + _DOT_RADIUS
+    # The key sits inside the plot area, so the strip has to be tall enough
+    # to hold it - otherwise a tall stack at the right-hand end draws
+    # straight through it.
+    keys = len({label for label in labels}) if labels is not None else 0
+    legend_h = (6 + keys * 14 + 8) if 0 < keys <= 8 else 0
+    chart_h = (
+        _CHART_MARGIN_T
+        + max(64.0, stack_h + 10, legend_h + stack_h)
+        + _CHART_MARGIN_B
+    )
+    px, py, pw, ph = _plot_box(chart_h)
+    ticks, lo_n, hi_n = _nice_ticks(min(values), max(values), target=6)
+
+    def to_x(v):
+        if hi_n <= lo_n:
+            return px + pw / 2
+        return px + (v - lo_n) / (hi_n - lo_n) * pw
+
+    order = []
+    if labels is not None:
+        for label in labels:
+            if label not in order:
+                order.append(label)
+    colors = {label: _palette(i) for i, label in enumerate(order)}
+
+    body = [_draw_x_axis_numeric(lo_n, hi_n, ticks, chart_h)]
+    seen = {}
+    for i, v in enumerate(values):
+        level = seen.get(v, 0)
+        seen[v] = level + 1
+        cy = py + ph - _DOT_RADIUS - level * (_DOT_RADIUS * 2 + 1)
+        fill = colors[labels[i]] if labels is not None else "#4f8cff"
+        body.append(
+            '<circle cx="%g" cy="%g" r="%g" fill="%s" opacity="0.85"/>'
+            % (to_x(v), cy, _DOT_RADIUS, fill)
+        )
+    if order and len(order) <= 8:
+        legend = [(colors[label], label) for label in order]
+        body.append(
+            _render_legend(legend, px + pw - _legend_width(legend) - 4, py + 2)
+        )
+    return {
+        "width": _CHART_W,
+        "height": chart_h,
+        "data": _chart_frame(title, name, "", "".join(body), chart_h),
     }
 
 
@@ -772,4 +1397,6 @@ PLL_TABLE_EXPORTS = [
     "Table",
     "table",
     "table_from_columns",
+    "load_table",
+    "function_plot",
 ]

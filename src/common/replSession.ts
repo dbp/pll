@@ -900,10 +900,13 @@ export class ReplSession implements vscode.Disposable {
       case "error": {
         const traceback = event.traceback || `${event.errorType}: ${event.message}`;
         const parsed = parsePythonError(traceback);
-        if (parsed.lineNumber === null && event.lineNumber !== null) {
+        // `!= null` rather than `!== null`: these arrive from a Python dict
+        // and a missing key is `undefined`, which would otherwise be copied
+        // across as if it were a location.
+        if (parsed.lineNumber === null && event.lineNumber != null) {
           parsed.lineNumber = event.lineNumber;
         }
-        if (parsed.column === null && event.column !== null) {
+        if (parsed.column === null && event.column != null) {
           parsed.column = event.column;
         }
         if (parsed.fileName === null && event.fileName) {

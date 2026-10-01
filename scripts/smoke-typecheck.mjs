@@ -60,6 +60,7 @@ async function loadAnalyzer() {
     `
 export { findRuntimeFinding } from "../src/common/analyzers/registry";
 export { parsePythonError } from "../src/common/errors/pythonErrorParser";
+export { deliverTestResult } from "../src/common/deliverResult";
 `,
   );
   await build({
@@ -82,7 +83,7 @@ async function main() {
     console.error(`Missing ${WORKER_PATH}. Run \`pnpm run build\` first.`);
     process.exit(1);
   }
-  const { findRuntimeFinding, parsePythonError } = await loadAnalyzer();
+  const { findRuntimeFinding, parsePythonError, deliverTestResult } = await loadAnalyzer();
   const worker = new Worker(WORKER_PATH);
   const send = talk(worker);
   let session = 0;
@@ -467,6 +468,138 @@ async function main() {
         "should not say \"`None` (`None`)\": " + none.headline,
       );
     }
+    console.log("\n[16] recursive data: forward references, and checked fields");
+    {
+      // `rest: "NumList"` is the shape of every recursive data definition,
+      // and it used to take the whole test phase down with
+      // `AttributeError: 'NoneType' object has no attribute '__dict__'` -
+      // `dataclasses` resolves a string annotation through
+      // `sys.modules[cls.__module__]`, and nothing was registered there.
+      const recursive = [
+        "from dataclasses import dataclass",
+        "from typing import Optional",
+        "",
+        "@dataclass",
+        "class Cons:",
+        "    first: int",
+        '    rest: "Optional[Cons]"',
+        "",
+        "def total(nl: \"Optional[Cons]\") -> int:",
+        "    if nl is None:",
+        "        return 0",
+        "    return nl.first + total(nl.rest)",
+        "",
+        "def test_total():",
+        "    assert total(Cons(1, Cons(2, None))) == 3",
+        "",
+        "print(total(Cons(1, Cons(2, None))))",
+      ].join("\n");
+
+      const ran = await run(recursive, { level: "beginner" });
+      expect(ran.ok === true, `the run phase should work: ${ran.error_message ?? ""}`);
+      expect(ran.stdout.trim() === "3", `expected 3, got ${JSON.stringify(ran.stdout)}`);
+
+      const tested = await send({
+        type: "runTests",
+        code: recursive,
+        fileName: "rec.py",
+        sessionKey: "tc-rec",
+        level: "beginner",
+      }).then((r) => r.result);
+      expect(
+        tested.internal_error !== true,
+        `the test phase must not crash: ${tested.error_type}: ${tested.error_message}`,
+      );
+      expect(tested.passed === 1, `expected 1 passing test, got ${tested.passed}`);
+      console.log("    a recursive dataclass runs and tests cleanly");
+
+      // `@dataclass` writes `__init__` after typeguard has instrumented the
+      // source, so its fields were never checked at all.
+      const fields = [
+        "from dataclasses import dataclass",
+        "",
+        "@dataclass",
+        "class Dog:",
+        "    name: str",
+        "    age: int",
+        "",
+        "Dog(5, 3)",
+      ].join("\n");
+      const bad = await run(fields, { level: "beginner" });
+      expect(bad.ok === false, "a dataclass field of the wrong type must be refused");
+      expect(
+        (bad.error_message ?? "").includes("name"),
+        `the message should name the field, got ${bad.error_message}`,
+      );
+      const good = await run(fields.replace("Dog(5, 3)", 'Dog("Rex", 3)'), {
+        level: "beginner",
+      });
+      expect(good.ok === true, `a well-typed dataclass still works: ${good.error_message ?? ""}`);
+
+      // And a recursive field is checked too, which needs the annotation
+      // resolved in the student's own namespace rather than `__main__`.
+      const badRest = await run(
+        recursive.replace("print(total(Cons(1, Cons(2, None))))", "Cons(1, 2)"),
+        { level: "beginner" },
+      );
+      expect(badRest.ok === false, "a bad recursive field must be refused too");
+      console.log("    dataclass fields are checked, including recursive ones");
+
+      // At `#level raw` nothing is checked, so the same file has to run.
+      const raw = await run(fields, { level: "raw" });
+      expect(raw.ok === true, `#level raw must not check fields: ${raw.error_message ?? ""}`);
+      console.log("    and #level raw still checks nothing");
+    }
+
+    console.log("\n[17] a type error inside a test is worded for students");
+    {
+      // The run path went through the analyzers; the test path did not, so
+      // students read typeguard's own "is not an instance of str".
+      const code = [
+        "def shout(word: str) -> str:",
+        "    return None",
+        "",
+        "def test_shout():",
+        '    print("checking")',
+        '    assert shout("hi") == "HI!"',
+      ].join("\n");
+      const result = await send({
+        type: "runTests",
+        code,
+        fileName: "tw.py",
+        sessionKey: "tc-tw",
+        level: "beginner",
+      }).then((r) => r.result);
+      // The *worker* result still carries typeguard's own text; the
+      // rewriting happens where the result becomes events, so that both the
+      // editor's card and the command line get it. Check it there.
+      const raw = (result.tests ?? [])[0];
+      expect(raw !== undefined, "a test case should be reported");
+      expect(
+        (raw.message ?? "").includes("is not an instance of"),
+        `the worker reports typeguard's text: ${raw.message}`,
+      );
+
+      let report = null;
+      deliverTestResult(result, (event) => {
+        if (event.kind === "testReport") report = event;
+      }, "tw.py", "beginner");
+      expect(report !== null, "a testReport event should be emitted");
+      const test = report.tests[0];
+      expect(
+        !(test.message ?? "").includes("is not an instance of"),
+        `typeguard's wording must not reach the report: ${test.message}`,
+      );
+      expect(
+        (test.message ?? "").includes("should return"),
+        `expected PLL's wording, got ${test.message}`,
+      );
+      // `stdout` is on the case already - the command line just was not
+      // printing it.
+      expect((test.stdout ?? "").includes("checking"), `the test's output is carried: ${test.stdout}`);
+      console.log(`    report message: ${JSON.stringify((test.message ?? "").split("\n")[0])}`);
+    }
+
   } finally {
     await worker.terminate();
   }

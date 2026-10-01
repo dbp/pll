@@ -8,8 +8,32 @@ import { syncHttpRequest } from "./syncHttp";
  * `response` / `responseText`, and `getAllResponseHeaders()`.
  *
  * When Pyodide is not in a *web* worker it treats `response` as a string
- * of ISO-8859-15 bytes; we decode the body as latin-1 to match.
+ * of ISO-8859-15 bytes, so the body is decoded one character per byte.
  */
+
+/**
+ * Decode bytes so character *i* has code point `bytes[i]`, for any byte.
+ *
+ * `TextDecoder("latin1")` cannot do this: every `latin1` label in the
+ * Encoding Standard is an alias for **windows-1252**, which maps 0x80-0x9f
+ * to code points above 255 (0x89 becomes U+2030). That is lossless for
+ * text, which is why it went unnoticed, but it destroys binary - a PNG
+ * fetched through here used to arrive with its signature mangled.
+ */
+function decodeByteString(bytes: Uint8Array): string {
+  // Chunked: `String.fromCharCode(...bytes)` spreads into the argument list
+  // and blows the stack somewhere around a hundred thousand bytes.
+  const CHUNK = 0x8000;
+  let out = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    out += String.fromCharCode.apply(
+      null,
+      bytes.subarray(i, i + CHUNK) as unknown as number[],
+    );
+  }
+  return out;
+}
+
 export function installNodeXHR(): void {
   const g = globalThis as Record<string, unknown>;
   // pyodide-http imports this at module load. Missing it makes
@@ -54,7 +78,9 @@ export function installNodeXHR(): void {
     }
 
     overrideMimeType(_mime: string): void {
-      /* pyodide-http calls this in the main-thread path; we ignore it. */
+      /* Ignored on purpose. Callers ask for `x-user-defined` so a *browser*
+         stops decoding the body as UTF-8; here every response is already
+         one character per byte, which is what that request is for. */
     }
 
     send(body?: ArrayBuffer | Uint8Array | string | null): void {
@@ -84,7 +110,7 @@ export function installNodeXHR(): void {
         this.response = copy.buffer;
         this.responseText = "";
       } else {
-        const text = new TextDecoder("latin1").decode(result.body);
+        const text = decodeByteString(result.body);
         this.response = text;
         this.responseText = text;
       }

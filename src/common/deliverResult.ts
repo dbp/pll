@@ -1,3 +1,5 @@
+import { explainTypeCheckError } from "./errors/typeCheckExplainer";
+import type { Level } from "./level";
 import type { DisplayData, RunResult, TestRunResult } from "./pyodideRunner";
 import type { ExecutionEventHandler, TestCaseResult } from "./types";
 
@@ -123,14 +125,44 @@ function asPlain(value: unknown): unknown {
   return value;
 }
 
-function adaptTestCase(raw: unknown): TestCaseResult {
+/**
+ * Put PLL's wording on a typeguard failure that happened inside a test.
+ *
+ * A type error during a *run* goes through the runtime analyzers and comes
+ * out as "`shout` should return a str, but it returned None". The same
+ * error inside a test went straight into the report, so students read
+ * typeguard's own "the return value (None) is not an instance of str" -
+ * the wording the analyzers exist to replace.
+ *
+ * Done here rather than in either view, so the editor's card and the
+ * command line say the same thing.
+ */
+function friendlyTypeCheckMessage(message: string, level?: Level): string {
+  const marker = message.indexOf("TypeCheckError:");
+  if (marker < 0) {
+    return message;
+  }
+  // Everything after the marker, including the indented union detail that
+  // typeguard puts on following lines.
+  const detail = message.slice(marker + "TypeCheckError:".length).trim();
+  if (!detail) {
+    return message;
+  }
+  const explanation = explainTypeCheckError(detail, null, level);
+  return [explanation.headline, ...explanation.howToFix.map((line) => `- ${line}`)].join(
+    "\n",
+  );
+}
+
+function adaptTestCase(raw: unknown, level?: Level): TestCaseResult {
   const row = (asPlain(raw) ?? {}) as Record<string, unknown>;
   const line = row.line_number;
+  const message = row.message == null ? null : String(row.message);
   return {
     name: String(row.name ?? ""),
     outcome: String(row.outcome ?? "failed"),
     lineNumber: typeof line === "number" ? line : null,
-    message: row.message == null ? null : String(row.message),
+    message: message === null ? null : friendlyTypeCheckMessage(message, level),
     stdout: row.stdout == null ? null : String(row.stdout),
   };
 }
@@ -144,6 +176,7 @@ export function deliverTestResult(
   result: TestRunResult,
   onEvent: ExecutionEventHandler,
   fileName: string,
+  level?: Level,
 ): void {
   if (result.internal_error && result.error_type) {
     onEvent({
@@ -158,7 +191,9 @@ export function deliverTestResult(
     onEvent({ kind: "done" });
     return;
   }
-  const tests = Array.isArray(result.tests) ? result.tests.map(adaptTestCase) : [];
+  const tests = Array.isArray(result.tests)
+    ? result.tests.map((row) => adaptTestCase(row, level))
+    : [];
   onEvent({
     kind: "testReport",
     fileName,

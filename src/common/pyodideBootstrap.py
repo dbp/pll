@@ -33,6 +33,7 @@ import codeop as _codeop
 import contextlib
 import json as _pll_json
 import sys as _sys
+import types as _pll_types
 import builtins as _builtins_mod
 
 # Must match PLL_WORK_DIR in memfsWorkspace.ts. Sibling files are mounted
@@ -137,6 +138,8 @@ def _pll_enable_type_checking():
         # injects, so they have to be visible in user globals.
         _pll_initial_globals["_pll_tg_memo"] = TypeCheckMemo
         _pll_initial_globals["_pll_tg_check_assign"] = check_variable_assignment
+        # Referenced by name in the AST that `_PllDataclassChecks` injects.
+        _pll_initial_globals["_pll_check_dataclass_fields"] = _pll_check_dataclass_fields
         # Consulted before typeguard's builtin lookup, and gated on
         # `_PLL_STRICT_NUMBERS` so it is a no-op at `advanced`.
         _pll_type_check_error = TypeCheckError
@@ -416,6 +419,98 @@ class _PllTopLevelAnnAssign(_ast.NodeTransformer):
         return call
 
 
+def _pll_is_dataclass_decorator(node):
+    """True for `@dataclass`, `@dataclasses.dataclass` and calls to either."""
+    if isinstance(node, _ast.Call):
+        node = node.func
+    if isinstance(node, _ast.Name):
+        return node.id == "dataclass"
+    if isinstance(node, _ast.Attribute):
+        return node.attr == "dataclass"
+    return False
+
+
+class _PllDataclassChecks(_ast.NodeTransformer):
+    """Have every `@dataclass` check its field types when constructed.
+
+    typeguard instruments what it can see in the source, but `@dataclass`
+    writes `__init__` *afterwards* - so `Dog(5, 3)` with `name: str` was
+    accepted without a word, which is the opposite of the point at
+    `#level beginner`.
+
+    The checker goes on the front of the decorator list, which makes it the
+    outermost one and therefore the last to run, so it sees the `__init__`
+    that `@dataclass` generated rather than the class before it existed.
+    """
+
+    def visit_ClassDef(self, node):
+        self.generic_visit(node)
+        if any(_pll_is_dataclass_decorator(d) for d in node.decorator_list):
+            node.decorator_list.insert(
+                0, _ast.Name(id="_pll_check_dataclass_fields", ctx=_ast.Load())
+            )
+        return node
+
+
+def _pll_check_dataclass_fields(cls):
+    """Wrap a dataclass's `__init__` so its fields are checked.
+
+    Checked after the original `__init__` has run, so defaults,
+    `field(default_factory=...)` and `__post_init__` have all had their
+    say and the values checked are the ones the instance really holds.
+
+    Annotations are resolved at construction rather than at decoration,
+    because a recursive definition names a class that does not exist yet
+    (`rest: "NumList"`). A resolution that fails is not cached: it may well
+    succeed once the rest of the file has run.
+
+    The namespace to resolve them in is taken from the frame that applied
+    the decorator - the student's own globals - and not left to
+    `get_type_hints`, which would look up `sys.modules[cls.__module__]`.
+    That is Pyodide's `__main__`, a different dict from the session's, so
+    every recursive annotation failed to resolve and its field went
+    unchecked.
+    """
+    if not _PLL_TYPE_CHECK or not _PLL_TYPEGUARD_READY:
+        return cls
+    memo_type = _pll_initial_globals.get("_pll_tg_memo")
+    check = _pll_initial_globals.get("_pll_tg_check_assign")
+    if memo_type is None or check is None:
+        return cls
+
+    try:
+        defining_globals = _sys._getframe(1).f_globals
+    except Exception:
+        defining_globals = getattr(_sys.modules.get(cls.__module__), "__dict__", {})
+
+    original = cls.__init__
+    cache = []
+
+    def __init__(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        if not cache:
+            import typing as _pll_typing
+
+            try:
+                cache.append(
+                    _pll_typing.get_type_hints(cls, globalns=dict(defining_globals))
+                )
+            except Exception:
+                # Not resolvable yet (or at all). Construct without
+                # checking rather than failing on the annotation.
+                return
+        memo = memo_type(defining_globals, {})
+        for field_name, hint in cache[0].items():
+            if not hasattr(self, field_name):
+                continue
+            check(getattr(self, field_name), [(field_name, hint)], memo)
+
+    __init__.__name__ = "__init__"
+    __init__.__qualname__ = "%s.__init__" % cls.__qualname__
+    cls.__init__ = __init__
+    return cls
+
+
 def _pll_parse_and_instrument(code, filename):
     """Parse `code`, adding runtime type checks when they are available.
 
@@ -433,6 +528,7 @@ def _pll_parse_and_instrument(code, filename):
         instrumented = _ast.parse(code, filename=filename, mode="exec")
         _pll_typeguard_transformer().visit(instrumented)
         _PllTopLevelAnnAssign().visit(instrumented)
+        _PllDataclassChecks().visit(instrumented)
         _ast.fix_missing_locations(instrumented)
         compile(instrumented, filename, "exec")
         return instrumented
@@ -474,6 +570,113 @@ def _pll_should_skip_expr(stmt, index):
         if value.value is None or value.value is Ellipsis:
             return True
     return False
+
+
+# -----------------------------------------------------------------------------
+# Reading a source that is either a URL or a file next to the program
+# -----------------------------------------------------------------------------
+#
+# Shared by `load_table` and `load_image`, so "https:// means the network,
+# anything else means a file" is decided in exactly one place and both report
+# the same way when it goes wrong. It lives in the bootstrap because the
+# libraries are exec'd into these globals afterwards, in the same way
+# examplarLib borrows `_pll_fix_ast_ranges`.
+
+import re as _pll_src_re
+
+_PLL_SCHEME_RE = _pll_src_re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*)://")
+
+
+def _pll_source_is_url(source):
+    """True when `source` names an address rather than a file."""
+    match = _PLL_SCHEME_RE.match(source)
+    return match is not None and match.group(1).lower() in ("http", "https")
+
+
+def _pll_fetch_bytes(url, what):
+    """GET `url` synchronously and return the body as bytes.
+
+    Uses `XMLHttpRequest` rather than `pyodide.http.open_url`, because that
+    decodes to text and an image is bytes - one path has to serve both.
+    Synchronous XHR is fine here: Pyodide runs in a worker, never on a
+    page's main thread.
+
+    `overrideMimeType` is what keeps this portable. A browser would decode
+    the body as UTF-8 and mangle every byte above 0x7f, so it is asked for
+    `x-user-defined`, which maps bytes 0x80-0xff to U+F780-U+F7FF; masking
+    with 0xff undoes that. On the desktop the polyfill ignores the call and
+    hands back latin-1, where the mask is the identity. Same two lines of
+    Python either way.
+    """
+    try:
+        from js import XMLHttpRequest as _Xhr
+    except ImportError:
+        raise OSError(
+            "%s cannot reach the network, so it cannot read %s." % (what, url)
+        ) from None
+    xhr = _Xhr.new()
+    try:
+        xhr.open("GET", url, False)
+        xhr.overrideMimeType("text/plain; charset=x-user-defined")
+        xhr.send(None)
+    except Exception as e:
+        # A failed cross-origin request looks like this, and it is the most
+        # likely cause by far, so say so rather than repeating the browser's
+        # famously unhelpful wording.
+        raise OSError(
+            "%s could not reach %s (%s). If that address is not your own, it "
+            "may not allow other sites to read it." % (what, url, e)
+        ) from None
+    if xhr.status != 200:
+        raise OSError(
+            "%s could not read %s: the server answered %d."
+            % (what, url, xhr.status)
+        )
+    return bytes(ord(c) & 0xFF for c in xhr.responseText)
+
+
+def _pll_read_source(source, what, binary=False):
+    """Read `source` - a URL or a path beside the program - and return it.
+
+    Returns bytes when `binary`, otherwise text decoded as UTF-8.
+    """
+    if not isinstance(source, str):
+        raise TypeError(
+            "%s needs a file name or a URL as a string, not %r"
+            % (what, type(source).__name__)
+        )
+    stripped = source.strip()
+    if not stripped:
+        raise ValueError("%s needs a file name or a URL; got an empty string" % what)
+
+    if _pll_source_is_url(stripped):
+        data = _pll_fetch_bytes(stripped, what)
+    else:
+        scheme = _PLL_SCHEME_RE.match(stripped)
+        if scheme is not None:
+            raise ValueError(
+                "%s can read an https:// address or a file next to your "
+                "program, but not a %s:// one." % (what, scheme.group(1))
+            )
+        try:
+            with open(stripped, "rb") as handle:
+                data = handle.read()
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                "There is no file called %r next to your program. Check the "
+                "spelling, or pass an https:// address instead." % stripped
+            ) from None
+        except IsADirectoryError:
+            raise IsADirectoryError("%r is a folder, not a file." % stripped) from None
+    if binary:
+        return data
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError(
+            "%s could not read %r as text - it does not look like a text file."
+            % (what, source)
+        ) from None
 
 
 # -----------------------------------------------------------------------------
@@ -818,9 +1021,24 @@ def _pll_run_tests(code, filename, level="raw"):
         # Assert rewriting failed; keep the type instrumentation.
         compiled = compile(tree, display_name, "exec")
 
-    ns = dict(_pll_initial_globals)
+    # The tests run inside a real module, registered under the name their
+    # classes will report as `__module__`.
+    #
+    # `dataclasses` resolves a *string* annotation - `rest: "NumList"`, the
+    # shape of every recursive data definition - by looking that module up:
+    # `sys.modules.get(cls.__module__).__dict__`. With nothing registered
+    # that is `None.__dict__`, and the whole test phase died with
+    # `AttributeError: 'NoneType' object has no attribute '__dict__'`.
+    #
+    # The module's own `__dict__` is used as the globals, rather than a copy
+    # of them, so a forward reference resolves to the student's class as
+    # soon as they define it.
+    module = _pll_types.ModuleType("__pll_test__")
+    ns = module.__dict__
+    ns.update(_pll_initial_globals)
     ns["__name__"] = "__pll_test__"
     ns["__file__"] = display_name
+    _sys.modules["__pll_test__"] = module
 
     try:
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
@@ -1315,6 +1533,15 @@ def _pll_static_analyze(code, level, filename, session_key=None):
 
         # ---- Shadowing first ----
         for name, locs in scope.bindings.items():
+            if scope.kind == "class":
+                # A name bound in a class body is an *attribute*, not a
+                # variable. `id: int` in a dataclass declares a field, and
+                # `id` everywhere else still finds the built-in - so there
+                # is nothing being shadowed, and telling a student to
+                # rename the field was simply wrong. The class's own name
+                # is bound in the enclosing scope and is still checked
+                # there, so `class list:` is still caught.
+                continue
             first_loc = locs[0]
             # A binding imported from a `pll` module re-binds the library's
             # own value and shadows nothing; a "preexisting" marker records

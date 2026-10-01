@@ -10,20 +10,89 @@
 # globals so a beginner can write `circle(50, "solid", "red")` with no
 # import boilerplate (matching the HtDP/Pyret experience).
 
+import base64 as _pll_img_b64
 import math as _math
+import re as _pll_img_re
 
 
 # -----------------------------------------------------------------------------
 # Color handling
 # -----------------------------------------------------------------------------
 
+#: Colour strings that are not names: `#abc`, `#aabbcc`, `#aabbccdd`, and
+#: the functional forms, so `rgb(1, 2, 3)` keeps working.
+_PLL_COLOR_HEX_RE = _pll_img_re.compile(r"^#(?:[0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
+_PLL_COLOR_FN_RE = _pll_img_re.compile(r"^(?:rgb|rgba|hsl|hsla)\(.+\)$")
+#: A colour *name*. Not checked against a list of the real ones - see
+#: `_pll_check_color` for why - so this only says it is shaped like a word.
+_PLL_COLOR_NAME_RE = _pll_img_re.compile(r"^[A-Za-z]+$")
+
+_PLL_MODES = ("solid", "outline")
+
+
+def _pll_check_color(color, who):
+    """Reject anything that is not a colour, naming the caller.
+
+    SVG ignores a paint value it cannot parse, so before this an
+    `rectangle(30, 40, "solid", 50)` drew an invisible rectangle and said
+    nothing at all. Checked here, at construction, rather than when the
+    picture renders, so the error points at the line that made the mistake.
+
+    A *name* is only checked for shape, not against the list of real CSS
+    colours: getting that list slightly wrong would reject a colour that
+    works, which is worse than the typo it would catch. So `"rd"` still
+    draws nothing - see the note in the readme.
+    """
+    if isinstance(color, str):
+        if (
+            _PLL_COLOR_NAME_RE.match(color)
+            or _PLL_COLOR_HEX_RE.match(color)
+            or _PLL_COLOR_FN_RE.match(color)
+        ):
+            return color
+        raise ValueError(
+            "%s: %r is not a colour. Use a name like \"red\", a hex code like "
+            "\"#ff0000\", or (red, green, blue) numbers from 0 to 255." % (who, color)
+        )
+    if isinstance(color, (tuple, list)) and len(color) in (3, 4):
+        for i, part in enumerate(color):
+            if isinstance(part, bool) or not isinstance(part, (int, float)):
+                raise ValueError(
+                    "%s: a colour's parts have to be numbers, but %r is %s."
+                    % (who, part, type(part).__name__)
+                )
+            # The fourth part is opacity, which is written either way round.
+            limit = 255 if i < 3 or part > 1 else 1
+            if not 0 <= part <= limit:
+                raise ValueError(
+                    "%s: the %s part of a colour runs from 0 to %g, but it is %r."
+                    % (who, "red green blue opacity".split()[i], limit, part)
+                )
+        return color
+    raise ValueError(
+        "%s: %r is not a colour. Use a name like \"red\", a hex code like "
+        "\"#ff0000\", or (red, green, blue) numbers from 0 to 255." % (who, color)
+    )
+
+
+def _pll_check_mode(mode, who):
+    """`solid` or `outline`, and nothing else.
+
+    Same silence as a bad colour: anything unrecognised used to fall
+    through to solid, so a misspelled "outilne" quietly filled the shape.
+    """
+    if mode not in _PLL_MODES:
+        raise ValueError(
+            "%s: expected \"solid\" or \"outline\", got %r" % (who, mode)
+        )
+    return mode
+
+
 def _pll_color_to_css(color):
     """Convert a PLL color value to an SVG/CSS color string.
 
-    Accepts:
-      - a string CSS name or hex ("red", "#ff0000")
-      - an (r, g, b) tuple/list of integers 0..255
-      - an (r, g, b, a) tuple/list, a in 0..1 or 0..255
+    Accepts what `_pll_check_color` allows: a name or hex string, or an
+    (r, g, b) / (r, g, b, a) sequence.
     """
     if isinstance(color, str):
         return color
@@ -279,6 +348,178 @@ class _Text(Image):
 # -----------------------------------------------------------------------------
 # Alignment (HtDP's x-place / y-place)
 # -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Loading a picture from a file or a URL
+# -----------------------------------------------------------------------------
+
+def _pll_png_size(data):
+    if not data.startswith(b"\x89PNG\r\n\x1a\n") or data[12:16] != b"IHDR":
+        return None
+    return (
+        int.from_bytes(data[16:20], "big"),
+        int.from_bytes(data[20:24], "big"),
+    )
+
+
+def _pll_gif_size(data):
+    if not data.startswith((b"GIF87a", b"GIF89a")):
+        return None
+    return (
+        int.from_bytes(data[6:8], "little"),
+        int.from_bytes(data[8:10], "little"),
+    )
+
+
+def _pll_jpeg_size(data):
+    """Walk the segment chain to the frame header that carries the size."""
+    if not data.startswith(b"\xff\xd8"):
+        return None
+    i = 2
+    end = len(data)
+    while i + 3 < end:
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        marker = data[i + 1]
+        # Standalone markers: no length field to skip.
+        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7 or marker == 0x01:
+            i += 2
+            continue
+        length = int.from_bytes(data[i + 2:i + 4], "big")
+        # Any SOFn except the four that are not frame headers.
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC, 0xD8):
+            if i + 9 > end:
+                return None
+            return (
+                int.from_bytes(data[i + 7:i + 9], "big"),
+                int.from_bytes(data[i + 5:i + 7], "big"),
+            )
+        i += 2 + max(length, 2)
+    return None
+
+
+def _pll_webp_size(data):
+    if not (data.startswith(b"RIFF") and data[8:12] == b"WEBP"):
+        return None
+    kind = data[12:16]
+    if kind == b"VP8 ":
+        return (
+            int.from_bytes(data[26:28], "little") & 0x3FFF,
+            int.from_bytes(data[28:30], "little") & 0x3FFF,
+        )
+    if kind == b"VP8L":
+        bits = int.from_bytes(data[21:25], "little")
+        return ((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1)
+    if kind == b"VP8X":
+        return (
+            int.from_bytes(data[24:27], "little") + 1,
+            int.from_bytes(data[27:30], "little") + 1,
+        )
+    return None
+
+
+def _pll_svg_size(data):
+    """An SVG's size, from `width`/`height` or failing that the viewBox."""
+    try:
+        head = data[:4096].decode("utf-8", "replace")
+    except Exception:
+        return None
+    if "<svg" not in head:
+        return None
+
+    def length(name):
+        found = _pll_img_re.search(r'\b%s\s*=\s*["\']([0-9.]+)' % name, head)
+        return float(found.group(1)) if found else None
+
+    w, h = length("width"), length("height")
+    if w and h:
+        return (w, h)
+    box = _pll_img_re.search(
+        r'\bviewBox\s*=\s*["\']\s*[-0-9.]+[,\s]+[-0-9.]+[,\s]+([0-9.]+)[,\s]+([0-9.]+)',
+        head,
+    )
+    if box:
+        return (float(box.group(1)), float(box.group(2)))
+    return None
+
+
+#: Sniffers in the order they are tried, with the media type each implies.
+_PLL_IMAGE_KINDS = (
+    ("image/png", _pll_png_size),
+    ("image/jpeg", _pll_jpeg_size),
+    ("image/gif", _pll_gif_size),
+    ("image/webp", _pll_webp_size),
+    ("image/svg+xml", _pll_svg_size),
+)
+
+
+class _LoadedImage(Image):
+    """A picture read from a file or a URL, carried as a data URI.
+
+    Its bytes are embedded rather than linked, so the picture keeps working
+    in a saved SVG, in the interactions panel and in a `.svg` written by
+    `--save-images`, none of which can be relied on to fetch anything.
+    """
+
+    __slots__ = ("_w", "_h", "_href", "_source")
+
+    def __init__(self, width, height, media_type, data, source):
+        self._w = float(width)
+        self._h = float(height)
+        encoded = _pll_img_b64.b64encode(data).decode("ascii")
+        self._href = "data:%s;base64,%s" % (media_type, encoded)
+        self._source = source
+
+    @property
+    def width(self):
+        return self._w
+
+    @property
+    def height(self):
+        return self._h
+
+    def _render_body(self, x, y):
+        # `preserveAspectRatio="none"` so a scaled picture fills the box the
+        # combinators computed for it, exactly as the drawn shapes do.
+        return (
+            '<image x="%g" y="%g" width="%g" height="%g" '
+            'preserveAspectRatio="none" href="%s" />'
+        ) % (x, y, self._w, self._h, self._href)
+
+    def __repr__(self):
+        return "<image %gx%g from %s>" % (self._w, self._h, self._source)
+
+
+def load_image(source):
+    """Read a picture from a file beside your program, or from a URL.
+
+    Which one is worked out from the text: anything starting `http://` or
+    `https://` is fetched, anything else is a file name.
+
+        load_image("cat.png")
+        load_image("https://example.edu/cat.png")
+
+    The result is an ordinary picture, so every combinator works on it -
+    `scale`, `rotate`, `beside`, `place_image` and the rest. PNG, JPEG,
+    GIF, WebP and SVG are understood.
+    """
+    data = _pll_read_source(source, "load_image", binary=True)
+    if not data:
+        raise ValueError("%r is empty, so there is no picture in it." % source)
+    for media_type, sniff in _PLL_IMAGE_KINDS:
+        size = sniff(data)
+        if size is None:
+            continue
+        width, height = size
+        if width <= 0 or height <= 0:
+            raise ValueError("%r says it is %gx%g, which is not a picture." % (source, width, height))
+        return _LoadedImage(width, height, media_type, data, source)
+    raise ValueError(
+        "%r is not a picture PLL can read. It understands PNG, JPEG, GIF, "
+        "WebP and SVG files." % source
+    )
+
 
 _PLL_X_PLACES = ("left", "center", "middle", "right")
 _PLL_Y_PLACES = ("top", "center", "middle", "bottom")
@@ -612,27 +853,37 @@ class _Flip(Image):
 
 def circle(radius, mode, color):
     """Solid or outline circle."""
-    return _Circle(radius, mode, color)
+    return _Circle(radius, _pll_check_mode(mode, "circle"), _pll_check_color(color, "circle"))
 
 
 def square(side, mode, color):
     """Square with the given side length."""
-    return _Rectangle(side, side, mode, color)
+    return _Rectangle(
+        side, side, _pll_check_mode(mode, "square"), _pll_check_color(color, "square")
+    )
 
 
 def rectangle(width, height, mode, color):
-    return _Rectangle(width, height, mode, color)
+    return _Rectangle(
+        width, height,
+        _pll_check_mode(mode, "rectangle"), _pll_check_color(color, "rectangle"),
+    )
 
 
 def ellipse(width, height, mode, color):
-    return _Ellipse(width, height, mode, color)
+    return _Ellipse(
+        width, height,
+        _pll_check_mode(mode, "ellipse"), _pll_check_color(color, "ellipse"),
+    )
 
 
 def triangle(side, mode, color):
     """Equilateral triangle pointing up."""
     h = side * _math.sqrt(3) / 2.0
     points = [(side / 2.0, 0.0), (side, h), (0.0, h)]
-    return _Polygon(points, mode, color)
+    return _Polygon(
+        points, _pll_check_mode(mode, "triangle"), _pll_check_color(color, "triangle")
+    )
 
 
 def right_triangle(width, height, mode, color):
@@ -645,6 +896,8 @@ def regular_polygon(side, sides, mode, color):
     """Regular polygon with `sides` sides each `side` units long."""
     if sides < 3:
         raise ValueError("regular_polygon needs at least 3 sides")
+    _pll_check_mode(mode, "regular_polygon")
+    _pll_check_color(color, "regular_polygon")
     radius = side / (2 * _math.sin(_math.pi / sides))
     points = []
     for i in range(sides):
@@ -665,6 +918,8 @@ def star_polygon(side, points_count, step, mode, color):
     """An n-pointed star with the given inner step (e.g. 5/2 -> classic star)."""
     if points_count < 3 or step < 1:
         raise ValueError("invalid star_polygon arguments")
+    _pll_check_mode(mode, "star_polygon")
+    _pll_check_color(color, "star_polygon")
     radius = side / (2 * _math.sin(_math.pi / points_count))
     pts = []
     n = points_count * 2
@@ -680,11 +935,11 @@ def star_polygon(side, points_count, step, mode, color):
 
 def line(dx, dy, color):
     """Line going `(dx, dy)` from its top-left anchor."""
-    return _Line(dx, dy, color)
+    return _Line(dx, dy, _pll_check_color(color, "line"))
 
 
 def text(value, size, color):
-    return _Text(value, size, color)
+    return _Text(value, size, _pll_check_color(color, "text"))
 
 
 def beside(*images):
@@ -830,4 +1085,5 @@ PLL_IMAGE_EXPORTS = [
     "image_width",
     "image_height",
     "empty_image",
+    "load_image",
 ]
