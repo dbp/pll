@@ -608,6 +608,20 @@ two wheats, six chaffs, and the staff suite that verifies them - and
 Documentation rots, and this is documentation that a change to a wheat could
 quietly break.
 
+`pnpm run test-web:load` covers `load_table` and `load_image` in a real
+workbench, from files beside the program and from a URL. Two of those four
+paths exist only in a browser and nothing else reaches them: a local
+picture arrives through the editor's own collector (`workspaceFiles.ts`,
+over `vscode.workspace.fs`), a different code path from the CLI's; and a
+fetched one is decoded by a real `XMLHttpRequest`, which honours the
+`x-user-defined` request and remaps every byte above 0x7f for
+`_pll_fetch_bytes` to mask back. The desktop polyfill ignores that request
+and returns one character per byte, so the mask is a no-op there and every
+command-line test passed without the mapping ever running - on a PNG, whose
+first byte is 0x89. The test therefore pulls the data URI back out of the
+rendered SVG and checks the byte count and signature, rather than trusting
+that a plausible-looking width means the bytes survived.
+
 `pnpm run test-web:examplar` is the only test that sees the two halves meet.
 It builds a bundle with the CLI, serves it from a correctly configured
 localhost server, and runs four files in the workbench: a finished suite, a
