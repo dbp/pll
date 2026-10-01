@@ -88,6 +88,20 @@ def _pll_check_mode(mode, who):
     return mode
 
 
+def _pll_px(value):
+    """A size in whole pixels, with trigonometry's rounding error removed.
+
+    Rounded before the ceiling. A hexagon of side 40 is exactly 80 across,
+    but the cosines that build it give 80.00000000000001, and `ceil` turned
+    that into an 81-pixel box with a blank column down one side.
+
+    Zero stays zero: `empty_image` is 0x0, and `beside` and friends do
+    arithmetic with that. Only an `<svg>` viewport needs a floor of 1, and
+    `to_svg` applies it there.
+    """
+    return int(_math.ceil(round(value, 9)))
+
+
 def _pll_color_to_css(color):
     """Convert a PLL color value to an SVG/CSS color string.
 
@@ -147,8 +161,9 @@ class Image:
     def to_svg(self):
         body = self._render_body(0, 0)
         # Use ceil to give a tiny bit of room so antialiased edges aren't clipped.
-        w = max(1, int(_math.ceil(self.width)))
-        h = max(1, int(_math.ceil(self.height)))
+        # At least 1: an `<svg>` of zero width renders as nothing at all.
+        w = max(1, _pll_px(self.width))
+        h = max(1, _pll_px(self.height))
         return (
             '<svg xmlns="http://www.w3.org/2000/svg" '
             'width="%d" height="%d" '
@@ -159,15 +174,15 @@ class Image:
     def _pll_image_data(self):
         return {
             "type": "svg",
-            "width": int(_math.ceil(self.width)),
-            "height": int(_math.ceil(self.height)),
+            "width": _pll_px(self.width),
+            "height": _pll_px(self.height),
             "data": self.to_svg(),
         }
 
     def __repr__(self):
         return "<Image %dx%d>" % (
-            int(_math.ceil(self.width)),
-            int(_math.ceil(self.height)),
+            _pll_px(self.width),
+            _pll_px(self.height),
         )
 
 
@@ -899,13 +914,23 @@ def regular_polygon(side, sides, mode, color):
     _pll_check_mode(mode, "regular_polygon")
     _pll_check_color(color, "regular_polygon")
     radius = side / (2 * _math.sin(_math.pi / sides))
+    # Oriented with a *side* along the bottom, which is what a regular
+    # polygon is expected to look like. With an odd number of sides a
+    # vertex at the top already gives that - a triangle points up - but
+    # with an even number it puts a vertex at the bottom too, so
+    # `regular_polygon(40, 4, ...)` came out as a 57x57 diamond instead of
+    # a 40x40 square. Half a step of rotation fixes the even cases and
+    # leaves the odd ones alone.
+    offset = 0.0 if sides % 2 else _math.pi / sides
     points = []
     for i in range(sides):
         # start at the top and go clockwise
-        angle = -_math.pi / 2.0 + i * 2 * _math.pi / sides
+        angle = -_math.pi / 2.0 + offset + i * 2 * _math.pi / sides
         px = radius + radius * _math.cos(angle)
         py = radius + radius * _math.sin(angle)
         points.append((px, py))
+    # `_Polygon` measures the points it is given, so the box is the shape's
+    # real extent rather than the circle it was cut from.
     return _Polygon(points, mode, color)
 
 
@@ -1038,11 +1063,11 @@ def flip_vertical(image):
 
 
 def image_width(image):
-    return int(_math.ceil(image.width))
+    return _pll_px(image.width)
 
 
 def image_height(image):
-    return int(_math.ceil(image.height))
+    return _pll_px(image.height)
 
 
 empty_image = _Rectangle(0, 0, "solid", (0, 0, 0, 0))

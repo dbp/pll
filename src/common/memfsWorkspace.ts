@@ -1,4 +1,5 @@
 import {
+  contentsByteLength,
   isSafeBasename,
   isWritebackName,
   MAX_FILE_BYTES,
@@ -27,7 +28,8 @@ export interface MemFS {
 }
 
 interface MountSnapshot {
-  contents: string;
+  /** Bytes for a picture, text for everything else - as mounted. */
+  contents: string | Uint8Array;
   mtimeMs: number;
 }
 
@@ -91,7 +93,7 @@ export function mountWorkspaceFiles(FS: MemFS, files: WorkspaceFile[]): void {
     if (!isSafeBasename(file.name)) {
       continue;
     }
-    if (utf8ByteLength(file.contents) > MAX_FILE_BYTES) {
+    if (contentsByteLength(file.contents) > MAX_FILE_BYTES) {
       continue;
     }
     const path = joinCwd(FS, file.name);
@@ -135,7 +137,15 @@ export function collectChangedWorkspaceFiles(FS: MemFS): WorkspaceFile[] {
       continue;
     }
     const prev = lastMounted.get(name);
-    if (prev && prev.contents === contents && prev.mtimeMs === mtimeMs(stat)) {
+    // `isWritebackName` already excluded every picture, so a snapshot
+    // reached here holds text; a byte snapshot would never compare equal
+    // and the file would be written back on every run.
+    if (
+      prev &&
+      typeof prev.contents === "string" &&
+      prev.contents === contents &&
+      prev.mtimeMs === mtimeMs(stat)
+    ) {
       continue;
     }
     out.push({ name, contents });

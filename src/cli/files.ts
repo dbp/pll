@@ -47,6 +47,11 @@ export async function writeBackSiblingFiles(
   const written: string[] = [];
   for (const file of selectWritebackFiles(files)) {
     try {
+      // Writeback is text only; `selectWritebackFiles` has already dropped
+      // anything that arrived as bytes.
+      if (typeof file.contents !== "string") {
+        continue;
+      }
       await fs.writeFile(path.join(folder, file.name), file.contents, "utf8");
       written.push(file.name);
     } catch {

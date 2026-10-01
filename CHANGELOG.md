@@ -1,5 +1,67 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`load_table(source)`** reads a CSV from a file next to your program or
+  from an `https://` address, working out which from the text. Every cell
+  arrives as text, as in Pyret; convert a column with
+  `transform_column("mpg", float)`.
+- **`load_image(source)`** does the same for a picture — a file or an
+  address — and gives back an ordinary image, so every combinator works on
+  it. PNG, JPEG, GIF, WebP and SVG.
+- **Charts to match the Pyret charting library**: `pie_chart`,
+  `freq_bar_chart`, `dot_plot`, `labeled_dot_plot`, `box_plot`, `lr_plot`,
+  `labeled_scatter_plot`, `labeled_lr_plot`, `scatter_plot` (an alias for
+  `scatter_chart`), and module-level `function_plot(f, x_min, x_max)`.
+  `histogram` now takes `bin_width=` as well as `bins=`, and
+  `linear_regression(x, y)` gives the slope, intercept and r² as numbers.
+- **Tables compare with `==`** — same columns in the same order holding the
+  same values — so a function that builds a table can be tested by
+  comparing it with the expected one. `repr` now shows the rows rather than
+  just the shape, because that is what a failed comparison prints.
+- **Pictures next to your program are mounted**, so `load_image("cat.png")`
+  works on a local file. Same size limits as the data files, and a picture
+  is never written back.
+
+### Fixed
+- **Recursive data crashed the test phase.** A dataclass with a string
+  forward reference (`rest: "NumList"`) died with
+  `AttributeError: 'NoneType' object has no attribute '__dict__'`, because
+  the tests ran under a module name that was never registered.
+- **Dataclass fields were not type-checked.** `@dataclass` writes `__init__`
+  after the type checker has seen the file, so `Dog(5, 3)` with `name: str`
+  was accepted silently. Recursive fields are checked too.
+- **A dataclass field named `id` was reported as shadowing a built-in.** A
+  name in a class body is a field, not a variable. A class *named* after a
+  built-in is still caught.
+- **A non-colour was accepted silently.** `rectangle(30, 40, "solid", 50)`
+  drew an invisible shape; it is now an error that names the call. The same
+  went for a misspelled mode (`"sloid"`). A misspelled colour *name* still
+  draws nothing — PLL does not keep a list of colour names.
+- **Type errors inside tests showed typeguard's own wording** ("is not an
+  instance of str") instead of PLL's, in both the editor and the command
+  line.
+- **`pll` dropped a failing test's printed output**, which the editor shows —
+  so a `print` added to see what a function returned was invisible there.
+- **`pll` printed a `NameError`'s column as `:NaN`.**
+- **A URL read through the desktop host corrupted bytes above 0x7f.** The
+  XHR shim decoded bodies as windows-1252 under the name `latin1`, which
+  also affected `pd.read_csv` of a CSV containing them.
+- **`to_pandas()` failed unless the file also imported pandas.** The import
+  is inside the method, so nothing in the file told the host to load the
+  package.
+- **`regular_polygon` drew a diamond for any even number of sides**, and
+  reported the size of the circle it was cut from rather than the shape's:
+  `regular_polygon(40, 4, ...)` was a 57x57 diamond instead of a 40x40
+  square. Sizes are also no longer rounded up by a pixel when the
+  trigonometry lands just over a whole number.
+- **An error's column was reported too far right** - `print(y)` blamed
+  column 11 of an 8-character line. The caret in a traceback is offset by
+  the indent Python adds when it echoes the source, and Python strips the
+  line's own indent first, so the column was wrong on every line and wrong
+  by a different amount on indented ones.
+
 ## 0.1.2 (2026-09-23)
 
 ### Fixed

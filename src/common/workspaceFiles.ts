@@ -78,7 +78,13 @@ export async function writeBackSiblingFiles(
   for (const file of selectWritebackFiles(files)) {
     const uri = vscode.Uri.joinPath(folder, file.name);
     try {
-      await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(file.contents));
+      // Only text files are writeback-eligible, so this is a string; the
+      // union exists for the pictures that are mounted and never written.
+      const bytes =
+        typeof file.contents === "string"
+          ? new TextEncoder().encode(file.contents)
+          : file.contents;
+      await vscode.workspace.fs.writeFile(uri, bytes);
       written.push(file.name);
     } catch {
       /* skip files the host refuses to write */

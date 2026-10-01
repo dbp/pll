@@ -8,7 +8,7 @@ import {
   parseLevel,
   type Level,
 } from "../common/level";
-import { ANY_IMPORT_RE } from "../common/pyodideRunner";
+import { needsPackages } from "../common/pyodideRunner";
 import type { ExecutionEvent, PythonRuntime } from "../common/types";
 import { collectSiblingFiles, writeBackSiblingFiles } from "./files";
 import type { CliView } from "./view";
@@ -134,7 +134,7 @@ async function ensurePackages(
   view: CliView,
   source: string,
 ): Promise<void> {
-  if (!ANY_IMPORT_RE.test(source)) {
+  if (!needsPackages(source)) {
     return;
   }
   try {

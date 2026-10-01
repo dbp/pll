@@ -791,7 +791,10 @@ console.log("\n[14] sibling files are mounted before a run and written back afte
   files.clear();
   written.clear();
   files.set("file:/work/cars.csv", "name,mpg\nvw,29\n");
+  // A picture is mounted too, for `load_image("cat.png")`.
   files.set("file:/work/photo.png", "binary-ish");
+  // ...but an executable is not.
+  files.set("file:/work/tool.exe", "nope");
   const doc = makeDoc("files.py", "print(1)\n");
   const { repl, view, runtime } = await harness(
     {
@@ -804,7 +807,10 @@ console.log("\n[14] sibling files are mounted before a run and written back afte
   await settle();
   const mount = runtime.calls.find((c) => c[0] === "mountWorkspaceFiles");
   console.log(`    mounted: ${mount[1]}`);
-  expect(mount[1] === "cars.csv", "only mountable siblings should be sent, got " + mount[1]);
+  expect(
+    mount[1] === "cars.csv|photo.png",
+    "data files and pictures should be sent, and nothing else, got " + mount[1],
+  );
   expect(
     written.get("file:/work/out.csv") === "a,b\n1,2\n",
     "changed files should be written next to the script",

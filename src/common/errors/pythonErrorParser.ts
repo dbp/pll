@@ -53,13 +53,42 @@ export function userTracebackFrames(traceback: string): TracebackFrame[] {
 }
 
 /**
+ * The leading whitespace of line `lineNumber` in `source`, or 0.
+ *
+ * Python's traceback prints `line.strip()`, so the original indentation is
+ * gone by the time a caret is placed under it and has to come from the file.
+ */
+function sourceIndent(source: string | undefined, lineNumber: number): number {
+  if (!source) {
+    return 0;
+  }
+  const line = source.split(/\r?\n/)[lineNumber - 1];
+  if (line === undefined) {
+    return 0;
+  }
+  return line.length - line.trimStart().length;
+}
+
+/**
  * Parse a Python traceback string into a structured error.
  *
  * Pyodide's PythonError exposes the traceback via `error.message` (which is
  * the full formatted traceback ending in "ErrorType: message"). This function
  * is conservative - if it can't find a frame, fields are returned as null.
  */
-export function parsePythonError(rawTraceback: string): ParsedPythonError {
+export function parsePythonError(
+  rawTraceback: string,
+  /**
+   * The file's own text, when the caller has it.
+   *
+   * Python echoes a source line with its indentation **stripped**, so a
+   * caret's position is relative to the trimmed line and a column taken
+   * from it lands too far left on anything indented - which is where the
+   * editor would then draw the squiggle. Given the source, the real
+   * indentation can be added back.
+   */
+  source?: string,
+): ParsedPythonError {
   const traceback = rawTraceback.trimEnd();
   const lines = traceback.split(/\r?\n/);
 
@@ -97,10 +126,15 @@ export function parsePythonError(rawTraceback: string): ParsedPythonError {
   if (lineNumber !== null) {
     for (let i = 0; i < lines.length - 1; i++) {
       if (/^\s*\^+\s*$/.test(lines[i + 1] ?? "")) {
-        const caretLine = lines[i + 1];
-        const caretIdx = caretLine.indexOf("^");
+        const sourceLine = lines[i];
+        const caretIdx = lines[i + 1].indexOf("^");
         if (caretIdx >= 0) {
-          column = caretIdx;
+          // Both lines carry the indent Python adds when it echoes the
+          // source, so the caret's index in the *traceback* is further along
+          // than its column in the file. Taking it raw put the `NameError`
+          // in `print(y)` - eight characters - at column 11.
+          const echoed = sourceLine.length - sourceLine.trimStart().length;
+          column = Math.max(0, caretIdx - echoed) + sourceIndent(source, lineNumber);
         }
       }
     }

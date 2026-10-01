@@ -287,7 +287,8 @@ cat = load_image("https://example.edu/cat.png")
 
 It gives you an ordinary picture, so everything above works on it —
 `scale`, `rotate`, `beside`, `place_image` and the rest. PNG, JPEG, GIF,
-WebP and SVG files are understood.
+WebP and SVG files are understood, up to 2 MB each — these are for the
+graphics a program draws with, not for photographs.
 
 ## Tables and charts
 

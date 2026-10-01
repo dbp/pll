@@ -46,6 +46,25 @@ export const PLL_EXAMPLAR_LIB_PY = examplarLibSource;
  */
 export const ANY_IMPORT_RE = /(^|\n)[ \t]*(import|from)[ \t]+\S/;
 
+/**
+ * `t.to_pandas()` needs pandas loaded, but nothing in the file imports it -
+ * the import lives inside the method, where `loadPackagesFromImports` cannot
+ * see it. So the *call* is the signal, and a file that never makes it never
+ * pays for pandas.
+ */
+export const PANDAS_METHOD_RE = /\.\s*to_pandas\s*\(/;
+
+/**
+ * Whether anything in the file needs a package loaded before it runs:
+ * either an import, or one of the calls whose import is hidden inside a
+ * library method.
+ */
+export const NEEDS_PACKAGES_RE_LIST = [PANDAS_METHOD_RE];
+
+export function needsPackages(code: string): boolean {
+  return ANY_IMPORT_RE.test(code) || NEEDS_PACKAGES_RE_LIST.some((re) => re.test(code));
+}
+
 export const NETWORK_IMPORT_RE =
   /(^|\n)[ \t]*(?:import|from)[ \t]+(?:pandas|requests|urllib|urllib3|httpx|aiohttp|http)\b/;
 

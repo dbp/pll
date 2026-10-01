@@ -430,6 +430,46 @@ del _name
     console.log(`    ${good.length} colour spellings still accepted`);
   }
 
+  console.log("\n[17] regular_polygon sits on a side, and its box is its real size");
+  {
+    // `regular_polygon(40, 4, ...)` was a 57x57 diamond: a vertex at the top
+    // puts one at the bottom too when the side count is even. The box also
+    // has to be the shape's extent, not the circle it was cut from.
+    const sizes = py(callRunFile, [
+      [
+        "for n in (3, 4, 6, 8):",
+        '    p = regular_polygon(40, n, "solid", "red")',
+        '    print(n, image_width(p), image_height(p))',
+      ].join("\n"),
+      "poly.py",
+      SK,
+    ]);
+    expect(sizes.ok === true, `ran: ${sizes.error_message ?? ""}`);
+    const got = sizes.stdout.trim().split("\n");
+    // 3: 40 wide, 40*sqrt(3)/2 tall. 4: a square. 6: 2R across,
+    // 2R*sqrt(3)/2 tall. 8: 40*(1+sqrt(2)) each way.
+    expect(got[0] === "3 40 35", `triangle: ${got[0]}`);
+    expect(got[1] === "4 40 40", `square, not a diamond: ${got[1]}`);
+    expect(got[2] === "6 80 70", `hexagon: ${got[2]}`);
+    expect(got[3] === "8 97 97", `octagon: ${got[3]}`);
+
+    // 80.00000000000001 from the cosines used to ceil to 81, leaving a
+    // blank column down one side of every such shape.
+    const zero = py(callRunFile, [
+      [
+        "print(image_width(empty_image), image_height(empty_image))",
+        'print(image_width(rectangle(0.4, 3, "solid", "red")))',
+      ].join("\n"),
+      "zero.py",
+      SK,
+    ]);
+    // Rounding must not turn an empty image into a 1x1 one: `beside` and
+    // friends do arithmetic with that zero.
+    expect(zero.stdout.trim().split("\n")[0] === "0 0", `empty_image stays 0x0: ${zero.stdout}`);
+    expect(zero.stdout.trim().split("\n")[1] === "1", `a fractional size still rounds up: ${zero.stdout}`);
+    console.log("    flat-bottomed, measured exactly, and still zero when empty");
+  }
+
   callRunFile.destroy?.();
   callReplEval.destroy?.();
 

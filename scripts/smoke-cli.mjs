@@ -298,6 +298,38 @@ async function main() {
     console.log("    location printed without NaN");
   }
 
+  console.log("\n[14] to_pandas works without the file importing pandas");
+  {
+    // The import is inside the method, so `loadPackagesFromImports` never
+    // saw it and the call died with ModuleNotFoundError.
+    const file = fixture(
+      "pd.py",
+      't = table(["name", "mpg"], [["vw", 29], ["honda", 33]])',
+      "df = t.to_pandas()",
+      "print(type(df).__name__, df['mpg'].mean())",
+    );
+    const r = await run([file]);
+    expect(r.code === 0, `expected exit 0, got ${r.code}: ${r.stderr}`);
+    expect(/DataFrame 31\.0/.test(r.stdout), `expected a DataFrame: ${r.stdout}`);
+    console.log("    pandas is loaded because the call is there");
+  }
+
+  console.log("\n[15] a NameError's column is the one in the file");
+  {
+    // The caret's index in a traceback counts the indent Python adds when
+    // it echoes the line, and Python strips the original indent first - so
+    // the column was wrong on every line, by different amounts.
+    const flat = fixture("flat.py", "print(y)");
+    const r1 = await run([flat]);
+    expect(/flat\.py:1:7\b/.test(r1.stderr), `print(y) blames column 7: ${r1.stderr}`);
+
+    const nested = fixture("deep.py", "def g():", "    if True:", "        return missing", "g()");
+    const r2 = await run([nested]);
+    // 8 spaces + "return " is 15 characters, so `missing` starts at 16.
+    expect(/deep\.py:3:16\b/.test(r2.stderr), `an indented line blames column 16: ${r2.stderr}`);
+    console.log("    columns correct at top level and indented");
+  }
+
   rmSync(work, { recursive: true, force: true });
   if (!ok) {
     console.error("\nsmoke-cli: FAILED");

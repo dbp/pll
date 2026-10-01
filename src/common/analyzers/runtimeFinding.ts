@@ -25,7 +25,7 @@ export function findingForErrorEvent(
   level: Level,
 ): AnalysisFinding | null {
   const traceback = event.traceback || `${event.errorType}: ${event.message}`;
-  const parsed = parsePythonError(traceback);
+  const parsed = parsePythonError(traceback, source);
   // `!= null` rather than `!== null`: the event's numbers come from a
   // Python dict, where a missing key reaches JS as `undefined`. That passed
   // a `!== null` test and was copied across as a location, which is how the

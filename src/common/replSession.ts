@@ -13,7 +13,7 @@ import {
 import { DEFAULT_LEVEL, levelHasStaticChecks, parseLevel, type Level } from "./level";
 import type { RawStaticFinding } from "./pyodideRunner";
 import {
-  ANY_IMPORT_RE,
+  needsPackages,
   type ExamplarRunResult,
   type ReactorStepResult,
 } from "./pyodideRunner";
@@ -739,7 +739,7 @@ export class ReplSession implements vscode.Disposable {
    * import itself surfaces the error when the code runs.
    */
   private async ensurePackagesForRun(session: Session, code: string): Promise<void> {
-    if (!ANY_IMPORT_RE.test(code)) {
+    if (!needsPackages(code)) {
       return;
     }
     this.setSessionBusy(session, true, "Loading libraries...");
@@ -899,7 +899,7 @@ export class ReplSession implements vscode.Disposable {
         break;
       case "error": {
         const traceback = event.traceback || `${event.errorType}: ${event.message}`;
-        const parsed = parsePythonError(traceback);
+        const parsed = parsePythonError(traceback, source);
         // `!= null` rather than `!== null`: these arrive from a Python dict
         // and a missing key is `undefined`, which would otherwise be copied
         // across as if it were a location.

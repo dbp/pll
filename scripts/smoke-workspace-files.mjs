@@ -49,22 +49,43 @@ function testPolicy() {
 
   expect(policy.isMountableName("data.csv") === true, "csv is mountable");
   expect(policy.isMountableName("helper.py") === true, "py is mountable");
-  expect(policy.isMountableName("photo.png") === false, "png is not mountable");
+  // Pictures mount too, for `load_image("cat.png")` - but as bytes, and
+  // they are never written back.
+  expect(policy.isMountableName("photo.png") === true, "png is mountable");
+  expect(policy.isBinaryMountName("photo.png") === true, "png mounts as bytes");
+  expect(policy.isBinaryMountName("badge.svg") === false, "svg is text, so it mounts as text");
+  expect(policy.isMountableName("badge.svg") === true, "svg is mountable");
+  expect(policy.isWritebackName("photo.png") === false, "a picture is never written back");
   expect(policy.isWritebackName("out.csv") === true, "csv is writeback");
   expect(policy.isWritebackName("assignment.py") === false, "py is not writeback");
 
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d]);
   const selected = policy.selectMountableFiles([
     { name: "../x.csv", contents: "a" },
     { name: "ok.csv", contents: "a,b\n1,2\n" },
-    { name: "skip.png", contents: "nope" },
+    { name: "cat.png", contents: png },
     { name: "notes.txt", contents: "hi" },
     { name: "nul.csv", contents: new Uint8Array([65, 0, 66]) },
   ]);
   expect(
-    selected.map((f) => f.name).join(",") === "ok.csv,notes.txt",
-    "selectMountableFiles should keep text csv/txt only, got " +
+    selected.map((f) => f.name).join(",") === "ok.csv,cat.png,notes.txt",
+    "pictures mount alongside text, and a NUL in a csv still does not, got " +
       selected.map((f) => f.name).join(","),
   );
+  const picture = selected.find((f) => f.name === "cat.png");
+  // The bytes have to arrive intact: 0x89 is a PNG's first byte, and any
+  // decode-then-encode round trip mangles it.
+  expect(
+    picture.contents instanceof Uint8Array && picture.contents[0] === 0x89,
+    `a picture keeps its bytes, got ${typeof picture.contents}`,
+  );
+  const text = selected.find((f) => f.name === "ok.csv");
+  expect(typeof text.contents === "string", "a csv still arrives as text");
+
+  const bigPng = policy.selectMountableFiles([
+    { name: "huge.png", contents: new Uint8Array(policy.MAX_FILE_BYTES + 1) },
+  ]);
+  expect(bigPng.length === 0, "an oversize picture is dropped, same cap as text");
 
   const huge = "x".repeat(policy.MAX_FILE_BYTES + 1);
   const oversize = policy.selectMountableFiles([{ name: "big.csv", contents: huge }]);
@@ -74,6 +95,7 @@ function testPolicy() {
     { name: "out.csv", contents: "a,b\n" },
     { name: "hack.py", contents: "print(1)\n" },
     { name: "../x.csv", contents: "no" },
+    { name: "cat.png", contents: png },
   ]);
   expect(
     writeback.map((f) => f.name).join(",") === "out.csv",

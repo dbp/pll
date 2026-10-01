@@ -6,6 +6,7 @@ import {
 } from "./memfsWorkspace";
 import {
   NETWORK_IMPORT_RE,
+  PANDAS_METHOD_RE,
   PLL_EXAMPLAR_LIB_PY,
   PLL_IMAGE_LIB_PY,
   PLL_REACTOR_LIB_PY,
@@ -339,6 +340,12 @@ export function createWorkerHost(
         }
         case "loadPackages": {
           await ready().loadPackagesFromImports(data.code);
+          // `loadPackagesFromImports` only sees imports, and `to_pandas`
+          // keeps its own inside the method, so it has to be asked for
+          // by name.
+          if (PANDAS_METHOD_RE.test(data.code)) {
+            await ready().loadPackage("pandas");
+          }
           if (NETWORK_IMPORT_RE.test(data.code)) {
             await ensureHttpShim();
           }
