@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-09-30)
+
+### Breaking
+- **A colour or a draw mode that is not one has become an error.** Before,
+  `rectangle(30, 40, "solid", 50)` drew an invisible shape and a misspelled
+  `"outilne"` quietly filled it in; both now stop the file with a message
+  naming the call. A file that was relying on either was not drawing what it
+  looked like it was, but it did run, and now it will not.
+- **`regular_polygon` is oriented differently for an even number of sides.**
+  It sits on a side rather than on a vertex, so `regular_polygon(40, 4, ...)`
+  is now a 40x40 square where it used to be a 57x57 diamond.
 
 ### Added
 - **`load_table(source)`** reads a CSV from a file next to your program or
