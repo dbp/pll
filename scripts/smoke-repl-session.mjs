@@ -2238,6 +2238,29 @@ console.log("\n[53] at the prompt, a Stop before the input runs means it does no
   repl.dispose();
 }
 
+console.log("\n[54] after going back, Play plays again - even once stop_when has stopped it");
+{
+  const steps = (runtime) => runtime.calls.filter((c) => c[0] === "reactorStep").length;
+  for (const stopAt of [undefined, 2]) {
+    const { repl, view, runtime, doc } = await harness(countingReactor({ stopAt }));
+    await repl.runFile("animate(...)", "hello.py", doc);
+    await new Promise((r) => setTimeout(r, 300));
+    view.handlers.onReactorControl("r1", stopAt ? "back" : "pause", 0);
+    view.handlers.onReactorControl("r1", "seek", 0);
+    await settle();
+    const card = view.entries.find((e) => e.kind === "reactor");
+    expect(card.stopped === false, `an earlier frame is not a stopped one: ${card.stopped}`);
+    const before = steps(runtime);
+    view.handlers.onReactorControl("r1", "play");
+    await new Promise((r) => setTimeout(r, 150));
+    const label = stopAt ? "after stop_when" : "after a pause";
+    expect(card.playing === true || stopAt, `${label}: Play should be playing`);
+    expect(steps(runtime) > before, `${label}: Play should tick again, got ${steps(runtime) - before} ticks`);
+    repl.dispose();
+  }
+  console.log("    Play resumes from an earlier frame, stopped or not");
+}
+
 console.log(`\nsmoke-repl-session: ${ok ? "ok" : "FAILED"}`);
 if (!ok) {
   process.exit(1);

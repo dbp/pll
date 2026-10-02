@@ -1397,8 +1397,12 @@ export class ReplSession implements vscode.Disposable {
     if (result.messages && result.messages.length > 0) {
       this.sendUniverse(driver, result.messages);
     }
-    if (result.stopped) {
-      driver.stopped = true;
+    // Whether the frame on screen is a stopped one - not whether the
+    // reactor ever stopped. Going back from the stopped frame is going back
+    // to one that can go on, and Play has to be able to: a sticky flag left
+    // Play enabled and doing nothing, while the step buttons still worked.
+    driver.stopped = !!result.stopped;
+    if (driver.stopped) {
       this.pauseReactor(driver);
     }
   }
@@ -1453,8 +1457,7 @@ export class ReplSession implements vscode.Disposable {
     try {
       await this.enqueue(async () => {
         const reply = await this.deps.runtime.reactorSeek(driver.id, target);
-        // Seeking never stops a reactor, it only changes which frame shows.
-        this.applyReactorResult(driver, { ...reply, stopped: false });
+        this.applyReactorResult(driver, reply);
       });
     } catch (err) {
       this.feedStream(driver.session, "stderr", `Reactor error: ${errorMessage(err)}\n`);

@@ -85,6 +85,14 @@ await sleep(1500);
 const a2 = await counter.innerText();
 console.log(`2 animating: ${JSON.stringify(a1)} -> ${JSON.stringify(a2)}`);
 expect(a1 !== a2, "the frame counter should advance on its own");
+// At the newest frame the bar is full by definition, so it has to say why.
+expect(/live/.test(a2), `a playing animation should read as live, got ${JSON.stringify(a2)}`);
+// The two step buttons are mirror images: bar on the outside.
+expect(
+  (await anim.getByTitle("One frame back").innerText()) === "\u2759\u25C0" &&
+    (await anim.getByTitle("One frame forward").innerText()) === "\u25B6\u2759",
+  "the step buttons should mirror each other",
+);
 expect(/<svg/.test(await anim.locator(".rxStage").innerHTML()), "the stage should hold an svg");
 
 // --- pause stops it ---
@@ -108,6 +116,10 @@ await sleep(1200);
 const replayed = frameOf(await counter.innerText());
 console.log(`5 played forward again to frame ${replayed}`);
 expect(replayed > rewound, "play should advance from the rewound position");
+expect(
+  /of \d+/.test(await counter.innerText()) || /live/.test(await counter.innerText()),
+  "replaying shows its place in the history, or live once it catches up",
+);
 await anim.getByTitle("Pause").click();
 
 // --- single step ---
@@ -137,6 +149,25 @@ await cards.nth(2).locator(".rxCounter").waitFor();
 for (let i = 0; i < 40 && !/stopped/.test(await down.innerText()); i++) await sleep(500);
 console.log(`8 countdown: ${JSON.stringify(await down.innerText())}`);
 expect(/stopped/.test(await down.innerText()), "stop_when should stop the reactor");
+
+// --- and after going back from where it stopped, Play plays again ---
+// It used to stay "stopped" for good: Play was enabled and did nothing,
+// while the step buttons still moved it.
+const countdown = cards.nth(2);
+const end = frameOf(await down.innerText());
+await countdown.getByTitle("One frame back").click();
+await countdown.getByTitle("One frame back").click();
+await sleep(600);
+const earlier = frameOf(await down.innerText());
+expect(earlier === end - 2, `two frames back from ${end}, got ${earlier}`);
+expect(!/stopped/.test(await down.innerText()), "an earlier frame is not a stopped one");
+await countdown.getByTitle("Play").click();
+for (let i = 0; i < 20 && !/stopped/.test(await down.innerText()); i++) await sleep(250);
+console.log(`8b back two from the end, then Play: ${JSON.stringify(await down.innerText())}`);
+expect(
+  /stopped/.test(await down.innerText()) && frameOf(await down.innerText()) === end,
+  `Play should run on to the end again, got ${JSON.stringify(await down.innerText())}`,
+);
 
 // --- simulate_trace printed without any clock ---
 const stream = await panel(page).locator("#stream").innerText();

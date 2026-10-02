@@ -356,7 +356,9 @@
       vscode.postMessage({ type: "reactorControl", id: entry.id, action, index });
 
     const reset = button("⏮", "Back to the first frame", () => send("reset"));
-    const back = button("◀", "Previous frame", () =>
+    // Mirrors the step button, bar and all: a bare "◀" read as "play
+    // backwards", which is not what it does.
+    const back = button("❙◀", "One frame back", () =>
       send("back", Math.max(0, (card.index || 0) - 1)));
     const play = button("▶", "Play", () => send(card.playing ? "pause" : "play"));
     const step = button("▶❙", "One frame forward", () => send("step"));
@@ -455,9 +457,17 @@
     card.scrub.max = String(last);
     card.scrub.value = String(Math.min(card.index, last));
     card.scrub.disabled = last === 0;
+    // The bar is the recorded history, and a running animation is always
+    // at its newest frame - so while it plays, the bar is full. Saying
+    // "live" is what makes that read as right rather than as stuck, the way
+    // a live stream's player does. Replaying from an earlier frame moves
+    // the thumb along the bar like any other playback.
+    const live = card.playing && e.atEnd !== false && card.index >= last;
     card.counter.textContent = e.stopped
       ? `frame ${card.index} of ${last} · stopped`
-      : `frame ${card.index} of ${last}`;
+      : live
+        ? `frame ${card.index} · live`
+        : `frame ${card.index} of ${last}`;
   }
 
   function scrollToBottom() {

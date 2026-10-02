@@ -192,6 +192,17 @@
   clean-up. A program that catches the first `KeyboardInterrupt` can still
   be stopped by the next press. This was also the intermittent
   `smoke-interrupt` failure, which now has deterministic tests for each part.
+- **Play did nothing after going back from where `stop_when` stopped.**
+  The card remembered that the reactor had stopped, rather than whether the
+  frame on screen was the stopped one, so Play stayed enabled and did
+  nothing while the step buttons still worked. Play now runs on from the
+  earlier frame, to the end again.
+- **The animation slider looked stuck while playing.** It shows the recorded
+  history, and a running animation is always at its newest frame, so it was
+  always full. The counter now says `frame 116 · live` there, the way a live
+  stream's player does; going back shows `frame 40 of 116` as before.
+- **The one-frame-back button looked like "play backwards".** It is now the
+  mirror of the one-frame-forward button, bar included.
 - **A Stop during the tests did not stop the run.** It ended the test that
   was running, recorded that as the test's error, and carried on: the other
   tests ran, and then the program - which, if it looped as well, needed a
