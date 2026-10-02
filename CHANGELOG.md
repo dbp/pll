@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+- **The command line runs the Examplar check.** A file with an `#examplar`
+  line gets the same cards on `pll hw.py` as in the editor - the same lines,
+  naming tests and buggy implementations by name and id only - before its
+  own tests and the program. Bundles are cached on disk, so an offline run
+  still gets its verdict, and the verdict does not change the exit code.
+
 ### Changed
 - **An error a test raised reads like any other error.** It goes through the
   same explanations as an error the program raises, so a `NameError` inside
@@ -22,6 +29,16 @@
   "next to this file".
 
 ### Fixed
+- **A `None` is traced to where it came from.** `print(x.total)` with `x =
+  deposit(...)` said "`print(...)` gave back `None`" - the first call on the
+  line, and the one that only wrapped the value. It now says "`x` is
+  `None`", that `x` was set from `deposit(...)` on line 4, which gave back
+  `None` - or, for a parameter, which call passed it. The same for a `None`
+  that is subscripted, looped over, or added to.
+- **The fix offered for a discarded `add_column` fits where it is.** At
+  `#level intermediate`, inside a function, it now offers `employees =
+  employees.add_column(...)` - which that level accepts there - rather than
+  a new name, which is only needed at module scope.
 - **A tab in the indentation is pointed at**, at column 1, rather than at the
   first character after it.
 - **A top-level error in a file with tests was reported twice in the

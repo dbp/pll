@@ -403,12 +403,9 @@ def _pll_reactor_view(rid, running):
 
 
 def _pll_reactor_failure(exc):
-    return {
-        "ok": False,
-        "error_type": type(exc).__name__,
-        "error_message": str(exc),
-        "traceback": _pll_format_exception(exc),
-    }
+    failure = {"ok": False}
+    failure.update(_pll_error_info(exc))
+    return failure
 
 
 def _pll_reactor_interact(reactor_value):

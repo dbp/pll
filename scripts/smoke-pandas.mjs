@@ -15,14 +15,23 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
+import { build } from "esbuild";
 import { loadPyodide } from "pyodide";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
 
-// Keep in sync with NETWORK_IMPORT_RE in src/common/pyodideRunner.ts.
-const NETWORK_IMPORT_RE =
-  /(^|\n)[ \t]*(?:import|from)[ \t]+(?:pandas|requests|urllib|urllib3|httpx|aiohttp|http)\b/;
+// The hosts' own regex, bundled, rather than a copy that could drift from it.
+const bundled = await build({
+  entryPoints: [resolve(ROOT, "src/common/packages.ts")],
+  bundle: true,
+  write: false,
+  format: "esm",
+  platform: "node",
+});
+const { NETWORK_IMPORT_RE } = await import(
+  "data:text/javascript;base64," + Buffer.from(bundled.outputFiles[0].text).toString("base64")
+);
 
 const CARS_CSV = "name,mpg\nvw,29\nhonda,33\nford,18\n";
 

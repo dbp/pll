@@ -1,4 +1,74 @@
 /**
+ * What the explanations know about PLL's own library: the functions that
+ * call one of the student's, what each passes it, which frames are the
+ * reactor's, and every function's parameters.
+ *
+ * In one place because each fact was needed by more than one explanation,
+ * and was written out in each - three copies of "the functions that call
+ * yours", two of what they pass.
+ */
+
+/**
+ * The library functions that call a function the student passes them, and
+ * what they call it with. `each` and `param` are for the table methods,
+ * whose function decides about one row or value at a time.
+ *
+ * The distinction that matters is `transform_column`, which passes one
+ * *value* from a column, against `filter` and `add_column`, which pass a
+ * whole row. Confusing the two is the commonest reason one of these
+ * functions' annotations fails.
+ */
+export const FUNCTION_TAKERS: Record<
+  string,
+  { calls: string; each?: string; param?: string; keeps?: string }
+> = {
+  filter: {
+    calls: "`filter` calls your function with one row at a time",
+    each: "each row",
+    param: "r: dict",
+    keeps: "keeps the rows where it returns `True`",
+  },
+  transform_column: {
+    calls: "`transform_column` calls your function with one *value* from the column, not a row",
+    each: "each value in the column",
+    param: "v",
+    keeps: "puts what it returns in place of the value",
+  },
+  add_column: {
+    calls: "`add_column` calls your function with one row at a time",
+    each: "each row",
+    param: "r: dict",
+    keeps: "puts what it returns in the new column",
+  },
+  animate: { calls: "`animate` calls your function with the tick count, a number" },
+  big_bang: { calls: "`big_bang` calls your handlers with the state" },
+};
+
+/** The names of `FUNCTION_TAKERS`. */
+export const FUNCTION_TAKER_NAMES = Object.keys(FUNCTION_TAKERS);
+
+/** A reactor's handlers, which are given a function by keyword: `to_draw=draw`. */
+export const HANDLER_KEYWORDS = ["to_draw", "on_tick", "stop_when", "on_key", "on_mouse", "on_receive"];
+
+/**
+ * Frames that mean a reactor called the handler.
+ *
+ * There are several, because a handler is reached through whichever of
+ * them is driving at the time - showing the first frame, a tick, a key.
+ * They all amount to the same thing for the student, so they map to one
+ * name: the value came from the reactor's state, not from any line.
+ */
+export const REACTOR_FRAMES = [
+  "_pll_reactor_interact",
+  "_pll_reactor_view",
+  "_pll_reactor_step",
+  "interact",
+  "react",
+  "tick",
+  "step",
+];
+
+/**
  * Parameter names of PLL's own library functions.
  *
  * Python says `circle() missing 2 required positional arguments: 'mode'

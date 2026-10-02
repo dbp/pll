@@ -1,3 +1,5 @@
+import { editDistance } from "./editDistance";
+
 /**
  * Language levels for Python files. The level is opted into with a magic
  * comment on the first non-blank line of the file:
@@ -192,33 +194,6 @@ function closestLevel(named: string): Level | null {
     : null;
 }
 
-function editDistance(a: string, b: string): number {
-  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i++) {
-    const current = [i];
-    for (let j = 1; j <= b.length; j++) {
-      current[j] = Math.min(
-        previous[j] + 1,
-        current[j - 1] + 1,
-        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
-      );
-    }
-    previous = current;
-  }
-  return previous[b.length];
-}
-
-/**
- * Whether annotations are checked while the program runs.
- *
- * On at every level except `raw`, which exists precisely so that a file can
- * opt out. There is deliberately no setting for this: one mechanism, named
- * in the file, rather than two that can contradict each other.
- */
-export function levelHasTypeChecking(level: Level): boolean {
-  return level !== "raw";
-}
-
 /**
  * Whether a `bool` is rejected where `int` / `float` is annotated.
  *
@@ -229,6 +204,17 @@ export function levelHasTypeChecking(level: Level): boolean {
  */
 export function levelRejectsBoolAsNumber(level: Level): boolean {
   return level === "beginner" || level === "intermediate";
+}
+
+/**
+ * Whether this level refuses a second assignment to a name in `scope`.
+ *
+ * `beginner` refuses it everywhere; `intermediate` only at module scope, so
+ * a function can still keep a running total. `_pll_static_analyze` enforces
+ * this; the explanations ask it so they only offer fixes the level accepts.
+ */
+export function levelRefusesReassignment(level: Level, scope: "module" | "function"): boolean {
+  return level === "beginner" || (level === "intermediate" && scope === "module");
 }
 
 /** Whether this level runs any static analyzer checks at all. */

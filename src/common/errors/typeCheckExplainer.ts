@@ -1,4 +1,7 @@
 import { levelRejectsBoolAsNumber, type Level } from "../level";
+import { FUNCTION_TAKERS } from "./libraryFacts";
+import { typeWords } from "./wording";
+import type { ErrorFacts } from "./pythonError";
 import {
   annotationOf,
   assignedFromVoidMethod,
@@ -44,35 +47,13 @@ export interface ParsedTypeCheckError {
   /** For "field": the class whose field it is, and the value it got. */
   owner?: string;
   value?: string;
-  /**
-   * For an element failure, what the element actually is ("the string
-   * "1""), read by Python from the frame the check fired in. typeguard's
-   * own message names the element but not its value.
-   */
-  elementValue?: string;
 }
 
-/** Plain-language gloss for the types a beginner course actually uses. */
-const FRIENDLY_TYPES: Record<string, string> = {
-  int: "a whole number",
-  float: "a number",
-  complex: "a complex number",
-  str: "a string",
-  bool: "`True` or `False`",
-  bytes: "bytes",
-  list: "a list",
-  dict: "a dictionary",
-  set: "a set",
-  tuple: "a tuple",
-  None: "`None`",
-  NoneType: "`None`",
-};
-
-/** User code runs as `__main__`, so its classes arrive as `__main__.Dog`. */
 /**
  * Module prefixes that are PLL's own bookkeeping, not something a student
- * wrote. `__pll_test__` is the module the test phase runs a file in, and
- * without this a class the student named `Account` was reported as
+ * wrote. A file runs as `__main__`, so its classes arrive as `__main__.Dog`;
+ * `__pll_test__` is the module the test phase runs a file in, and without
+ * this a class the student named `Account` was reported as
  * `__pll_test__.Account`.
  */
 const INTERNAL_MODULES = ["__main__.", "__pll_test__."];
@@ -102,7 +83,7 @@ function describeType(type: string): string {
   const name = cleanTypeName(type);
   // (c) `None`'s gloss is already the type name; "`None` (`None`)" is silly.
   if (name === "None" || name === "NoneType") return "`None`";
-  const friendly = FRIENDLY_TYPES[name];
+  const friendly = typeWords(name, { article: true });
   return friendly ? `${friendly} (\`${name}\`)` : `\`${name}\``;
 }
 
@@ -131,23 +112,6 @@ function boolAsNumberNote(
     "accepted as numbers, even though Python counts them as `1` and `0`."
   );
 }
-
-/**
- * What each library function hands the student's function.
- *
- * The distinction that matters is `transform_column`, which passes one
- * *value* from a column, against `filter` and `add_column`, which pass a
- * whole row. Confusing the two is the commonest reason one of these
- * annotations fails.
- */
-const LIBRARY_SUPPLIES: Record<string, string> = {
-  filter: "`filter` calls your function with one row at a time",
-  transform_column:
-    "`transform_column` calls your function with one *value* from the column, not a row",
-  add_column: "`add_column` calls your function with one row at a time",
-  animate: "`animate` calls your function with the tick count, a number",
-  big_bang: "`big_bang` calls your handlers with the state",
-};
 
 /**
  * The field `line` reads from `name`, when the line replaces `name` itself.
@@ -222,12 +186,6 @@ export function parseTypeCheckMessage(message: string): ParsedTypeCheckError {
   };
   const lines = message.split(/\r?\n/);
   const first = lines[0].trim();
-  // The `->` line PLL adds after an element failure; never a union member,
-  // which always starts with a type name.
-  const elementLine = lines
-    .map((line) => /^\s*-> .+? is (.+)$/.exec(line))
-    .find((m) => m !== null);
-  const elementValue = elementLine ? elementLine[1].trim() : undefined;
 
   // A dataclass field, which PLL words itself: typeguard is asked to check
   // one, so its own message calls it an assignment, and nobody assigned
@@ -294,7 +252,7 @@ export function parseTypeCheckMessage(message: string): ParsedTypeCheckError {
   }
   const argument = subject.match(/^argument "(.+)"$/);
   if (argument) {
-    return { kind: "argument", name: argument[1], element, actual, expected, elementValue };
+    return { kind: "argument", name: argument[1], element, actual, expected };
   }
   const assigned = subject.match(/^value assigned to (.+)$/);
   if (assigned) {
@@ -322,6 +280,8 @@ export interface ReturnContext {
    * passed for `r` on this line" - and on that line nothing was passed.
    */
   calledBy?: string | null;
+  /** What Python learned from the frames: the failing element, a swapped field. */
+  facts?: ErrorFacts;
 }
 
 /**
@@ -560,7 +520,8 @@ export function explainTypeCheckError(
     if (parsed.element) {
       // What the element *is*, when Python could read it - "item 0 is not"
       // left the student to go and find out.
-      const is = parsed.elementValue !== undefined ? ` is ${parsed.elementValue}` : " is not";
+      const value = context?.facts?.elementValue;
+      const is = value !== undefined ? ` is ${value}` : " is not";
       return {
         headline:
           `${owner} expects ${membersPhrase(parsed.element)} ${named} to be ${wanted}, ` +
@@ -585,7 +546,7 @@ export function explainTypeCheckError(
                 "state, not a value from this line.",
             ]
           : [
-              `${LIBRARY_SUPPLIES[supplied] ?? `\`${supplied}\` calls ${owner} for you`}, ` +
+              `${FUNCTION_TAKERS[supplied]?.calls ?? `\`${supplied}\` calls ${owner} for you`}, ` +
                 `so ${named} is whatever it hands over - not a value from this line.`,
             ];
       if (annotation !== null && parsed.actual !== null) {
@@ -619,14 +580,14 @@ export function explainTypeCheckError(
     // Python found another field this value fits, whose value fits here:
     // the two were given in each other's places, and converting one would
     // hide that.
-    const swappedWith = /^\s*-> swapped with (\w+)$/m.exec(message);
-    if (swappedWith !== null) {
+    const swappedWith = context?.facts?.swappedWith;
+    if (swappedWith !== undefined) {
       return {
         headline:
-          `The values for \`${parsed.name}\` and \`${swappedWith[1]}\` of \`${owner}\` ` +
+          `The values for \`${parsed.name}\` and \`${swappedWith}\` of \`${owner}\` ` +
           "look swapped.",
         howToFix: [
-          `\`${parsed.name}\` got \`${parsed.value ?? "?"}\`, which fits \`${swappedWith[1]}\` - and the other way round.`,
+          `\`${parsed.name}\` got \`${parsed.value ?? "?"}\`, which fits \`${swappedWith}\` - and the other way round.`,
           `Give the values in the order the fields are written in \`class ${owner}\`.`,
         ],
       };

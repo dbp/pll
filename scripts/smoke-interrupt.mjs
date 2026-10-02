@@ -40,7 +40,6 @@ const {
   INTERRUPT_SIGINT,
   INTERRUPT_ACK_INDEX,
   requestInterrupt,
-  signalInterrupt,
 } = await import(pathToFileURL(join(bundleDir, "out.mjs")).href);
 rmSync(bundleDir, { recursive: true, force: true });
 
@@ -198,7 +197,7 @@ async function main() {
     requestInterrupt(interruptBuffer, () => !settled);
   };
   /** One bare store, with nothing retrying it - a Stop racing the end of a run. */
-  const signal = () => signalInterrupt(interruptBuffer);
+  const signal = () => Atomics.store(new Uint8Array(interruptBuffer), 0, INTERRUPT_SIGINT);
   /**
    * A Stop as the hosts send one, pressed when no Python was running to take
    * it and with nothing left to retry for - pressed while files loaded, or

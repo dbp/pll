@@ -1,5 +1,5 @@
 import type { Level } from "../../level";
-import type { RawStaticFinding } from "../../pyodideRunner";
+import type { RawStaticFindingOf } from "../../wire";
 import type { AnalysisFinding } from "../types";
 
 /** Friendly noun for the kind of scope the outer binding lives in. */
@@ -24,7 +24,7 @@ function outerScopeNoun(kind: string | null | undefined): string {
  * scope" finding from the Python static analyzer.
  */
 export function explainShadowing(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<"shadowing">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -62,7 +62,7 @@ export function explainShadowing(
  * Build an AnalysisFinding for "name shadows a built-in" (e.g. `list = ...`).
  */
 export function explainShadowingBuiltin(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<"shadowing-builtin">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -110,7 +110,7 @@ function libraryNoun(library: string | null | undefined): string {
  * `table` (table library), or `animate` (reactor library).
  */
 export function explainShadowingLibrary(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<"shadowing-library">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {

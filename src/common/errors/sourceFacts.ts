@@ -12,6 +12,34 @@
  * cannot read returns null and the caller falls back to Python's wording.
  */
 
+import { editDistance } from "../editDistance";
+
+/** Line `line` (1-based) of `source`, or null when it has no such line. */
+export function sourceLine(source: string, line: number | null): string | null {
+  if (line === null) {
+    return null;
+  }
+  const lines = source.split(/\r?\n/);
+  return line >= 1 && line <= lines.length ? lines[line - 1] : null;
+}
+
+/**
+ * The student's text of the line `frame` is at - null unless the frame is
+ * in this file. A line pulled out of the wrong file would make an
+ * explanation confidently wrong.
+ */
+export function frameLine(
+  source: string,
+  fileName: string,
+  frame: { fileName: string; line: number } | null,
+): string | null {
+  const basename = (path: string) => path.split(/[\\/]/).pop() ?? path;
+  if (frame === null || basename(frame.fileName) !== basename(fileName)) {
+    return null;
+  }
+  return sourceLine(source, frame.line);
+}
+
 /** Parameter names of `def name(...)`, with `self` and annotations dropped. */
 export function parametersOf(source: string, name: string): string[] | null {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -295,34 +323,6 @@ export function closestName(name: string, candidates: string[]): string | null {
   }
   // Close enough to be a typo rather than a different word.
   return bestDistance <= Math.max(1, Math.floor(best.length / 3)) ? best : null;
-}
-
-/**
- * Edit distance counting a swap of two neighbours as one mistake.
- *
- * Plain Levenshtein charges two for `yaer` -> `year`, which is enough to
- * push the commonest typo of all past any threshold tight enough to be
- * useful. This is the usual optimal-string-alignment variant.
- */
-function editDistance(a: string, b: string): number {
-  let twoBack: number[] = [];
-  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i++) {
-    const current = [i];
-    for (let j = 1; j <= b.length; j++) {
-      current[j] = Math.min(
-        previous[j] + 1,
-        current[j - 1] + 1,
-        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
-      );
-      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
-        current[j] = Math.min(current[j], twoBack[j - 2] + 1);
-      }
-    }
-    twoBack = previous;
-    previous = current;
-  }
-  return previous[b.length];
 }
 
 /**

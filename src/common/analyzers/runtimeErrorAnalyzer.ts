@@ -1,6 +1,7 @@
-import { userTracebackFrames } from "../errors/pythonErrorParser";
+import { innermostUserFrame } from "../errors/pythonError";
 import { tableRowLine } from "../errors/sourceFacts";
-import type { AnalysisFinding, RuntimeAnalyzerInput } from "./types";
+import { punctuated } from "../errors/wording";
+import { runtimeFindingFor, type AnalysisFinding, type RuntimeAnalyzerInput } from "./types";
 
 /**
  * The last resort: turn *any* runtime error into a finding.
@@ -19,33 +20,28 @@ import type { AnalysisFinding, RuntimeAnalyzerInput } from "./types";
  * messages better wording.
  */
 export function analyzeRuntimeError(input: RuntimeAnalyzerInput): AnalysisFinding {
-  const { parsedError, fileName, level } = input;
-  const frames = userTracebackFrames(parsedError.traceback);
+  const { error, fileName } = input;
   // The innermost frame the student wrote. When a library raised, that is
   // the line that called into it, which is the line to point at.
-  const blamed = frames.length > 0 ? frames[frames.length - 1] : null;
+  const blamed = innermostUserFrame(error);
 
-  const line = blamed ? blamed.line : parsedError.lineNumber;
-  return {
+  // With no frame of the student's, the innermost one is PLL's or a
+  // library's, and its line number means nothing in their file. Only an
+  // error with no frames at all - one Python placed itself - keeps its own.
+  const line = blamed ? blamed.line : error.frames.length === 0 ? error.lineNumber : null;
+  return runtimeFindingFor(input, {
     id: "runtime-error",
-    errorType: parsedError.errorType,
-    message: parsedError.message,
-    headline: headlineFor(parsedError.errorType, parsedError.message),
+    headline: headlineFor(error.errorType, error.message),
     // Deliberately empty. A generic error has no generic remedy, and
     // inventing one would be worse than the message itself.
     howToFix: [],
     fileName: blamed ? blamed.fileName : fileName,
-    lineNumber: rowLine(input.source, line, parsedError.message) ?? line,
+    lineNumber: rowLine(input.source, line, error.message) ?? line,
     // The caret belongs to whichever frame raised, which is usually inside
     // a library, so it would point at a column of code the student cannot
     // see. Only trust it when the error came from their own innermost line.
-    column: blamed === null ? parsedError.column : null,
-    nameToken: parsedError.nameToken,
-    severity: "error",
-    raw: parsedError.traceback,
-    origin: "runtime",
-    level,
-  };
+    column: blamed === null ? error.column : null,
+  });
 }
 
 /**
@@ -93,8 +89,4 @@ function headlineFor(errorType: string, message: string): string {
     return punctuated(unquoted[1]);
   }
   return punctuated(text);
-}
-
-function punctuated(text: string): string {
-  return /[.!?]$/.test(text) ? text : `${text}.`;
 }

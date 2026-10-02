@@ -242,44 +242,44 @@ button:disabled {
   border-left: 3px solid var(--vscode-editorError-foreground, #f48771);
   padding: 4px 0 4px 8px;
 }
-.entry.finding .errType {
+.finding .errType {
   color: var(--vscode-editorError-foreground, #f48771);
   font-weight: 700;
 }
-.entry.finding .headline {
+.finding .headline {
   font-weight: 700;
 }
-.entry.finding .loc {
+.finding .loc {
   display: block;
   opacity: 0.7;
   font-size: 0.95em;
   margin-top: 2px;
 }
-.entry.finding .loc a {
+.finding .loc a {
   color: inherit;
   text-decoration: underline dotted;
   cursor: pointer;
 }
-.entry.finding .loc a:hover {
+.finding .loc a:hover {
   color: var(--vscode-textLink-foreground, #4da3ff);
 }
-.entry.finding .howTitle {
+.finding .howTitle {
   margin-top: 6px;
   color: var(--vscode-symbolIcon-keywordForeground, #569cd6);
   font-weight: 700;
 }
-.entry.finding ul {
+.finding ul {
   margin: 2px 0 2px 0;
   padding-left: 16px;
   list-style: none;
 }
-.entry.finding ul li::before {
+.finding ul li::before {
   content: "- ";
   color: var(--vscode-symbolIcon-keywordForeground, #569cd6);
   margin-right: 4px;
 }
 
-/* Raw error fallback */
+/* PLL itself failing (Python would not start), shown as it is */
 .entry.rawError {
   margin: 6px 0;
   border-left: 3px solid var(--vscode-editorError-foreground, #f48771);
@@ -358,6 +358,11 @@ button:disabled {
   font-size: 12px;
   margin: 2px 0 8px 1.6em;
   opacity: 0.9;
+}
+/* A test that raised: the same finding, inside the card. */
+.entry.testReport .testFinding {
+  margin: 2px 0 8px 1.6em;
+  font-size: 12px;
 }
 .entry.testReport .testMsg {
   color: var(--vscode-terminal-ansiRed, #f48771);

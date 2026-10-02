@@ -310,6 +310,10 @@ async function main() {
       `typeguard's wording should be rewritten: ${r.stderr}`,
     );
     expect(/should return a string/.test(r.stderr), `expected PLL's wording: ${r.stderr}`);
+    // Shown as a finding is shown anywhere: its type, then where it is -
+    // in `shout`, not in the test.
+    expect(/TypeMismatch: `shout`/.test(r.stderr), `with the error's type: ${r.stderr}`);
+    expect(/^\s+at day5\.py:4$/m.test(r.stderr), `and where it happened: ${r.stderr}`);
     console.log("    printed output shown, wording rewritten");
   }
 
@@ -382,7 +386,7 @@ async function main() {
       /`check_total` has an `assert` in it, but nothing ever runs it/.test(r.stderr),
       `the warning is still shown: ${r.stderr}`,
     );
-    expect(!/File not run/.test(r.stderr), `and nothing says the file was skipped: ${r.stderr}`);
+    expect(!/The file was not run/.test(r.stderr), `and nothing says the file was skipped: ${r.stderr}`);
 
     // An error still stops it.
     const blocked = fixture(
@@ -399,7 +403,7 @@ async function main() {
     const r2 = await run([blocked]);
     expect(r2.code !== 0, `an error should fail the run, got ${r2.code}`);
     expect(!/should not run/.test(r2.stdout), `and the file must not run: ${r2.stdout}`);
-    expect(/File not run/.test(r2.stderr), `with the reason given: ${r2.stderr}`);
+    expect(/The file was not run\./.test(r2.stderr), `with the reason given: ${r2.stderr}`);
     console.log("    warning shown and run continued; error still stops it");
   }
 

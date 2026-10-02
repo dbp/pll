@@ -18,8 +18,6 @@ import type { Level } from "./level";
 /** `none` writes nothing; anything else is the level to write. */
 export type NewFileLevel = Level | "none";
 
-export const NEW_FILE_LEVEL_SETTING = "pll.newFileLevel";
-
 function configuredLevel(): NewFileLevel {
   const value = vscode.workspace
     .getConfiguration("pll")

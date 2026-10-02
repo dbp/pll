@@ -1,5 +1,5 @@
-import type { Level } from "../../level";
-import type { RawStaticFinding } from "../../pyodideRunner";
+import { levelRefusesReassignment, type Level } from "../../level";
+import type { RawStaticFindingOf } from "../../wire";
 import type { AnalysisFinding } from "../types";
 
 /**
@@ -11,7 +11,7 @@ import type { AnalysisFinding } from "../types";
  * can mention it in the explanation.
  */
 export function explainReassignment(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<"reassignment">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -27,8 +27,10 @@ export function explainReassignment(
     errorType: "Reassignment",
     message: raw.message,
     headline: `\`${name}\` is already assigned${firstLineHint}.`,
+    // Refused here, but not inside a function: then the fix is to move the
+    // work into one.
     howToFix:
-      level === "intermediate"
+      !levelRefusesReassignment(level, "function")
         ? [
             `If you want a different value, give it a different name (e.g.` +
               ` \`${name}_doubled\`, \`new_${name}\`, \`${name}2\`).`,
@@ -45,7 +47,7 @@ export function explainReassignment(
               ` or a small helper function that returns the new value instead.`,
             // Inside a function this is exactly what `intermediate` exists
             // for, and a student has no way to know that from here.
-            ...(raw.scope_kind === "function"
+            ...(raw.scope_kind === "function" && !levelRefusesReassignment("intermediate", "function")
               ? [
                   "`#level intermediate` allows changing a variable inside a" +
                     " function, which is what a running total needs.",

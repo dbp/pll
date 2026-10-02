@@ -1,3 +1,5 @@
+import { errorText } from "./errorText";
+
 /**
  * The world half of `universe`: a client, never a server.
  *
@@ -86,7 +88,7 @@ export const connectUniverse: UniverseConnect = (url, handlers) => {
   } catch (err) {
     return unavailableSocket(
       handlers,
-      universeErrorMessage(err instanceof Error ? err.message : String(err)),
+      universeErrorMessage(errorText(err)),
     );
   }
   socket.onopen = () => handlers.onOpen();

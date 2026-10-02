@@ -1,4 +1,5 @@
-import type { ParsedPythonError } from "./pythonErrorParser";
+import { FUNCTION_TAKER_NAMES } from "./libraryFacts";
+import type { PythonError } from "./pythonError";
 import type { BeginnerExplanation } from "./types";
 
 /**
@@ -90,20 +91,12 @@ function annotationTarget(line: string | null, name: string): string | null {
  * the name that is missing is a symptom of passing the result rather than
  * the function.
  */
-const CALLS_YOUR_FUNCTION = [
-  "filter",
-  "transform_column",
-  "add_column",
-  "animate",
-  "big_bang",
-];
-
 function passedResultNotFunction(line: string | null, name: string): string | null {
   if (line === null) {
     return null;
   }
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  for (const taker of CALLS_YOUR_FUNCTION) {
+  for (const taker of FUNCTION_TAKER_NAMES) {
     const pattern = new RegExp(
       `\\b${taker}\\s*\\(\\s*([A-Za-z_]\\w*)\\s*\\(\\s*${escaped}\\s*\\)`,
     );
@@ -115,16 +108,6 @@ function passedResultNotFunction(line: string | null, name: string): string | nu
   return null;
 }
 
-/**
- * Build a friendly explanation for a NameError.
- *
- * The exact message Python emits is:
- *   NameError: name 'foo' is not defined
- *
- * Older/newer CPython versions occasionally include suggestions
- * ("Did you mean: ...?"). We strip those out of the headline and
- * surface them separately if present.
- */
 /**
  * Which kind of name problem this is.
  *
@@ -144,8 +127,15 @@ export interface NameContext {
   line?: string | null;
 }
 
+/**
+ * A friendly explanation for a `NameError` or `UnboundLocalError`.
+ *
+ * The message is the one Python shows - `name 'Totl' is not defined. Did
+ * you mean: 'total'?` - so its suggestion is in it, and becomes a "Did you
+ * mean" line of its own rather than part of the headline.
+ */
 export function explainNameError(
-  parsed: ParsedPythonError,
+  parsed: PythonError,
   context: NameContext = {},
 ): BeginnerExplanation {
   const named = parsed.nameToken !== null;

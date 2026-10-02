@@ -1,3 +1,5 @@
+import { errorText } from "./errorText";
+
 /**
  * Finding and fetching an Examplar bundle.
  *
@@ -124,7 +126,7 @@ export async function loadBundle(
       headers: cached?.etag ? { "If-None-Match": cached.etag } : {},
     });
   } catch (err) {
-    const why = err instanceof Error ? err.message : String(err);
+    const why = errorText(err);
     return cached
       ? { json: cached.json, fromCache: true, note: `could not reach ${url} (${why}); using the cached copy` }
       : { fromCache: false, error: `could not reach ${url} (${why}), and nothing is cached` };

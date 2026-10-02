@@ -59,8 +59,9 @@ async function loadAnalyzer() {
     join(tmp, "entry.mjs"),
     `
 export { findRuntimeFinding } from "../src/common/analyzers/registry";
-export { parsePythonError } from "../src/common/errors/pythonErrorParser";
+export { pythonErrorFrom } from "../src/common/errors/pythonError";
 export { deliverTestResult } from "../src/common/deliverResult";
+export { explainTestReport } from "../src/common/analyzers/runtimeFinding";
 `,
   );
   await build({
@@ -83,7 +84,23 @@ async function main() {
     console.error(`Missing ${WORKER_PATH}. Run \`pnpm run build\` first.`);
     process.exit(1);
   }
-  const { findRuntimeFinding, parsePythonError, deliverTestResult } = await loadAnalyzer();
+  const { findRuntimeFinding, pythonErrorFrom, deliverTestResult, explainTestReport } = await loadAnalyzer();
+
+  /**
+   * A test phase's report as both hosts show it: translated, then each
+   * error explained. `shown` is what a view prints for a test.
+   */
+  const reportOf = (result, fileName, level, code) => {
+    let report = null;
+    deliverTestResult(result, (event) => {
+      if (event.kind === "testReport") report = explainTestReport(event, code, fileName, level);
+    }, fileName);
+    return report;
+  };
+  const shown = (test) =>
+    test?.finding
+      ? [test.finding.headline, ...test.finding.howToFix].join("\n")
+      : (test?.message ?? "");
   const worker = new Worker(WORKER_PATH);
   const send = talk(worker);
   let session = 0;
@@ -363,12 +380,7 @@ async function main() {
       /** Run `code`, then push it through the host-side analyzer. */
       const finding = async (code, level = "advanced") => {
         const r = await run(code, { level });
-        const traceback = r.traceback || `${r.error_type}: ${r.error_message}`;
-        const parsed = parsePythonError(traceback);
-        if (parsed.lineNumber === null && r.line_number !== null) {
-          parsed.lineNumber = r.line_number;
-        }
-        return findRuntimeFinding(code, "hello.py", level, parsed);
+        return findRuntimeFinding(code, "hello.py", level, pythonErrorFrom(r));
       };
 
       const arg = await finding(
@@ -585,12 +597,9 @@ async function main() {
         `the worker reports typeguard's text: ${raw.message}`,
       );
 
-      let report = null;
-      deliverTestResult(result, (event) => {
-        if (event.kind === "testReport") report = event;
-      }, "tw.py", "beginner", code);
+      const report = reportOf(result, "tw.py", "beginner", code);
       expect(report !== null, "a testReport event should be emitted");
-      const test = report.tests[0];
+      const test = { ...report.tests[0], message: shown(report.tests[0]) };
       expect(
         !(test.message ?? "").includes("is not an instance of"),
         `typeguard's wording must not reach the report: ${test.message}`,
@@ -705,7 +714,7 @@ async function main() {
           source,
           "none.py",
           "beginner",
-          parsePythonError(result.traceback, source),
+          pythonErrorFrom(result),
         );
         const text = `${finding.headline}\n${finding.howToFix.join("\n")}`;
         expect(wanted.test(finding.headline), `${label}: headline was ${finding.headline}`);
@@ -744,7 +753,7 @@ async function main() {
         field,
         "dc.py",
         "beginner",
-        parsePythonError(fieldRun.traceback, field),
+        pythonErrorFrom(fieldRun),
       );
       expect(
         fieldFinding.headline ===
@@ -770,7 +779,7 @@ async function main() {
         column,
         "tc.py",
         "beginner",
-        parsePythonError(columnRun.traceback, column),
+        pythonErrorFrom(columnRun),
       );
       const advice = columnFinding.howToFix.join("\n");
       expect(
@@ -798,11 +807,7 @@ async function main() {
         sessionKey: "tc-fl",
         level: "raw",
       }).then((r) => r.result);
-      let report = null;
-      deliverTestResult(result, (event) => {
-        if (event.kind === "testReport") report = event;
-      }, "fl.py", "raw", code);
-      const message = report?.tests?.[0]?.message ?? "";
+      const message = shown(reportOf(result, "fl.py", "raw", code)?.tests?.[0]);
       expect(/pytest\.approx\(3\.3\)/.test(message), `approx should be suggested: ${message}`);
       expect(
         /differ only in the last few digits/.test(message),
@@ -818,14 +823,8 @@ async function main() {
         sessionKey: "tc-fw",
         level: "raw",
       }).then((r) => r.result);
-      let wrongReport = null;
-      deliverTestResult(other, (event) => {
-        if (event.kind === "testReport") wrongReport = event;
-      }, "fw.py", "raw", wrong);
-      expect(
-        !/approx/.test(wrongReport?.tests?.[0]?.message ?? ""),
-        `a genuinely wrong answer gets no approx note: ${wrongReport?.tests?.[0]?.message}`,
-      );
+      const wrongMessage = shown(reportOf(other, "fw.py", "raw", wrong)?.tests?.[0]);
+      expect(!/approx/.test(wrongMessage), `a genuinely wrong answer gets no approx note: ${wrongMessage}`);
       console.log("    approx suggested for rounding, and not for a wrong answer");
     }
 
@@ -841,11 +840,7 @@ async function main() {
           sessionKey: key,
           level: "raw",
         }).then((r) => r.result);
-        let report = null;
-        deliverTestResult(result, (event) => {
-          if (event.kind === "testReport") report = event;
-        }, "te.py", "raw", code);
-        return report?.tests?.[0]?.message ?? "";
+        return shown(reportOf(result, "te.py", "raw", code)?.tests?.[0]);
       };
       const listPlus = await reportFor(
         'def shout(words):\n    return words + "!"\n\n\ndef test_shout():\n    assert shout(["hi"]) == ["HI"]\n',
@@ -872,6 +867,34 @@ async function main() {
         "te-3",
       );
       expect(/^assert 3 == 4/.test(plain), `a failed assert is left as it is: ${plain}`);
+
+      // Through the same analyzers as a run error: a name error is explained
+      // too (it used to arrive in Python's words), and a finding says where.
+      const named = await reportFor("def test_x():\n    assert totl == 1\n", "te-4");
+      expect(/Python doesn't know what `totl` means/.test(named), `a NameError inside a test: ${named}`);
+      const located = await send({
+        type: "runTests",
+        code: 'def shout(words):\n    return words + "!"\n\n\ndef test_shout():\n    assert shout(["hi"]) == ["HI"]\n',
+        fileName: "te.py",
+        sessionKey: "te-5",
+        level: "raw",
+      }).then((r) => reportOf(r.result, "te.py", "raw", 'def shout(words):\n    return words + "!"\n'));
+      const where = located?.tests?.[0]?.finding?.location?.label;
+      expect(where === "te.py:2", `the error is placed in \`shout\`, not the test: ${where}`);
+      expect(located?.tests?.[0]?.error === undefined, "and the report keeps the finding, not the exception");
+      const paramWhere = (
+        await send({
+          type: "runTests",
+          code: "def test_pen_cost(n):\n    assert n\n",
+          fileName: "te.py",
+          sessionKey: "te-6",
+          level: "raw",
+        }).then((r) => reportOf(r.result, "te.py", "raw", "def test_pen_cost(n):\n    assert n\n"))
+      )?.tests?.[0]?.finding;
+      expect(
+        paramWhere !== undefined && paramWhere.location === null,
+        `PLL called that test, so there is no line of theirs to point at: ${JSON.stringify(paramWhere?.location)}`,
+      );
       console.log("    a TypeError and a parameter reworded; a failed assert left alone");
     }
 
@@ -891,7 +914,7 @@ async function main() {
         rows,
         "row.py",
         "beginner",
-        parsePythonError(rowRun.traceback, rows),
+        pythonErrorFrom(rowRun),
       );
       const rowText = `${rowFinding.headline} ${rowFinding.howToFix.join(" ")}`;
       expect(!/\bRow\b/.test(rowText), `\`Row\` must not appear: ${rowText}`);
@@ -910,7 +933,7 @@ async function main() {
         reactorSource,
         "rx.py",
         "beginner",
-        parsePythonError(rxRun.traceback, reactorSource),
+        pythonErrorFrom(rxRun),
       );
       const rxText = rxFinding.howToFix.join(" ");
       expect(/`init`/.test(rxText), `it should say the state started as init: ${rxText}`);
@@ -939,7 +962,7 @@ async function main() {
         code,
         "items.py",
         "intermediate",
-        parsePythonError(result.traceback, code),
+        pythonErrorFrom(result),
       );
       expect(
         /but item 0 is the string "1"\.$/.test(finding.headline),
@@ -957,7 +980,7 @@ async function main() {
         dictCode,
         "dict.py",
         "intermediate",
-        parsePythonError(dictRun.traceback, dictCode),
+        pythonErrorFrom(dictRun),
       );
       expect(
         /is the string "three"/.test(dictFinding.headline),
@@ -973,7 +996,7 @@ async function main() {
         "    name: str\n    singer: str\n    year: int\n\n\n";
       const findingFor = async (code, fileName) => {
         const result = await run(code, { level: "intermediate", fileName });
-        return findRuntimeFinding(code, fileName, "intermediate", parsePythonError(result.traceback, code));
+        return findRuntimeFinding(code, fileName, "intermediate", pythonErrorFrom(result));
       };
 
       // Two values in each other's places: converting one would hide it.
@@ -992,12 +1015,102 @@ async function main() {
       // An index error with the list's real length.
       const indexCode = "#level raw\nnums = [5, 1, 7]\nprint(nums[3])\n";
       const indexRun = await run(indexCode, { level: "raw", fileName: "idx.py" });
-      const indexFinding = findRuntimeFinding(indexCode, "idx.py", "raw", parsePythonError(indexRun.traceback, indexCode));
+      const indexFinding = findRuntimeFinding(indexCode, "idx.py", "raw", pythonErrorFrom(indexRun));
       expect(
         indexFinding.howToFix.some((l) => /`nums` has 3 items, numbered 0 to 2/.test(l)),
         `the real length: ${JSON.stringify(indexFinding.howToFix)}`,
       );
       console.log("    a swap named, a string quoted, a length read from the list itself");
+    }
+
+    console.log("\n[25] Python describes an error as data, not as traceback text");
+    {
+      // `_pll_error_info` is the whole interface between an exception and
+      // the host's explanations: where it is, whose frames, what was learned.
+      // The file is mounted so Python can read its lines, as it is in a run.
+      const described = async (code, level = "raw") => {
+        await send({ type: "mountWorkspace", files: [{ name: "hello.py", contents: code }] });
+        return run(code, { level });
+      };
+
+      const unknown = await described("total = 1\nprint(Total)\n");
+      expect(unknown.error_type === "NameError", `type: ${unknown.error_type}`);
+      expect(unknown.error_facts?.name === "Total", `the name: ${JSON.stringify(unknown.error_facts)}`);
+      expect(
+        /Did you mean: 'total'\?/.test(unknown.error_message),
+        `Python's suggestion is part of the message it shows: ${unknown.error_message}`,
+      );
+      expect(unknown.line_number === 2 && unknown.column === 6, `at 2:6, got ${unknown.line_number}:${unknown.column}`);
+
+      // A local read before it is assigned: Python sets no `name` for this
+      // one, and the host still has to be told it.
+      const local = await described("def f():\n    print(count)\n    count = 1\n\nf()\n");
+      expect(local.error_type === "UnboundLocalError", `type: ${local.error_type}`);
+      expect(local.error_facts?.name === "count", `the local's name: ${JSON.stringify(local.error_facts)}`);
+      const free = await described(
+        "def outer():\n    def inner():\n        return title\n    r = inner()\n    title = 1\n\nouter()\n",
+      );
+      expect(free.error_facts?.name === "title", `the free variable's name: ${JSON.stringify(free.error_facts)}`);
+
+      // Python draws no caret under a name that is the whole line, so
+      // there is no column to report.
+      const whole = await described("totl\n");
+      expect(whole.column == null, `no column for a whole-line name, got ${whole.column}`);
+
+      // Whose frames: the student's, and PLL's own around them.
+      const nested = await described("def a(n):\n    return b(n)\n\ndef b(n):\n    return n / 0\n\na(1)\n");
+      const frames = (nested.error_frames ?? []).map((f) => `${f.user ? "user" : "pll"}:${f.function ?? "<module>"}:${f.line}`);
+      expect(
+        frames.filter((f) => f.startsWith("user")).join(",") === "user:<module>:7,user:a:2,user:b:5",
+        `the student's frames, outermost first: ${frames.join(",")}`,
+      );
+      expect(frames[0]?.startsWith("pll:"), `PLL's own frame is there, and not the student's: ${frames[0]}`);
+      expect(nested.line_number === 5, `the error is at the innermost frame: ${nested.line_number}`);
+
+      // A recursion sends its innermost frames, not all thousand.
+      const deep = await described("def f(n):\n    return f(n + 1)\n\nf(0)\n");
+      expect(deep.error_type === "RecursionError", `type: ${deep.error_type}`);
+      expect(
+        deep.error_frames.length === 100 && deep.error_frames.every((f) => f.function === "f"),
+        `100 frames, all of f: ${deep.error_frames.length}`,
+      );
+
+      // A syntax error is where Python says, with its message as shown.
+      const syntax = await described("x = 1\nif x = 1:\n    pass\n");
+      expect(syntax.error_type === "SyntaxError", `type: ${syntax.error_type}`);
+      expect(syntax.line_number === 2 && syntax.column === 3, `at 2:3, got ${syntax.line_number}:${syntax.column}`);
+      expect(!/hello\.py, line/.test(syntax.error_message), `no "(file, line)" in the message: ${syntax.error_message}`);
+
+      // What was learned travels beside the message, not inside it.
+      const index = await described("nums = [5, 1, 7]\nprint(nums[3])\n");
+      expect(
+        index.error_facts?.sequence === "nums" && index.error_facts?.length === 3,
+        `the list and its length: ${JSON.stringify(index.error_facts)}`,
+      );
+      expect(index.error_message === "list index out of range", `the message is Python's: ${index.error_message}`);
+      const element = await described(
+        "def total(lst: list[float]) -> float:\n    return 0\n\ntotal([\"1\", 2.0])\n",
+        "beginner",
+      );
+      expect(
+        element.error_facts?.element_value === 'the string "1"',
+        `the element that failed: ${JSON.stringify(element.error_facts)}`,
+      );
+      expect(!/->/.test(element.error_message), `and nothing appended to the message: ${element.error_message}`);
+      const swapped = await described(
+        [
+          "from dataclasses import dataclass",
+          "@dataclass",
+          "class Song:",
+          "    title: str",
+          "    year: int",
+          's = Song(1999, "x")',
+        ].join("\n") + "\n",
+        "beginner",
+      );
+      expect(swapped.error_facts?.swapped_with === "year", `the swap: ${JSON.stringify(swapped.error_facts)}`);
+      await send({ type: "mountWorkspace", files: [] });
+      console.log("    names, frames, columns, facts and messages, each from the exception itself");
     }
   } finally {
     await worker.terminate();

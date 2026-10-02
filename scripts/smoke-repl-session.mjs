@@ -442,6 +442,35 @@ async function harness(script = {}, doc = makeDoc("hello.py")) {
   return { repl, runtime, view, diagnostics, doc, sockets, bundles };
 }
 
+/**
+ * An error event, as the runtime builds one from `_pll_error_info`: `frames`
+ * is `[file, line, function]` per frame, outermost first, and a frame is the
+ * student's unless its file is `<exec>`.
+ */
+function errorEvent({ type, message, file, line, column = null, frames = [], facts = {} }) {
+  return {
+    kind: "error",
+    fileName: file,
+    error: {
+      errorType: type,
+      message,
+      traceback: `${type}: ${message}`,
+      fileName: file,
+      lineNumber: line,
+      column,
+      nameToken: facts.name ?? null,
+      frames: frames.map(([fileName, frameLine, functionName = null]) => ({
+        fileName,
+        line: frameLine,
+        column: null,
+        functionName,
+        user: fileName !== "<exec>",
+      })),
+      facts,
+    },
+  };
+}
+
 const texts = (view, kind) =>
   view.entries.filter((e) => e.kind === kind).map((e) => e.text ?? e.code ?? e.repr);
 const kinds = (view) => view.entries.map((e) => e.kind);
@@ -575,7 +604,7 @@ console.log("\n[5] beginner static findings block the file and become diagnostic
     "the finding should be shown in the interactions view",
   );
   expect(
-    view.entries.at(-1).text === "Static analysis found issues. File not executed.",
+    /^Static analysis found \d+ problems?\. The file was not run\.$/.test(view.entries.at(-1).text),
     "the banner should say the file was not executed, got " + view.entries.at(-1).text,
   );
   expect(
@@ -617,7 +646,7 @@ console.log("\n[6] prompt findings stay in the view and carry the session key");
   view.handlers.onSubmit("list = [1]");
   await settle();
   expect(
-    view.entries.at(-1).text === "Static analysis found issues. Input not executed.",
+    /^Static analysis found \d+ problems?\. Your input was not run\.$/.test(view.entries.at(-1).text),
     "the prompt banner should say the input was not executed, got " + view.entries.at(-1).text,
   );
   expect(
@@ -657,15 +686,14 @@ console.log("\n[8] a runtime NameError becomes a friendly finding");
   const { repl, view, runtime, diagnostics } = await harness(
     {
       events: () => [
-        {
-          kind: "error",
-          errorType: "NameError",
+        errorEvent({
+          type: "NameError",
           message: "name 'total' is not defined",
-          traceback: 'File "oops.py", line 1\nNameError: name \'total\' is not defined',
-          lineNumber: 1,
-          column: null,
-          fileName: "oops.py",
-        },
+          file: "oops.py",
+          line: 1,
+          frames: [["oops.py", 1]],
+          facts: { name: "total" },
+        }),
         { kind: "done" },
       ],
     },
@@ -709,22 +737,13 @@ console.log("\n[9] an error with no analyzer of its own is still a finding");
   const { repl, view } = await harness(
     {
       events: () => [
-        {
-          kind: "error",
-          errorType: "ZeroDivisionError",
+        errorEvent({
+          type: "ZeroDivisionError",
           message: "division by zero",
-          traceback: [
-            "Traceback (most recent call last):",
-            '  File "<exec>", line 779, in _pll_run_file',
-            '  File "boom.py", line 2, in <module>',
-            "    print(x / 0)",
-            "          ~~^~~",
-            "ZeroDivisionError: division by zero",
-          ].join("\n"),
-          lineNumber: 2,
-          column: null,
-          fileName: "boom.py",
-        },
+          file: "boom.py",
+          line: 2,
+          frames: [["<exec>", 779, "_pll_run_file"], ["boom.py", 2]],
+        }),
         { kind: "done" },
       ],
     },
@@ -855,7 +874,7 @@ console.log("\n[14] sibling files are mounted before a run and written back afte
     "changed files should be written next to the script",
   );
   expect(
-    view.entries.some((e) => e.kind === "banner" && e.text === "Saved out.csv next to this file."),
+    view.entries.some((e) => e.kind === "banner" && e.text === "Saved out.csv next to files.py."),
     "a banner should name what was saved",
   );
   repl.dispose();
@@ -1027,8 +1046,8 @@ console.log("\n[21] a static-analysis crash does not block the run");
   await repl.runFile("#level beginner\nprint(1)\n", "beginner.py", doc);
   await settle();
   expect(
-    texts(view, "stderr").some((t) => /analyzer exploded/.test(t)),
-    "the failure should be visible, got " + JSON.stringify(texts(view, "stderr")),
+    texts(view, "banner").some((t) => /^Static analysis failed \(analyzer exploded\)\. Running anyway\.$/.test(t)),
+    "the failure should be visible, got " + JSON.stringify(texts(view, "banner")),
   );
   expect(
     runtime.calls.some((c) => c[0] === "runFile"),
@@ -1799,7 +1818,7 @@ console.log("\n[45] a warning is shown and the file still runs");
     "the warning should be shown",
   );
   expect(
-    !view.entries.some((e) => e.kind === "banner" && /not executed/.test(e.text)),
+    !view.entries.some((e) => e.kind === "banner" && /was not run/.test(e.text)),
     `and nothing should say the file was skipped: ${JSON.stringify(view.entries.map((e) => e.text))}`,
   );
   expect(
@@ -1832,7 +1851,7 @@ console.log("\n[46] an error still stops the file");
   await repl.runFile(doc.getText(), "blocked.py", doc);
   await settle();
   expect(
-    view.entries.some((e) => e.kind === "banner" && /not executed/.test(e.text)),
+    view.entries.some((e) => e.kind === "banner" && /The file was not run/.test(e.text)),
     "an error should say the file was not executed",
   );
   expect(
@@ -2259,6 +2278,152 @@ console.log("\n[54] after going back, Play plays again - even once stop_when has
     repl.dispose();
   }
   console.log("    Play resumes from an earlier frame, stopped or not");
+}
+
+console.log("\n[55] an error in a reactor's handler is a finding, like any other");
+{
+  // It used to be shown as Python's raw traceback, through PLL's own
+  // frames - the one runtime error that never got PLL's wording.
+  const code = "def tick(n: int) -> int:\n    return n + undefined_step\n\nanimate(draw)\n";
+  const doc = makeDoc("anim.py", code);
+  const { repl, view } = await harness(
+    countingReactor({
+      script: {
+        reactorStep: () => ({
+          ok: false,
+          error_type: "NameError",
+          error_message: "name 'undefined_step' is not defined",
+          traceback: "Traceback ...",
+          error_file: "anim.py",
+          line_number: 2,
+          column: 15,
+          error_frames: [
+            { file: "<exec>", line: 400, column: null, function: "_pll_reactor_step", user: false },
+            { file: "anim.py", line: 2, column: 15, function: "tick", user: true },
+          ],
+          error_facts: { name: "undefined_step" },
+        }),
+      },
+    }),
+    doc,
+  );
+  await repl.runFile(code, "anim.py", doc);
+  await new Promise((r) => setTimeout(r, 100));
+  expect(!view.entries.some((e) => e.kind === "rawError"), "no raw traceback");
+  const finding = view.entries.find((e) => e.kind === "finding")?.finding;
+  expect(
+    finding?.headline === "Python doesn't know what `undefined_step` means.",
+    `explained against the program: ${finding?.headline}`,
+  );
+  expect(finding?.location?.label === "anim.py:2:16", `at the handler's line: ${finding?.location?.label}`);
+  const card = view.entries.find((e) => e.kind === "reactor");
+  expect(card?.playing === false, "and the clock stops");
+  console.log(`    ${finding?.headline} (${finding?.location?.label})`);
+  repl.dispose();
+}
+
+console.log("\n[56] a test's error is explained in the card, as the run's would be");
+{
+  const code = 'def add(xs):\n    return xs + "!"\n\ndef test_add():\n    assert add([1]) == [1]\n';
+  const doc = makeDoc("t.py", code);
+  const { repl, view } = await harness(
+    {
+      events: () => [{ kind: "done" }],
+      runTests: async (request, onEvent) => {
+        onEvent({
+          kind: "testReport",
+          fileName: request.fileName,
+          passed: 0,
+          failed: 0,
+          skipped: 0,
+          errors: 1,
+          tests: [
+            {
+              name: "test_add",
+              outcome: "error",
+              lineNumber: 4,
+              message: 'TypeError: can only concatenate list (not "str") to list',
+              stdout: null,
+              error: errorEvent({
+                type: "TypeError",
+                message: 'can only concatenate list (not "str") to list',
+                file: "t.py",
+                line: 2,
+                frames: [["t.py", 5, "test_add"], ["t.py", 2, "add"]],
+              }).error,
+            },
+          ],
+        });
+        onEvent({ kind: "done" });
+      },
+    },
+    doc,
+  );
+  await repl.runFile(code, "t.py", doc);
+  await settle();
+  const test = view.entries.find((e) => e.kind === "testReport")?.tests?.[0];
+  expect(
+    test?.finding?.headline === "A list and a string cannot be added together.",
+    `the editor explains it: ${JSON.stringify(test?.finding)}`,
+  );
+  expect(test?.finding?.location?.label === "t.py:2", `in \`add\`: ${test?.finding?.location?.label}`);
+  expect(test?.error === undefined, "and the webview is sent the finding, not the exception");
+  console.log(`    ${test?.finding?.errorType}: ${test?.finding?.headline}`);
+  repl.dispose();
+}
+
+console.log("\n[57] a top-level error in a file with tests is reported once");
+{
+  // The test phase loads the file to find its tests, so it meets the error
+  // first; the program then raises it again. The editor showed both, while
+  // the command line - which had its own copy of the run - showed one.
+  const code = "x = 1 / 0\n\ndef test_a():\n    assert True\n";
+  const doc = makeDoc("top.py", code);
+  const failure = errorEvent({
+    type: "ZeroDivisionError",
+    message: "division by zero",
+    file: "top.py",
+    line: 1,
+    frames: [["top.py", 1]],
+  });
+  const { repl, view } = await harness(
+    {
+      events: (kind) => (kind === "runFile" ? [failure, { kind: "done" }] : [{ kind: "done" }]),
+      runTests: async (_request, onEvent) => {
+        onEvent(failure);
+        onEvent({ kind: "done" });
+      },
+    },
+    doc,
+  );
+  await repl.runFile(code, "top.py", doc);
+  await settle();
+  const findings = view.entries.filter((e) => e.kind === "finding");
+  expect(findings.length === 1, `one finding, from the program: ${findings.length}`);
+  console.log(`    ${findings.length} finding: ${findings[0]?.finding.headline}`);
+  repl.dispose();
+}
+
+console.log("\n[58] files that could not be mounted are not written back");
+{
+  const doc = makeDoc("nofiles.py", "print(1)\n");
+  const { repl, runtime } = await harness(
+    {
+      events: () => [{ kind: "done" }],
+      mountWorkspaceFiles: async () => {
+        throw new Error("no room");
+      },
+    },
+    doc,
+  );
+  await repl.runFile("print(1)\n", "nofiles.py", doc);
+  await settle();
+  expect(runtime.calls.some((c) => c[0] === "runFile"), "the program still runs");
+  expect(
+    !runtime.calls.some((c) => c[0] === "collectWorkspaceFiles"),
+    "but nothing it wrote is copied back over the student's files",
+  );
+  repl.dispose();
 }
 
 console.log(`\nsmoke-repl-session: ${ok ? "ok" : "FAILED"}`);

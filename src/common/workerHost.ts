@@ -2,11 +2,10 @@ import {
   collectChangedWorkspaceFiles,
   ensureWorkDir,
   mountWorkspaceFiles,
-  type MemFS,
+  MemFS,
 } from "./memfsWorkspace";
+import { NETWORK_IMPORT_RE, PANDAS_METHOD_RE } from "./packages";
 import {
-  NETWORK_IMPORT_RE,
-  PANDAS_METHOD_RE,
   PLL_EXAMPLAR_LIB_PY,
   PLL_IMAGE_LIB_PY,
   PLL_REACTOR_LIB_PY,
@@ -14,18 +13,21 @@ import {
   PYODIDE_BOOTSTRAP_PY,
   PYODIDE_HTTP_PATCH_PY,
   PYODIDE_INSTALL_PY,
-  type DisplayData,
-  type ExamplarBuildResult,
-  type ExamplarRunResult,
-  type RawStaticFinding,
-  type ReactorStepResult,
-  type RunResult,
-  type TestRunResult,
-} from "./pyodideRunner";
+} from "./pythonSources";
+import type {
+  DisplayData,
+  ExamplarBuildResult,
+  ExamplarRunResult,
+  RawStaticFinding,
+  ReactorStepResult,
+  RunResult,
+  TestRunResult,
+} from "./wire";
 import { clearInterrupt } from "./interruptBuffer";
 import { PLL_VENDOR_DIR, VENDORED_WHEELS } from "./pythonVendor";
 import { waitForStdinLine } from "./stdinBuffer";
 import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "./workerProtocol";
+import { errorText } from "./errorText";
 
 /**
  * Where Pyodide's package-loading progress goes.
@@ -466,7 +468,7 @@ export function createWorkerHost(
       adapter.post({
         id: data.id,
         type: "error",
-        message: err instanceof Error ? err.message : String(err),
+        message: errorText(err),
       });
     }
   };

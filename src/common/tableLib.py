@@ -105,20 +105,6 @@ def _format_cell(value):
 # Naming things in messages
 # -----------------------------------------------------------------------------
 
-_PLL_ORDINALS = ("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th")
-
-
-def _pll_ordinal(index):
-    """`1st`, `2nd`, ... for a 0-based position.
-
-    Used instead of the index itself wherever a message would otherwise
-    have to say "Row 1" about the second row.
-    """
-    if index < len(_PLL_ORDINALS):
-        return _PLL_ORDINALS[index]
-    return "%dth" % (index + 1)
-
-
 def _pll_literal(value, limit=60):
     """A value written the way it would be written in a program.
 
@@ -159,17 +145,7 @@ def _pll_closest(name, candidates):
     starting = [c for c in candidates if c.lower().startswith(name.lower()) and name]
     if len(starting) == 1:
         return (starting[0], "")
-    best = None
-    best_distance = None
-    for candidate in candidates:
-        distance = _pll_edit_distance(name.lower(), candidate.lower())
-        if best_distance is None or distance < best_distance:
-            best = candidate
-            best_distance = distance
-    # Close enough to be a typo rather than a different word.
-    if best is not None and best_distance <= max(1, len(best) // 3):
-        return (best, "")
-    return (None, "")
+    return (_pll_closest_name(name, candidates), "")
 
 
 def _pll_q(name):
@@ -1139,16 +1115,6 @@ _CHART_MARGIN_T = 28  # space for title
 _CHART_MARGIN_B = 44
 
 
-def _xml_escape(s):
-    return (
-        str(s)
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
-
-
 class _PllChart:
     """An immutable, displayable SVG chart. Duck-types as a PLL image."""
 
@@ -1229,18 +1195,18 @@ def _chart_frame(title, x_label, y_label, body_svg, height=None):
         title_svg = (
             '<text x="%d" y="%d" text-anchor="middle" '
             'font-size="13" font-weight="600">%s</text>'
-        ) % (_CHART_W / 2, _CHART_MARGIN_T - 12, _xml_escape(title))
+        ) % (_CHART_W / 2, _CHART_MARGIN_T - 12, _pll_xml_escape(title))
 
     x_label_svg = (
         '<text x="%d" y="%d" text-anchor="middle" '
         'font-size="11" font-style="italic">%s</text>'
-    ) % (px + pw / 2, chart_h - 8, _xml_escape(x_label))
+    ) % (px + pw / 2, chart_h - 8, _pll_xml_escape(x_label))
 
     # y-label rotated 90deg, anchored on the left margin
     y_label_svg = (
         '<text x="%d" y="%d" text-anchor="middle" font-size="11" '
         'font-style="italic" transform="rotate(-90 %d %d)">%s</text>'
-    ) % (16, py + ph / 2, 16, py + ph / 2, _xml_escape(y_label))
+    ) % (16, py + ph / 2, 16, py + ph / 2, _pll_xml_escape(y_label))
 
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" '
@@ -1277,7 +1243,7 @@ def _draw_y_axis(lo, hi, ticks):
         text_parts.append(
             '<text x="%g" y="%g" font-size="10" text-anchor="end" '
             'fill="#444" dominant-baseline="middle">%s</text>'
-            % (px - 6, y, _xml_escape(_format_tick(t)))
+            % (px - 6, y, _pll_xml_escape(_format_tick(t)))
         )
     # Axis line.
     parts.append('<line x1="%g" y1="%g" x2="%g" y2="%g" stroke="#888"/>' % (px, py, px, py + ph))
@@ -1299,7 +1265,7 @@ def _draw_x_axis_numeric(lo, hi, ticks, height=None):
         )
         text_parts.append(
             '<text x="%g" y="%g" font-size="10" text-anchor="middle" fill="#444">%s</text>'
-            % (x, py + ph + 14, _xml_escape(_format_tick(t)))
+            % (x, py + ph + 14, _pll_xml_escape(_format_tick(t)))
         )
     parts.append(
         '<line x1="%g" y1="%g" x2="%g" y2="%g" stroke="#888"/>'
@@ -1320,7 +1286,7 @@ def _draw_x_axis_categorical(labels):
             cx = px + slot * (i + 0.5)
             text_parts.append(
                 '<text x="%g" y="%g" font-size="10" text-anchor="middle" '
-                'fill="#444">%s</text>' % (cx, py + ph + 14, _xml_escape(label))
+                'fill="#444">%s</text>' % (cx, py + ph + 14, _pll_xml_escape(label))
             )
     parts.append(
         '<line x1="%g" y1="%g" x2="%g" y2="%g"/>'
@@ -1384,7 +1350,7 @@ def _plain_frame(title, body_svg, width=_CHART_W, height=_CHART_H):
         title_svg = (
             '<text x="%d" y="%d" text-anchor="middle" '
             'font-size="13" font-weight="600">%s</text>'
-        ) % (width / 2, _CHART_MARGIN_T - 12, _xml_escape(title))
+        ) % (width / 2, _CHART_MARGIN_T - 12, _pll_xml_escape(title))
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" '
         'viewBox="0 0 %d %d" font-family="sans-serif" '
@@ -1422,7 +1388,7 @@ def _render_legend(entries, x, y):
                     % (x + 5, cy - 6, color))
         rows.append(
             '<text x="%g" y="%g" font-size="10" fill="#333">%s</text>'
-            % (x + 18, cy + 1, _xml_escape(label))
+            % (x + 18, cy + 1, _pll_xml_escape(label))
         )
     return "".join(rows)
 
@@ -1666,7 +1632,7 @@ def _render_box_plot(values, name, title):
     )
     body.append(
         '<text x="%g" y="%g" font-size="10" fill="#555" text-anchor="middle">%s</text>'
-        % (px + pw / 2, py + 10, _xml_escape(summary))
+        % (px + pw / 2, py + 10, _pll_xml_escape(summary))
     )
     return {
         "width": _CHART_W,

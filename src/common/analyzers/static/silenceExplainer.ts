@@ -1,5 +1,5 @@
 import type { Level } from "../../level";
-import type { RawStaticFinding } from "../../pyodideRunner";
+import type { RawStaticFinding, RawStaticFindingOf, SilenceFindingId } from "../../wire";
 import type { AnalysisFinding } from "../types";
 
 /**
@@ -68,7 +68,7 @@ function finding(
 
 /** `pen_cost(0, "huskies") == 1` - a test written without `assert`. */
 export function explainUnusedComparison(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -89,7 +89,7 @@ export function explainUnusedComparison(
 
 /** `ac.balance + amt` on a line of its own. */
 export function explainUnusedValue(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -120,7 +120,7 @@ export function explainUnusedValue(
 
 /** `assert(x, 1)` - a tuple, which is always true. */
 export function explainAssertTuple(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -139,7 +139,7 @@ export function explainAssertTuple(
 
 /** `movies["rating"].mean` - the method, not its result. */
 export function explainMethodNotCalled(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -159,7 +159,7 @@ export function explainMethodNotCalled(
 
 /** `t: table` - the function that makes tables, not the type. */
 export function explainAnnotationNotAType(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -192,7 +192,7 @@ export function explainAnnotationNotAType(
 
 /** A function with an `assert` that nothing ever runs. */
 export function explainTestNotNamed(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<"test-not-named">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -212,7 +212,7 @@ export function explainTestNotNamed(
 
 /** `year` on a line of its own in a dataclass body. */
 export function explainFieldNoType(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -234,7 +234,7 @@ export function explainFieldNoType(
 
 /** `year = int` where `year: int` was meant. */
 export function explainFieldAssignedType(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -255,7 +255,7 @@ export function explainFieldAssignedType(
 
 /** A class with annotated fields and no `@dataclass`. */
 export function explainClassNeedsDataclass(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -275,7 +275,7 @@ export function explainClassNeedsDataclass(
 
 /** `if a == Boa:` - a value is never equal to the class it was made from. */
 export function explainComparedWithClass(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {

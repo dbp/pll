@@ -557,8 +557,9 @@ behaves the same on a terminal as it does in the panel:
 npx pll-python hw.py
 ```
 
-The level still comes from the file's own `#level` line, tests still run
-first, and errors are worded the same way. Pictures cannot be drawn in a
+The level still comes from the file's own `#level` line, an `#examplar` line
+still checks your tests, tests still run first, and errors are worded the
+same way. Pictures cannot be drawn in a
 terminal (each prints a note, or use `--save-images`) and reactors do not
 animate, but tables print as text and everything else is the same code.
 

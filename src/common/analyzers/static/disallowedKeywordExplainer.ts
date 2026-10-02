@@ -1,5 +1,5 @@
 import type { Level } from "../../level";
-import type { RawStaticFinding } from "../../pyodideRunner";
+import type { RawStaticFindingOf } from "../../wire";
 import type { AnalysisFinding } from "../types";
 
 /**
@@ -10,7 +10,7 @@ import type { AnalysisFinding } from "../types";
  * to keep beginners from running into.
  */
 export function explainDisallowedKeyword(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<"disallowed-keyword">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {

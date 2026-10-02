@@ -6,7 +6,7 @@ import type {
   ReactorStepResult,
   RunResult,
   TestRunResult,
-} from "./pyodideRunner";
+} from "./wire";
 import type { WorkspaceFile } from "./workspaceFilePolicy";
 
 export interface RawReplCheck {

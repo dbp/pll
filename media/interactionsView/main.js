@@ -230,81 +230,28 @@
     head.append(title, source);
     div.append(head);
 
-    const line = (klass, text) => {
-      const el = document.createElement("div");
-      el.className = "exLine " + klass;
-      el.textContent = text;
-      div.append(el);
-    };
-
-    if (entry.card !== "function") {
-      line("exBad", entry.problem);
-      return div;
-    }
-
-    if (entry.testCount === 0) {
-      line("exNote", "No tests yet.");
-      return div;
-    }
-
-    const CORRECT = "Against correct implementations: ";
-    const BUGGY = "Against buggy implementations: ";
-    const total = entry.testCount;
-    /** "your test" when there is one of them, "2 of your 5 tests" otherwise. */
-    const some = (n) => (total === 1 ? "your test" : `${n} of your ${total} tests`);
-    /** English needs the verb to agree with that. */
-    const does = (n) => (n === 1 ? "s" : "");
-
-    if (entry.allPass) {
-      line(
-        "exGood",
-        total === 1
-          ? `${CORRECT}your test passes.`
-          : `${CORRECT}all ${total} of your tests pass.`,
-      );
-    }
-    if (entry.failures.length > 0) {
-      const n = entry.failures.length;
-      line("exBad", `${CORRECT}${some(n)} expect${does(n)} the wrong answer:`);
-      // The name, and nothing else. The assertion would state the correct
-      // answer, which would let a student read the specification off this
-      // card one deliberately-wrong test at a time.
-      for (const test of entry.failures) {
-        const item = document.createElement("div");
-        item.className = "exFailure exFailureBad";
-        const name = document.createElement("code");
-        name.textContent = test;
-        item.append(name);
-        div.append(item);
+    // The wording is the host's (examplarPhase.ts), so the panel and the
+    // command line say the same thing; this only draws it.
+    const TONE = { good: "exGood", bad: "exBad", warn: "exWarn", note: "exNote" };
+    for (const block of entry.body ?? []) {
+      if (block.kind === "line") {
+        const el = document.createElement("div");
+        el.className = "exLine " + TONE[block.tone];
+        el.textContent = block.text;
+        div.append(el);
+        continue;
       }
-    }
-    // Separate, and worded as a fact rather than a fault: a test that raised
-    // never got as far as having an expectation, so telling the student it
-    // expects the wrong answer would be wrong.
-    if ((entry.errors ?? []).length > 0) {
-      line("exWarn", `${CORRECT}${some(entry.errors.length)} could not run here:`);
-      for (const { test, message } of entry.errors) {
-        const item = document.createElement("div");
-        item.className = "exFailure exFailureWarn";
-        const name = document.createElement("code");
-        name.textContent = test;
+      const item = document.createElement("div");
+      item.className = "exFailure " + (block.tone === "bad" ? "exFailureBad" : "exFailureWarn");
+      const name = document.createElement("code");
+      name.textContent = block.name;
+      item.append(name);
+      if (block.detail) {
         const msg = document.createElement("pre");
-        msg.textContent = message;
-        item.append(name, msg);
-        div.append(item);
+        msg.textContent = block.detail;
+        item.append(msg);
       }
-      if (entry.hint) line("exNote", entry.hint);
-    }
-
-    if (entry.pending) {
-      line("exNote", `${BUGGY}waiting until all your tests of ${entry.name} pass.`);
-    } else if (entry.caught === entry.total) {
-      line("exGood", `${BUGGY}caught all ${entry.total}.`);
-    } else {
-      line(
-        "exWarn",
-        `${BUGGY}caught ${entry.caught} of ${entry.total} - missed ${entry.missed.join(", ")}.`,
-      );
+      div.append(item);
     }
     return div;
   }
@@ -657,10 +604,18 @@
   }
 
   function renderFinding(entry) {
-    const f = entry.finding;
     const div = document.createElement("div");
     div.className = "entry finding";
+    appendFinding(div, entry.finding);
+    return div;
+  }
 
+  /**
+   * A finding's parts - headline, where, and how to fix it - into `div`.
+   * Shared by a finding entry and a test that raised, so an error reads the
+   * same wherever it is shown.
+   */
+  function appendFinding(div, f) {
     const head = document.createElement("div");
     const errType = document.createElement("span");
     errType.className = "errType";
@@ -703,8 +658,6 @@
       }
       div.appendChild(ul);
     }
-
-    return div;
   }
 
   function renderRawError(entry) {
@@ -787,7 +740,12 @@
 
         list.appendChild(row);
 
-        if (t.message) {
+        if (t.finding) {
+          const box = document.createElement("div");
+          box.className = "testFinding finding";
+          appendFinding(box, t.finding);
+          list.appendChild(box);
+        } else if (t.message) {
           const msg = document.createElement("div");
           msg.className = "testMsg";
           msg.textContent = t.message;

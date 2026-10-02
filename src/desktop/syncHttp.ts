@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { errorText } from "../common/errorText";
 
 export interface SyncHttpResult {
   status: number;
@@ -61,7 +62,7 @@ fetch(req.url, init).then(async (r) => {
       windowsHide: true,
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorText(err);
     throw new Error(`HTTP request failed: ${msg}`);
   }
   const parsed = JSON.parse(out.toString("utf8")) as {

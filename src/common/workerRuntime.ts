@@ -4,7 +4,7 @@ import type {
   ExamplarRunResult,
   RawStaticFinding,
   ReactorStepResult,
-} from "./pyodideRunner";
+} from "./wire";
 import { requestInterrupt, tryCreateInterruptBuffer } from "./interruptBuffer";
 import { tryCreateStdinBuffer, writeStdinLine } from "./stdinBuffer";
 import type {
@@ -148,7 +148,7 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
       },
       "testResult",
     );
-    deliverTestResult(result, onEvent, request.fileName, request.level, request.code);
+    deliverTestResult(result, onEvent, request.fileName);
   }
 
   async staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]> {

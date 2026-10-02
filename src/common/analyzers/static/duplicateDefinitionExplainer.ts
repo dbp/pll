@@ -1,5 +1,5 @@
 import type { Level } from "../../level";
-import type { RawStaticFinding } from "../../pyodideRunner";
+import type { RawStaticFindingOf } from "../../wire";
 import type { AnalysisFinding } from "../types";
 
 /**
@@ -12,7 +12,7 @@ import type { AnalysisFinding } from "../types";
  * near the actual fix, which is to rename one of them.
  */
 export function explainDuplicateDefinition(
-  raw: RawStaticFinding,
+  raw: RawStaticFindingOf<"duplicate-definition">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {

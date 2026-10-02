@@ -18,25 +18,22 @@ const entry = join(tmp, "entry.mjs");
 writeFileSync(
   entry,
   `
-import { parseLevel, levelHasTypeChecking, levelHeaderProblem } from "../src/common/level";
+import { parseLevel, levelHeaderProblem } from "../src/common/level";
 import { levelHeaderFinding } from "../src/common/analyzers/levelHeaderFinding";
 import { explainSyntaxError } from "../src/common/errors/syntaxExplainer";
 import { enrichStaticFindings } from "../src/common/analyzers/static/registry";
 import { formatFriendlyError } from "../src/common/errorFormatter";
 import { findRuntimeFinding } from "../src/common/analyzers/registry";
-import { parsePythonError } from "../src/common/errors/pythonErrorParser";
-import { LIBRARY_SIGNATURES } from "../src/common/errors/librarySignatures";
+import { LIBRARY_SIGNATURES } from "../src/common/errors/libraryFacts";
 
 export {
   parseLevel,
-  levelHasTypeChecking,
   levelHeaderProblem,
   levelHeaderFinding,
   explainSyntaxError,
   enrichStaticFindings,
   formatFriendlyError,
   findRuntimeFinding,
-  parsePythonError,
   LIBRARY_SIGNATURES,
 };
 `,
@@ -54,6 +51,52 @@ await build({
 });
 
 const mod = await import(pathToFileURL(join(tmp, "out.mjs")).href);
+
+/**
+ * A `PythonError`, as `pythonErrorFrom` builds one from `_pll_error_info`.
+ *
+ * `frames` are `[file, line, function]`, outermost first; a frame is the
+ * student's unless its file is PLL's (`<exec>`) or a library's. The error is
+ * at the innermost frame. `facts` are what Python would have learned from
+ * the live frames, and `name` among them is the name a `NameError` is about.
+ */
+function pyError(type, message, frames, { facts = {}, column = null } = {}) {
+  const innermost = frames[frames.length - 1] ?? null;
+  return {
+    errorType: type,
+    message,
+    traceback: `${type}: ${message}`,
+    fileName: innermost?.[0] ?? null,
+    lineNumber: innermost?.[1] ?? null,
+    column,
+    nameToken: facts.name ?? null,
+    frames: frames.map(([fileName, line, functionName = "<module>"]) => ({
+      fileName,
+      line,
+      column: null,
+      functionName: functionName === "<module>" ? null : functionName,
+      user: !/<exec>|site-packages|\/lib\/python|_pytest|pluggy|pll_vendor/.test(fileName),
+    })),
+    facts,
+  };
+}
+
+/**
+ * The same, from the `Type: message` line a traceback ends with. A
+ * `NameError`'s name is taken from its message, as Python does - that part
+ * is tested against Python itself, in smoke-typecheck.
+ */
+function pyErrorLine(errorLine, frames, options = {}) {
+  const at = errorLine.indexOf(": ");
+  const type = at < 0 ? errorLine : errorLine.slice(0, at);
+  const message = at < 0 ? "" : errorLine.slice(at + 2);
+  const facts = { ...(options.facts ?? {}) };
+  const named =
+    /^(?:NameError|UnboundLocalError)$/.test(type) &&
+    (/name '(\w+)' is not defined/.exec(message) ?? /cannot access (?:free|local) variable '(\w+)'/.exec(message));
+  if (named && facts.name === undefined) facts.name = named[1];
+  return pyError(type, message, frames, { ...options, facts });
+}
 
 let ok = true;
 function expect(cond, msg) {
@@ -81,12 +124,6 @@ expect(mod.parseLevel("#LEVEL beginner\nx=1") === "raw", "#LEVEL is not #level")
 expect(mod.parseLevel("#level Beginner\nx=1") === "raw", "#level Beginner is not a level");
 expect(mod.parseLevel("#level expert\nx=1") === "raw", "expert is not a level");
 expect(mod.parseLevel("#level\nx=1") === "raw", "a bare #level names nothing");
-
-console.log("\n[levelHasTypeChecking]");
-expect(mod.levelHasTypeChecking("beginner") === true, "beginner checks annotations");
-expect(mod.levelHasTypeChecking("intermediate") === true, "intermediate checks annotations");
-expect(mod.levelHasTypeChecking("advanced") === true, "advanced checks annotations");
-expect(mod.levelHasTypeChecking("raw") === false, "raw checks nothing");
 
 console.log("[enrichStaticFindings]");
 const findings = mod.enrichStaticFindings(
@@ -356,21 +393,19 @@ expect(lines.some((l) => l.includes("How to fix:")), "shows How to fix section")
 console.log("[name errors: a name with no value is named, not called `this name`]");
 {
   /** Build a finding from a traceback the way the hosts do. */
-  const finding = (traceback, source) =>
-    mod.findRuntimeFinding(source, "lab.py", "beginner", mod.parsePythonError(traceback, source));
+  const finding = (error, source) =>
+    mod.findRuntimeFinding(source, "lab.py", "beginner", error);
 
   // The Lab 10 shape: an inner function reads a name the enclosing function
   // assigns later. Only `name 'x' is not defined` was matched before, so the
   // name was unknown and the report read "Python doesn't know what `this
   // name` means" - four times over, in a file where `title` is right there.
   const free = finding(
-    [
-      'Traceback (most recent call last):',
-      '  File "lab.py", line 3, in inner',
-      "    return title",
-      "           ^^^^^",
+    pyErrorLine(
       "NameError: cannot access free variable 'title' where it is not associated with a value",
-    ].join("\n"),
+      [["lab.py", 3, "inner"]],
+      { column: 15 },
+    ),
     "def outer():\n    def inner():\n        return title\n    inner()\n    title = 1\n",
   );
   expect(free !== null, "a free-variable NameError should be explained");
@@ -390,13 +425,11 @@ console.log("[name errors: a name with no value is named, not called `this name`
   // `UnboundLocalError` is the same mistake under a different type, and was
   // not handled at all - it fell through to a bare traceback.
   const local = finding(
-    [
-      'Traceback (most recent call last):',
-      '  File "lab.py", line 2, in f',
-      "    print(count)",
-      "          ^^^^^",
+    pyErrorLine(
       "UnboundLocalError: cannot access local variable 'count' where it is not associated with a value",
-    ].join("\n"),
+      [["lab.py", 2, "f"]],
+      { column: 10 },
+    ),
     "def f():\n    print(count)\n    count = 1\n",
   );
   expect(local !== null, "an UnboundLocalError should be explained too");
@@ -409,13 +442,7 @@ console.log("[name errors: a name with no value is named, not called `this name`
 
   // A genuinely unknown name still gets the spelling advice.
   const unknown = finding(
-    [
-      'Traceback (most recent call last):',
-      '  File "lab.py", line 1, in <module>',
-      "    print(Totl)",
-      "          ^^^^",
-      "NameError: name 'Totl' is not defined",
-    ].join("\n"),
+    pyErrorLine("NameError: name 'Totl' is not defined", [["lab.py", 1]], { column: 6 }),
     "print(Totl)\n",
   );
   expect(unknown.nameToken === "Totl", `got ${unknown.nameToken}`);
@@ -557,21 +584,12 @@ console.log("[syntax errors: Python's wording where it is clear, better where it
 console.log("[stock messages: Python's own wording replaced with the course's]");
 {
   /** Build a finding the way the hosts do, from a traceback and the file. */
-  const finding = (traceback, source) =>
-    mod.findRuntimeFinding(source, "lab.py", "beginner", mod.parsePythonError(traceback, source));
+  const finding = (error, source) =>
+    mod.findRuntimeFinding(source, "lab.py", "beginner", error);
 
   /** A one-frame traceback pointing at `line` of `source`. */
   const raised = (source, line, fn, errorLine) =>
-    finding(
-      [
-        "Traceback (most recent call last):",
-        '  File "<exec>", line 560, in run',
-        `  File "lab.py", line ${line}, in ${fn}`,
-        `    ${source.split("\n")[line - 1].trim()}`,
-        errorLine,
-      ].join("\n"),
-      source,
-    );
+    finding(pyErrorLine(errorLine, [["<exec>", 560, "run"], ["lab.py", line, fn]]), source);
 
   /** Nothing a student never typed should ever reach them. */
   const INTERNALS = [/__init__/, /types\.UnionType/, /__pll_test__/, /_Rectangle/, /NoneType/];
@@ -857,13 +875,10 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
 
   // -- recursion, where the traceback itself names the culprit -----------
   const recursion = finding(
-    [
-      "Traceback (most recent call last):",
-      '  File "lab.py", line 6, in <module>',
-      "    print(my_len([1, 2, 3]))",
-      ...Array.from({ length: 40 }, () => '  File "lab.py", line 3, in my_len\n    return 1 + my_len(nums)'),
-      "RecursionError: maximum recursion depth exceeded",
-    ].join("\n"),
+    pyErrorLine("RecursionError: maximum recursion depth exceeded", [
+      ["lab.py", 6],
+      ...Array.from({ length: 40 }, () => ["lab.py", 3, "my_len"]),
+    ]),
     "def my_len(nums):\n    if nums == []:\n        return 1 + my_len(nums)\n    return 0\n\n\nprint(my_len([1, 2, 3]))\n",
   );
   expect(
@@ -877,21 +892,10 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
 
   // -- pandas, whose KeyError arrives through a wall of internals --------
   const pandas = finding(
-    [
-      "Traceback (most recent call last):",
-      '  File "/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 3805, in get_loc',
-      "    return self._engine.get_loc(casted_key)",
-      "KeyError: 'ratings'",
-      "",
-      "The above exception was the direct cause of the following exception:",
-      "",
-      "Traceback (most recent call last):",
-      '  File "lab.py", line 4, in <module>',
-      '    print(movies["ratings"].mean())',
-      '  File "/lib/python3.13/site-packages/pandas/core/frame.py", line 4102, in __getitem__',
-      "    indexer = self.columns.get_loc(key)",
-      "KeyError: 'ratings'",
-    ].join("\n"),
+    pyErrorLine("KeyError: 'ratings'", [
+      ["lab.py", 4],
+      ["/lib/python3.13/site-packages/pandas/core/frame.py", 4102, "__getitem__"],
+    ]),
     'import pandas as pd\n\nmovies = pd.DataFrame({"title": [], "rating": []})\nprint(movies["ratings"].mean())\n',
   );
   expect(
@@ -908,12 +912,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
   // is a real file in this repo, and a plain dict `KeyError` in it was
   // being reported as a missing DataFrame column.
   const notPandas = finding(
-    [
-      "Traceback (most recent call last):",
-      '  File "pandas.py", line 2, in <module>',
-      '    print(ages["bob"])',
-      "KeyError: 'bob'",
-    ].join("\n"),
+    pyErrorLine("KeyError: 'bob'", [["pandas.py", 2]]),
     'ages = {"alice": 30}\nprint(ages["bob"])\n',
   );
   expect(
@@ -924,14 +923,10 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
 
   // -- a class passed where one of its instances was wanted --------------
   const classItself = finding(
-    [
-      "Traceback (most recent call last):",
-      '  File "lab.py", line 12, in <module>',
-      "    print(title(ITunesSong))",
-      '  File "lab.py", line 11, in title',
-      "    return s.name",
-      'typeguard.TypeCheckError: argument "s" (class __pll_test__.ITunesSong) is not an instance of __pll_test__.ITunesSong',
-    ].join("\n"),
+    pyErrorLine(
+      'TypeCheckError: argument "s" (class __pll_test__.ITunesSong) is not an instance of __pll_test__.ITunesSong',
+      [["lab.py", 12], ["lab.py", 11, "title"]],
+    ),
     song + "\n\ndef title(s: ITunesSong) -> str:\n    return s.name\n\n\nprint(title(ITunesSong))\n",
   );
   expect(
@@ -1146,7 +1141,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
 
 console.log("[library signatures match the Python they describe]");
 {
-  // `librarySignatures.ts` is written by hand so the Python sources stay
+  // `libraryFacts.ts` is written by hand so the Python sources stay
   // out of the extension bundle. That only works if it cannot drift, so
   // re-derive every signature from the real files and compare both ways.
   const PUBLIC_CLASSES = new Set(["Table", "Reactor", "Row", "Image"]);
@@ -1190,7 +1185,7 @@ console.log("[library signatures match the Python they describe]");
   const table = mod.LIBRARY_SIGNATURES;
   for (const [name, sig] of derived) {
     const written = table[name];
-    expect(written !== undefined, `librarySignatures.ts is missing \`${name}\``);
+    expect(written !== undefined, `libraryFacts.ts is missing \`${name}\``);
     if (written === undefined) continue;
     expect(
       written.required.join(",") === sig.required.join(","),
@@ -1202,25 +1197,17 @@ console.log("[library signatures match the Python they describe]");
     );
   }
   for (const name of Object.keys(table)) {
-    expect(derived.has(name), `librarySignatures.ts has \`${name}\`, which Python does not`);
+    expect(derived.has(name), `libraryFacts.ts has \`${name}\`, which Python does not`);
   }
   console.log(`    ${derived.size} signatures agree with imageLib, tableLib and reactorLib`);
 }
 
 console.log("[name errors: the hint that fits, not the one that always fits]");
 {
-  const finding = (traceback, source) =>
-    mod.findRuntimeFinding(source, "lab.py", "raw", mod.parsePythonError(traceback, source));
+  const finding = (error, source) =>
+    mod.findRuntimeFinding(source, "lab.py", "raw", error);
   const raised = (source, line, errorLine) =>
-    finding(
-      [
-        "Traceback (most recent call last):",
-        `  File "lab.py", line ${line}, in <module>`,
-        `    ${source.split("\n")[line - 1].trim()}`,
-        errorLine,
-      ].join("\n"),
-      source,
-    );
+    finding(pyErrorLine(errorLine, [["lab.py", line]]), source);
 
   // A name an import provides. Python's own suggestion for `pd` is `id`,
   // a real built-in with nothing to do with pandas.
@@ -1381,20 +1368,10 @@ console.log("[annotations: the function wording only where there is a function]"
 
 console.log("[second review: advice that has to come from the program in hand]");
 {
-  const finding = (traceback, source, level = "raw") =>
-    mod.findRuntimeFinding(source, "lab.py", level, mod.parsePythonError(traceback, source));
+  const finding = (error, source, level = "raw") =>
+    mod.findRuntimeFinding(source, "lab.py", level, error);
   const raised = (source, line, errorLine, level = "raw") =>
-    finding(
-      [
-        "Traceback (most recent call last):",
-        '  File "<exec>", line 560, in run',
-        `  File "lab.py", line ${line}, in <module>`,
-        `    ${source.split("\n")[line - 1].trim()}`,
-        errorLine,
-      ].join("\n"),
-      source,
-      level,
-    );
+    finding(pyErrorLine(errorLine, [["<exec>", 560, "run"], ["lab.py", line]]), source, level);
 
   // The comparison hint used to show `int("999")` and `str(1000)`, and to
   // mention CSV columns, whatever the program compared.
@@ -1596,18 +1573,11 @@ console.log("[second review: a wrong annotation says what will actually happen]"
 
 console.log("[third review: the cases replayed from docs/error-review.md]");
 {
-  const finding = (traceback, source, level = "beginner") =>
-    mod.findRuntimeFinding(source, "student.py", level, mod.parsePythonError(traceback, source));
+  const finding = (error, source, level = "beginner") =>
+    mod.findRuntimeFinding(source, "student.py", level, error);
   const raised = (source, line, errorLine, frames = []) =>
     finding(
-      [
-        "Traceback (most recent call last):",
-        '  File "<exec>", line 1, in _pll_run_file',
-        `  File "student.py", line ${line}, in <module>`,
-        `    ${source.split("\n")[line - 1].trim()}`,
-        ...frames,
-        errorLine,
-      ].join("\n"),
+      pyErrorLine(errorLine, [["<exec>", 1, "_pll_run_file"], ["student.py", line], ...frames]),
       source,
     );
   const text = (f) => `${f.headline}\n${f.howToFix.join("\n")}`;
@@ -1717,15 +1687,11 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
 
   // loop-list-annotation: what item 0 *is*, read by Python from the frame.
   const item = finding(
-    [
-      "Traceback (most recent call last):",
-      '  File "student.py", line 25, in <module>',
-      '    sum_list(["1", "2", "3"])',
-      '  File "student.py", line 2, in sum_list',
-      "    def sum_list(lst: list[float]) -> float:",
-      'typeguard.TypeCheckError: item 0 of argument "lst" (list) is not an instance of float',
-      '  -> item 0 is the string "1"',
-    ].join("\n"),
+    pyErrorLine(
+      'TypeCheckError: item 0 of argument "lst" (list) is not an instance of float',
+      [["student.py", 25], ["student.py", 2, "sum_list"]],
+      { facts: { elementValue: 'the string "1"' } },
+    ),
     'def sum_list(lst: list[float]) -> float:\n    return 0\n',
   );
   expect(
@@ -1735,14 +1701,10 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
 
   // mut-local-not-field: the line reads the field it meant to change.
   const field = finding(
-    [
-      "Traceback (most recent call last):",
-      '  File "student.py", line 14, in <module>',
-      "    deposit(a, 5)",
-      '  File "student.py", line 3, in deposit',
-      "    ac = ac.balance + amt",
-      "typeguard.TypeCheckError: value assigned to ac (int) is not an instance of __pll_test__.Account",
-    ].join("\n"),
+    pyErrorLine(
+      "TypeCheckError: value assigned to ac (int) is not an instance of __pll_test__.Account",
+      [["student.py", 14], ["student.py", 3, "deposit"]],
+    ),
     "def deposit(ac: Account, amt: float) -> None:\n    x = 1\n    ac = ac.balance + amt\n",
   );
   expect(
@@ -1757,32 +1719,24 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
   // dc-class-call-no-args: "not `ITunesSong`" next to "the class
   // `ITunesSong`" said the same name twice for opposite things.
   const cls = finding(
-    [
-      "Traceback (most recent call last):",
-      '  File "student.py", line 8, in <module>',
-      "    song_age(ITunesSong)",
-      '  File "student.py", line 5, in song_age',
-      "    def song_age(s: ITunesSong) -> int:",
-      'typeguard.TypeCheckError: argument "s" (class __pll_test__.ITunesSong) is not an instance of __pll_test__.ITunesSong',
-    ].join("\n"),
+    pyErrorLine(
+      'TypeCheckError: argument "s" (class __pll_test__.ITunesSong) is not an instance of __pll_test__.ITunesSong',
+      [["student.py", 8], ["student.py", 5, "song_age"]],
+    ),
     "class ITunesSong:\n    pass\n\n\ndef song_age(s: ITunesSong) -> int:\n    return 1\n\n\nsong_age(ITunesSong)\n",
   );
   expect(/itself, not one made from it\.$/.test(cls.headline), `class itself: ${cls.headline}`);
 
   // rx-init-string: a capital, and the handler named.
   const state = finding(
-    [
-      "Traceback (most recent call last):",
-      '  File "<exec>", line 960, in _pll_run_file',
-      '  File "student.py", line 21, in <module>',
-      "    dog_reactor.interact()",
-      '  File "<exec>", line 223, in interact',
-      '  File "<exec>", line 431, in _pll_reactor_interact',
-      '  File "<exec>", line 396, in _pll_reactor_view',
-      '  File "student.py", line 5, in draw_dog',
-      "    def draw_dog(x: float) -> Image:",
-      'typeguard.TypeCheckError: argument "x" (str) is not an instance of float',
-    ].join("\n"),
+    pyErrorLine('TypeCheckError: argument "x" (str) is not an instance of float', [
+      ["<exec>", 960, "_pll_run_file"],
+      ["student.py", 21],
+      ["<exec>", 223, "interact"],
+      ["<exec>", 431, "_pll_reactor_interact"],
+      ["<exec>", 396, "_pll_reactor_view"],
+      ["student.py", 5, "draw_dog"],
+    ]),
     "#level beginner\n\n\n\ndef draw_dog(x: float) -> Image:\n    return x\n",
   );
   expect(
@@ -1820,19 +1774,10 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
 
 console.log("[fourth pass: every replayed case read for the same patterns]");
 {
-  const finding = (traceback, source, level = "beginner") =>
-    mod.findRuntimeFinding(source, "student.py", level, mod.parsePythonError(traceback, source));
+  const finding = (error, source, level = "beginner") =>
+    mod.findRuntimeFinding(source, "student.py", level, error);
   const raised = (source, line, errorLine, extra = []) =>
-    finding(
-      [
-        "Traceback (most recent call last):",
-        `  File "student.py", line ${line}, in <module>`,
-        `    ${source.split("\n")[line - 1].trim()}`,
-        errorLine,
-        ...extra,
-      ].join("\n"),
-      source,
-    );
+    finding(pyErrorLine(errorLine, [["student.py", line]], { facts: extra }), source);
   const text = (f) => `${f.headline}\n${f.howToFix.join("\n")}`;
 
   // One suggestion is "Did you mean", not "try one of those"; a case-only
@@ -1848,7 +1793,7 @@ console.log("[fourth pass: every replayed case read for the same patterns]");
     "nums = [1, 2, 3]\nprint(nums[3])\n",
     2,
     "IndexError: list index out of range",
-    ["  -> nums has 3 items"],
+    { sequence: "nums", length: 3 },
   );
   expect(
     sized.howToFix.some((l) => /`nums` has 3 items, numbered 0 to 2/.test(l)),
@@ -1882,25 +1827,18 @@ console.log("[fourth pass: every replayed case read for the same patterns]");
 
   // "Return `Image`" read as returning the class: a class gets an article.
   const returned = finding(
-    [
-      "Traceback (most recent call last):",
-      '  File "student.py", line 2, in flag',
-      '    return "red"',
-      "typeguard.TypeCheckError: the return value (str) is not an instance of Image",
-    ].join("\n"),
+    pyErrorLine("TypeCheckError: the return value (str) is not an instance of Image", [
+      ["student.py", 2, "flag"],
+    ]),
     'def flag() -> Image:\n    return "red"\n',
   );
   expect(returned.howToFix.includes("Return an `Image` from this line."), `article: ${JSON.stringify(returned.howToFix)}`);
 
   // Swapped values in a dataclass, as Python reports them.
   const swapped = finding(
-    [
-      "Traceback (most recent call last):",
-      '  File "student.py", line 9, in <module>',
-      '    s = Song("Yesterday", 2015, "The Beatles")',
-      "typeguard.TypeCheckError: field 'singer' of 'Song' got 2015 (int), not str",
-      "  -> swapped with year",
-    ].join("\n"),
+    pyErrorLine("TypeCheckError: field 'singer' of 'Song' got 2015 (int), not str", [["student.py", 9]], {
+      facts: { swappedWith: "year" },
+    }),
     'class Song:\n    name: str\n    singer: str\n    year: int\n',
   );
   expect(/values for `singer` and `year` of `Song` look swapped/.test(swapped.headline), `swap: ${swapped.headline}`);

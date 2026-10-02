@@ -1,8 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { SerializedFinding } from "../common/analyzers/findingLocation";
+import type { ExamplarEntry } from "../common/examplarPhase";
 import type { AnalysisFinding } from "../common/analyzers/types";
 import { formatFriendlyError } from "../common/errorFormatter";
 import type { ExecutionEvent } from "../common/types";
+import { errorText } from "../common/errorText";
 
 /**
  * The CLI's "view": `ExecutionEvent`s as text.
@@ -29,8 +32,6 @@ export class CliView {
   public sawError = false;
   /** Failing + erroring tests across all reports. */
   public testFailures = 0;
-  /** A Stop ended the test phase, so the program is not to be run after it. */
-  public testsStopped = false;
   private imageCount = 0;
 
   constructor(private readonly opts: ViewOptions) {}
@@ -122,14 +123,34 @@ export class CliView {
       case "testReport":
         this.testReport(event);
         break;
-      case "error": {
+      case "error":
+        // `runFile` turns every error into a finding before it gets here;
+        // this is only for a caller that does not.
         this.sawError = true;
-        const body = event.traceback || `${event.errorType}: ${event.message}`;
-        process.stderr.write(this.red(body.trimEnd()) + "\n");
+        this.problem(this.red(`${event.error.errorType}: ${event.error.message}`));
         break;
-      }
       case "done":
         break;
+    }
+  }
+
+  /**
+   * One card of the Examplar verdict: the same lines the panel shows, so a
+   * test is named and a buggy implementation is given by its id - nothing
+   * more, in either place. Commentary, so on stderr and silenced by --quiet.
+   */
+  examplarCard(card: ExamplarEntry): void {
+    this.note(this.dim("examplar: ") + (card.card === "function" ? card.name : "your tests"));
+    const tone = { good: this.green, bad: this.red, warn: this.yellow, note: this.dim };
+    for (const block of card.body) {
+      if (block.kind === "line") {
+        this.note("  " + tone[block.tone].call(this, block.text));
+        continue;
+      }
+      this.note(`    ${block.name}`);
+      for (const line of (block.detail ?? "").split("\n")) {
+        if (line.trim()) this.note(this.dim(`      ${line}`));
+      }
     }
   }
 
@@ -148,16 +169,13 @@ export class CliView {
       fs.writeFileSync(target, svg, "utf8");
       this.note(this.dim(`[image ${width}x${height} -> ${target}]`));
     } catch (err) {
-      this.problem(`Could not write ${target}: ${errText(err)}`);
+      this.problem(`Could not write ${target}: ${errorText(err)}`);
     }
   }
 
   private testReport(event: Extract<ExecutionEvent, { kind: "testReport" }>): void {
     const bad = event.failed + event.errors;
     this.testFailures += bad;
-    if (event.stopped) {
-      this.testsStopped = true;
-    }
     const summary =
       `${event.passed} passed` +
       (event.failed ? `, ${event.failed} failed` : "") +
@@ -188,7 +206,8 @@ export class CliView {
       }
       const where = test.lineNumber === null ? "" : ` (line ${test.lineNumber})`;
       this.problem(this.red(`  ${test.outcome.toUpperCase()} ${test.name}${where}`));
-      for (const line of (test.message ?? "").split("\n")) {
+      const body = test.finding ? findingLines(test.finding) : (test.message ?? "").split("\n");
+      for (const line of body) {
         if (line.trim()) {
           this.problem("        " + line);
         }
@@ -208,8 +227,13 @@ export class CliView {
   }
 }
 
-function errText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+/** A test's finding, compactly: the headline, where, and what to do. */
+function findingLines(finding: SerializedFinding): string[] {
+  return [
+    `${finding.errorType}: ${finding.headline}`,
+    ...(finding.location ? [`at ${finding.location.label}`] : []),
+    ...finding.howToFix.map((line) => `- ${line}`),
+  ];
 }
 
 /**

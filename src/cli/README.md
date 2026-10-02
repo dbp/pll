@@ -147,6 +147,11 @@ Publish the bundle at a URL and point students at it from their file:
 #examplar https://cs2000.example/hw3.json
 ```
 
+The check runs wherever the file does - in the editor, and with `pll
+hw3.py`, which prints the same cards to stderr. Fetched bundles are cached
+(under `$PLL_CACHE_DIR`, `$XDG_CACHE_HOME` or `~/.cache`), so a run without a
+network still gets its verdict. The verdict does not change the exit code.
+
 If any of your students use **vscode.dev** or a codespace, the extension host
 there is a browser, so serve the bundle with CORS
 (`samples/examplar_serve.mjs` in the repository is a dependency-free server

@@ -1,3 +1,5 @@
+import type { SerializedFinding } from "./analyzers/findingLocation";
+import type { PythonError } from "./errors/pythonError";
 import type { Level } from "./level";
 import type {
   ExamplarBuildResult,
@@ -5,7 +7,7 @@ import type {
   RawStaticFinding,
   ReactorFrame,
   ReactorStepResult,
-} from "./pyodideRunner";
+} from "./wire";
 import type { WorkspaceFile } from "./workspaceFilePolicy";
 
 export interface ExecutionStdoutChunk {
@@ -51,14 +53,9 @@ export interface ExecutionTableChunk {
 
 export interface ExecutionErrorChunk {
   kind: "error";
-  errorType: string;
-  message: string;
-  traceback: string;
-  /** 1-based line number in user file, if extractable. */
-  lineNumber: number | null;
-  /** 1-based column number, if extractable. */
-  column: number | null;
-  /** Filename mentioned in the traceback, if any. */
+  /** The exception, as Python described it. */
+  error: PythonError;
+  /** The file that was running. */
   fileName: string | null;
 }
 
@@ -108,8 +105,13 @@ export interface TestCaseResult {
   name: string;
   outcome: "passed" | "failed" | "skipped" | "error" | "stopped" | string;
   lineNumber: number | null;
+  /** The one line a report has room for: a failed assertion, or Python's message. */
   message: string | null;
   stdout: string | null;
+  /** For a test that raised: the exception, until the host explains it. */
+  error?: PythonError | null;
+  /** That explanation, put there by `explainTestReport`. */
+  finding?: SerializedFinding;
 }
 
 export type ExecutionEvent =

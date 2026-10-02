@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
-import { findingLocation, type FindingLocation } from "./analyzers/findingLocation";
-import type { AnalysisFinding } from "./analyzers/types";
+import type { SerializedFinding } from "./analyzers/findingLocation";
+import type { ExamplarEntry } from "./examplarPhase";
+import type { ExecutionImageChunk, ExecutionTableChunk, ExecutionTestReportChunk } from "./types";
+import type { UniverseStatus } from "./universeClient";
 
 /**
  * The PLL interactions view replaces both the pseudoterminal REPL and the
@@ -58,45 +60,23 @@ export interface ResultEntry {
   kind: "result";
   repr: string;
 }
-export interface ImageEntry {
-  kind: "image";
-  svg: string;
-  width: number;
-  height: number;
-  source?: string;
-}
-export interface TableEntry {
-  kind: "table";
-  columns: string[];
-  rows: string[][];
-  rowCount: number;
-  shownCount: number;
-  truncated: boolean;
-  source?: string;
-}
+/** An image, a table or a test report is shown as the event it arrived as. */
+export type ImageEntry = ExecutionImageChunk;
+export type TableEntry = ExecutionTableChunk;
+export type TestReportEntry = ExecutionTestReportChunk;
 export interface FindingEntry {
   kind: "finding";
   finding: SerializedFinding;
 }
-export interface SerializedFinding {
-  errorType: string;
-  headline: string;
-  howToFix: string[];
-  location: FindingLocation | null;
-}
+/**
+ * PLL itself failing - Python would not start - shown as it is. Never a
+ * program's error: every one of those is explained, as a `FindingEntry`.
+ */
 export interface RawErrorEntry {
   kind: "rawError";
   errorType: string;
   message: string;
   traceback: string;
-}
-
-export interface TestCaseView {
-  name: string;
-  outcome: string;
-  lineNumber: number | null;
-  message: string | null;
-  stdout: string | null;
 }
 
 /**
@@ -122,107 +102,13 @@ export interface ReactorEntry {
   playing: boolean;
   /** Universe server this world is registered with, if any. */
   register: string | null;
-  connection: "none" | "connecting" | "open" | "closed" | "error";
+  connection: UniverseStatus;
   /** Why the connection is in that state, when there is something to say. */
   connectionDetail?: string;
 }
 
 /** Fields of a `ReactorEntry` the host may update in place. */
 export type ReactorPatch = Partial<Omit<ReactorEntry, "kind" | "id" | "title">>;
-
-/**
- * An Examplar verdict: the student's tests judged against known-good and
- * known-bad implementations.
- *
- * Wheat failures carry their assertion message, because that is what tells
- * a student their *expectation* is wrong. Missed chaffs carry only an id -
- * the failure messages describe the planted bug, and revealing it would
- * hand over the test they were meant to write.
- */
-/** A failing test and whatever it had to say about it. */
-export interface ExamplarTestFailure {
-  test: string;
-  message: string;
-}
-
-/**
- * One Examplar verdict, as its own card.
- *
- * A card per **function**, because that is the unit a student works in.
- * Within it, two phases that answer different questions and mean opposite
- * things: *are your tests for this function right?*, judged against correct
- * implementations, and *are they thorough?*, judged against buggy ones. The
- * second waits for the first, per function - a wrong test of `initials`
- * says nothing about how well `longest` is tested and must not hold its
- * report back.
- *
- * Neither half says more than it has to. A disagreement gives the test's
- * name, not its assertion, because `assert 'HI!' == 'hi!'` states the
- * correct answer - a student could read the specification off this card one
- * deliberately-wrong test at a time. A buggy implementation that got
- * through gives its id, because its failure message describes the bug it
- * plants. Both are the same rule: say which thing is wrong, never what is
- * right.
- */
-export type ExamplarEntry = ExamplarFunctionEntry | ExamplarFailedEntry;
-
-interface ExamplarEntryBase {
-  kind: "examplar";
-  /** Where the implementations came from; shown as the header's tooltip. */
-  url: string;
-  /** True when the bundle came from the store rather than the network. */
-  cached: boolean;
-}
-
-/** How one provided function's tests fared. */
-export interface ExamplarFunctionEntry extends ExamplarEntryBase {
-  card: "function";
-  /** The provided function this card is about. Heads the card. */
-  name: string;
-  /** How many of the student's tests exercise it. Zero is the tests-first state. */
-  testCount: number;
-  /** True when all of them passed on every correct implementation. */
-  allPass: boolean;
-  /**
-   * Names - and only names - of tests whose expectation is wrong. The
-   * assertion is deliberately absent; see the note above.
-   */
-  failures: string[];
-  /**
-   * Tests that raised, so they never got as far as an expectation. These
-   * do keep their message: `FileNotFoundError: ... 'data.csv'` says why the
-   * student's own test could not run and reveals nothing about the answer.
-   */
-  errors: ExamplarTestFailure[];
-  /** Why those could not run, when it is worth explaining. */
-  hint?: string;
-  /** Buggy implementations of this function, and how many were caught. */
-  total: number;
-  caught: number;
-  /** Ids - and only ids - of the ones no test caught. */
-  missed: string[];
-  /** True when phase one has not passed here, so coverage was not measured. */
-  pending: boolean;
-}
-
-/** Neither phase ran anywhere: the bundle would not have it. */
-export interface ExamplarFailedEntry extends ExamplarEntryBase {
-  card: "failed";
-  problem: string;
-}
-
-export interface TestReportEntry {
-  kind: "testReport";
-  fileName: string;
-  passed: number;
-  failed: number;
-  skipped: number;
-  errors: number;
-  tests: TestCaseView[];
-  /** A Stop ended the phase; the card says where, and draws it as neither pass nor fail. */
-  stopped?: boolean;
-  stoppedIn?: string | null;
-}
 
 export type PromptKind = "primary" | "continuation";
 
@@ -731,15 +617,6 @@ export class InteractionsView
  * for callers (e.g. the session manager) that need to manufacture
  * FindingEntry objects directly without going through `appendFinding`.
  */
-export function serializeFinding(finding: AnalysisFinding): SerializedFinding {
-  return {
-    errorType: finding.errorType,
-    headline: finding.headline,
-    howToFix: [...finding.howToFix],
-    location: findingLocation(finding),
-  };
-}
-
 function makeNonce(): string {
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let out = "";

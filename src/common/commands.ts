@@ -3,6 +3,7 @@ import type { Diagnostics } from "./diagnostics";
 import { editorCopy, editorCut, editorPaste } from "./editorClipboard";
 import type { InteractionsView } from "./interactionsView";
 import type { ReplSession } from "./replSession";
+import { errorText } from "./errorText";
 
 export interface ExtensionServices {
   repl: ReplSession;
@@ -60,6 +61,6 @@ async function runActiveFile(services: ExtensionServices): Promise<void> {
 }
 
 function reportError(err: unknown): void {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errorText(err);
   vscode.window.showErrorMessage(`Python Language Levels: ${message}`);
 }

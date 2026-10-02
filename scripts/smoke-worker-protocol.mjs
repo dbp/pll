@@ -262,7 +262,11 @@ console.log("\n[6] a failed run becomes an error event, then done");
     events.map((e) => e.kind).join(",") === "error,done",
     "a failed run should emit error then done",
   );
-  expect(events[0].lineNumber === 3, "line number should be carried through");
+  expect(events[0].error.lineNumber === 3, "line number should be carried through");
+  expect(
+    events[0].error.errorType === "NameError" && events[0].error.frames.length === 0,
+    "the error should arrive whole, with no frames when Python sent none",
+  );
   expect(events[0].fileName === "<repl>", "replEval should label events <repl>");
 }
 

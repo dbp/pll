@@ -1,5 +1,5 @@
 import type { Level } from "../../level";
-import type { RawStaticFinding } from "../../pyodideRunner";
+import type { RawStaticFinding, RawStaticFindingOf } from "../../wire";
 import type { AnalysisFinding } from "../types";
 import {
   explainShadowing,
@@ -22,14 +22,13 @@ import {
 } from "./silenceExplainer";
 import { explainDuplicateDefinition } from "./duplicateDefinitionExplainer";
 
-export type StaticExplainer = (
-  raw: RawStaticFinding,
-  level: Level,
-  fileName: string,
-) => AnalysisFinding;
-
-/** Add an entry here to give another static-analyzer id a friendly finding. */
-const explainers: Record<string, StaticExplainer> = {
+/**
+ * One explainer for every kind of finding, each given only its own kind -
+ * so a new kind in `RawStaticFinding` does not compile until it has one.
+ */
+const explainers: {
+  [Id in RawStaticFinding["id"]]: (raw: RawStaticFindingOf<Id>, level: Level, fileName: string) => AnalysisFinding;
+} = {
   shadowing: explainShadowing,
   "shadowing-builtin": explainShadowingBuiltin,
   "shadowing-library": explainShadowingLibrary,
@@ -80,7 +79,28 @@ export function enrichStaticFindings(
   fileName: string,
 ): AnalysisFinding[] {
   return rawFindings.map((raw) => {
-    const explainer = explainers[raw.id] ?? fallbackExplainer;
-    return explainer(raw, level, fileName);
+    // An id this version does not know - a newer bootstrap, say - still
+    // gets Python's own wording rather than nothing.
+    const explainer =
+      (explainers as Record<string, (raw: RawStaticFinding, level: Level, fileName: string) => AnalysisFinding>)[
+        raw.id
+      ] ?? fallbackExplainer;
+    return explainer(withPositions(raw), level, fileName);
   });
+}
+
+/**
+ * The finding with its positions as numbers or null. A Python `None`
+ * arrives as `undefined`, which passes a `!== null` test and used to reach
+ * a label as `file.py:3:NaN`.
+ */
+function withPositions(raw: RawStaticFinding): RawStaticFinding {
+  const position = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) ? value : null;
+  return {
+    ...raw,
+    line_number: position(raw.line_number),
+    column: position(raw.column),
+    name_token: raw.name_token ?? null,
+  };
 }

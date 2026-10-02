@@ -60,11 +60,6 @@ export function tryCreateInterruptBuffer(): SharedArrayBuffer | null {
   }
 }
 
-/** Store the signal once. Idempotent, and on its own not reliable - see above. */
-export function signalInterrupt(sab: SharedArrayBuffer): void {
-  Atomics.store(new Uint8Array(sab), 0, INTERRUPT_SIGINT);
-}
-
 /**
  * Ask for a `KeyboardInterrupt`, and keep asking until Python has it.
  *

@@ -18,6 +18,26 @@ export interface FindingLocation {
 }
 
 /**
+ * A finding as the views render it: the interactions panel, a test row, the
+ * command line. Plain data, so it crosses into the webview as it is.
+ */
+export interface SerializedFinding {
+  errorType: string;
+  headline: string;
+  howToFix: string[];
+  location: FindingLocation | null;
+}
+
+export function serializeFinding(finding: AnalysisFinding): SerializedFinding {
+  return {
+    errorType: finding.errorType,
+    headline: finding.headline,
+    howToFix: [...finding.howToFix],
+    location: findingLocation(finding),
+  };
+}
+
+/**
  * The finding's location, or null when there is none worth showing.
  *
  * Null for a finding with no line, and for prompt input: `<repl>` and
@@ -34,14 +54,9 @@ export function findingLocation(finding: AnalysisFinding): FindingLocation | nul
   if (finding.fileName === "<repl>" || finding.fileName === "<input>") {
     return null;
   }
-  // `!== null` was not enough. A column can also arrive `undefined` - the
-  // Python result simply has no such key on some paths - and `undefined`
-  // passes that test, so the label came out as `file.py:3:NaN`. Ask for a
-  // real number instead of ruling out one way of not being one.
-  const column =
-    typeof finding.column === "number" && Number.isFinite(finding.column)
-      ? finding.column
-      : null;
+  // Positions from Python are numbers or null by the time they get here:
+  // `pythonErrorFrom` and `enrichStaticFindings` see to it.
+  const column = finding.column;
   const label =
     column !== null
       ? `${finding.fileName}:${finding.lineNumber}:${column + 1}`

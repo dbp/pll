@@ -27,6 +27,7 @@
 # session.
 
 import traceback as _tb_mod
+import linecache as _pll_linecache
 import ast as _ast
 import copy as _pll_copy
 import codeop as _codeop
@@ -62,9 +63,9 @@ _pll_type_check_error = None
 _PLL_STRICT_NUMBERS = False
 
 # Whether annotations are instrumented at all. Set per run from the language
-# level; see `levelHasTypeChecking` in level.ts. False only at `#level raw`,
-# which exists so a file can opt out. There is no separate setting: the level
-# is the single input, so nothing can disagree with it.
+# level, and decided only here: False only at `#level raw`, which exists so a
+# file can opt out. There is no separate setting: the level is the single
+# input, so nothing can disagree with it.
 _PLL_TYPE_CHECK = False
 
 
@@ -166,8 +167,34 @@ _PLL_ELEMENT_FAILURE_RE = _pll_src_re.compile(
 )
 
 
+def _pll_add_facts(exc, **facts):
+    """Record what was learned about `exc` for the host's explanations.
+
+    Facts travel beside the message, never in it: the message stays the one
+    Python wrote, and the host reads a fact by name rather than by pattern.
+    """
+    try:
+        known = getattr(exc, "_pll_facts", None) or {}
+        known.update(facts)
+        exc._pll_facts = known
+    except Exception:
+        pass
+
+
+def _pll_student_frames(exc):
+    """The live frames of `exc`'s traceback that run the student's code."""
+    frames = []
+    tb = exc.__traceback__
+    while tb is not None:
+        filename = tb.tb_frame.f_code.co_filename
+        if not _pll_is_vendor_frame(filename) and filename != "<exec>":
+            frames.append((tb.tb_frame, tb.tb_lineno))
+        tb = tb.tb_next
+    return frames
+
+
 def _pll_enrich_index_error(exc, code):
-    """Add how long the list really is to an `IndexError`.
+    """Record how long the list really is, for an `IndexError`.
 
     "list index out of range" says nothing about the list, and the
     explanation was left to illustrate with a made-up list of 3. The frame
@@ -176,41 +203,27 @@ def _pll_enrich_index_error(exc, code):
     """
     if type(exc) is not IndexError or "out of range" not in str(exc):
         return
-    tb = exc.__traceback__
-    frame = lineno = None
-    while tb is not None:
-        filename = tb.tb_frame.f_code.co_filename
-        if not _pll_is_vendor_frame(filename) and filename != "<exec>":
-            frame, lineno = tb.tb_frame, tb.tb_lineno
-        tb = tb.tb_next
-    if frame is None or not code:
+    frames = _pll_student_frames(exc)
+    if not frames or not code:
         return
+    frame, lineno = frames[-1]
     lines = code.split("\n")
     if not 0 < lineno <= len(lines):
         return
     for name in _pll_src_re.findall(r"([A-Za-z_]\w*)\s*\[", lines[lineno - 1]):
         value = frame.f_locals.get(name, frame.f_globals.get(name))
         if isinstance(value, (list, tuple, str)):
-            exc.args = (
-                "%s\n  -> %s has %d item%s" % (
-                    exc.args[0] if exc.args else str(exc),
-                    name,
-                    len(value),
-                    "" if len(value) == 1 else "s",
-                ),
-            )
+            _pll_add_facts(exc, sequence=name, length=len(value))
             return
 
 
 def _pll_enrich_type_check(exc):
-    """Add what the offending element actually is to an element failure.
+    """Record what the offending element actually is, for an element failure.
 
     typeguard names the element that failed - "item 0 of argument "lst"
     (list) is not an instance of float" - but not what it is, which is the
     one thing a student needs to see: here, the string "1". The value is
-    only reachable from the frame the check fired in, so it is read from
-    there and added as an indented `->` line, which the host reads and
-    which cannot be mistaken for one of a union's member lines.
+    only reachable from the frame the check fired in.
 
     Only frames from the student's own file are searched: typeguard's own
     functions have locals with ordinary names like `value`, and finding one
@@ -222,22 +235,11 @@ def _pll_enrich_type_check(exc):
     if match is None:
         return
     name = match.group(4)
-    frames = []
-    tb = exc.__traceback__
-    while tb is not None:
-        frames.append(tb.tb_frame)
-        tb = tb.tb_next
-    container = None
-    found = False
-    for frame in reversed(frames):
-        filename = frame.f_code.co_filename
-        if _pll_is_vendor_frame(filename) or filename == "<exec>":
-            continue
+    for frame, _line in reversed(_pll_student_frames(exc)):
         if name in frame.f_locals:
             container = frame.f_locals[name]
-            found = True
             break
-    if not found:
+    else:
         return
     try:
         if match.group(2) is not None:
@@ -246,12 +248,7 @@ def _pll_enrich_type_check(exc):
             element = container[_ast.literal_eval(match.group(3))]
     except Exception:
         return
-    describe = globals().get("_pll_describe")
-    if describe is None:
-        return
-    exc.args = (
-        "%s\n  -> %s is %s" % (exc.args[0], match.group(1), describe(element)),
-    ) + tuple(exc.args[1:])
+    _pll_add_facts(exc, element_value=_pll_describe(element))
 
 
 def _pll_format_exception(exc):
@@ -273,6 +270,127 @@ def _pll_format_exception(exc):
         return "".join(parts)
     except BaseException:
         return "".join(_tb_mod.format_exception(type(exc), exc, exc.__traceback__))
+
+
+#: Frames that are not the student's: PLL's own bootstrap and libraries
+#: (`<exec>`), the vendored type checker, the standard library, installed
+#: packages, and pytest.
+_PLL_NOT_STUDENT = ("<exec>", _PLL_VENDOR_DIR, "site-packages", "/lib/python", "_pytest", "pluggy")
+
+#: How Python words a name used before it has a value.
+_PLL_UNBOUND_RE = _pll_src_re.compile(r"cannot access (?:free|local) variable '(\w+)'")
+
+#: Innermost frames sent with an error. A `RecursionError` has a thousand,
+#: and the rules that read frames want only the last few.
+_PLL_MAX_FRAMES = 100
+
+
+def _pll_frame_column(summary):
+    """The 0-based column `summary`'s frame failed at, or None.
+
+    None where Python's own traceback draws no caret: when it has no source
+    for the line, or when the failing expression is the whole line.
+    """
+    if summary.colno is None or summary.end_colno is None:
+        return None
+    text = _pll_linecache.getline(summary.filename, summary.lineno).rstrip("\n")
+    if not text:
+        return None
+    # Python counts these in UTF-8 bytes; a column counts characters.
+    encoded = text.encode("utf-8")
+    start = len(encoded[: summary.colno].decode("utf-8", "replace"))
+    if summary.end_lineno == summary.lineno:
+        end = len(encoded[: summary.end_colno].decode("utf-8", "replace"))
+        if text[:start].strip() == "" and text[end:].strip() == "":
+            return None
+    return start
+
+
+def _pll_displayed_message(exc):
+    """The message as Python's traceback shows it.
+
+    Not always `str(exc)`: Python adds its suggestion ("Did you mean:
+    'total'?") to a `NameError` or `AttributeError` only when it displays
+    one, and a `SyntaxError`'s `str` carries the file and line, which the
+    display puts elsewhere.
+    """
+    exc_type = type(exc)
+    shown = exc_type.__qualname__
+    if exc_type.__module__ not in ("__main__", "builtins"):
+        shown = "%s.%s" % (exc_type.__module__, shown)
+    try:
+        lines = _tb_mod.TracebackException(
+            exc_type, exc, exc.__traceback__, limit=0, compact=True
+        ).format_exception_only()
+        for text in lines:
+            if text.startswith(shown + ": "):
+                return text[len(shown) + 2 :].rstrip("\n")
+            if text.rstrip("\n") == shown:
+                return ""
+    except Exception:
+        pass
+    return exc.msg if isinstance(exc, SyntaxError) else str(exc)
+
+
+def _pll_error_info(exc, code=""):
+    """Everything the host needs to report `exc`, as data.
+
+    The one place an exception becomes a result, for a file run, a prompt
+    line, the test phase, a test and a reactor alike. The host reads these
+    fields rather than the traceback text: `traceback` is kept only to show
+    when nothing better can be said.
+
+    - `error_frames`: outermost first, each `{file, line, column, function,
+      user}`, where `user` says whether the frame runs the student's code.
+    - `error_facts`: what was learned from the live frames - the name a
+      `NameError` is about, a sequence's real length, the value that failed
+      its annotation, a swapped field.
+    """
+    _pll_enrich_type_check(exc)
+    _pll_enrich_index_error(exc, code)
+    summaries = [
+        s for s in _tb_mod.extract_tb(exc.__traceback__) if not _pll_is_vendor_frame(s.filename)
+    ][-_PLL_MAX_FRAMES:]
+    frames = [
+        {
+            "file": s.filename,
+            "line": s.lineno,
+            "column": _pll_frame_column(s),
+            "function": None if s.name == "<module>" else s.name,
+            "user": not any(token in s.filename for token in _PLL_NOT_STUDENT),
+        }
+        for s in summaries
+    ]
+    facts = dict(getattr(exc, "_pll_facts", None) or {})
+    if isinstance(exc, NameError):
+        # Python sets `name` for most of these, but not for a local read
+        # before it is assigned; its message names it either way.
+        name = getattr(exc, "name", None)
+        if not isinstance(name, str):
+            found = _PLL_UNBOUND_RE.search(str(exc))
+            name = found.group(1) if found else None
+        if name is not None:
+            facts["name"] = name
+    if isinstance(exc, SyntaxError):
+        where = {
+            "file": exc.filename,
+            "line": exc.lineno,
+            "column": exc.offset - 1 if exc.offset else None,
+        }
+    elif frames:
+        where = frames[-1]
+    else:
+        where = {"file": None, "line": None, "column": None}
+    return {
+        "error_type": type(exc).__name__,
+        "error_message": _pll_displayed_message(exc),
+        "traceback": _pll_format_exception(exc),
+        "error_file": where["file"],
+        "line_number": where["line"],
+        "column": where["column"],
+        "error_frames": frames,
+        "error_facts": facts,
+    }
 
 
 def _pll_protect_import_path():
@@ -700,17 +818,13 @@ def _pll_check_dataclass_fields(cls):
                 bad = getattr(self, field_name)
                 shown = '"%s"' % bad if isinstance(bad, str) and '"' not in bad else repr(bad)
                 swapped = _pll_swapped_field(self, cache[0], field_name)
-                raise _pll_type_check_error(
-                    "field %r of %r got %s (%s), not %s%s"
-                    % (
-                        field_name,
-                        cls.__name__,
-                        shown,
-                        type(bad).__name__,
-                        _pll_hint_name(hint),
-                        "\n  -> swapped with %s" % swapped if swapped else "",
-                    )
-                ) from None
+                error = _pll_type_check_error(
+                    "field %r of %r got %s (%s), not %s"
+                    % (field_name, cls.__name__, shown, type(bad).__name__, _pll_hint_name(hint))
+                )
+                if swapped:
+                    _pll_add_facts(error, swapped_with=swapped)
+                raise error from None
 
     __init__.__name__ = "__init__"
     __init__.__qualname__ = "%s.__init__" % cls.__qualname__
@@ -877,6 +991,32 @@ def _pll_should_skip_expr(stmt, index):
 # libraries are exec'd into these globals afterwards, in the same way
 # examplarLib borrows `_pll_fix_ast_ranges`. (`re` itself is imported at the
 # top of the file, with the rest.)
+
+_PLL_ORDINALS = ("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th")
+
+
+def _pll_ordinal(index):
+    """`1st`, `2nd`, ... for a 0-based position.
+
+    Used instead of the index itself wherever a message would otherwise
+    have to say "Row 1" about the second row, or "argument 0".
+    """
+    if index < len(_PLL_ORDINALS):
+        return _PLL_ORDINALS[index]
+    return "%dth" % (index + 1)
+
+
+def _pll_xml_escape(text):
+    """`text` as it can appear in SVG, as content or inside an attribute."""
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
 
 def _pll_describe(value):
     """A value as a student would name it, for a message about it.
@@ -1137,82 +1277,56 @@ def _pll_repl_check(source):
 # Run a whole file (with output capture and traceback extraction)
 # -----------------------------------------------------------------------------
 
-def _pll_extract_loc(tb_str, fallback_filename):
-    line_no = None
-    col = None
-    for raw in reversed(tb_str.splitlines()):
-        line = raw.strip()
-        if line.startswith('File "') and ", line " in line:
-            try:
-                rest = line.split(", line ", 1)[1]
-                num_part = rest.split(",", 1)[0].strip()
-                line_no = int(num_part)
-            except Exception:
-                line_no = None
-            break
-    if line_no is None and fallback_filename:
-        for raw in tb_str.splitlines():
-            if fallback_filename in raw and ", line " in raw:
-                try:
-                    rest = raw.split(", line ", 1)[1]
-                    num_part = rest.split(",", 1)[0].strip()
-                    line_no = int(num_part)
-                except Exception:
-                    pass
-                break
-    return line_no, col
-
-
 def _pll_reset_notes():
-    """Forget anything the last run had to say at the end of it."""
+    """Forget what the last run had to say at its end."""
     reset = globals().get("_pll_reset_reactor_notes")
     if reset is not None:
         reset()
 
 
 def _pll_run_notes():
-    """Things worth saying once the program has finished, as stderr text.
+    """What is worth saying once the program has finished, as stderr text.
 
-    These are not errors: the program ran. They are the cases where it ran
-    and visibly did nothing, and the student has no other evidence of why.
-    The libraries that have something to say provide a `_pll_*_note`
-    function; the bootstrap loads before them, so each is looked up here
-    rather than imported.
+    Not an error: the program ran. It is the case where it ran and visibly
+    did nothing, and the student has no other evidence of why - today, a
+    reactor that was built and never started. Looked up rather than named
+    because the reactor library loads after the bootstrap, and a test may
+    load the bootstrap alone.
     """
-    notes = []
-    for name in ("_pll_reactor_note",):
-        note = globals().get(name)
-        if note is None:
-            continue
-        try:
-            text = note()
-        except Exception:
-            # A note is a courtesy; it must never take the run down with it.
-            continue
-        if text:
-            notes.append(text)
-    return "".join(notes)
+    note = globals().get("_pll_reactor_note")
+    if note is None:
+        return ""
+    try:
+        return note() or ""
+    except Exception:
+        # A note is a courtesy; it must never take the run down with it.
+        return ""
 
 
-def _pll_stopped_run():
-    """A run's result when Stop landed before any of the student's code ran."""
+def _pll_no_error():
+    """The error fields of a result that reports none."""
     return {
-        "ok": False,
-        "stdout": "",
-        "stderr": "",
-        "result_repr": None,
-        "error_type": "KeyboardInterrupt",
-        "error_message": "",
+        "error_type": None,
+        "error_message": None,
         "traceback": None,
+        "error_file": None,
         "line_number": None,
         "column": None,
-        "displays": [],
+        "error_frames": [],
+        "error_facts": {},
     }
 
 
-def _pll_stopped_tests():
-    """A test phase's result when Stop landed before the file was loaded."""
-    return {
+def _pll_run_result():
+    """A file run's or prompt line's result, before anything has happened."""
+    result = {"ok": False, "stdout": "", "stderr": "", "result_repr": None, "displays": []}
+    result.update(_pll_no_error())
+    return result
+
+
+def _pll_tests_result():
+    """A test phase's result, before anything has happened."""
+    result = {
         "ok": False,
         "internal_error": False,
         "passed": 0,
@@ -1222,15 +1336,32 @@ def _pll_stopped_tests():
         "tests": [],
         "stdout": "",
         "stderr": "",
-        "error_type": None,
-        "error_message": None,
-        "traceback": None,
-        "line_number": None,
-        "column": None,
         "displays": [],
-        "stopped": True,
-        "stopped_in": None,
     }
+    result.update(_pll_no_error())
+    return result
+
+
+def _pll_with_output(result, stdout, stderr):
+    """`result`, with what the run printed and showed."""
+    result["stdout"] = stdout.getvalue()
+    result["stderr"] = stderr.getvalue()
+    result["displays"] = list(_pll_displays)
+    return result
+
+
+def _pll_stopped_run():
+    """A run's result when Stop landed before any of the student's code ran."""
+    result = _pll_run_result()
+    result.update(error_type="KeyboardInterrupt", error_message="")
+    return result
+
+
+def _pll_stopped_tests():
+    """A test phase's result when Stop landed before the file was loaded."""
+    result = _pll_tests_result()
+    result.update(stopped=True, stopped_in=None)
+    return result
 
 
 def _pll_stoppable(stopped):
@@ -1259,18 +1390,7 @@ def _pll_stoppable(stopped):
 def _pll_run_file(code, filename, session_key, level="raw"):
     stdout = _PllStream("stdout")
     stderr = _PllStream("stderr")
-    result = {
-        "ok": False,
-        "stdout": "",
-        "stderr": "",
-        "result_repr": None,
-        "error_type": None,
-        "error_message": None,
-        "traceback": None,
-        "line_number": None,
-        "column": None,
-        "displays": [],
-    }
+    result = _pll_run_result()
     # Each Run File starts with a clean slate for this session: discard any
     # names defined by a previous Run File of the same session or by REPL
     # exploration since then.
@@ -1287,16 +1407,8 @@ def _pll_run_file(code, filename, session_key, level="raw"):
         with _pll_recording_compile_warnings():
             compiled = compile(tree, filename, "exec")
     except SyntaxError as e:
-        tb_text = "".join(_tb_mod.format_exception(type(e), e, e.__traceback__))
-        result["error_type"] = type(e).__name__
-        result["error_message"] = str(e)
-        result["traceback"] = tb_text
-        result["line_number"] = e.lineno
-        result["column"] = (e.offset - 1) if e.offset else None
-        result["stdout"] = stdout.getvalue()
-        result["stderr"] = stderr.getvalue()
-        result["displays"] = list(_pll_displays)
-        return result
+        result.update(_pll_error_info(e, code))
+        return _pll_with_output(result, stdout, stderr)
 
     try:
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
@@ -1308,22 +1420,12 @@ def _pll_run_file(code, filename, session_key, level="raw"):
     except SystemExit:
         result["ok"] = True
     except BaseException as e:
-        _pll_enrich_type_check(e)
-        _pll_enrich_index_error(e, code)
-        formatted = _pll_format_exception(e)
-        result["error_type"] = type(e).__name__
-        result["error_message"] = str(e)
-        result["traceback"] = formatted
-        line_no, col = _pll_extract_loc(formatted, filename)
-        result["line_number"] = line_no
-        result["column"] = col
+        result.update(_pll_error_info(e, code))
     finally:
         # After the run, so a warning the run's own error explains can be
         # left out, and one about a line that never ran can be said.
         _pll_say_compile_warnings(stderr, result["error_message"], code)
-        result["stdout"] = stdout.getvalue()
-        result["stderr"] = stderr.getvalue()
-        result["displays"] = list(_pll_displays)
+        _pll_with_output(result, stdout, stderr)
     return result
 
 
@@ -1474,9 +1576,9 @@ def _pll_is_async(fn):
 def _pll_call_test(fn, code=""):
     """Run one test function.
 
-    Returns `(outcome, message, stdout, traceback)`. The traceback is for
-    the host, not the student: the message is one line by design, and the
-    frames are what say which of *their* functions the error came from.
+    Returns `(outcome, message, stdout, error)`. `error` is the
+    `_pll_error_info` of a test that raised, for the host's explanations;
+    the message is the one line a report has room for.
     """
     import io
 
@@ -1503,11 +1605,9 @@ def _pll_call_test(fn, code=""):
             "failed",
             _pll_friendly_assert_message(e, tb_text),
             buf.getvalue().strip() or None,
-            tb_text,
+            None,
         )
     except BaseException as e:
-        _pll_enrich_type_check(e)
-        _pll_enrich_index_error(e, code)
         name = type(e).__name__
         if name == "Skipped":
             return (
@@ -1520,7 +1620,7 @@ def _pll_call_test(fn, code=""):
             "error",
             name + ": " + (str(e) or "this test raised an exception."),
             buf.getvalue().strip() or None,
-            "".join(_tb_mod.format_exception(type(e), e, e.__traceback__)),
+            _pll_error_info(e, code),
         )
 
 
@@ -1558,10 +1658,7 @@ def _pll_syntax_result(result, error):
     tell the two apart - nor should they have to.
     """
     result["internal_error"] = True
-    result["error_type"] = type(error).__name__
-    result["error_message"] = str(error)
-    result["line_number"] = error.lineno
-    result["column"] = (error.offset - 1) if error.offset else None
+    result.update(_pll_error_info(error))
     return result
 
 
@@ -1576,23 +1673,7 @@ def _pll_run_tests(code, filename, level="raw"):
     display_name = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] or "user_script.py"
     stdout = _PllStream("stdout")
     stderr = _PllStream("stderr")
-    result = {
-        "ok": False,
-        "internal_error": False,
-        "passed": 0,
-        "failed": 0,
-        "skipped": 0,
-        "errors": 0,
-        "tests": [],
-        "stdout": "",
-        "stderr": "",
-        "error_type": None,
-        "error_message": None,
-        "traceback": None,
-        "line_number": None,
-        "column": None,
-        "displays": [],
-    }
+    result = _pll_tests_result()
     _pll_displays.clear()
     _pll_apply_level(level)
     _pll_protect_import_path()
@@ -1658,23 +1739,11 @@ def _pll_run_tests(code, filename, level="raw"):
         # Stopped in the file's own top-level code, before any test ran.
         result["stopped"] = True
         result["stopped_in"] = None
-        result["stdout"] = stdout.getvalue()
-        result["stderr"] = stderr.getvalue()
-        result["displays"] = list(_pll_displays)
-        return result
+        return _pll_with_output(result, stdout, stderr)
     except BaseException as e:
-        formatted = _pll_format_exception(e)
         result["internal_error"] = True
-        result["error_type"] = type(e).__name__
-        result["error_message"] = str(e)
-        result["traceback"] = formatted
-        line_no, col = _pll_extract_loc(formatted, display_name)
-        result["line_number"] = line_no
-        result["column"] = col
-        result["stdout"] = stdout.getvalue()
-        result["stderr"] = stderr.getvalue()
-        result["displays"] = list(_pll_displays)
-        return result
+        result.update(_pll_error_info(e, code))
+        return _pll_with_output(result, stdout, stderr)
 
     rows = []
     passed = failed = errors = skipped = 0
@@ -1682,7 +1751,7 @@ def _pll_run_tests(code, filename, level="raw"):
     try:
         for name, fn in _pll_iter_tests(ns):
             current = name
-            outcome, message, cap, tb_text = _pll_call_test(fn, code)
+            outcome, message, cap, error = _pll_call_test(fn, code)
             if outcome == "passed":
                 passed += 1
             elif outcome == "failed":
@@ -1698,7 +1767,7 @@ def _pll_run_tests(code, filename, level="raw"):
                 "message": message,
                 "stdout": cap,
                 # For the host's explainers only; never shown to a student.
-                "traceback": tb_text,
+                "error": error,
             })
     except KeyboardInterrupt:
         # A Stop ends the whole phase. The tests that finished keep their
@@ -1713,7 +1782,7 @@ def _pll_run_tests(code, filename, level="raw"):
                 "line_number": locs.get(current),
                 "message": None,
                 "stdout": None,
-                "traceback": None,
+                "error": None,
             })
 
     result["passed"] = passed
@@ -1722,10 +1791,7 @@ def _pll_run_tests(code, filename, level="raw"):
     result["errors"] = errors
     result["tests"] = rows
     result["ok"] = failed == 0 and errors == 0 and not result.get("stopped")
-    result["stdout"] = stdout.getvalue()
-    result["stderr"] = stderr.getvalue()
-    result["displays"] = list(_pll_displays)
-    return result
+    return _pll_with_output(result, stdout, stderr)
 
 
 # -----------------------------------------------------------------------------
@@ -1736,18 +1802,7 @@ def _pll_run_tests(code, filename, level="raw"):
 def _pll_repl_eval(code, session_key, level="raw"):
     stdout = _PllStream("stdout")
     stderr = _PllStream("stderr")
-    result = {
-        "ok": False,
-        "stdout": "",
-        "stderr": "",
-        "result_repr": None,
-        "error_type": None,
-        "error_message": None,
-        "traceback": None,
-        "line_number": None,
-        "column": None,
-        "displays": [],
-    }
+    result = _pll_run_result()
     _pll_displays.clear()
     _pll_apply_level(level)
     _pll_protect_import_path()
@@ -1757,12 +1812,7 @@ def _pll_repl_eval(code, session_key, level="raw"):
     try:
         tree = _pll_parse_and_instrument(code, filename)
     except SyntaxError as e:
-        formatted = _pll_format_exception(e)
-        result["error_type"] = type(e).__name__
-        result["error_message"] = str(e)
-        result["traceback"] = formatted
-        result["line_number"] = e.lineno
-        result["column"] = (e.offset - 1) if e.offset else None
+        result.update(_pll_error_info(e, code))
         return result
 
     last_expr = None
@@ -1791,20 +1841,10 @@ def _pll_repl_eval(code, session_key, level="raw"):
     except SystemExit:
         result["ok"] = True
     except BaseException as e:
-        _pll_enrich_type_check(e)
-        _pll_enrich_index_error(e, code)
-        formatted = _pll_format_exception(e)
-        result["error_type"] = type(e).__name__
-        result["error_message"] = str(e)
-        result["traceback"] = formatted
-        line_no, col = _pll_extract_loc(formatted, filename)
-        result["line_number"] = line_no
-        result["column"] = col
+        result.update(_pll_error_info(e, code))
     finally:
         _pll_say_compile_warnings(stderr, result["error_message"], code)
-        result["stdout"] = stdout.getvalue()
-        result["stderr"] = stderr.getvalue()
-        result["displays"] = list(_pll_displays)
+        _pll_with_output(result, stdout, stderr)
     return result
 
 
@@ -2568,7 +2608,8 @@ def _pll_static_analyze(code, level, filename, session_key=None):
     # Whether we flag reassignment in `scope` at this level. At beginner,
     # we flag everywhere; at intermediate, only at module scope so that
     # function-local accumulator patterns (`total = 0; for x in xs:
-    # total += x`) work.
+    # total += x`) work. Mirrored by `levelRefusesReassignment` in level.ts,
+    # which the explanations use to offer only fixes the level accepts.
     def reassignment_active(scope_kind):
         if level == "beginner":
             return True

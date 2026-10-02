@@ -1,0 +1,1942 @@
+=== plain-ok (exit 0)
+stdout:
+  hello
+stderr:
+  student.py [raw]
+
+=== zero-division (exit 1)
+stderr:
+  student.py [raw]
+  ZeroDivisionError: division by zero.
+    at student.py:2
+
+=== key-error-dict (exit 1)
+stderr:
+  student.py [raw]
+  KeyError: 'b'
+    at student.py:2
+
+=== key-error-sentence (exit 1)
+stderr:
+  student.py [raw]
+  KeyError: no such thing here.
+    at student.py:1
+
+=== value-error-own (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: bad value.
+    at student.py:1
+
+=== runtime-no-message (exit 1)
+stderr:
+  student.py [raw]
+  RuntimeError: RuntimeError while running your program.
+    at student.py:1
+
+=== condition-not-function (exit 1)
+stderr:
+  student.py [beginner]
+  TypeError: `filter` needs a function, but this gives it a condition.
+    at student.py:3
+  
+  How to fix:
+    - `filter` calls a function on each row and keeps the rows where it returns `True`, so the condition belongs inside a function. Here it was worked out first - which is what the error is about.
+    - Write `def keep(r: dict) -> bool:` with `return r["riders"] < 1000` as its body, then `t.filter(keep)`.
+    - On its own, `"riders"` is just text. The value in that column of a row is `r["riders"]`.
+
+=== condition-add-column (exit 1)
+stderr:
+  student.py [beginner]
+  TypeError: `add_column` needs a function, but this gives it a condition.
+    at student.py:3
+  
+  How to fix:
+    - `add_column` calls a function on each row and puts what it returns in the new column, so the condition belongs inside a function. Here it was worked out first - which is what the error is about.
+    - Write `def keep(r: dict) -> bool:` with `return "busy", r["riders"] > 1000` as its body, then `t.add_column(keep)`.
+    - On its own, `"riders"` is just text. The value in that column of a row is `r["riders"]`.
+
+=== function-called-not-passed (exit 1)
+stderr:
+  student.py [beginner]
+  TypeError: `filter` calls `below_1k` for you, so it needs the function itself.
+    at student.py:6
+  
+  How to fix:
+    - Leave the brackets off: `filter(below_1k)`.
+    - `below_1k()` calls it right here, with nothing to work on.
+
+=== missing-dataclass (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `ITunesSong` lists fields (`title` and `year`) but has no `@dataclass`, so it takes no arguments.
+    at student.py:5
+  
+  How to fix:
+    - Write `@dataclass` on the line above `class ITunesSong`.
+    - Add `from dataclasses import dataclass` at the top of the file if it is not there.
+
+=== dataclass-too-few (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `Song` needs 2 values (`title` and `year`), but got 1.
+    at student.py:8
+  
+  How to fix:
+    - Give one value for each field, in the order they are written in `class Song`.
+
+=== dataclass-too-many (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `Song` needs 2 values (`title` and `year`), but got 3.
+    at student.py:8
+  
+  How to fix:
+    - Give one value for each field, in the order they are written in `class Song`.
+
+=== too-few-own (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `pen_cost` takes 2 arguments (`num_pens` and `message`), but got 1.
+    at student.py:4
+  
+  How to fix:
+    - Check the call on this line - one value is needed for each parameter.
+
+=== too-few-library (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `circle` takes 3 arguments (`radius`, `mode` and `color`), but got 1.
+    at student.py:1
+  
+  How to fix:
+    - Check the call on this line - one value is needed for each parameter.
+
+=== too-many-own (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `double` takes 1 argument (`n`), but got 2.
+    at student.py:4
+  
+  How to fix:
+    - Check the call on this line - there is one value too many.
+
+=== too-many-library (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `circle` takes 3 arguments (`radius`, `mode` and `color`), but got 4.
+    at student.py:1
+  
+  How to fix:
+    - Check the call on this line - there is one value too many.
+
+=== method-arity (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `scatter_plot` takes 2 arguments (`x` and `y`), but got 0.
+    at student.py:2
+
+=== attribute-on-class (exit 1)
+stderr:
+  student.py [raw]
+  AttributeError: `Song` on its own is the class, not one made from it, so it has no `title`.
+    at student.py:9
+  
+  How to fix:
+    - `Song(...)` makes one, with a value for each field (`title` and `year`).
+    - A field belongs to the value, not to the class it was made from.
+
+=== attribute-on-class-raw (exit 1)
+stderr:
+  student.py [raw]
+  AttributeError: `Song` on its own is the class, not one made from it, so it has no `title`.
+    at student.py:7
+  
+  How to fix:
+    - `Song(...)` makes one, with a value for each field (`title`).
+    - A field belongs to the value, not to the class it was made from.
+
+=== attribute-on-none (exit 1)
+stderr:
+  student.py [raw]
+  AttributeError: `x` is `None`, so it has no `total`.
+    at student.py:5
+  
+  How to fix:
+    - `x` was set from `deposit(...)` on line 4, which gave back `None`.
+    - A function with no `return` gives back `None`.
+    - A method that changes something in place - `append`, `sort` - also gives back `None`.
+
+=== none-attr-direct-call (exit 1)
+stderr:
+  student.py [raw]
+  AttributeError: `deposit(...)` gave back `None`, so it has no `total`.
+    at student.py:4
+  
+  How to fix:
+    - A function with no `return` gives back `None`.
+    - A method that changes something in place - `append`, `sort` - also gives back `None`.
+
+=== none-subscript-name (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `r` is `None`, so square brackets cannot get anything out of it.
+    at student.py:5
+  
+  How to fix:
+    - `r` was set from `first(...)` on line 4, which gave back `None`.
+    - A function with no `return` gives back `None`.
+    - A method that changes something in place - `append`, `sort` - also gives back `None`.
+
+=== none-loop-name (exit 1)
+stdout:
+  1
+stderr:
+  student.py [raw]
+  TypeError: `xs` is `None`, so there is nothing to loop over.
+    at student.py:5
+  
+  How to fix:
+    - `xs` was set from `items(...)` on line 4, which gave back `None`.
+    - A function with no `return` gives back `None`.
+    - A method that changes something in place - `append`, `sort` - also gives back `None`.
+
+=== none-operand-name (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `t` is `None`, so `+` cannot be used on it.
+    at student.py:5
+  
+  How to fix:
+    - `t` was set from `total(...)` on line 4, which gave back `None`.
+    - A function with no `return` gives back `None`.
+    - A method that changes something in place - `append`, `sort` - also gives back `None`.
+
+=== none-operand-right (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `t` is `None`, so `+` cannot be used on it.
+    at student.py:5
+  
+  How to fix:
+    - `t` was set from `total(...)` on line 4, which gave back `None`.
+    - A function with no `return` gives back `None`.
+    - A method that changes something in place - `append`, `sort` - also gives back `None`.
+
+=== none-parameter (exit 1)
+stderr:
+  student.py [raw]
+  AttributeError: `acct` is `None`, so it has no `balance`.
+    at student.py:2
+  
+  How to fix:
+    - `acct` is a parameter of `balance_of`, so the call on line 4 gave it `None`.
+    - A function with no `return` gives back `None`.
+    - A method that changes something in place - `append`, `sort` - also gives back `None`.
+
+=== attribute-typo-field (exit 1)
+stderr:
+  student.py [raw]
+  AttributeError: `Song` has no field `yaer` (its fields are `title` and `year`).
+    at student.py:9
+  
+  How to fix:
+    - Did you mean `year`?
+
+=== attribute-no-fields (exit 1)
+stderr:
+  student.py [raw]
+  AttributeError: `NoInfo` has no fields at all, so it has no `value`.
+    at student.py:8
+  
+  How to fix:
+    - A value that might be a `NoInfo` needs a `case NoInfo():` before `.value` is used.
+
+=== attribute-builtin (exit 1)
+stderr:
+  student.py [raw]
+  AttributeError: A whole number has no `upper`.
+    at student.py:2
+
+=== subscript-none (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `first(...)` gave back `None`, so square brackets cannot get anything out of it.
+    at student.py:4
+  
+  How to fix:
+    - A function with no `return` gives back `None`.
+    - A method that changes something in place - `append`, `sort` - also gives back `None`.
+
+=== subscript-dataclass (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: Square brackets do not get a field out of `Song`.
+    at student.py:9
+  
+  How to fix:
+    - Use a dot instead: `s.year` rather than `s["year"]`.
+    - Square brackets are for lists, dictionaries and table rows.
+
+=== subscript-int (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: Square brackets do not work on a whole number.
+    at student.py:2
+  
+  How to fix:
+    - Square brackets are for lists, dictionaries and table rows.
+
+=== loop-over-len (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `len(xs)` is a number, and a number is not something to loop over.
+    at student.py:2
+  
+  How to fix:
+    - To visit each item, write `for item in xs:`.
+    - To count, write `for i in range(len(xs)):` - but the first form is usually what you want.
+
+=== loop-over-none (exit 1)
+stdout:
+  1
+stderr:
+  student.py [raw]
+  TypeError: `items(...)` gave back `None`, so there is nothing to loop over.
+    at student.py:4
+  
+  How to fix:
+    - A function with no `return` gives back `None`.
+    - A method that changes something in place - `append`, `sort` - also gives back `None`.
+
+=== loop-over-int (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: A whole number is not something to loop over.
+    at student.py:1
+  
+  How to fix:
+    - `for` needs a list, a string, a range or something else with items in it.
+
+=== concat-str-int (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: A string and a whole number cannot be added together.
+    at student.py:2
+  
+  How to fix:
+    - To join them as text, convert `n` with `str`: `"total: " + str(n)`.
+    - In `print`, a comma needs no conversion at all, and puts a space in for you: `print("total:", n)`.
+    - To add them as numbers instead, convert the text with `int(...)` or `float(...)`.
+
+=== concat-call (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: A string and a whole number cannot be added together.
+    at student.py:4
+  
+  How to fix:
+    - To join them as text, convert `add_shipping(10)` with `str`: `"Total: " + str(add_shipping(10))`.
+    - In `print`, a comma needs no conversion at all, and puts a space in for you: `print("Total:", add_shipping(10))`.
+    - To add them as numbers instead, convert the text with `int(...)` or `float(...)`.
+
+=== concat-nested-call (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: A string and a whole number cannot be added together.
+    at student.py:6
+  
+  How to fix:
+    - To join them as text, convert `add_shipping(pen_cost(10, "bravo"))` with `str`: `"Total: " + str(add_shipping(pen_cost(10, "bravo")))`.
+    - To add them as numbers instead, convert the text with `int(...)` or `float(...)`.
+
+=== concat-value-first (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `+` does not work between a whole number and a string.
+    at student.py:2
+  
+  How to fix:
+    - Convert one of them first - `int(...)` for a number, `str(...)` for text.
+
+=== concat-input (exit 1)
+stdout:
+  Age? 
+  (no newline at end)
+stderr:
+  student.py [raw]
+  TypeError: A string and a whole number cannot be added together.
+    at student.py:2
+  
+  How to fix:
+    - `age` came from `input`, which always gives back text - even when a number is typed.
+    - Convert it first: `int(age) + 1`.
+
+=== concat-list (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: A list and a string cannot be added together.
+    at student.py:2
+  
+  How to fix:
+    - `+` joins a list to another list. To add one item, put it inside brackets: `xs + [item]`.
+    - Or add it in place with `xs.append(item)`, which changes `xs` and returns nothing.
+
+=== concat-tuple (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: A tuple and a whole number cannot be added together.
+    at student.py:2
+  
+  How to fix:
+    - `+` joins a tuple to another tuple. To add one item, put it inside a tuple: `xs + (item,)`.
+
+=== operand-none (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `total(...)` gave back `None`, so `+` cannot be used on it.
+    at student.py:4
+  
+  How to fix:
+    - A function with no `return` gives back `None`.
+    - A method that changes something in place - `append`, `sort` - also gives back `None`.
+
+=== operand-str-list (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `-` does not work between a string and a list.
+    at student.py:1
+  
+  How to fix:
+    - Convert one of them first - `int(...)` for a number, `str(...)` for text.
+
+=== operand-dict (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `*` does not work between a dictionary and a number.
+    at student.py:1
+
+=== compare-str-int (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `<` cannot compare a string with a whole number.
+    at student.py:1
+  
+  How to fix:
+    - Convert the text to a number with `int(...)`, or the number to text with `str(...)` - whichever this comparison is meant to be about.
+
+=== compare-csv (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `>` cannot compare a string with a whole number.
+    at student.py:2
+  
+  How to fix:
+    - Convert the text to a number with `int(...)`, or the number to text with `str(...)` - whichever this comparison is meant to be about.
+    - Every column read from a CSV is text, so a column of numbers needs `transform_column(name, int)` before it can be compared.
+
+=== compare-none (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `>` cannot compare a `None` with a whole number.
+    at student.py:4
+  
+  How to fix:
+    - `>` only orders values of the same kind; there is no answer to this comparison.
+
+=== bad-int-word (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: `int` cannot turn "nineteen" into a whole number.
+    at student.py:1
+  
+  How to fix:
+    - `int` only reads whole numbers written in digits, like `"19"`.
+
+=== bad-int-input (exit 1)
+stdout:
+  How many? 
+  (no newline at end)
+stderr:
+  student.py [raw]
+  ValueError: `int` cannot turn "nineteen" into a whole number.
+    at student.py:1
+  
+  How to fix:
+    - `int` only reads whole numbers written in digits, like `"19"`.
+    - `input` gives back exactly what was typed, as text, so a word cannot become a number.
+
+=== bad-int-input-blank (exit 1)
+stdout:
+  How many? 
+  (no newline at end)
+stderr:
+  student.py [raw]
+  ValueError: `int` cannot turn an empty string into a whole number.
+    at student.py:1
+  
+  How to fix:
+    - `int` only reads whole numbers written in digits, like `"19"`.
+    - Nothing was typed: pressing Enter on its own makes `input` give back an empty string.
+
+=== bad-int-csv-blank (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: transform_column("riders", int) failed on the 3rd row, whose value is blank (""). A blank cell cannot be converted; write a function that decides what a blank should become, and give that to transform_column instead.
+    at student.py:2
+
+=== index-range (exit 1)
+stderr:
+  student.py [raw]
+  IndexError: `nums` has no item at that position.
+    at student.py:2
+  
+  How to fix:
+    - `nums` has 3 items, numbered 0 to 2 - positions start at 0.
+
+=== index-range-in-fn (exit 1)
+stderr:
+  student.py [raw]
+  IndexError: `xs` has no item at that position.
+    at student.py:2
+  
+  How to fix:
+    - `xs` has 2 items, numbered 0 to 1 - positions start at 0.
+
+=== index-range-string (exit 1)
+stderr:
+  student.py [raw]
+  IndexError: `word` has no item at that position.
+    at student.py:2
+  
+  How to fix:
+    - `word` has 2 items, numbered 0 to 1 - positions start at 0.
+
+=== not-callable-int (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: Brackets after `3` look like a function call, not multiplication.
+    at student.py:2
+  
+  How to fix:
+    - To multiply, write the `*`: `3 * width`, not `3(width)`.
+
+=== not-callable-name (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: A whole number cannot be called like a function.
+    at student.py:2
+  
+  How to fix:
+    - Brackets after a value mean a call; check whether a `*` or a comma is missing.
+
+=== pattern-arity (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `Boa` has 2 fields (`name` and `length`), but this pattern names 3.
+    at student.py:10
+  
+  How to fix:
+    - Write one name for each field: `case Boa(name, length):`.
+
+=== missing-comma-rows (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: A tuple cannot be called like a function.
+    at student.py:2
+  
+  How to fix:
+    - Brackets after a value mean a call; check whether a `*` or a comma is missing.
+
+=== recursion (exit 1)
+stderr:
+  student.py [raw]
+  RecursionError: `count` kept calling itself and never stopped.
+    at student.py:2
+  
+  How to fix:
+    - Each call has to work on something smaller - the rest of the list, a smaller number.
+    - Check that there is a case that returns without calling again, and that it is reached.
+
+=== discarded-add-column (exit 1)
+stdout:
+  name  hours  pay
+  ----  -----  ---
+  a     10     150
+  (1 row)
+stderr:
+  student.py [raw]
+  KeyError: `add_column` makes a new table; it does not change `employees`.
+    at student.py:3
+  
+  How to fix:
+    - Keep the result: `employees = employees.add_column(...)`.
+    - Every table method leaves the table it was called on exactly as it was, so `pay` was never added to `employees`.
+
+=== discarded-add-column-beginner (exit 1)
+stdout:
+  name  hours  pay
+  ----  -----  ---
+  a     10     150
+  (1 row)
+stderr:
+  student.py [beginner]
+  KeyError: `add_column` makes a new table; it does not change `employees`.
+    at student.py:4
+  
+  How to fix:
+    - Keep the result under a new name: `new_employees = employees.add_column(...)`.
+    - Every table method leaves the table it was called on exactly as it was, so `pay` was never added to `employees`.
+
+=== discarded-add-column-in-fn-intermediate (exit 1)
+stderr:
+  student.py [intermediate]
+  KeyError: `add_column` makes a new table; it does not change `employees`.
+    at student.py:4
+  
+  How to fix:
+    - Keep the result: `employees = employees.add_column(...)`.
+    - Every table method leaves the table it was called on exactly as it was, so `pay` was never added to `employees`.
+
+=== discarded-add-column-in-fn-beginner (exit 1)
+stderr:
+  student.py [beginner]
+  KeyError: `add_column` makes a new table; it does not change `employees`.
+    at student.py:4
+  
+  How to fix:
+    - Keep the result under a new name: `new_employees = employees.add_column(...)`.
+    - Every table method leaves the table it was called on exactly as it was, so `pay` was never added to `employees`.
+
+=== uneven-columns (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: The columns of this DataFrame have different numbers of values.
+    at student.py:2
+  
+  How to fix:
+    - Each list in the dictionary is one column, and every column needs one value for each row - so the lists have to be the same length.
+    - Count the values in each list on this line; one has more or fewer than the rest.
+
+=== pandas-key-error (exit 1)
+stderr:
+  student.py [raw]
+  KeyError: There is no column named `ratings`.
+    at student.py:3
+  
+  How to fix:
+    - `print(df.columns)` lists the columns this DataFrame has.
+    - Column names are case-sensitive, and spaces count.
+
+=== handler-called (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: `to_draw` has to be given the function itself, not what calling it gives back.
+    at student.py:4
+  
+  How to fix:
+    - Write `to_draw=draw_dog`, not `to_draw=draw_dog(0)`.
+    - The reactor calls `draw_dog` itself, with its state, every time it needs a picture.
+
+=== error-in-library-callback (exit 1)
+stderr:
+  student.py [raw]
+  ZeroDivisionError: division by zero.
+    at student.py:2
+
+=== error-deep-stack (exit 1)
+stderr:
+  student.py [raw]
+  ZeroDivisionError: division by zero.
+    at student.py:6
+
+=== tc-argument (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `double` expects `n` to be a whole number (`int`), but got a string (`str`).
+    at student.py:5
+  
+  How to fix:
+    - Check the value you passed for `n` on this line.
+    - If it should be a whole number (`int`), convert it with `int(...)`.
+    - Or, if `n` really should be a string (`str`), change its annotation in `double` from `int` to `str`.
+
+=== tc-argument-float (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `half` expects `n` to be a number (`float`), but got a string (`str`).
+    at student.py:5
+  
+  How to fix:
+    - Check the value you passed for `n` on this line.
+    - If it should be a number (`float`), convert it with `float(...)`.
+    - Or, if `n` really should be a string (`str`), change its annotation in `half` from `float` to `str`.
+
+=== tc-return-none (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `shout` should return a string (`str`), but it finished without returning a value.
+    at student.py:2
+  
+  How to fix:
+    - Make sure every path through the function reaches a `return`.
+    - An `if` with no `else` falls off the end, and Python then returns `None`.
+    - Or annotate the return type as `None` if `shout` is not meant to return anything.
+
+=== tc-return-print (exit 1)
+stdout:
+  9
+stderr:
+  student.py [beginner]
+  TypeMismatch: `order` should return a number (`float`), but it finished without returning a value.
+    at student.py:2
+  
+  How to fix:
+    - Line 6 ends its branch with `print`: did you mean `return order_amt + 4`?
+    - `print` shows a value on screen; `return` hands it back to whatever called the function.
+
+=== tc-return-append (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `add` should return a list (`list`), but `xs.append(x)` is `None` here.
+    at student.py:3
+  
+  How to fix:
+    - This line did return - what it returned was nothing.
+    - Check where `xs.append(x)` was last set.
+    - Or annotate the return type as `None` if `add` is not meant to return anything.
+
+=== tc-return-wrong (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `name_of` says it returns a string (`str`), but this line returns a whole number (`int`).
+    at student.py:3
+  
+  How to fix:
+    - Convert the returned value with `str(...)`.
+    - Or change `name_of`'s return annotation from `str` to `int`.
+
+=== tc-match-no-case (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: No `case` in `sound` fitted `p`, so nothing was returned.
+    at student.py:13
+  
+  How to fix:
+    - There is no `case` for `Cat`.
+
+=== tc-union-argument (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `f` expects `x` to be a whole number (`int`) or `None`, but got a string (`str`).
+    at student.py:5
+  
+  How to fix:
+    - Check the value you passed for `x` on this line.
+
+=== tc-list-element (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `total` expects every item in `lst` to be a number (`float`), but item 0 is the string "1".
+    at student.py:5
+  
+  How to fix:
+    - Look at item 0 of the list you passed for `lst`.
+    - Every one has to match the annotation, not just the first.
+
+=== tc-dict-value (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `total` expects every value in `d` to be a whole number (`int`), but the value for key 'a' is the string "1".
+    at student.py:5
+  
+  How to fix:
+    - Look at the value for key 'a' of the dict you passed for `d`.
+    - Every one has to match the annotation, not just the first.
+
+=== tc-bool-as-int (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `double` expects `n` to be a whole number (`int`), but got `True` or `False` (`bool`).
+    at student.py:5
+  
+  How to fix:
+    - Check the value you passed for `n` on this line.
+    - At `#level beginner` and `#level intermediate`, `True` and `False` are not accepted as numbers, even though Python counts them as `1` and `0`.
+    - Or, if `n` really should be `True` or `False` (`bool`), change its annotation in `double` from `int` to `bool`.
+
+=== tc-bool-as-int-advanced (exit 0)
+stdout:
+  2
+stderr:
+  student.py [advanced]
+
+=== tc-field (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: The `year` field of `Song` should be a whole number (`int`), but got `"1999"`.
+    at student.py:9
+  
+  How to fix:
+    - Check the values given to `Song(...)`, in the order its fields are written.
+    - If it should be a whole number (`int`), convert it with `int(...)`.
+    - Or change the field's annotation from `int` to `str`.
+
+=== tc-field-swapped (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: The values for `title` and `year` of `Song` look swapped.
+    at student.py:9
+  
+  How to fix:
+    - `title` got `1999`, which fits `year` - and the other way round.
+    - Give the values in the order the fields are written in `class Song`.
+
+=== tc-class-itself (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `t` was given the class `Song` itself, not one made from it.
+    at student.py:11
+  
+  How to fix:
+    - `Song` on its own is the blueprint; `Song(...)` makes one.
+    - Add the brackets and the values for its fields: `Song(...)`.
+
+=== tc-row-is-dict (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `big` expects `r` to be a whole number (`int`), but got a dictionary (`dict`).
+    at student.py:6
+  
+  How to fix:
+    - `filter` calls your function with one row at a time, so `r` is whatever it hands over - not a value from this line.
+    - Annotate `r` as `dict` in `big`, or change what `filter` is given so it hands over a whole number (`int`).
+
+=== tc-filter-returns (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `keep` says it returns `True` or `False` (`bool`), but this line returns a whole number (`int`).
+    at student.py:3
+  
+  How to fix:
+    - Return a `True` or `False` (`bool`) from this line.
+    - Or change `keep`'s return annotation from `bool` to `int`.
+
+=== tc-reactor-init (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `draw` expects `n` to be a whole number (`int`), but got a string (`str`).
+    at student.py:6
+  
+  How to fix:
+    - The reactor calls `draw` with its state: the `init` value to start with, then whatever the handlers return. So `n` is the reactor's state, not a value from this line.
+    - Annotate `n` as `str` in `draw`, or change what the reactor is given so it hands over a whole number (`int`).
+
+=== tc-raw-unchecked (exit 0)
+stdout:
+  44
+stderr:
+  student.py [raw]
+
+=== tc-intermediate (exit 1)
+stderr:
+  student.py [intermediate]
+  TypeMismatch: `double` expects `n` to be a whole number (`int`), but got a string (`str`).
+    at student.py:5
+  
+  How to fix:
+    - Check the value you passed for `n` on this line.
+    - If it should be a whole number (`int`), convert it with `int(...)`.
+    - Or, if `n` really should be a string (`str`), change its annotation in `double` from `int` to `str`.
+
+=== tc-annotation-string-type (exit 2)
+stderr:
+  student.py [beginner]
+  NotAType: `string` is not a type Python knows.
+    at student.py:2:10
+  
+  How to fix:
+    - Write `str` instead.
+    - There is nothing called `string`, so this line fails as soon as it runs.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== name-undefined (exit 1)
+stderr:
+  student.py [raw]
+  NameError: Python doesn't know what `totl` means.
+    at student.py:1:7
+  
+  How to fix:
+    - Check the spelling of `totl` (Python is case-sensitive).
+    - Make sure `totl` is defined before this line runs.
+    - If `totl` should be text, put it in quotes: `"totl"`.
+
+=== name-typo (exit 1)
+stderr:
+  student.py [raw]
+  NameError: Python doesn't know what `Total` means.
+    at student.py:2:7
+  
+  How to fix:
+    - Did you mean `total`? Python names are case-sensitive, so `Total` and `total` are different names.
+
+=== name-typo-close (exit 1)
+stderr:
+  student.py [raw]
+  NameError: Python doesn't know what `widht` means.
+    at student.py:2:7
+  
+  How to fix:
+    - Did you mean `width`?
+
+=== name-import-pd (exit 1)
+stderr:
+  student.py [raw]
+  NameError: `pd` comes from an import, and this file has not imported it.
+    at student.py:1:6
+  
+  How to fix:
+    - Add `import pandas as pd` at the top of the file.
+
+=== name-import-math (exit 1)
+stderr:
+  student.py [raw]
+  NameError: `math` comes from an import, and this file has not imported it.
+    at student.py:1:7
+  
+  How to fix:
+    - Add `import math` at the top of the file.
+
+=== name-defined-later (exit 1)
+stderr:
+  student.py [raw]
+  NameError: `double` is defined on line 3, after this line.
+    at student.py:1:7
+  
+  How to fix:
+    - Python runs a file from the top, so nothing further down exists yet.
+    - Move the definition of `double` above this line.
+
+=== name-forward-annotation (exit 1)
+stderr:
+  student.py [beginner]
+  NameError: `NumList` is defined on line 9, after this line, and an annotation is read as the file runs.
+    at student.py:7:11
+  
+  How to fix:
+    - Write the type as a string - `rest: "NumList"` - and Python looks it up later, once it exists.
+    - A type that names itself can only be written that way: the union needs the class, and the class needs the union.
+
+=== name-free-variable (exit 1)
+stderr:
+  student.py [raw]
+  NameError: `title` has not been given a value yet on this line.
+    at student.py:3:16
+  
+  How to fix:
+    - Move the line that sets `title` above this one.
+    - The `title` here belongs to the function around this one, which sets it after this line runs.
+
+=== name-unbound-local (exit 1)
+stderr:
+  student.py [raw]
+  UnboundLocalError: `count` has not been given a value yet on this line.
+    at student.py:3:13
+  
+  How to fix:
+    - Move the line that sets `count` above this one.
+    - If you meant a `count` from outside this function: assigning to it anywhere inside makes it local to the whole function, so the outer one is not visible here. Pass it in as a parameter instead.
+
+=== name-passed-result (exit 1)
+stderr:
+  student.py [raw]
+  NameError: `filter` calls `below_1k` for you, so `r` is not something you write here.
+    at student.py:4:25
+  
+  How to fix:
+    - Pass the function itself: `filter(below_1k)`.
+    - `filter` supplies the argument for each row, so `below_1k` is never called by hand.
+
+=== name-in-function (exit 1)
+stderr:
+  student.py [raw]
+  NameError: Python doesn't know what `missing` means.
+    at student.py:2:16
+  
+  How to fix:
+    - Check the spelling of `missing` (Python is case-sensitive).
+    - Make sure `missing` is defined before this line runs.
+    - If `missing` should be text, put it in quotes: `"missing"`.
+
+=== name-deep (exit 1)
+stderr:
+  student.py [raw]
+  NameError: Python doesn't know what `missing` means.
+    at student.py:3:16
+  
+  How to fix:
+    - Check the spelling of `missing` (Python is case-sensitive).
+    - Make sure `missing` is defined before this line runs.
+    - If `missing` should be text, put it in quotes: `"missing"`.
+
+=== syntax-else-if (exit 1)
+stderr:
+  student.py [raw]
+  SyntaxError: Python spells this `elif`, not `else if`.
+    at student.py:4:6
+  
+  How to fix:
+    - Write `elif` as one word, then the condition and a colon.
+
+=== syntax-assign-in-if (exit 1)
+stderr:
+  student.py [raw]
+  SyntaxError: This compares two values, so it needs `==`.
+    at student.py:2:4
+  
+  How to fix:
+    - `==` asks whether two values are equal; `=` gives a name a value.
+
+=== syntax-class-keyword (exit 1)
+stderr:
+  student.py [raw]
+  SyntaxError: `class` is a word Python reserves, so it cannot be a name.
+    at student.py:1:7
+  
+  How to fix:
+    - Pick another name, such as `class_value` or something describing what it holds.
+
+=== syntax-curly-quote (exit 1)
+stderr:
+  student.py [raw]
+  SyntaxError: `“` is not a character Python can read here.
+    at student.py:1:7
+  
+  How to fix:
+    - Use straight quotes (`"` and `'`) rather than curly ones.
+    - Curly quotes come from copying out of a document or a web page; retyping the quotes fixes it.
+
+=== syntax-tab (exit 1)
+stderr:
+  student.py [raw]
+  TabError: This line mixes tabs and spaces for its indentation.
+    at student.py:3:1
+  
+  How to fix:
+    - Use spaces throughout. In VS Code, the command **Convert Indentation to Spaces** fixes the whole file.
+    - A tab and four spaces look identical on screen, which is why this is hard to see.
+
+=== syntax-missing-colon (exit 1)
+stderr:
+  student.py [raw]
+  SyntaxError: expected ':'.
+    at student.py:1:8
+
+=== syntax-unclosed (exit 1)
+stderr:
+  student.py [raw]
+  SyntaxError: '(' was never closed.
+    at student.py:1:6
+
+=== syntax-indent (exit 1)
+stderr:
+  student.py [raw]
+  IndentationError: expected an indented block after function definition on line 1.
+    at student.py:2:1
+
+=== syntax-case-capture (exit 1)
+stderr:
+  student.py [raw]
+  SyntaxError: `case Boa:` needs brackets: `case Boa():`.
+    at student.py:9:14
+  
+  How to fix:
+    - Without them, `Boa` is a new name that matches anything, so no `case` after it can ever run.
+    - With them, `case Boa():` matches only a `Boa`; put one name inside for each field.
+
+=== syntax-case-capture-tests (exit 1)
+stderr:
+  student.py [raw]
+  SyntaxError: `case Boa:` needs brackets: `case Boa():`.
+    at student.py:9:14
+  
+  How to fix:
+    - Without them, `Boa` is a new name that matches anything, so no `case` after it can ever run.
+    - With them, `case Boa():` matches only a `Boa`; put one name inside for each field.
+
+=== syntax-warning-unrun (exit 0)
+stdout:
+  fine
+stderr:
+  student.py [raw]
+  warning: line 2: brackets after a number are a function call, not multiplication. To multiply, write the `*`: `3 * w`, not `3(w)`.
+
+=== syntax-warning-run (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: Brackets after `3` look like a function call, not multiplication.
+    at student.py:1
+  
+  How to fix:
+    - To multiply, write the `*`: `3 * 4`, not `3(4)`.
+
+=== syntax-row-missing-comma (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: A comma is missing between two values in a list.
+    at student.py:2
+  
+  How to fix:
+    - `[a, b] [c, d]` with no comma reads as looking `c, d` up inside the first list.
+    - Write `[[a, b], [c, d]]`, with a comma after every row.
+
+=== syntax-beginner (exit 1)
+stderr:
+  student.py [beginner]
+  SyntaxError: '(' was never closed.
+    at student.py:2:5
+
+=== header-misspelled (exit 2)
+stderr:
+  student.py [raw]
+  Level: `begginer` is not a level. Did you mean `beginner`?
+    at student.py:1
+  
+  How to fix:
+    - Write `#level beginner` on the first line, in lower case.
+  
+
+=== header-capital (exit 2)
+stderr:
+  student.py [raw]
+  Level: `Beginner` is not a level. Did you mean `beginner`?
+    at student.py:1
+  
+  How to fix:
+    - Write `#level beginner` on the first line, in lower case.
+  
+
+=== header-bare (exit 2)
+stderr:
+  student.py [raw]
+  Level: `#level` needs a level after it: `raw`, `beginner`, `intermediate`, `advanced`.
+    at student.py:1
+  
+  How to fix:
+    - Name one of `raw`, `beginner`, `intermediate`, `advanced`, or leave the line out.
+  
+
+=== header-no-space (exit 2)
+stderr:
+  student.py [raw]
+  Level: `#level` needs a space before `beginner`: `#level beginner`.
+    at student.py:1
+  
+  How to fix:
+    - Write it as `#level beginner`, with a space.
+  
+
+=== header-not-first (exit 0)
+stdout:
+  x
+stderr:
+  student.py [raw]
+
+=== header-unknown-word (exit 2)
+stderr:
+  student.py [raw]
+  Level: `easy` is not a level. The levels are `raw`, `beginner`, `intermediate`, `advanced`.
+    at student.py:1
+  
+  How to fix:
+    - Name one of `raw`, `beginner`, `intermediate`, `advanced`, or leave the line out.
+  
+
+=== st-reassignment (exit 2)
+stderr:
+  student.py [beginner]
+  Reassignment: `total` is already assigned (first assigned on line 2).
+    at student.py:3:1
+  
+  How to fix:
+    - If you want a different value, give it a different name (e.g. `total_doubled`, `new_total`, `total2`).
+    - If you're trying to update a value (`x = x + 1`, accumulators, running totals), use a built-in like `sum(...)`, `max(...)`, or a small helper function that returns the new value instead.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-reassignment-intermediate (exit 2)
+stderr:
+  student.py [intermediate]
+  Reassignment: `total` is already assigned (first assigned on line 2).
+    at student.py:3:1
+  
+  How to fix:
+    - If you want a different value, give it a different name (e.g. `total_doubled`, `new_total`, `total2`).
+    - If you're trying to update a value (`x = x + 1`, accumulators, running totals), wrap the work in a function and rebind `total` from the function's return value: `total = compute_total(...)`.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-reassignment-in-fn (exit 2)
+stderr:
+  student.py [beginner]
+  Reassignment: `x` is already assigned (first assigned on line 3).
+    at student.py:4:5
+  
+  How to fix:
+    - If you want a different value, give it a different name (e.g. `x_doubled`, `new_x`, `x2`).
+    - If you're trying to update a value (`x = x + 1`, accumulators, running totals), use a built-in like `sum(...)`, `max(...)`, or a small helper function that returns the new value instead.
+    - `#level intermediate` allows changing a variable inside a function, which is what a running total needs.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-shadowing (exit 2)
+stderr:
+  student.py [beginner]
+  Shadowing: `x` is already defined (first defined on line 2, in the file).
+    at student.py:4:5
+  
+  How to fix:
+    - Rename the inner `x` to something distinct (e.g. `x_inner`, `local_x`, or whatever describes its role).
+    - Or, if you want to use the outer `x`, just read it directly without making a new variable.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-shadowing-builtin (exit 2)
+stderr:
+  student.py [beginner]
+  Shadowing: `list` is the name of a Python built-in.
+    at student.py:2:1
+  
+  How to fix:
+    - Pick a different name. Common patterns: `my_list`, `list_value`, `lists` (plural), or a more specific noun describing what this value represents.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-shadowing-library (exit 2)
+stderr:
+  student.py [beginner]
+  Shadowing: `circle` is already defined by the image library.
+    at student.py:2:1
+  
+  How to fix:
+    - Pick a different name for your definition - for example `my_circle`, `circle_value`, or a word that describes what yours represents.
+    - If you meant to use the library's `circle`, call it directly instead of defining a new `circle` of your own.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-shadowing-library-table (exit 2)
+stderr:
+  student.py [beginner]
+  Shadowing: `table` is already defined by the table library.
+    at student.py:2:1
+  
+  How to fix:
+    - Pick a different name for your definition - for example `my_table`, `table_value`, or a word that describes what yours represents.
+    - If you meant to use the library's `table`, call it directly instead of defining a new `table` of your own.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-global (exit 2)
+stderr:
+  student.py [intermediate]
+  DisallowedKeyword: `global` is not allowed at the intermediate level.
+    at student.py:4:5
+  
+  How to fix:
+    - Pass `count` into this function as an argument instead of declaring it `global`.
+    - If the function needs to *change* a value, return the new value and let the caller decide what to do with it (e.g. `x = update(x)`).
+    - `#level advanced` allows `global`, if you have a reason to use it.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-nonlocal (exit 2)
+stderr:
+  student.py [beginner]
+  DisallowedKeyword: `nonlocal` is not allowed at the beginner level.
+    at student.py:5:9
+  
+  How to fix:
+    - Return `n` from this inner function and have the outer function rebind it explicitly (e.g. `x = inner(x)`).
+    - If the inner function only needs to *read* the outer name, just use it directly - you don't need `nonlocal` for that.
+    - `#level advanced` allows `nonlocal`, if you have a reason to use it.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-unused-comparison (exit 2)
+stderr:
+  student.py [beginner]
+  UnusedValue: This comparison's answer is not used, so nothing checks it.
+    at student.py:6:5
+  
+  How to fix:
+    - Did you mean `assert double(2) == 4`? Without `assert` the comparison is worked out and thrown away, so the test always passes.
+    - At the top level a line like this is displayed; inside a function nothing shows it.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-unused-value (exit 2)
+stderr:
+  student.py [beginner]
+  UnusedValue: This line works out a value and then throws it away.
+    at student.py:3:5
+  
+  How to fix:
+    - Did you mean `return order_amt + 8`? On its own, the value is worked out and thrown away.
+    - Nothing in Python changes as a result of this line.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-unused-value-field (exit 2)
+stderr:
+  student.py [beginner]
+  UnusedValue: This line works out a value and then throws it away.
+    at student.py:9:5
+  
+  How to fix:
+    - To change `ac.balance`, assign the result to it: `ac.balance = ac.balance + amt`.
+    - Or, if this is the function's answer, return it: `return ac.balance + amt`.
+    - Nothing in Python changes as a result of this line.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-assert-tuple (exit 2)
+stderr:
+  student.py [beginner]
+  AlwaysTrue: This `assert` has brackets around two things, so it is always true.
+    at student.py:3:5
+  
+  How to fix:
+    - `assert(a, b)` checks a pair, and a pair is never false - the test passes whatever happens.
+    - Write `assert a == b`, with no brackets after `assert`.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-method-not-called (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `avg` says it returns a whole number (`int`), but this line returns `method`.
+    at student.py:4
+  
+  How to fix:
+    - Return a whole number (`int`) from this line.
+    - Or change `avg`'s return annotation from `int` to `method`.
+
+=== st-annotation-not-a-type (exit 2)
+stderr:
+  student.py [beginner]
+  NotAType: `table` is the function that makes a table; the type is `Table`.
+    at student.py:2:10
+  
+  How to fix:
+    - Write `Table` instead.
+    - As it stands the annotation is accepted and nothing about this value is checked.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-test-not-named (exit 0)
+stdout:
+  ran
+stderr:
+  student.py [beginner]
+  NeverRun: `check_double` has an `assert` in it, but nothing ever runs it.
+    at student.py:5:1
+  
+  How to fix:
+    - Rename it `test_check_double` and it will run with the other tests.
+    - Only functions whose names start with `test_` are run automatically.
+  
+
+=== st-field-no-type (exit 0)
+stderr:
+  student.py [beginner]
+
+=== st-field-assigned-type (exit 2)
+stderr:
+  student.py [beginner]
+  FieldNeedsType: `year = int` sets `year` to the type itself; did you mean `year: int`?
+    at student.py:7:5
+  
+  How to fix:
+    - A field is declared with a colon, not an `=`.
+    - With an `=` there is no `year` field, and the constructor ends up with the wrong number of arguments.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-class-needs-dataclass (exit 2)
+stderr:
+  student.py [beginner]
+  NotADataclass: `Song` lists fields but has no `@dataclass`, so `Song(...)` takes no arguments.
+    at student.py:2:1
+  
+  How to fix:
+    - Write `@dataclass` on the line above `class Song`.
+    - Add `from dataclasses import dataclass` at the top of the file if it is not there.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-compared-with-class (exit 2)
+stderr:
+  student.py [beginner]
+  AlwaysFalse: `Boa` is a class, so comparing a value with it is always False.
+    at student.py:9:17
+  
+  How to fix:
+    - Use `match` to tell the kinds apart: `case Boa(...):`.
+    - `Boa` is the blueprint; a value made from it is never equal to it.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-duplicate-function (exit 2)
+stderr:
+  student.py [beginner]
+  DuplicateDefinition: There are two functions named `f` (lines 2 and 5).
+    at student.py:5:1
+  
+  How to fix:
+    - Rename one of them. Python keeps only the second, so the first never runs.
+    - Both definitions are kept in the file, but only the last name points at anything.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-duplicate-class (exit 2)
+stderr:
+  student.py [beginner]
+  DuplicateDefinition: There are two classes named `A` (lines 5 and 8).
+    at student.py:8:1
+  
+  How to fix:
+    - Rename one of them. Python keeps only the second, so the first never runs.
+    - Both definitions are kept in the file, but only the last name points at anything.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-several (exit 2)
+stderr:
+  student.py [beginner]
+  Reassignment: `total` is already assigned (first assigned on line 2).
+    at student.py:3:1
+  
+  How to fix:
+    - If you want a different value, give it a different name (e.g. `total_doubled`, `new_total`, `total2`).
+    - If you're trying to update a value (`x = x + 1`, accumulators, running totals), use a built-in like `sum(...)`, `max(...)`, or a small helper function that returns the new value instead.
+  
+  Shadowing: `list` is the name of a Python built-in.
+    at student.py:4:1
+  
+  How to fix:
+    - Pick a different name. Common patterns: `my_list`, `list_value`, `lists` (plural), or a more specific noun describing what this value represents.
+  
+  AlwaysTrue: This `assert` has brackets around two things, so it is always true.
+    at student.py:6:5
+  
+  How to fix:
+    - `assert(a, b)` checks a pair, and a pair is never false - the test passes whatever happens.
+    - Write `assert a == b`, with no brackets after `assert`.
+  
+  Static analysis found 3 problems. The file was not run.
+
+=== st-warning-and-error (exit 2)
+stderr:
+  student.py [beginner]
+  Reassignment: `total` is already assigned (first assigned on line 5).
+    at student.py:6:1
+  
+  How to fix:
+    - If you want a different value, give it a different name (e.g. `total_doubled`, `new_total`, `total2`).
+    - If you're trying to update a value (`x = x + 1`, accumulators, running totals), use a built-in like `sum(...)`, `max(...)`, or a small helper function that returns the new value instead.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== img-colour-typo (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: rectangle's `color` (the 4th argument) is the string "bleu", which is not a color name PLL knows. Did you mean "blue"?
+    at student.py:1
+
+=== img-colour-nonsense (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: circle's `color` (the 3rd argument) is the string "zzzzzzz", which is not a color name PLL knows. Use a name like "red", a hex code like "#ff0000", or (red, green, blue) numbers from 0 to 255.
+    at student.py:1
+
+=== img-colour-number (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: rectangle's `color` (the 4th argument) is the number 50, which is not a color. Use a name like "red", a hex code like "#ff0000", or (red, green, blue) numbers from 0 to 255.
+    at student.py:1
+
+=== img-colour-range (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: circle's `color` (the 3rd argument): the red part runs from 0 to 255, but it is 300.
+    at student.py:1
+
+=== img-mode (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: circle's `mode` (the 2nd argument) should be "solid" or "outline", but it is the string "outilne". The arguments are: circle(radius, mode, color).
+    at student.py:1
+
+=== img-size-string (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: circle's `radius` (the 1st argument) must be a number, but it is the string "5". The arguments are: circle(radius, mode, color).
+    at student.py:1
+
+=== img-size-negative (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: rectangle's `width` (the 1st argument) cannot be negative, but it is -5. The arguments are: rectangle(width, height, mode, color).
+    at student.py:1
+
+=== img-scale-zero (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: scale's `factor` (the 1st argument) has to be more than 0, but it is 0.
+    at student.py:1
+
+=== img-rotate-order (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: rotate takes the `angle` first, then the image: write rotate(45, image).
+    at student.py:1
+
+=== img-add (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: Images cannot be joined with `+`. Use `beside(a, b)` to put them side by side, `above(a, b)` to stack them, or `overlay(a, b)` to put one on top of the other.
+    at student.py:2
+
+=== img-beside-string (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: beside's 2nd argument is the string "austria", not an image.
+    at student.py:2
+
+=== img-beside-list (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: beside takes the images themselves, not a list of them: write beside(first, second) rather than beside([first, second]).
+    at student.py:2
+
+=== img-place (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: beside_align: expected one of 'top', 'center', 'middle', 'bottom', got 'upper'.
+    at student.py:2
+
+=== img-load-missing (exit 1)
+stderr:
+  student.py [raw]
+  FileNotFoundError: There is no file called "dog.png" next to your program. Check the spelling, or pass an https:// address instead.
+    at student.py:1
+
+=== img-ok (exit 0)
+stdout:
+  <Image 10x10>
+stderr:
+  student.py [raw]
+
+=== tbl-row-length (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: the 2nd row, [3], has 1 value, but the table has 2 columns: a, b.
+    at student.py:1
+
+=== tbl-row-length-lines (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: the 3rd row, [5], has 1 value, but the table has 2 columns: a, b.
+    at student.py:6
+
+=== tbl-columns-string (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: table's column names should be a list of strings, like ["month", "riders"] - not one string.
+    at student.py:1
+
+=== tbl-rows-not-nested (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: each row should be a list of values, but the 1st row is the number 1. Put every row inside one outer list: table(columns, [[...], [...]]).
+    at student.py:1
+
+=== tbl-duplicate-column (exit 1)
+stderr:
+  student.py [raw]
+  ValueError: table has two columns called "a". Column names have to be different, so give one of them another name.
+    at student.py:1
+
+=== tbl-row-no-column (exit 1)
+stderr:
+  student.py [raw]
+  KeyError: this row has no column "rider" (it has: month, riders). Did you mean "riders"?
+    at student.py:2
+
+=== tbl-row-attribute (exit 1)
+stderr:
+  student.py [raw]
+  AttributeError: to get a value out of a row, use square brackets: row["riders"].
+    at student.py:2
+
+=== tbl-row-by-name (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: row expects a row number, but got the string "Mar". To find rows by a value, use filter.
+    at student.py:2
+
+=== tbl-row-range (exit 1)
+stderr:
+  student.py [raw]
+  IndexError: there is no row 5: this table's rows are numbered 0 to 0.
+    at student.py:2
+
+=== tbl-no-column (exit 1)
+stderr:
+  student.py [raw]
+  KeyError: the table has no column "month" (it has: Month). Did you mean "Month"? Column names are case-sensitive.
+    at student.py:2
+
+=== tbl-no-column-prefix (exit 1)
+stderr:
+  student.py [raw]
+  KeyError: the table has no column "hours" (it has: hours-worked). Did you mean "hours-worked"?
+    at student.py:2
+
+=== tbl-filter-arity (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: filter calls `keep` with one row, but `keep` takes 2 parameters.
+    at student.py:4
+
+=== tbl-filter-not-function (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: filter needs a function, but got the number 3. filter calls your function with one row at a time, so give it the function's name with no brackets after it - `int`, not `int()`.
+    at student.py:2
+
+=== tbl-filter-non-bool (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: the function given to filter has to return True or False, but the function given returned the number 1 for the 1st row. Did you mean to compare it with something?
+    at student.py:2
+
+=== tbl-order-by-string-bool (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: order_by's ascending has to be True or False, but it is the string "False".
+    at student.py:2
+
+=== tbl-order-by-typo (exit 1)
+stderr:
+  student.py [raw]
+  KeyError: the table has no column "b" (it has: a). Did you mean "a"?
+    at student.py:2
+
+=== tbl-select-string (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: select_columns takes a list of column names, like ["name"] - not one name on its own.
+    at student.py:2
+
+=== tbl-mean-text (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: mean needs a column of numbers, but column "mpg" holds the string "29" in the 1st row. Values read from a CSV are text until they are converted: transform_column("mpg", float) first.
+    at student.py:2
+
+=== tbl-load-missing (exit 1)
+stderr:
+  student.py [raw]
+  FileNotFoundError: There is no file called "car.csv" next to your program. Did you mean "cars.csv"?
+    at student.py:1
+
+=== tbl-load-missing-none (exit 1)
+stderr:
+  student.py [raw]
+  FileNotFoundError: There is no file called "data.csv" next to your program. Check the spelling, or pass an https:// address instead.
+    at student.py:1
+
+=== tbl-ok (exit 0)
+stdout:
+  26.666666666666668
+  name   mpg
+  -----  ---
+  vw     29
+  honda  33
+  ford   18
+  (3 rows)
+stderr:
+  student.py [raw]
+
+=== test-pass (exit 0)
+stderr:
+  student.py [raw]
+  tests: 1 passed
+    ok   test_double
+
+=== test-fail (exit 3)
+stderr:
+  student.py [raw]
+  tests: 0 passed, 1 failed
+    FAILED test_double (line 4)
+          assert 6 == 4
+          where 6 = double(2)
+
+=== test-float (exit 3)
+stderr:
+  student.py [raw]
+  tests: 0 passed, 1 failed
+    FAILED test_tax (line 4)
+          assert 0.9299999999999999 == 0.93
+          where 0.9299999999999999 = tax(3)
+          These differ only in the last few digits, which is how decimals work in any computer. Compare them with `pytest.approx`: `assert value == pytest.approx(0.93)`.
+
+=== test-print-shown (exit 3)
+stderr:
+  student.py [beginner]
+  tests: 0 passed, 1 errored
+    ERROR test_shout (line 5)
+          TypeMismatch: `shout` returns `None` on this line, but it should return a string (`str`).
+          at student.py:3
+          - Return a string (`str`) here, or annotate `shout` as returning `None`.
+          output:
+            about to call shout
+
+=== test-error-concat (exit 3)
+stderr:
+  student.py [raw]
+  tests: 0 passed, 1 errored
+    ERROR test_add (line 4)
+          TypeError: A list and a string cannot be added together.
+          at student.py:2
+          - `+` joins a list to another list. To add one item, put it inside brackets: `xs + [item]`.
+          - Or add it in place with `xs.append(item)`, which changes `xs` and returns nothing.
+
+=== test-error-typecheck (exit 3)
+stderr:
+  student.py [beginner]
+  tests: 0 passed, 1 errored
+    ERROR test_shout (line 5)
+          TypeMismatch: `shout` expects `word` to be a string (`str`), but got a whole number (`int`).
+          at student.py:6
+          - Check the value you passed for `word` on this line.
+          - If it should be a string (`str`), convert it with `str(...)`.
+          - Or, if `word` really should be a whole number (`int`), change its annotation in `shout` from `str` to `int`.
+
+=== test-error-name (exit 3)
+stderr:
+  student.py [raw]
+  tests: 0 passed, 1 errored
+    ERROR test_x (line 1)
+          NameError: Python doesn't know what `totl` means.
+          at student.py:2:12
+          - Check the spelling of `totl` (Python is case-sensitive).
+          - Make sure `totl` is defined before this line runs.
+          - If `totl` should be text, put it in quotes: `"totl"`.
+
+=== test-error-index (exit 3)
+stderr:
+  student.py [raw]
+  tests: 0 passed, 1 errored
+    ERROR test_third (line 4)
+          IndexError: `xs` has no item at that position.
+          at student.py:2
+          - `xs` has 2 items, numbered 0 to 1 - positions start at 0.
+
+=== test-error-key (exit 3)
+stderr:
+  student.py [raw]
+  tests: 0 passed, 1 errored
+    ERROR test_d (line 1)
+          KeyError: 'b'
+          at student.py:3
+
+=== test-error-recursion (exit 3)
+stderr:
+  student.py [raw]
+  tests: 0 passed, 1 errored
+    ERROR test_f (line 4)
+          RecursionError: `f` kept calling itself and never stopped.
+          at student.py:2
+          - Each call has to work on something smaller - the rest of the list, a smaller number.
+          - Check that there is a case that returns without calling again, and that it is reached.
+
+=== test-params (exit 3)
+stderr:
+  student.py [raw]
+  tests: 0 passed, 1 errored
+    ERROR test_pen_cost (line 4)
+          TypeError: `test_pen_cost` is a test, so it cannot take any parameters.
+          - Write `def test_pen_cost():` with nothing in the brackets, and make the values it needs inside it.
+
+=== test-async (exit 3)
+stderr:
+  student.py [raw]
+  tests: 0 passed, 1 errored
+    ERROR test_a (line 1)
+          async tests are not supported.
+
+=== test-class (exit 3)
+stderr:
+  student.py [raw]
+  tests: 0 passed, 1 failed
+    FAILED TestThings::test_one (line 2)
+          assert 1 == 2
+
+=== test-top-level-error (exit 1)
+stderr:
+  student.py [raw]
+  ZeroDivisionError: division by zero.
+    at student.py:1
+
+=== test-and-program-error (exit 1)
+stderr:
+  student.py [raw]
+  NameError: Python doesn't know what `undefined_name` means.
+    at student.py:7:14
+  
+  How to fix:
+    - Check the spelling of `undefined_name` (Python is case-sensitive).
+    - Make sure `undefined_name` is defined before this line runs.
+    - If `undefined_name` should be text, put it in quotes: `"undefined_name"`.
+
+=== test-skip (exit 0)
+stderr:
+  student.py [raw]
+  pytest already loaded from default channel
+  No new packages to load
+  tests: 0 passed, 1 skipped
+    SKIPPED test_s (line 3)
+          later
+
+=== test-approx (exit 0)
+stderr:
+  student.py [raw]
+  pytest already loaded from default channel
+  No new packages to load
+  tests: 1 passed
+    ok   test_a
+
+=== test-forward-ref (exit 0)
+stderr:
+  student.py [raw]
+  tests: 1 passed
+    ok   test_n
+
+=== ex-tests-first (exit 0)
+stderr:
+  student.py [beginner]
+  examplar: initials
+    Against correct implementations: your test passes.
+    Against buggy implementations: caught 1 of 3 - missed 2, 3.
+  examplar: longest
+    Against correct implementations: your test passes.
+    Against buggy implementations: caught 1 of 3 - missed 1, 2.
+
+=== ex-wrong-expectation (exit 0)
+stderr:
+  student.py [beginner]
+  examplar: initials
+    Against correct implementations: your test expects the wrong answer:
+      test_initials_lower
+    Against buggy implementations: waiting until all your tests of initials pass.
+  examplar: longest
+    Against correct implementations: your test passes.
+    Against buggy implementations: caught 1 of 3 - missed 1, 2.
+
+=== ex-test-raises (exit 0)
+stderr:
+  student.py [beginner]
+  examplar: initials
+    Against correct implementations: your test could not run here:
+      test_initials_from_file
+        FileNotFoundError: [Errno 44] No such file or directory: 'name.txt'
+    Your tests are checked on their own, so files next to your program are not available while that happens.
+    Against buggy implementations: waiting until all your tests of initials pass.
+  examplar: longest
+    Against correct implementations: your test passes.
+    Against buggy implementations: caught 1 of 3 - missed 1, 2.
+
+=== ex-thorough (exit 0)
+stderr:
+  student.py [beginner]
+  examplar: initials
+    Against correct implementations: your test passes.
+    Against buggy implementations: caught all 3.
+  examplar: longest
+    Against correct implementations: your test passes.
+    Against buggy implementations: caught all 3.
+
+=== ex-with-own-code (exit 0)
+stdout:
+  G.
+stderr:
+  student.py [beginner]
+  examplar: initials
+    Against correct implementations: your test passes.
+    Against buggy implementations: caught 1 of 3 - missed 2, 3.
+  examplar: longest
+    Against correct implementations: your test passes.
+    Against buggy implementations: caught 1 of 3 - missed 1, 2.
+  tests: 2 passed
+    ok   test_initials
+    ok   test_longest
+
+=== ex-no-tests (exit 0)
+stdout:
+  nothing yet
+stderr:
+  student.py [beginner]
+  examplar: initials
+    No tests yet.
+  examplar: longest
+    No tests yet.
+
+=== ex-plain-http (exit 0)
+stderr:
+  student.py [beginner]
+  Line 2: `http://example.com/hw.json` must use https (plain http is only allowed for localhost).
+  tests: 1 passed
+    ok   test_a
+
+=== ex-unreachable (exit 0)
+stderr:
+  student.py [beginner]
+  Could not load the known implementations from http://localhost:9/hw.json: could not reach http://localhost:9/hw.json (fetch failed), and nothing is cached
+  tests: 1 passed
+    ok   test_a
+
+=== ex-two-directives (exit 0)
+stderr:
+  student.py [beginner]
+  Line 3: there is more than one `#examplar` line (lines 2 and 3). Keep the one you want.
+  tests: 1 passed
+    ok   test_a
+
+=== input-ok (exit 0)
+stdout:
+  Name? hi Ada
+stderr:
+  student.py [raw]
+
+=== input-eof (exit 1)
+stdout:
+  A? B? 
+  (no newline at end)
+stderr:
+  student.py [raw]
+  EOFError: EOF when reading a line.
+    at student.py:2
+
+=== reactor-cli (exit 0)
+stderr:
+  student.py [raw]
+  [reactor needs the editor's interactions panel; not run here]
+
+=== reactor-not-started (exit 0)
+stderr:
+  student.py [raw]
+  note: a reactor was made but never started, so nothing ran. Add `.interact()` to start it.
+

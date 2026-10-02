@@ -1,5 +1,5 @@
 import type { Level } from "../level";
-import type { ParsedPythonError } from "../errors/pythonErrorParser";
+import type { PythonError } from "../errors/pythonError";
 
 export interface AnalysisFinding {
   /** Short id like "name-error" or "shadowing". */
@@ -44,14 +44,38 @@ export interface AnalyzerContext {
 }
 
 export interface RuntimeAnalyzerInput extends AnalyzerContext {
-  parsedError: ParsedPythonError;
+  error: PythonError;
 }
 
 /**
- * Analyzer that turns a runtime Python exception into a friendly finding.
- * Implemented today for NameError; later analyzers can layer on for other
- * runtime errors. The `level` on the input lets analyzers tailor the
- * explanation to features available at that level.
+ * A runtime finding about `input.error`, given only what this one says
+ * differently. Everything else - where it is, what Python called it - is
+ * the error's own.
+ */
+export function runtimeFindingFor(
+  input: RuntimeAnalyzerInput,
+  fields: Pick<AnalysisFinding, "id" | "headline" | "howToFix"> & Partial<AnalysisFinding>,
+): AnalysisFinding {
+  const { error, fileName, level } = input;
+  return {
+    errorType: error.errorType,
+    message: error.message,
+    fileName,
+    lineNumber: error.lineNumber,
+    column: error.column,
+    nameToken: error.nameToken,
+    severity: "error",
+    raw: error.traceback,
+    origin: "runtime",
+    level,
+    ...fields,
+  };
+}
+
+/**
+ * Turns the runtime errors it `handles` into a friendly finding, or returns
+ * null to leave one to the analyzers after it. The `level` on the input lets
+ * an analyzer tailor the explanation to what that level allows.
  */
 export interface RuntimeAnalyzer {
   /** Errors this analyzer handles (e.g. ["NameError"]). */

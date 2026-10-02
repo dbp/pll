@@ -4,6 +4,7 @@ import { createCliRuntime } from "./runtime";
 import { EXIT, runFile } from "./run";
 import { createLineReader } from "./stdin";
 import { CliView } from "./view";
+import { errorText } from "../common/errorText";
 
 declare const PLL_CLI_VERSION: string;
 
@@ -110,7 +111,7 @@ export async function main(argv: string[]): Promise<number> {
     try {
       return await runExamplar(runtime, view, argv.slice(at + 1));
     } catch (err) {
-      view.problem(`pll: ${err instanceof Error ? err.message : String(err)}`);
+      view.problem(`pll: ${errorText(err)}`);
       return EXIT.usage;
     } finally {
       runtime.dispose();
@@ -163,7 +164,7 @@ export async function main(argv: string[]): Promise<number> {
       stopRequested: () => interrupted,
     });
   } catch (err) {
-    view.problem(`pll: ${err instanceof Error ? err.message : String(err)}`);
+    view.problem(`pll: ${errorText(err)}`);
     return EXIT.usage;
   } finally {
     process.off("SIGINT", onSigint);

@@ -1,3 +1,4 @@
+import { punctuated } from "./wording";
 import type { BeginnerExplanation } from "./types";
 
 /**
@@ -108,7 +109,7 @@ export function explainSyntaxError(
   }
 
   return {
-    headline: punctuated(message),
+    headline: sentence(message),
     howToFix: [],
   };
 }
@@ -130,10 +131,7 @@ function keywordAssignedTo(line: string): string | null {
   return KEYWORDS.includes(assignment[1]) ? assignment[1] : null;
 }
 
-function punctuated(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "Python could not read this line.";
-  }
-  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+/** Python's message as a sentence - or, when it gave none, ours. */
+function sentence(text: string): string {
+  return text.trim() ? punctuated(text) : "Python could not read this line.";
 }

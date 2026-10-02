@@ -4,10 +4,11 @@ import type {
   ExamplarBundle,
   ExamplarImplResult,
   ExamplarRunResult,
-} from "../common/pyodideRunner";
+} from "../common/wire";
 import type { PythonRuntime } from "../common/types";
 import { EXIT } from "./run";
 import type { CliView } from "./view";
+import { errorText } from "../common/errorText";
 
 export const EXAMPLAR_USAGE = `pll examplar - author Examplar bundles
 
@@ -178,7 +179,7 @@ export async function runExamplar(
   try {
     sources = { wheats: await readWheats(dir), chaffs: await readChaffs(dir) };
   } catch (err) {
-    view.problem(`pll: ${err instanceof Error ? err.message : String(err)}`);
+    view.problem(`pll: ${errorText(err)}`);
     return EXIT.usage;
   }
 
@@ -234,7 +235,7 @@ async function verify(
   try {
     testSource = await fs.readFile(path.resolve(testsPath), "utf8");
   } catch (err) {
-    view.problem(`pll: cannot read ${testsPath}: ${err instanceof Error ? err.message : err}`);
+    view.problem(`pll: cannot read ${testsPath}: ${errorText(err)}`);
     return EXIT.usage;
   }
   // Load pytest so a failure shows `assert 'HI' == 'HI!'` rather than

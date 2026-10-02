@@ -1,37 +1,20 @@
 import * as vscode from "vscode";
-import { findRuntimeFinding } from "./analyzers/registry";
-import { levelHeaderFinding } from "./analyzers/levelHeaderFinding";
-import { enrichStaticFindings } from "./analyzers/static/registry";
+import { serializeFinding } from "./analyzers/findingLocation";
 import type { Diagnostics } from "./diagnostics";
-import { parsePythonError } from "./errors/pythonErrorParser";
 import {
   type InteractionsView,
   type Entry,
-  type ExamplarEntry,
   type PromptKind,
-  serializeFinding,
+  type ReactorPatch,
 } from "./interactionsView";
-import { DEFAULT_LEVEL, levelHasStaticChecks, parseLevel, type Level } from "./level";
-import type { RawStaticFinding } from "./pyodideRunner";
-import {
-  needsPackages,
-  type ExamplarRunResult,
-  type ReactorStepResult,
-} from "./pyodideRunner";
-import {
-  loadBundle,
-  parseExamplarDirective,
-  type BundleStore,
-} from "./examplarSource";
+import { DEFAULT_LEVEL, parseLevel, type Level } from "./level";
+import type { BundleStore } from "./examplarSource";
+import { ReactorController, type ProgramInfo, type ReactorEvent } from "./reactorController";
+import { runFilePlan, runInputPlan, type RunHost, type RunOutcome } from "./runPlan";
 import type { ExecutionEvent, PythonRuntime } from "./types";
-import {
-  unavailableSocket,
-  validateUniverseUrl,
-  type UniverseConnect,
-  type UniverseSocket,
-  type UniverseStatus,
-} from "./universeClient";
+import type { UniverseConnect } from "./universeClient";
 import { collectSiblingFiles, folderUri, writeBackSiblingFiles } from "./workspaceFiles";
+import { errorText } from "./errorText";
 
 /**
  * How long to wait after a Stop before telling the student it did not work.
@@ -40,15 +23,6 @@ import { collectSiblingFiles, folderUri, writeBackSiblingFiles } from "./workspa
  * stuck somewhere the interrupt cannot reach.
  */
 export const STOP_TIMEOUT_MS = 3000;
-
-/**
- * Said when a Stop arrives before any of the student's code has run: while
- * Python, packages or files load, or during the static checks. Nothing in
- * the run gets as far as raising `KeyboardInterrupt`, so the run checks for
- * the Stop itself (see `stoppedDuring`).
- */
-const STOPPED_BEFORE_START = "Stopped before the program started. Nothing was run.";
-const STOPPED_BEFORE_INPUT = "Stopped. Your input was not run.";
 
 /**
  * Most lines of program output rendered for a single run.
@@ -149,8 +123,8 @@ export class ReplSession implements vscode.Disposable {
   private stdinSession: Session | null = null;
   /** Sessions with a Stop in flight, so repeated presses don't stack banners. */
   private readonly stopPending = new Set<string>();
-  /** Reactors currently shown in the panel, keyed by the Python-side id. */
-  private readonly reactors = new Map<string, ReactorDriver>();
+  /** The reactors runs have shown, and their clocks and sockets. */
+  private readonly reactors: ReactorController<Session>;
   private stdinPending: {
     session: Session;
     prefix: string;
@@ -158,12 +132,22 @@ export class ReplSession implements vscode.Disposable {
   } | null = null;
 
   constructor(private readonly deps: ReplDeps) {
+    this.reactors = new ReactorController<Session>({
+      runtime: deps.runtime,
+      connectUniverse: deps.connectUniverse,
+      append: (session, entry) => {
+        this.flushStreams(session);
+        this.appendToSession(session, entry);
+      },
+      patch: (session, id, patch) => this.patchReactorEntry(session, id, patch),
+      enqueue: (task) => this.enqueue(task),
+    });
     deps.view.setHandlers({
       onSubmit: (code) => this.handleSubmit(code),
       onInterrupt: () => this.handleInterrupt(),
       onClearRequested: () => this.handleClearRequested(),
-      onReactorControl: (id, action, index) => this.handleReactorControl(id, action, index),
-      onReactorInput: (id, event) => this.handleReactorInput(id, event as ReactorEvent),
+      onReactorControl: (id, action, index) => this.reactors.control(id, action, index),
+      onReactorInput: (id, event) => this.reactors.input(id, event as ReactorEvent),
     });
     deps.runtime.setStdinHandler(() => this.provideStdin());
 
@@ -204,9 +188,7 @@ export class ReplSession implements vscode.Disposable {
   }
 
   dispose(): void {
-    for (const id of [...this.reactors.keys()]) {
-      this.disposeReactor(id, { fromPython: false });
-    }
+    this.reactors.disposeAll();
     this.editorWatcher.dispose();
   }
 
@@ -220,7 +202,7 @@ export class ReplSession implements vscode.Disposable {
       try {
         await this.deps.runtime.initialize();
       } catch (err) {
-        this.initError = errorMessage(err);
+        this.initError = errorText(err);
         return false;
       }
       this.initialized = true;
@@ -386,7 +368,7 @@ export class ReplSession implements vscode.Disposable {
 
   private clearSession(session: Session): void {
     // Cards are going away, so their clocks must stop with them.
-    this.disposeReactorsFor(session);
+    this.reactors.disposeAllFor(session);
     session.entries = [];
     if (this.isActive(session)) this.deps.view.clear();
   }
@@ -464,31 +446,6 @@ export class ReplSession implements vscode.Disposable {
           "KeyboardInterrupt. Reload the window (Developer: Reload Window) to recover.",
       });
     }, STOP_TIMEOUT_MS);
-  }
-
-  /**
-   * Whether Stop was pressed during this run, saying so if it was.
-   *
-   * Asked between the phases of a file run. A Stop lands in whichever
-   * phase is running, but what the student asked for is that nothing more
-   * runs - so a test that loops is the last thing to run, not the first of
-   * several, and the program after the tests does not start.
-   */
-  private stoppedDuring(session: Session, runSeq: number, text: string): boolean {
-    if (session.stopRequestedSeq !== runSeq) {
-      return false;
-    }
-    this.appendToSession(session, { kind: "banner", text });
-    return true;
-  }
-
-  /**
-   * Whether Stop was pressed during the session's current run. A step that
-   * fails then has usually failed *because* of the Stop - the interrupt
-   * landed in it - so its own error message would say the wrong thing.
-   */
-  private wasStopped(session: Session): boolean {
-    return session.stopRequestedSeq === session.runSeq;
   }
 
   private handleClearRequested(): void {
@@ -570,57 +527,15 @@ export class ReplSession implements vscode.Disposable {
    * copy changed files back. Internal failures land in the session's stderr
    * instead of propagating.
    */
-  private async execute(
-    session: Session,
-    code: string,
-    run: () => Promise<void>,
-  ): Promise<void> {
-    let workspaceReady = false;
-    try {
-      await this.ensurePackagesForRun(session, code);
-      this.setSessionBusy(session, true, "Loading files...");
-      workspaceReady = await this.syncWorkspaceIn(session);
-      this.setSessionBusy(session, true, "Running...");
-      await run();
-    } catch (err) {
-      if (this.wasStopped(session)) {
-        this.appendToSession(session, { kind: "banner", text: "Stopped." });
-      } else {
-        this.feedStream(session, "stderr", `Internal error: ${errorMessage(err)}\n`);
-      }
-    } finally {
-      this.flushStreams(session);
-      if (workspaceReady) {
-        await this.syncWorkspaceOut(session);
-      }
-      this.setSessionBusy(session, false);
-    }
-  }
-
   private async executeRepl(session: Session, code: string): Promise<void> {
     const level = session.lastLevel ?? DEFAULT_LEVEL;
     session.runSeq += 1;
     this.resetStreamBudget(session);
     this.setSessionBusy(session, true, "Starting...");
-    if (levelHasStaticChecks(level)) {
-      this.setSessionBusy(session, true, "Checking...");
-      if (await this.runStaticChecks(session, code, "<repl>", level, undefined)) {
-        this.flushStreams(session);
-        this.setSessionBusy(session, false);
-        return;
-      }
-    }
-    const runSeq = session.runSeq;
-    await this.execute(session, code, async () => {
-      if (this.stoppedDuring(session, runSeq, STOPPED_BEFORE_INPUT)) {
-        return;
-      }
-      await this.deps.runtime.replEval(
-        { code, sessionKey: session.key, level },
-        (event) =>
-          this.handleEvent(session, event, code, "<repl>", undefined, level),
-      );
-    });
+    const program = { source: code, fileName: "<repl>", level };
+    await this.runWithSession(session, program, undefined, (host) =>
+      runInputPlan(this.deps.runtime, host, { code, sessionKey: session.key, level }),
+    );
   }
 
   private async executeFile(
@@ -658,225 +573,86 @@ export class ReplSession implements vscode.Disposable {
     }
     // Re-post the status: until init finished it read "Loading Python...".
     this.setSessionBusy(session, true, "Starting...");
-    // Before the level's own checks, and at every level: a broken `#level`
-    // line means the file asked for checks and got none, so the level it
-    // fell back to is the symptom rather than the thing to consult. Only
-    // for a file - a prompt line is not a file and has no header.
-    const header = levelHeaderFinding(code, fileName, level);
-    if (header !== null) {
-      this.appendToSession(session, { kind: "finding", finding: serializeFinding(header) });
-      if (document) {
-        this.deps.diagnostics.setFinding(document.uri, document, header);
-      }
+    const program = { source: code, fileName, level };
+    await this.runWithSession(session, program, document, (host) =>
+      runFilePlan(this.deps.runtime, host, {
+        code,
+        fileName,
+        sessionKey: session.key,
+        level,
+        runTests: true,
+        bundles: this.deps.bundleStore,
+      }),
+    );
+  }
+
+  /**
+   * Run `plan` with this session as its host, and leave the session idle
+   * after, whatever happened.
+   */
+  private async runWithSession(
+    session: Session,
+    program: ProgramInfo,
+    document: vscode.TextDocument | undefined,
+    plan: (host: RunHost) => Promise<RunOutcome>,
+  ): Promise<void> {
+    try {
+      await plan(this.hostFor(session, program, document));
+    } catch (err) {
+      this.feedStream(session, "stderr", `Internal error: ${errorText(err)}\n`);
+    } finally {
       this.flushStreams(session);
       this.setSessionBusy(session, false);
-      return;
     }
-    if (levelHasStaticChecks(level)) {
-      this.setSessionBusy(session, true, "Checking...");
-      if (await this.runStaticChecks(session, code, fileName, level, document)) {
-        this.flushStreams(session);
-        this.setSessionBusy(session, false);
-        return;
-      }
-    }
+  }
 
-    const onEvent = (event: ExecutionEvent) =>
-      this.handleEvent(session, event, code, fileName, document, level);
-    // Resolved before `execute` so a fetch failure is reported once, and so
-    // the phase can run before the student's own tests.
-    const known = await this.loadExamplar(session, code);
-    await this.execute(session, code, async () => {
-      // Examplar runs whenever the directive is present - writing tests
-      // before any implementation of their own is the point, not a
-      // special case. What `ownCodeIsComplete` decides is only whether the
-      // *other* test phase makes sense: running a file's `test_*` against
-      // the code in that same file needs that code to exist, or every test
-      // reports a NameError under a perfectly good verdict. Nothing is said
-      // about its absence, because early on absence is the normal state.
-      const runSeq = session.runSeq;
-      // Pressed while something loaded - a bundle, libraries, the files
-      // next to this one: no Python was running to raise it, and the
-      // worker drops it before the next request.
-      if (this.stoppedDuring(session, runSeq, STOPPED_BEFORE_START)) {
-        return;
-      }
-      let ownCodeIsComplete = true;
-      if (known) {
-        ownCodeIsComplete = await this.runExamplarPhase(session, code, known);
-        // The phase unmounted the workspace; put the siblings back before
-        // anything of the student's runs.
-        await this.syncWorkspaceIn(session);
-      }
-      if (
-        this.stoppedDuring(
-          session,
-          runSeq,
-          "Stopped while checking your tests. Your own tests and the program were not run.",
-        )
-      ) {
-        return;
-      }
-      if (ownCodeIsComplete && (await this.shouldRunTests(session, code))) {
-        // Pressed while pytest loaded, which can take a while the first
-        // time: nothing of the student's has run yet.
-        if (
-          this.stoppedDuring(
-            session,
-            runSeq,
-            "Stopped before the tests started. The tests and the program were not run.",
-          )
-        ) {
-          return;
+  /** How a run plan shows things in this session's panel. */
+  private hostFor(
+    session: Session,
+    program: ProgramInfo,
+    document: vscode.TextDocument | undefined,
+  ): RunHost {
+    const runSeq = session.runSeq;
+    const entry = (item: Entry) => {
+      // Anything that is its own entry lands after the output before it.
+      this.flushStreams(session);
+      this.appendToSession(session, item);
+    };
+    return {
+      staticFindings: (findings) => {
+        if (document) {
+          // Also clears stale diagnostics when there are no findings.
+          this.deps.diagnostics.setFindings(document.uri, document, findings);
         }
-        this.setSessionBusy(session, true, "Running tests...");
-        let testsStopped = false;
-        await this.deps.runtime.runTests(
-          { code, fileName, sessionKey: session.key, level },
-          (event) => {
-            if (event.kind === "testReport" && event.stopped) {
-              testsStopped = true;
-            }
-            onEvent(event);
-          },
-        );
-        // A Stop pressed as the last test finished arrives after them all.
-        if (
-          this.stoppedDuring(
-            session,
-            runSeq,
-            testsStopped
-              ? "Stopped during the tests. The rest of the tests and the program were not run."
-              : "Stopped after the tests. The program was not run.",
-          )
-        ) {
-          return;
+        for (const finding of findings) {
+          entry({ kind: "finding", finding: serializeFinding(finding) });
         }
-      }
-      // Pressed while the file was checked for tests, and there were none
-      // to run.
-      if (this.stoppedDuring(session, runSeq, "Stopped before the program started.")) {
-        return;
-      }
-      this.setSessionBusy(session, true, "Running...");
-      this.stdinSession = session;
-      try {
-        await this.deps.runtime.runFile(
-          { code, fileName, sessionKey: session.key, level },
-          onEvent,
-        );
-      } finally {
-        this.stdinSession = null;
-        this.cancelStdin();
-      }
-    });
-  }
-
-  /**
-   * True if the file has `test_*` functions *and* pytest loaded. Both checks
-   * are non-fatal: a failure here just means the file runs without tests.
-   */
-  private async shouldRunTests(session: Session, code: string): Promise<boolean> {
-    try {
-      if (!(await this.deps.runtime.hasTests(code))) {
-        return false;
-      }
-    } catch (err) {
-      if (!this.wasStopped(session)) {
-        this.feedStream(session, "stderr", `Could not check for tests: ${errorMessage(err)}\n`);
-      }
-      return false;
-    }
-    this.setSessionBusy(session, true, "Loading pytest...");
-    try {
-      await this.deps.runtime.ensurePytest();
-      return true;
-    } catch (err) {
-      if (!this.wasStopped(session)) {
-        this.appendToSession(session, {
-          kind: "banner",
-          text: `Could not load pytest (${errorMessage(err)}). Skipping tests.`,
-        });
-      }
-      return false;
-    }
-  }
-
-  /**
-   * Snapshot sibling files into Pyodide so `open` / `read_csv` see the
-   * folder next to the running script. Always remounts (even if empty)
-   * so a previous file's leftovers do not leak into this run.
-   */
-  private async syncWorkspaceIn(session: Session): Promise<boolean> {
-    try {
-      const files = folderUri(session.documentUri)
-        ? await collectSiblingFiles(session.documentUri)
-        : [];
-      await this.deps.runtime.mountWorkspaceFiles(files);
-      return true;
-    } catch (err) {
-      this.appendToSession(session, {
-        kind: "banner",
-        text:
-          `Could not load files next to this script (${errorMessage(err)}). ` +
-          "open() may fail.",
-      });
-      return false;
-    }
-  }
-
-  /**
-   * Copy data files Python created or changed back into the script's folder.
-   */
-  private async syncWorkspaceOut(session: Session): Promise<void> {
-    if (!folderUri(session.documentUri)) {
-      return;
-    }
-    try {
-      const changed = await this.deps.runtime.collectWorkspaceFiles();
-      if (changed.length === 0) {
-        return;
-      }
-      const written = await writeBackSiblingFiles(session.documentUri, changed);
-      if (written.length > 0) {
-        this.appendToSession(session, {
-          kind: "banner",
-          text: `Saved ${written.join(", ")} next to this file.`,
-        });
-      }
-    } catch (err) {
-      this.appendToSession(session, {
-        kind: "banner",
-        text: `Could not save files next to this script (${errorMessage(err)}).`,
-      });
-    }
-  }
-
-  /**
-   * Load any third-party packages the code imports (pandas, numpy, ...) before
-   * running it. Only reaches the runtime when the code actually has an import,
-   * so plain REPL lines don't pay a round-trip. Non-fatal: if a load fails, the
-   * import itself surfaces the error when the code runs.
-   */
-  private async ensurePackagesForRun(session: Session, code: string): Promise<void> {
-    if (!needsPackages(code)) {
-      return;
-    }
-    this.setSessionBusy(session, true, "Loading libraries...");
-    try {
-      await this.deps.runtime.ensurePackages(code);
-    } catch (err) {
-      const message = errorMessage(err);
-      // A SyntaxError here just means the file doesn't parse; the run itself
-      // will surface it. Only flag genuine load/network failures - and not
-      // one caused by a Stop, which the run reports as a Stop.
-      if (!/syntaxerror|invalid syntax/i.test(message) && !this.wasStopped(session)) {
-        this.appendToSession(session, {
-          kind: "banner",
-          text: `Could not load libraries (${message}). Continuing; imports may fail.`,
-        });
-      }
-    }
+      },
+      runtimeFinding: (finding) => {
+        entry({ kind: "finding", finding: serializeFinding(finding) });
+        if (document) {
+          this.deps.diagnostics.setFinding(document.uri, document, finding);
+        }
+      },
+      event: (event) => this.handleEvent(session, event, program),
+      say: (text) => entry({ kind: "banner", text }),
+      status: (text) => this.setSessionBusy(session, true, text),
+      stopRequested: () => session.stopRequestedSeq === runSeq,
+      siblingFiles: async () =>
+        folderUri(session.documentUri) ? collectSiblingFiles(session.documentUri) : [],
+      writeBack: async (files) =>
+        folderUri(session.documentUri) ? writeBackSiblingFiles(session.documentUri, files) : [],
+      examplarCard: (card) => entry(card),
+      aroundProgram: async (run) => {
+        this.stdinSession = session;
+        try {
+          await run();
+        } finally {
+          this.stdinSession = null;
+          this.cancelStdin();
+        }
+      },
+    };
   }
 
   /**
@@ -927,80 +703,14 @@ export class ReplSession implements vscode.Disposable {
     this.fulfillStdin(null);
   }
 
-  /**
-   * Run the level's static checks. Returns true when findings blocked the
-   * run. For a file run, `document` is set and the findings also become
-   * editor diagnostics; prompt snippets keep their findings in the
-   * interactions view only, since snippet lines are not file lines (they are
-   * analyzed with `sessionKey` so names bound earlier in the session count as
-   * existing bindings).
-   */
-  private async runStaticChecks(
-    session: Session,
-    code: string,
-    fileName: string,
-    level: Level,
-    document: vscode.TextDocument | undefined,
-  ): Promise<boolean> {
-    let raw: RawStaticFinding[];
-    try {
-      raw = await this.deps.runtime.staticAnalyze({
-        code,
-        fileName,
-        level,
-        ...(document ? {} : { sessionKey: session.key }),
-      });
-    } catch (err) {
-      // Interrupted by a Stop: the run ends here, for that reason.
-      if (
-        this.stoppedDuring(
-          session,
-          session.runSeq,
-          document ? STOPPED_BEFORE_START : STOPPED_BEFORE_INPUT,
-        )
-      ) {
-        return true;
-      }
-      this.feedStream(session, "stderr", `Static analysis failed: ${errorMessage(err)}\n`);
-      return false;
-    }
-    const findings = enrichStaticFindings(raw, level, fileName);
-    if (document) {
-      // Also clears stale diagnostics when there are no findings.
-      this.deps.diagnostics.setFindings(document.uri, document, findings);
-    }
-    if (findings.length === 0) {
-      return false;
-    }
-    for (const finding of findings) {
-      this.appendToSession(session, {
-        kind: "finding",
-        finding: serializeFinding(finding),
-      });
-    }
-    // A warning is something worth saying about code that still works -
-    // a method named but not called, a test nothing runs - so it is shown
-    // and the program goes ahead. Only an error stops the run.
-    if (!findings.some((finding) => finding.severity === "error")) {
-      return false;
-    }
-    this.appendToSession(session, {
-      kind: "banner",
-      text: `Static analysis found issues. ${document ? "File" : "Input"} not executed.`,
-    });
-    return true;
-  }
-
   /* -------- Event handling -------- */
 
-  private handleEvent(
-    session: Session,
-    event: ExecutionEvent,
-    source: string,
-    fileName: string,
-    document: vscode.TextDocument | undefined,
-    level: Level,
-  ): void {
+  /**
+   * Show one event of a run. Errors never get here - the run plan turns
+   * them into findings - and test reports arrive already explained.
+   */
+  private handleEvent(session: Session, event: ExecutionEvent, program: ProgramInfo): void {
+    const { fileName } = program;
     if (event.kind === "stdout" || event.kind === "stderr") {
       this.feedStream(session, event.kind, event.text);
       return;
@@ -1015,487 +725,44 @@ export class ReplSession implements vscode.Disposable {
         }
         break;
       case "image":
-        this.appendToSession(session, {
-          kind: "image",
-          svg: event.svg,
-          width: event.width,
-          height: event.height,
-          source: event.source ?? fileName,
-        });
-        break;
       case "table":
-        this.appendToSession(session, {
-          kind: "table",
-          columns: event.columns,
-          rows: event.rows,
-          rowCount: event.rowCount,
-          shownCount: event.shownCount,
-          truncated: event.truncated,
-          source: event.source ?? fileName,
-        });
+        this.appendToSession(session, { ...event, source: event.source ?? fileName });
         break;
-      case "error": {
-        const traceback = event.traceback || `${event.errorType}: ${event.message}`;
-        const parsed = parsePythonError(traceback, source);
-        // `!= null` rather than `!== null`: these arrive from a Python dict
-        // and a missing key is `undefined`, which would otherwise be copied
-        // across as if it were a location.
-        if (parsed.lineNumber === null && event.lineNumber != null) {
-          parsed.lineNumber = event.lineNumber;
-        }
-        if (parsed.column === null && event.column != null) {
-          parsed.column = event.column;
-        }
-        if (parsed.fileName === null && event.fileName) {
-          parsed.fileName = event.fileName;
-        }
-        const finding = findRuntimeFinding(source, fileName, level, parsed);
-        if (finding) {
-          this.appendToSession(session, {
-            kind: "finding",
-            finding: serializeFinding(finding),
-          });
-          if (document) {
-            this.deps.diagnostics.setFinding(document.uri, document, finding);
-          }
-        } else {
-          this.appendToSession(session, {
-            kind: "rawError",
-            errorType: event.errorType,
-            message: event.message,
-            traceback,
-          });
-        }
-        break;
-      }
-      case "reactor":
+      case "reactor": {
+        // The card is the event, plus the state the host drives from here.
+        const { tickRate: _tickRate, ...shown } = event;
         this.appendToSession(session, {
-          kind: "reactor",
-          id: event.id,
-          title: event.title,
-          frame: event.frame,
-          index: event.index,
-          length: event.length,
-          atEnd: event.atEnd,
-          stopped: event.stopped,
-          valueRepr: event.valueRepr,
-          ticking: event.ticking,
-          wantsKeys: event.wantsKeys,
-          wantsMouse: event.wantsMouse,
+          ...shown,
           playing: event.ticking && !event.stopped,
-          register: event.register,
           connection: event.register ? "connecting" : "none",
         });
-        this.startReactor(session, event);
+        this.reactors.start(session, event, program);
         break;
+      }
       case "done":
         break;
       case "testReport":
-        this.appendToSession(session, {
-          kind: "testReport",
-          fileName: event.fileName,
-          passed: event.passed,
-          failed: event.failed,
-          skipped: event.skipped,
-          errors: event.errors,
-          tests: event.tests,
-          ...(event.stopped ? { stopped: true, stoppedIn: event.stoppedIn ?? null } : {}),
-        });
+        this.appendToSession(session, event);
         break;
     }
   }
 
   /* -------- Examplar -------- */
 
-  /**
-   * Resolve `#examplar <url>` into a bundle, or nothing.
-   *
-   * Every failure here is a banner and a `null`: a missing or unreachable
-   * bundle must not stop the student's file from running, which is the same
-   * fail-open stance as the type checker and the static analyzer.
-   */
-  private async loadExamplar(
-    session: Session,
-    code: string,
-  ): Promise<{ url: string; json: string; cached: boolean } | null> {
-    const directive = parseExamplarDirective(code);
-    if (directive.kind === "none") {
-      return null;
-    }
-    if (directive.kind === "error") {
-      this.appendToSession(session, {
-        kind: "banner",
-        text: `Line ${directive.line}: ${directive.message}`,
-      });
-      return null;
-    }
-    this.setSessionBusy(session, true, "Loading implementations...");
-    const load = await loadBundle(directive.url, this.deps.bundleStore);
-    if (load.note) {
-      this.appendToSession(session, {
-        kind: "banner",
-        text: `Known implementations: ${load.note}`,
-      });
-    }
-    if (!load.json) {
-      this.appendToSession(session, {
-        kind: "banner",
-        text: `Could not load the known implementations from ${directive.url}: ${load.error}`,
-      });
-      return null;
-    }
-    return { url: directive.url, json: load.json, cached: load.fromCache };
-  }
-
-  /**
-   * Run the student's tests against every wheat and chaff.
-   *
-   * The workspace is **unmounted** first. A bundle is code fetched from a
-   * URL, and although a course is trusted there is no reason for it to be
-   * able to read - or rewrite - the student's data files while it runs.
-   * `mountWorkspaceFiles([])` is the unmount: it replaces whatever was
-   * mounted with nothing. The caller restores the siblings afterwards.
-   *
-   * Returns whether the student has written every function the bundle
-   * provides, which decides if running their tests against their *own* code
-   * makes sense yet.
-   */
-  private async runExamplarPhase(
-    session: Session,
-    code: string,
-    bundle: { url: string; json: string; cached: boolean },
-  ): Promise<boolean> {
-    this.setSessionBusy(session, true, "Checking your tests...");
-    try {
-      await this.deps.runtime.mountWorkspaceFiles([]);
-    } catch {
-      /* nothing mounted is the state we wanted anyway */
-    }
-    // Not for the messages - the card deliberately shows none - but because
-    // a student's own tests may `import pytest` for `pytest.approx`, which
-    // the README recommends for comparing floats. Without it that import
-    // raises, the definition is skipped, and every test using it reports as
-    // one that could not run.
-    try {
-      await this.deps.runtime.ensurePytest();
-    } catch {
-      /* float comparisons may misreport; the rest of the verdict stands */
-    }
-    if (this.wasStopped(session)) {
-      return false;
-    }
-
-    let result: ExamplarRunResult;
-    try {
-      result = await this.deps.runtime.examplarRun(code, bundle.json);
-    } catch (err) {
-      // Stopped, which surfaces from the worker as a Python traceback. The
-      // card would show that as the reason the check failed; the banner the
-      // caller adds says what actually happened.
-      if (this.wasStopped(session)) {
-        return false;
-      }
-      this.appendToSession(session, {
-        kind: "examplar",
-        card: "failed",
-        url: bundle.url,
-        cached: bundle.cached,
-        problem: errorMessage(err),
-      });
-      return false;
-    }
-    for (const entry of buildExamplarEntries(bundle, result)) {
-      this.appendToSession(session, entry);
-    }
-    const provides = result.provides ?? [];
-    const defines = result.wheats?.[0]?.student_defines ?? [];
-    return provides.length > 0 && provides.every((name) => defines.includes(name));
-  }
-
   /* -------- Reactors -------- */
 
-  /**
-   * Take ownership of a reactor the worker just showed.
-   *
-   * The clock lives here rather than in Python: a loop in the worker would
-   * hold it (and the exec chain) for the whole animation, which is the
-   * failure `Stop` exists for. Each tick is one short request instead, so
-   * the prompt stays usable while something is animating.
-   */
-  private startReactor(session: Session, event: Extract<ExecutionEvent, { kind: "reactor" }>): void {
-    const driver: ReactorDriver = {
-      id: event.id,
-      session,
-      tickRate: Math.max(0.01, event.tickRate),
-      ticking: event.ticking,
-      playing: false,
-      stopped: event.stopped,
-      timer: null,
-      inFlight: false,
-      socket: null,
-      status: "none",
-      backlog: [],
-    };
-    this.reactors.set(event.id, driver);
-    if (event.register) {
-      this.connectUniverse(driver, event.register);
-    }
-    if (event.ticking && !event.stopped) {
-      this.playReactor(driver);
-    }
-  }
-
-  /* -------- Universe (world side only) -------- */
-
-  private connectUniverse(driver: ReactorDriver, url: string): void {
-    const problem = validateUniverseUrl(url);
-    if (problem) {
-      this.setUniverseStatus(driver, "error", problem);
-      return;
-    }
-    this.setUniverseStatus(driver, "connecting", url);
-    const handlers = {
-      onOpen: () => {
-        this.setUniverseStatus(driver, "open", url);
-        const queued = driver.backlog;
-        driver.backlog = [];
-        for (const json of queued) {
-          driver.socket?.send(json);
-        }
-      },
-      onMessage: (json: string) => {
-        let message: unknown;
-        try {
-          message = JSON.parse(json);
-        } catch {
-          this.setUniverseStatus(
-            driver,
-            "error",
-            "the server sent something that is not JSON",
-          );
-          return;
-        }
-        void this.reactorEvent(driver, { kind: "receive", message });
-      },
-      onClose: (reason: string) => this.setUniverseStatus(driver, "closed", reason),
-      onError: (message: string) => this.setUniverseStatus(driver, "error", message),
-    };
-    try {
-      driver.socket = this.deps.connectUniverse(url, handlers);
-    } catch (err) {
-      driver.socket = unavailableSocket(handlers, errorMessage(err));
-    }
-  }
-
-  private setUniverseStatus(
-    driver: ReactorDriver,
-    status: UniverseStatus,
-    detail: string,
-  ): void {
-    driver.status = status;
-    this.patchReactor(driver, { connection: status, connectionDetail: detail });
-    if (status === "error") {
-      this.appendToSession(driver.session, {
-        kind: "banner",
-        text: `Universe server: ${detail}`,
-      });
-    }
-  }
-
-  private sendUniverse(driver: ReactorDriver, messages: string[]): void {
-    if (messages.length === 0) return;
-    if (!driver.socket) {
-      this.setUniverseStatus(
-        driver,
-        "error",
-        "this reactor sent a message with package(...) but has no `register` address",
-      );
-      return;
-    }
-    if (driver.status === "open") {
-      for (const json of messages) {
-        driver.socket.send(json);
-      }
-      return;
-    }
-    // Still connecting: hold them, but not forever.
-    for (const json of messages) {
-      if (driver.backlog.length < MAX_UNIVERSE_BACKLOG) {
-        driver.backlog.push(json);
-      }
-    }
-  }
-
-  private playReactor(driver: ReactorDriver): void {
-    if (driver.playing || driver.stopped || !driver.ticking) return;
-    driver.playing = true;
-    driver.timer = setInterval(
-      () => void this.reactorEvent(driver, { kind: "tick" }),
-      driver.tickRate * 1000,
-    );
-    this.patchReactor(driver, { playing: true });
-  }
-
-  private pauseReactor(driver: ReactorDriver): void {
-    if (driver.timer !== null) {
-      clearInterval(driver.timer);
-      driver.timer = null;
-    }
-    if (!driver.playing) return;
-    driver.playing = false;
-    this.patchReactor(driver, { playing: false });
-  }
-
-  /**
-   * Apply one event. Frames are *dropped* rather than queued while a step is
-   * in flight: a slow `to_draw` should make the animation choppy, not build
-   * a backlog that outlives the program.
-   */
-  private async reactorEvent(driver: ReactorDriver, event: ReactorEvent): Promise<void> {
-    if (driver.inFlight || !this.reactors.has(driver.id)) return;
-    driver.inFlight = true;
-    try {
-      const result = await this.enqueue(async () => {
-        const reply = await this.deps.runtime.reactorStep(driver.id, JSON.stringify(event));
-        this.applyReactorResult(driver, reply);
-      });
-      return result;
-    } catch (err) {
-      this.pauseReactor(driver);
-      this.feedStream(driver.session, "stderr", `Reactor error: ${errorMessage(err)}\n`);
-      this.flushStreams(driver.session);
-    } finally {
-      driver.inFlight = false;
-    }
-  }
-
-  private applyReactorResult(driver: ReactorDriver, result: ReactorStepResult): void {
-    if (result.gone) {
-      this.disposeReactor(driver.id, { fromPython: false });
-      return;
-    }
-    if (!result.ok) {
-      // A handler raised. Stop the clock and show it the same way any other
-      // runtime error is shown, so the student sees where it happened.
-      this.pauseReactor(driver);
-      this.appendToSession(driver.session, {
-        kind: "rawError",
-        errorType: result.error_type ?? "Error",
-        message: result.error_message ?? "",
-        traceback: result.traceback || `${result.error_type}: ${result.error_message}`,
-      });
-      return;
-    }
-    this.patchReactor(driver, {
-      frame: result.frame,
-      index: result.index,
-      length: result.length,
-      atEnd: result.at_end,
-      stopped: result.stopped,
-      valueRepr: result.value_repr,
-    });
-    if (result.messages && result.messages.length > 0) {
-      this.sendUniverse(driver, result.messages);
-    }
-    // Whether the frame on screen is a stopped one - not whether the
-    // reactor ever stopped. Going back from the stopped frame is going back
-    // to one that can go on, and Play has to be able to: a sticky flag left
-    // Play enabled and doing nothing, while the step buttons still worked.
-    driver.stopped = !!result.stopped;
-    if (driver.stopped) {
-      this.pauseReactor(driver);
-    }
-  }
-
-  /**
-   * Update a reactor's entry, and the view if that session is the one on
-   * screen. Same split as `appendToSession`: the session owns the state, the
-   * view is a projection of whichever session is visible.
-   */
-  private patchReactor(driver: ReactorDriver, patch: ReactorPatch): void {
-    for (const entry of driver.session.entries) {
-      if (entry.kind === "reactor" && entry.id === driver.id) {
+  /** Update a reactor's card in `session`, and in the view if it is showing. */
+  private patchReactorEntry(session: Session, id: string, patch: ReactorPatch): void {
+    // Same split as `appendToSession`: the session owns the state, the
+    // view is a projection of whichever session is visible.
+    for (const entry of session.entries) {
+      if (entry.kind === "reactor" && entry.id === id) {
         Object.assign(entry, patch);
         break;
       }
     }
-    if (this.isActive(driver.session)) {
-      this.deps.view.updateReactor(driver.id, patch);
-    }
-  }
-
-  /** From the panel: play / pause / step / back / reset / scrub. */
-  private handleReactorControl(id: string, action: string, index?: number): void {
-    const driver = this.reactors.get(id);
-    if (!driver) return;
-    if (action === "play") {
-      this.playReactor(driver);
-      return;
-    }
-    if (action === "pause") {
-      this.pauseReactor(driver);
-      return;
-    }
-    if (action === "step") {
-      this.pauseReactor(driver);
-      void this.reactorEvent(driver, { kind: "tick" });
-      return;
-    }
-    if (action === "back" || action === "reset" || action === "seek") {
-      this.pauseReactor(driver);
-      void this.seekReactor(driver, action, index);
-    }
-  }
-
-  private async seekReactor(
-    driver: ReactorDriver,
-    action: string,
-    index: number | undefined,
-  ): Promise<void> {
-    const target =
-      action === "reset" ? 0 : action === "seek" ? (index ?? 0) : (index ?? 0);
-    try {
-      await this.enqueue(async () => {
-        const reply = await this.deps.runtime.reactorSeek(driver.id, target);
-        this.applyReactorResult(driver, reply);
-      });
-    } catch (err) {
-      this.feedStream(driver.session, "stderr", `Reactor error: ${errorMessage(err)}\n`);
-      this.flushStreams(driver.session);
-    }
-  }
-
-  /** From the panel: a key press or mouse event over a reactor's picture. */
-  private handleReactorInput(id: string, event: ReactorEvent): void {
-    const driver = this.reactors.get(id);
-    if (!driver || driver.stopped) return;
-    void this.reactorEvent(driver, event);
-  }
-
-  private disposeReactor(id: string, opts: { fromPython: boolean }): void {
-    const driver = this.reactors.get(id);
-    if (!driver) return;
-    this.pauseReactor(driver);
-    if (driver.socket) {
-      try {
-        driver.socket.close();
-      } catch {
-        /* already gone */
-      }
-      driver.socket = null;
-    }
-    this.reactors.delete(id);
-    if (opts.fromPython) {
-      void this.deps.runtime.reactorDispose(id).catch(() => undefined);
-    }
-  }
-
-  /** Stop and forget every reactor belonging to `session`. */
-  private disposeReactorsFor(session: Session): void {
-    for (const [id, driver] of [...this.reactors]) {
-      if (driver.session === session) {
-        this.disposeReactor(id, { fromPython: true });
-      }
+    if (this.isActive(session)) {
+      this.deps.view.updateReactor(id, patch);
     }
   }
 
@@ -1560,165 +827,6 @@ export class ReplSession implements vscode.Disposable {
     session.streamLines += 1;
     this.appendToSession(session, { kind, text });
   }
-}
-
-/** An event to feed a reactor; mirrors `Reactor.react` in reactorLib.py. */
-type ReactorEvent =
-  | { kind: "tick" }
-  | { kind: "key"; key: string }
-  | { kind: "mouse"; x: number; y: number; event: string }
-  | { kind: "receive"; message: unknown };
-
-interface ReactorPatch {
-  connection?: UniverseStatus;
-  connectionDetail?: string;
-  frame?: { data: string; width: number; height: number };
-  index?: number;
-  length?: number;
-  atEnd?: boolean;
-  stopped?: boolean;
-  valueRepr?: string;
-  playing?: boolean;
-}
-
-/**
- * Most messages a world may queue before its socket opens. A world that
- * sends on every tick to a server that never answers would otherwise grow
- * this without bound.
- */
-const MAX_UNIVERSE_BACKLOG = 100;
-
-interface ReactorDriver {
-  id: string;
-  session: Session;
-  socket: UniverseSocket | null;
-  status: UniverseStatus;
-  /** Sent once the socket opens. */
-  backlog: string[];
-  /** Seconds between ticks, floored so a typo cannot busy-loop the host. */
-  tickRate: number;
-  ticking: boolean;
-  playing: boolean;
-  stopped: boolean;
-  timer: ReturnType<typeof setInterval> | null;
-  inFlight: boolean;
-}
-
-/**
- * Turn a raw Examplar result into cards - one per provided function.
- *
- * Two summarising decisions live here. A test that fails on *any* correct
- * implementation is reported once: the student needs to know the test is
- * wrong, not which of several equivalent references disagreed. And a buggy
- * implementation contributes only its id, because its failure messages
- * describe the bug it plants.
- */
-function buildExamplarEntries(
-  bundle: { url: string; json: string; cached: boolean },
-  result: ExamplarRunResult,
-): ExamplarEntry[] {
-  const base = {
-    kind: "examplar" as const,
-    url: bundle.url,
-    cached: bundle.cached,
-  };
-  const failed = (problem: string): ExamplarEntry[] => [
-    { ...base, card: "failed", problem },
-  ];
-  if (!result.ok) {
-    return failed(result.error ?? "the known implementations could not be run");
-  }
-  const wheats = result.wheats ?? [];
-  const unloadable = wheats.find((w) => !w.loaded);
-  if (unloadable) {
-    // Only the bundle can fail this way, so this is a message for whoever
-    // built it rather than for the student.
-    return failed(
-      `a known correct implementation could not be loaded ` +
-        `(${unloadable.error_type}: ${unloadable.error_message}). ` +
-        `The bundle may need rebuilding.`,
-    );
-  }
-
-  // Two different verdicts, because they are two different lessons. A test
-  // that *fails* an assertion on a correct implementation expects the wrong
-  // answer. A test that *raises* did not get far enough to have an opinion -
-  // most often because the phase runs with the workspace unmounted, so a
-  // file it opens is not there. Saying "you expect the wrong answer" over a
-  // `FileNotFoundError` would be an accusation, and a false one.
-  const disagreed = new Set<string>();
-  const raised = new Map<string, string>();
-  for (const wheat of wheats) {
-    for (const [test, outcome] of Object.entries(wheat.tests)) {
-      if (outcome.outcome === "fail") {
-        disagreed.add(test);
-      } else if (outcome.outcome === "error" && !raised.has(test)) {
-        raised.set(test, outcome.message ?? outcome.outcome);
-      }
-    }
-  }
-  // A test that disagrees with one reference and raises on another is a
-  // disagreement: that is the half the student can act on.
-  for (const test of disagreed) {
-    raised.delete(test);
-  }
-
-  const attribution = result.attribution ?? {};
-  const chaffs = result.chaffs ?? [];
-  const skipped = new Set(result.chaffs_skipped ?? []);
-  return (result.provides ?? []).map((name) => {
-    const tests = Object.entries(attribution)
-      .filter(([, names]) => names.includes(name))
-      .map(([test]) => test);
-    const failures = tests.filter((test) => disagreed.has(test));
-    const errors = tests
-      .filter((test) => raised.has(test))
-      .map((test) => ({ test, message: raised.get(test) as string }));
-    const mine = chaffs.filter((c) => c.targets === name);
-    const missed = mine
-      .filter((c) => c.loaded && Object.values(c.tests).every((t) => t.outcome === "pass"))
-      .map((c) => c.id);
-    return {
-      ...base,
-      card: "function" as const,
-      name,
-      testCount: tests.length,
-      allPass: tests.length > 0 && failures.length === 0 && errors.length === 0,
-      failures,
-      errors,
-      hint: errors.some((e) => isFileAccessError(e.message)) ? UNMOUNTED_HINT : undefined,
-      total: mine.length,
-      caught: mine.length - missed.length,
-      missed,
-      // The primitive gates phase two per function, so `mine` is normally
-      // already empty here. Deciding again from this function's own verdict
-      // rather than trusting the flag keeps a coverage number from ever
-      // appearing beside a test that did not pass.
-      pending: failures.length > 0 || errors.length > 0 || skipped.has(name),
-    };
-  });
-}
-
-/**
- * Why a test that opens a file cannot run during the phase.
- *
- * Shown only when a test actually tripped over it, because out of that
- * context it is a confusing thing to read: the file plainly *is* next to
- * their program, and it works everywhere else.
- */
-const UNMOUNTED_HINT =
-  "Your tests are checked on their own, so files next to your program are not " +
-  "available while that happens.";
-
-/** True for the errors Python raises when a path is not there to be opened. */
-function isFileAccessError(message: string): boolean {
-  return /^(FileNotFoundError|IsADirectoryError|NotADirectoryError|PermissionError):/.test(
-    message,
-  );
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 function displayName(uri: vscode.Uri): string {

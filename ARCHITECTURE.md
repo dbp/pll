@@ -49,8 +49,11 @@ src/
     ├── memfsWorkspace.ts          Pyodide MEMFS mount / collect helpers
     ├── commands.ts                Run File / Show Interactions / Clear / Stop
     ├── editorClipboard.ts         Palette PLL: Editor Copy/Cut/Paste (no keys)
+    ├── runPlan.ts                 The steps of a run, for every host
     ├── replSession.ts             Drives the interactions view: init,
-    │                              REPL multi-line buffer, file runs, exec chain
+    │                              REPL multi-line buffer, exec chain, and the
+    │                              panel's side of a run plan
+    ├── reactorController.ts       Reactors' clocks, card controls, universe sockets
     ├── interactionsView.ts        WebviewView provider for the integrated
     │                              text + image stream + input row
     ├── newFileLevel.ts            Seeds new .py files with a #level line
@@ -59,7 +62,9 @@ src/
     │                              each level checks
     ├── errorFormatter.ts          Plain-text rendering for diagnostic tooltips
     ├── diagnostics.ts             VS Code DiagnosticCollection (multi-finding)
-    ├── pyodideRunner.ts           Bootstrap loader + types
+    ├── pythonSources.ts           The Python run in Pyodide, inlined as strings
+    ├── packages.ts                Which packages a program needs, from its text
+    ├── wire.ts                    The shapes of what the Python side returns
     ├── pythonVendor.ts            Bundled typeguard / typing_extensions wheels
     ├── deliverResult.ts           Translates Python results to ExecutionEvents
     ├── pyodideBootstrap.py        Real Python: run / repl-eval / tests / static analyzer
@@ -82,8 +87,12 @@ src/
     │       ├── disallowedKeywordExplainer.ts    `global` / `nonlocal`
     │       └── registry.ts        Wraps Python-side raw findings
     └── errors/
-        ├── pythonErrorParser.ts
+        ├── pythonError.ts         An exception as Python describes it: frames, facts
+        ├── libraryFacts.ts        What the explanations know about PLL's library
+        ├── sourceFacts.ts         What they read from the student's file
         ├── nameErrorExplainer.ts
+        ├── syntaxExplainer.ts
+        ├── stockMessageExplainer.ts  Python's wording -> beginner wording
         └── typeCheckExplainer.ts  typeguard wording -> beginner wording
 
 vendor/
@@ -138,11 +147,16 @@ behaves exactly as CPython would; every difference has to be opted into by
 naming a level. It is also the answer to "how do I turn the checks off",
 which is why no setting does that.
 
-Three predicates in `level.ts` are the only places these rules live -
-`levelHasStaticChecks`, `levelHasTypeChecking`, `levelRejectsBoolAsNumber` -
-and `_pll_apply_level` in `pyodideBootstrap.py` mirrors the last two for the
-Python side. Adding a level means adding it to `Level`, `LEVEL_NAMES`, and
-those predicates.
+Python enforces these rules and the host explains them, so each has two
+homes, and they are kept to exactly two. On the host, the predicates in
+`level.ts` are the only place a level is asked about -
+`levelHasStaticChecks`, `levelRejectsBoolAsNumber`,
+`levelRefusesReassignment` - and the explanations use them to word a finding
+and to offer only fixes the level accepts. In Python, `_pll_apply_level`
+decides whether annotations are checked and how strictly, and
+`_pll_static_analyze` which reassignments it refuses. Adding a level means
+adding it to `Level`, `LEVEL_NAMES`, those predicates, and their Python
+counterparts.
 
 ### Seeding new files
 
@@ -233,6 +247,38 @@ the load and the patch are guarded so non-networked programs never
 load the shim. Browser requests still need CORS; desktop Node fetch
 does not.
 
+## From an exception to a finding
+
+Python describes an exception as data; the host only explains it. Every
+place that reports one - a file run, a prompt line, the test phase loading
+the file, a single test, a reactor handler - goes through
+`_pll_error_info`, which sends:
+
+- the type, and the message **as Python's traceback shows it** (so a
+  `NameError` keeps "Did you mean: 'total'?", which `str(exc)` lacks, and a
+  `SyntaxError` loses the "(file, line)" its `str` carries);
+- where it is: the innermost frame, or a syntax error's own position, with
+  a column only where Python would draw a caret;
+- the frames, outermost first (the innermost 100), each marked `user` or
+  not. Which frames are the student's is decided here, once;
+- facts learned from the live frames: the name a `NameError` is about, a
+  sequence's real length, the element that failed its annotation, a
+  swapped dataclass field. They travel beside the message, never in it.
+
+`pythonErrorFrom` turns that into a `PythonError`, and is the one place a
+Python `None` (which arrives as `undefined`) becomes `null`. The analyzers
+read its fields; nothing on the host parses a traceback. `traceback` is
+kept only to show when nothing better can be said.
+
+There is then one way to explain an error: `findRuntimeFinding`, which
+tries the analyzers in order and falls back to `analyzeRuntimeError`, so it
+never returns null. Run errors reach it through `findingForErrorEvent`;
+errors a test raised through `explainTestReport`, which puts the finding on
+the test row; a reactor handler's error directly. Both hosts call these -
+the runtime layer only translates results into events - and a test row's
+finding is rendered by the same code as any other finding, in the panel and
+on the command line.
+
 ## Runtime type checking
 
 Annotations are checked while the program runs at every level except
@@ -311,9 +357,9 @@ Two details that decide where the squiggle lands:
 - `_pll_format_exception` drops frames inside `/pll_vendor`, so students
   never see typeguard's internals. When nothing is dropped it returns the
   stdlib formatting unchanged, so ordinary errors are unaffected.
-- typeguard's union failures span several lines and `parsePythonError`
-  keeps only the first, which is exactly the part naming the accepted
-  types; `typeCheckAnalyzer` recovers the rest from the traceback.
+- typeguard's union failures span several lines, and the lines after the
+  first name the accepted types. The message reaches `typeCheckAnalyzer`
+  whole.
 
 ## Reactors (big-bang / animate) and the universe client
 
@@ -324,7 +370,7 @@ rewinding is just holding an earlier value - and it is also what lets
 `simulate_trace` test a reactor's logic with no clock and no drawing.
 
 **Nothing in Python runs an event loop.** The extension host owns the clock
-(`setInterval` in `ReplSession`) and calls `_pll_reactor_step` once per
+(`setInterval` in `ReactorController`) and calls `_pll_reactor_step` once per
 event. A loop in the worker would hold it, and the exec chain with it, for
 as long as the animation ran - the exact failure `Stop` exists for. Because
 the host drives it, the prompt stays usable while something is animating,
@@ -491,9 +537,9 @@ check, the file's own tests, then the program - and a Stop lands in
 whichever is running. What the student asked for is that nothing more
 runs. `_pll_run_tests` treats `KeyboardInterrupt` as the end of the test
 phase: the tests that finished keep their results, the one running is
-marked `stopped`, and the rest are not run. `ReplSession.executeFile`, and
-the CLI's `runFile`, check `stopRequestedSeq` between the steps and end the
-run with a banner saying what was not run. The same checks catch a Stop
+marked `stopped`, and the rest are not run. `runPlan.ts` checks the host's
+`stopRequested()` between the steps and ends the run with a banner saying
+what was not run. The same checks catch a Stop
 pressed while something loads, which reaches no running Python at all and
 used to be lost. A step that fails *because* of a Stop - static analysis,
 or loading pytest, interrupted part-way - reports the Stop, not a failure
@@ -861,22 +907,21 @@ things:
 | --- | --- |
 | `interactionsView.ts` (webview) | `cli/view.ts` (text on stdout/stderr) |
 | `workspaceFiles.ts` (`vscode.workspace.fs`) | `cli/files.ts` (`node:fs`) |
-| `ReplSession` (sessions, exec chain, reactor driver) | `cli/run.ts` (one linear run) |
+| `ReplSession` (sessions, exec chain) and `ReactorController` | `cli/run.ts` (one linear run) |
 
-Two things were pulled out rather than copied, because drift would be a real
-bug: `ANY_IMPORT_RE` (if one host detects an import and the other doesn't,
-the same file works in the editor and fails at the terminal) and
-`findingForErrorEvent` (the traceback-first, event-fields-fill-gaps order
-that decides which line gets blamed). `DesktopPyodideRuntime` now takes its
+The run itself is shared, not copied: `runPlan.ts` holds the steps - the
+`#level` line, static checks, libraries, files, Examplar, tests, the
+program, write back - and each host supplies a `RunHost` saying how to show
+a finding, a banner, a status, an event. The two used to each write the
+sequence out, and drifted: they worded the same failures differently, the
+CLI wrote files back after a failed mount, and the editor reported a
+top-level error in a file with tests twice, and only the editor ran the
+Examplar check; the CLI prints the same cards, from the same lines
+(`examplarPhase.ts` words them; the panel and the terminal only draw
+them). `DesktopPyodideRuntime` now takes its
 asset and worker paths instead of deriving them, so both Node hosts share
 the spawn; `desktop/pyodideWorker.ts` is reused **verbatim**, only bundled
 to a second output path.
-
-What is left duplicated is the *sequence* in `cli/run.ts` - level checks,
-packages, mount, tests, run, write back - about twenty lines. That is
-deliberate: an abstraction covering both would have to satisfy a stateful,
-multi-session, asynchronous view *and* a one-shot command, and the shared
-part is the policy underneath, which already is shared.
 
 ### Behaviour that differs, and why
 
@@ -919,8 +964,9 @@ is instead of leaving that to be guessed. Rehearse with
 
 The package declares `node >=22`, which is a support decision rather than a
 technical floor: the CLI bundle contains no `WebSocket` reference at all -
-`universeClient.ts` is only reachable through `activate.ts` and
-`replSession.ts`, neither of which the CLI imports - and `pyodide` itself
+`universeClient.ts` is only reachable through `activate.ts` and the
+editor's session (`replSession.ts`, `reactorController.ts`), none of which
+the CLI imports - and `pyodide` itself
 only asks for `>=18`. But 18 and 20 are both past end of life, so 22 is the
 oldest Node we could support, and it matches what the extension already gets
 from VS Code 1.101. One floor for the project instead of two.
@@ -1042,14 +1088,14 @@ here means a 304, so the bundle is *current* rather than stale. The case
 worth saying out loud - an unreachable server and a fallback to an older copy
 - already gets a banner.
 
-### The phase in the editor
+### The phase in a run
 
-`runFile` resolves the directive *before* it starts executing, so a fetch
-failure is reported once, and then runs the phase as the first thing inside
-the execution:
+The run plan runs the Examplar step (`examplarPhase.ts`) once libraries and
+files are loaded, in the editor and on the command line alike. It fetches the bundle (so a fetch failure is reported once) and runs
+the phase; the plan then mounts the files again:
 
 ```
-static checks -> [ unmount -> examplarRun -> remount ] -> own tests -> the program
+static checks -> files -> [ fetch -> unmount -> examplarRun ] -> remount -> own tests -> the program
 ```
 
 The workspace is **unmounted** for the phase (`mountWorkspaceFiles([])`).
@@ -1083,7 +1129,7 @@ That unmount has a student-visible cost, and three decisions pay for it:
   entirely of our own unmounting. It is excluded from the chaff count. A test
   that *disagrees* still counts: it ran, and it did tell them apart.
 
-`runExamplarPhase` returns whether the student defines every name the bundle
+`runExamplarStep` returns whether the student defines every name the bundle
 provides (`student_defines`, recorded before the overlay). That gates only
 the *other* test phase: running a file's `test_*` against the code in that
 same file needs that code to exist, or every test reports a `NameError`

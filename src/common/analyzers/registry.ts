@@ -1,5 +1,5 @@
 import type { Level } from "../level";
-import type { ParsedPythonError } from "../errors/pythonErrorParser";
+import type { PythonError } from "../errors/pythonError";
 import { nameErrorAnalyzer } from "./nameErrorAnalyzer";
 import { analyzeRuntimeError } from "./runtimeErrorAnalyzer";
 import { stockMessageAnalyzer } from "./stockMessageAnalyzer";
@@ -26,18 +26,18 @@ export function findRuntimeFinding(
   source: string,
   fileName: string,
   level: Level,
-  parsedError: ParsedPythonError,
-): AnalysisFinding | null {
+  error: PythonError,
+): AnalysisFinding {
   for (const analyzer of analyzers) {
-    if (!analyzer.handles.includes(parsedError.errorType)) {
+    if (!analyzer.handles.includes(error.errorType)) {
       continue;
     }
-    const finding = analyzer.analyze({ source, fileName, level, parsedError });
+    const finding = analyzer.analyze({ source, fileName, level, error });
     if (finding) {
       return finding;
     }
   }
   // Never null: every runtime error is reported as a finding, so no student
   // is shown a traceback through PLL's own internals.
-  return analyzeRuntimeError({ source, fileName, level, parsedError });
+  return analyzeRuntimeError({ source, fileName, level, error });
 }

@@ -1,43 +1,40 @@
 import type { Level } from "../level";
-import { parsePythonError } from "../errors/pythonErrorParser";
-import type { ExecutionErrorChunk } from "../types";
+import type { ExecutionErrorChunk, ExecutionTestReportChunk } from "../types";
+import { serializeFinding } from "./findingLocation";
 import { findRuntimeFinding } from "./registry";
 import type { AnalysisFinding } from "./types";
 
 /**
- * The friendly finding for a runtime error event, or null to show the real
- * traceback.
- *
- * The traceback text is the primary source and the event's own fields only
- * fill gaps: the innermost frame in the traceback is where the error
- * actually happened, which can differ from the exception's attributes -
- * exactly the distinction `typeCheckAnalyzer` uses to blame a bad argument
- * on the call rather than the `def` line.
+ * The friendly finding for a runtime error event.
  *
  * Shared by the editor and the command line so a program reports the same
- * thing in both. Returning null rather than inventing a finding is what
- * keeps friendly errors strictly additive.
+ * thing in both. Never null: every runtime error becomes a finding, and one
+ * no analyzer recognises keeps Python's own words.
  */
 export function findingForErrorEvent(
   event: ExecutionErrorChunk,
   source: string,
   fileName: string,
   level: Level,
-): AnalysisFinding | null {
-  const traceback = event.traceback || `${event.errorType}: ${event.message}`;
-  const parsed = parsePythonError(traceback, source);
-  // `!= null` rather than `!== null`: the event's numbers come from a
-  // Python dict, where a missing key reaches JS as `undefined`. That passed
-  // a `!== null` test and was copied across as a location, which is how the
-  // command line came to print `n.py:1:NaN`.
-  if (parsed.lineNumber === null && event.lineNumber != null) {
-    parsed.lineNumber = event.lineNumber;
-  }
-  if (parsed.column === null && event.column != null) {
-    parsed.column = event.column;
-  }
-  if (parsed.fileName === null && event.fileName) {
-    parsed.fileName = event.fileName;
-  }
-  return findRuntimeFinding(source, fileName, level, parsed);
+): AnalysisFinding {
+  return findRuntimeFinding(source, fileName, level, event.error);
+}
+
+/**
+ * The test report with each error that a test raised explained, exactly as
+ * the same error is explained when the program raises it. The report keeps
+ * the finding and drops the exception it came from.
+ */
+export function explainTestReport(
+  event: ExecutionTestReportChunk,
+  source: string,
+  fileName: string,
+  level: Level,
+): ExecutionTestReportChunk {
+  return {
+    ...event,
+    tests: event.tests.map(({ error, ...test }) =>
+      error ? { ...test, finding: serializeFinding(findRuntimeFinding(source, fileName, level, error)) } : test,
+    ),
+  };
 }

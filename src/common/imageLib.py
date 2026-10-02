@@ -70,15 +70,6 @@ _PLL_MODES = ("solid", "outline")
 #: without a second list of parameter names to keep in step.
 _PLL_PARAMS = {}
 
-_PLL_ORDINALS = ("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th")
-
-
-def _pll_ordinal(index):
-    """`1st`, `2nd`, ... for a 0-based argument position."""
-    if index < len(_PLL_ORDINALS):
-        return _PLL_ORDINALS[index]
-    return "%dth" % (index + 1)
-
 
 def _pll_where(who, param):
     """" (the 3rd argument)", or "" when the position is not known."""
@@ -308,16 +299,6 @@ def _pll_color_to_css(color):
                 a = a / 255.0
             return "rgba(%d, %d, %d, %g)" % (int(r), int(g), int(b), a)
     return str(color)
-
-
-def _pll_xml_escape(text):
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&apos;")
-    )
 
 
 # -----------------------------------------------------------------------------

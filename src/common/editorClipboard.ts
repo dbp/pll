@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { errorText } from "./errorText";
 
 function copyRanges(editor: vscode.TextEditor): vscode.Range[] {
   return editor.selections.map((sel) =>
@@ -16,7 +17,7 @@ async function writeClipboard(text: string): Promise<void> {
   try {
     await vscode.env.clipboard.writeText(text);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorText(err);
     void vscode.window.showWarningMessage(
       `Python Language Levels: copy failed (${message}). Allow clipboard access for this site.`,
     );
@@ -60,7 +61,7 @@ export async function editorPaste(): Promise<void> {
   try {
     text = await vscode.env.clipboard.readText();
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorText(err);
     void vscode.window.showWarningMessage(
       `Python Language Levels: paste failed (${message}). Allow clipboard access for this site.`,
     );
