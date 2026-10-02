@@ -38,10 +38,76 @@ function messageWithDetail(traceback: string, fallback: string): string {
   return fallback;
 }
 
+/**
+ * Library functions that call the student's own function for them.
+ *
+ * Their frames are inside `<exec>` and so are filtered out of the user
+ * frames, but the traceback still names them - and knowing which one it
+ * was changes the advice completely.
+ */
+const LIBRARY_CALLERS = [
+  "filter",
+  "transform_column",
+  "add_column",
+  "animate",
+  "big_bang",
+];
+
+/**
+ * Frames that mean a reactor called the handler.
+ *
+ * There are several, because a handler is reached through whichever of
+ * them is driving at the time - showing the first frame, a tick, a key.
+ * They all amount to the same thing for the student, so they map to one
+ * name: the value came from the reactor's state, not from any line.
+ */
+const REACTOR_FRAMES = [
+  "_pll_reactor_interact",
+  "_pll_reactor_view",
+  "_pll_reactor_step",
+  "interact",
+  "react",
+  "tick",
+  "step",
+];
+
+function libraryCaller(traceback: string): string | null {
+  for (const line of traceback.split(/\r?\n/)) {
+    const frame = /^\s*File "([^"]+)", line \d+, in (\S+)$/.exec(line);
+    if (frame === null || !frame[1].includes("<exec>")) {
+      continue;
+    }
+    if (LIBRARY_CALLERS.includes(frame[2])) {
+      return frame[2];
+    }
+    if (REACTOR_FRAMES.includes(frame[2])) {
+      return "reactor";
+    }
+  }
+  return null;
+}
+
+/** The student's text of `frame`'s line, when the frame is in this file. */
+function lineOf(
+  source: string,
+  fileName: string,
+  frame: { fileName: string; line: number } | null,
+): string | null {
+  if (frame === null) {
+    return null;
+  }
+  const basename = (path: string) => path.split(/[\\/]/).pop() ?? path;
+  if (basename(frame.fileName) !== basename(fileName)) {
+    return null;
+  }
+  const lines = source.split(/\r?\n/);
+  return frame.line >= 1 && frame.line <= lines.length ? lines[frame.line - 1] : null;
+}
+
 export const typeCheckAnalyzer: RuntimeAnalyzer = {
   handles: HANDLED,
   analyze(input: RuntimeAnalyzerInput): AnalysisFinding | null {
-    const { parsedError, fileName, level } = input;
+    const { parsedError, fileName, level, source } = input;
     if (!HANDLED.includes(parsedError.errorType)) {
       return null;
     }
@@ -61,6 +127,13 @@ export const typeCheckAnalyzer: RuntimeAnalyzer = {
       message,
       innermost ? innermost.functionName : null,
       level,
+      // The line the check fired on, which for a return is the `return`
+      // itself - or, when the function ran off its end, is not one.
+      {
+        source,
+        line: lineOf(source, fileName, innermost),
+        calledBy: libraryCaller(parsedError.traceback),
+      },
     );
 
     return {

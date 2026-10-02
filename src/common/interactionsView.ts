@@ -219,6 +219,9 @@ export interface TestReportEntry {
   skipped: number;
   errors: number;
   tests: TestCaseView[];
+  /** A Stop ended the phase; the card says where, and draws it as neither pass nor fail. */
+  stopped?: boolean;
+  stoppedIn?: string | null;
 }
 
 export type PromptKind = "primary" | "continuation";

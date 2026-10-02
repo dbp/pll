@@ -418,7 +418,12 @@ async function main() {
       );
       console.log(`    list item: ${item.headline}`);
       expect(/every item in `nums`/.test(item.headline), "item headline: " + item.headline);
-      expect(/item 2 is not/.test(item.headline), "should name the index: " + item.headline);
+      // The index, and what is at it - "item 2 is not" left the student to
+      // go and look.
+      expect(
+        /item 2 is the string "three"/.test(item.headline),
+        "should name the index and the value: " + item.headline,
+      );
 
       const union = await finding(
         'from typing import Optional\ndef f(x: Optional[int]) -> int:\n    return 0\n\nf("s")\n',
@@ -583,7 +588,7 @@ async function main() {
       let report = null;
       deliverTestResult(result, (event) => {
         if (event.kind === "testReport") report = event;
-      }, "tw.py", "beginner");
+      }, "tw.py", "beginner", code);
       expect(report !== null, "a testReport event should be emitted");
       const test = report.tests[0];
       expect(
@@ -594,12 +599,406 @@ async function main() {
         (test.message ?? "").includes("should return"),
         `expected PLL's wording, got ${test.message}`,
       );
+      expect(
+        (test.message ?? "").includes("returns `None` on this line"),
+        `a written-out \`return None\` is said as much, got ${test.message}`,
+      );
+      // The report used to say "this function" while the editor named it;
+      // pytest prints the frames, so the name is there to be read.
+      expect(
+        (test.message ?? "").includes("`shout`"),
+        `the report should name the function, got ${test.message}`,
+      );
+      expect(
+        !(test.message ?? "").includes("this function"),
+        `and not call it "this function": ${test.message}`,
+      );
       // `stdout` is on the case already - the command line just was not
       // printing it.
       expect((test.stdout ?? "").includes("checking"), `the test's output is carried: ${test.stdout}`);
       console.log(`    report message: ${JSON.stringify((test.message ?? "").split("\n")[0])}`);
     }
 
+
+    console.log("\n[18] a `None` result is told apart from running off the end");
+    {
+      // One message for every `None` - "it finished without returning a
+      // value" - describes the symptom. There are three quite different
+      // causes, and each needs its own thing said about it.
+      const cases = [
+        {
+          label: "ran off the end",
+          code: 'def grade(score: int) -> str:\n    if score > 90:\n        return "A"\n\n\nprint(grade(50))\n',
+          wanted: /finished without returning a value/,
+          also: /every path through the function reaches a `return`/,
+        },
+        {
+          label: "returned a name set from .append(...)",
+          code:
+            "def shout(words: list[str]) -> list[str]:\n" +
+            "    result = []\n" +
+            "    for w in words:\n" +
+            "        result = result.append(w.upper())\n" +
+            "    return result\n\n\n" +
+            'print(shout(["hi"]))\n',
+          wanted: /`result` was set to the result of `\.append\(\.\.\.\)` on line 5/,
+          also: /changes the list in place and gives back nothing/,
+        },
+        {
+          label: "a list pattern of a fixed length",
+          code:
+            "def my_len(nums: list[int]) -> int:\n" +
+            "    match nums:\n" +
+            "        case []:\n" +
+            "            return 0\n" +
+            "        case [first, rest]:\n" +
+            "            return 1 + my_len(rest)\n\n\n" +
+            "print(my_len([1, 2, 3]))\n",
+          wanted: /No `case` in `my_len` fitted `nums`/,
+          also: /matches a list of exactly 2 items; for a first and a rest, write `\[first, \*rest\]`/,
+        },
+        {
+          label: "a union variant with no case",
+          code:
+            "from dataclasses import dataclass\n\n\n" +
+            "@dataclass\nclass Boa:\n    name: str\n\n\n" +
+            "@dataclass\nclass Armadillo:\n    name: str\n\n\n" +
+            "Animal = Boa | Armadillo\n\n\n" +
+            "def describe(a: Animal) -> str:\n" +
+            "    match a:\n" +
+            "        case Boa(name):\n" +
+            '            return "a boa called " + name\n\n\n' +
+            'print(describe(Armadillo("Dilly")))\n',
+          wanted: /No `case` in `describe` fitted `a`/,
+          also: /There is no `case` for `Armadillo`/,
+        },
+
+        {
+          label: "a print where a return was meant",
+          code: "def double(n: int) -> int:\n    print(n * 2)\n\n\nprint(double(2))\n",
+          wanted: /finished without returning a value/,
+          // One plain argument, so the suggestion is their own expression.
+          also: /ends its branch with `print`: did you mean `return n \* 2`\?/,
+        },
+        {
+          // fn-print-not-return: two branches return, and the third - the
+          // one that ran - prints. "Prints and never returns" missed it.
+          label: "a print ending the one branch that ran",
+          code:
+            "def add_shipping(order_amt: float) -> float:\n" +
+            "    if order_amt <= 10:\n" +
+            "        print(order_amt + 4)\n" +
+            "    elif order_amt <= 30:\n" +
+            "        return order_amt + 8\n" +
+            "    else:\n" +
+            "        return order_amt + 12\n\n\n" +
+            "print(add_shipping(3.5))\n",
+          wanted: /finished without returning a value/,
+          also: /Line 4 ends its branch with `print`: did you mean `return order_amt \+ 4`\?/,
+        },
+      ];
+      for (const { label, code, wanted, also } of cases) {
+        const source = `#level beginner\n${code}`;
+        const result = await run(source, { level: "beginner", fileName: "none.py" });
+        expect(result.ok === false, `${label}: should fail`);
+        const finding = findRuntimeFinding(
+          source,
+          "none.py",
+          "beginner",
+          parsePythonError(result.traceback, source),
+        );
+        const text = `${finding.headline}\n${finding.howToFix.join("\n")}`;
+        expect(wanted.test(finding.headline), `${label}: headline was ${finding.headline}`);
+        expect(also.test(text), `${label}: wanted ${also}, got ${JSON.stringify(text)}`);
+        // Once a print is found ending the branch, it is the cause: the
+        // general advice ("an `if` with no `else`") would contradict it.
+        if (/ends its branch with `print`/.test(text)) {
+          expect(
+            !/An `if` with no `else`|annotate the return type as `None`/.test(text),
+            `${label}: no general advice beside the cause: ${text}`,
+          );
+        }
+        // A `match` that fitted nothing is a missing case: annotating the
+        // return type as `None` would hide the bug, so it is not offered.
+        if (/No `case`/.test(finding.headline)) {
+          expect(
+            !/annotate the return type as `None`/.test(text),
+            `${label}: no "annotate as None" for a missing case: ${text}`,
+          );
+        }
+      }
+      console.log("    off the end, a void method, a short pattern, a missing variant, a print");
+    }
+
+    console.log("\n[19] advice that fits where the value came from");
+    {
+      // A dataclass field, which typeguard words as an assignment because
+      // that is the check being reused - and nobody assigned anything.
+      const DC =
+        "from dataclasses import dataclass\n\n\n@dataclass\nclass ITunesSong:\n" +
+        "    name: str\n    singer: str\n    year: int\n\n\n";
+      const field = `#level beginner\n${DC}s = ITunesSong("Yesterday", 2015, 1965)\n`;
+      const fieldRun = await run(field, { level: "beginner", fileName: "dc.py" });
+      expect(fieldRun.ok === false, "a wrong field type should fail");
+      const fieldFinding = findRuntimeFinding(
+        field,
+        "dc.py",
+        "beginner",
+        parsePythonError(fieldRun.traceback, field),
+      );
+      expect(
+        fieldFinding.headline ===
+          "The `singer` field of `ITunesSong` should be a string (`str`), but got `2015`.",
+        `the field and the value are named: ${fieldFinding.headline}`,
+      );
+      expect(
+        !/assigned/.test(fieldFinding.headline),
+        `and it is not called an assignment: ${fieldFinding.headline}`,
+      );
+
+      // A value a library handed over, where "check the value you passed on
+      // this line" names a line that passed nothing.
+      const column =
+        "#level beginner\n" +
+        't = table(["wage"], [[10]])\n\n\n' +
+        "def compute(r: dict) -> float:\n" +
+        '    return r["wage"] * 2\n\n\n' +
+        'print(t.transform_column("wage", compute))\n';
+      const columnRun = await run(column, { level: "beginner", fileName: "tc.py" });
+      expect(columnRun.ok === false, "a row function on a column should fail");
+      const columnFinding = findRuntimeFinding(
+        column,
+        "tc.py",
+        "beginner",
+        parsePythonError(columnRun.traceback, column),
+      );
+      const advice = columnFinding.howToFix.join("\n");
+      expect(
+        /transform_column` calls your function with one \*value\* from the column, not a row/.test(
+          advice,
+        ),
+        `it should say what was handed over: ${JSON.stringify(columnFinding.howToFix)}`,
+      );
+      expect(
+        !/value you passed for `r` on this line/.test(advice),
+        `and not blame this line: ${advice}`,
+      );
+      console.log("    a dataclass field, and a value a library supplied");
+    }
+
+    console.log("\n[20] two floats that differ only in the dust");
+    {
+      // `0.9299999999999999 == 0.93` is how decimals work, not a mistake
+      // in the student's arithmetic, and nothing in the failure said so.
+      const code = "def test_close():\n    total = 1.1 * 3\n    assert total == 3.3\n";
+      const result = await send({
+        type: "runTests",
+        code,
+        fileName: "fl.py",
+        sessionKey: "tc-fl",
+        level: "raw",
+      }).then((r) => r.result);
+      let report = null;
+      deliverTestResult(result, (event) => {
+        if (event.kind === "testReport") report = event;
+      }, "fl.py", "raw", code);
+      const message = report?.tests?.[0]?.message ?? "";
+      expect(/pytest\.approx\(3\.3\)/.test(message), `approx should be suggested: ${message}`);
+      expect(
+        /differ only in the last few digits/.test(message),
+        `and the reason given: ${message}`,
+      );
+
+      // A test that fails for a real reason gets no such note.
+      const wrong = "def test_wrong():\n    total = 1.0 * 3\n    assert total == 4.0\n";
+      const other = await send({
+        type: "runTests",
+        code: wrong,
+        fileName: "fw.py",
+        sessionKey: "tc-fw",
+        level: "raw",
+      }).then((r) => r.result);
+      let wrongReport = null;
+      deliverTestResult(other, (event) => {
+        if (event.kind === "testReport") wrongReport = event;
+      }, "fw.py", "raw", wrong);
+      expect(
+        !/approx/.test(wrongReport?.tests?.[0]?.message ?? ""),
+        `a genuinely wrong answer gets no approx note: ${wrongReport?.tests?.[0]?.message}`,
+      );
+      console.log("    approx suggested for rounding, and not for a wrong answer");
+    }
+
+    console.log("\n[21] errors raised inside a test are translated too");
+    {
+      // Only a type-annotation failure used to be translated in the test
+      // report; every other error arrived in Python's own words.
+      const reportFor = async (code, key) => {
+        const result = await send({
+          type: "runTests",
+          code,
+          fileName: "te.py",
+          sessionKey: key,
+          level: "raw",
+        }).then((r) => r.result);
+        let report = null;
+        deliverTestResult(result, (event) => {
+          if (event.kind === "testReport") report = event;
+        }, "te.py", "raw", code);
+        return report?.tests?.[0]?.message ?? "";
+      };
+      const listPlus = await reportFor(
+        'def shout(words):\n    return words + "!"\n\n\ndef test_shout():\n    assert shout(["hi"]) == ["HI"]\n',
+        "te-1",
+      );
+      expect(
+        /A list and a string cannot be added together/.test(listPlus),
+        `a TypeError inside a test: ${listPlus}`,
+      );
+      expect(!/can only concatenate/.test(listPlus), `with Python's wording gone: ${listPlus}`);
+
+      const param = await reportFor(
+        'def pen_cost(n, m):\n    return n * 2\n\n\ndef test_pen_cost(n):\n    assert pen_cost(n, "x") == 2\n',
+        "te-2",
+      );
+      expect(
+        /`test_pen_cost` is a test, so it cannot take any parameters/.test(param),
+        `a test with a parameter: ${param}`,
+      );
+
+      // A plain failed assert is still shown as the assert, not reworded.
+      const plain = await reportFor(
+        "def add(a, b):\n    return a + b\n\n\ndef test_add():\n    assert add(1, 2) == 4\n",
+        "te-3",
+      );
+      expect(/^assert 3 == 4/.test(plain), `a failed assert is left as it is: ${plain}`);
+      console.log("    a TypeError and a parameter reworded; a failed assert left alone");
+    }
+
+    console.log("\n[22] a row is a dict, and a reactor's state comes from init");
+    {
+      // A row is `Row`, a dict subclass, but the course says a row's type is
+      // `dict` - so the message must never ask anyone to annotate `Row`.
+      const rows =
+        "#level beginner\n" +
+        't = table(["n"], [[1]])\n\n\n' +
+        "def double(r: int) -> int:\n" +
+        "    return 2\n\n\n" +
+        'print(t.add_column("d", double))\n';
+      const rowRun = await run(rows, { level: "beginner", fileName: "row.py" });
+      expect(rowRun.ok === false, "a row passed to an int annotation should fail");
+      const rowFinding = findRuntimeFinding(
+        rows,
+        "row.py",
+        "beginner",
+        parsePythonError(rowRun.traceback, rows),
+      );
+      const rowText = `${rowFinding.headline} ${rowFinding.howToFix.join(" ")}`;
+      expect(!/\bRow\b/.test(rowText), `\`Row\` must not appear: ${rowText}`);
+      expect(/`dict`/.test(rowText), `it is called a dict: ${rowText}`);
+
+      // A reactor handler's argument is the reactor's state, which no line
+      // passed - so "check the value you passed on this line" is wrong.
+      const reactorSource =
+        "#level beginner\n\n\n" +
+        "def draw(state: str) -> Image:\n" +
+        '    return circle(5, "solid", "red")\n\n\n' +
+        "reactor(init=0, to_draw=draw).interact()\n";
+      const rxRun = await run(reactorSource, { level: "beginner", fileName: "rx.py" });
+      expect(rxRun.ok === false, "a handler that does not fit init should fail");
+      const rxFinding = findRuntimeFinding(
+        reactorSource,
+        "rx.py",
+        "beginner",
+        parsePythonError(rxRun.traceback, reactorSource),
+      );
+      const rxText = rxFinding.howToFix.join(" ");
+      expect(/`init`/.test(rxText), `it should say the state started as init: ${rxText}`);
+      expect(
+        !/value you passed for `state` on this line/.test(rxText),
+        `and not blame this line: ${rxText}`,
+      );
+      console.log("    a row is a dict; a reactor's state is traced to init");
+    }
+
+    console.log("\n[23] an element failure says what the element is");
+    {
+      // typeguard names the element that failed but not what it is; Python
+      // reads it from the frame the check fired in.
+      const code =
+        "#level intermediate\n" +
+        "def sum_list(lst: list[float]) -> float:\n" +
+        "    total = 0.0\n" +
+        "    for x in lst:\n" +
+        "        total = total + x\n" +
+        "    return total\n\n\n" +
+        'sum_list(["1", "2", "3"])\n';
+      const result = await run(code, { level: "intermediate", fileName: "items.py" });
+      expect(result.ok === false, "a list of strings for list[float] should fail");
+      const finding = findRuntimeFinding(
+        code,
+        "items.py",
+        "intermediate",
+        parsePythonError(result.traceback, code),
+      );
+      expect(
+        /but item 0 is the string "1"\.$/.test(finding.headline),
+        `the element is described: ${finding.headline}`,
+      );
+
+      // A dict's values, by key.
+      const dictCode =
+        "#level intermediate\n" +
+        "def total(prices: dict[str, float]) -> float:\n" +
+        "    return 0.0\n\n\n" +
+        'total({"tea": 2.5, "cake": "three"})\n';
+      const dictRun = await run(dictCode, { level: "intermediate", fileName: "dict.py" });
+      const dictFinding = findRuntimeFinding(
+        dictCode,
+        "dict.py",
+        "intermediate",
+        parsePythonError(dictRun.traceback, dictCode),
+      );
+      expect(
+        /is the string "three"/.test(dictFinding.headline),
+        `a dict value is described too: ${dictFinding.headline}`,
+      );
+      console.log("    a list item and a dict value, each shown as what it is");
+    }
+
+    console.log("\n[24] what Python can read from the frame: swaps, quoting, lengths");
+    {
+      const DC =
+        "#level intermediate\nfrom dataclasses import dataclass\n\n\n@dataclass\nclass ITunesSong:\n" +
+        "    name: str\n    singer: str\n    year: int\n\n\n";
+      const findingFor = async (code, fileName) => {
+        const result = await run(code, { level: "intermediate", fileName });
+        return findRuntimeFinding(code, fileName, "intermediate", parsePythonError(result.traceback, code));
+      };
+
+      // Two values in each other's places: converting one would hide it.
+      const swappedCode = `${DC}s = ITunesSong("Yesterday", 2015, "The Beatles")\n`;
+      const swapped = await findingFor(swappedCode, "swap.py");
+      expect(
+        /values for `singer` and `year` of `ITunesSong` look swapped/.test(swapped.headline),
+        `a swap is named: ${swapped.headline}`,
+      );
+
+      // A string value, quoted as the course writes it.
+      const stringYear = await findingFor(`${DC}s = ITunesSong("Yesterday", "The Beatles", "2015")\n`, "year.py");
+      expect(/but got `"2015"`\.$/.test(stringYear.headline), `double quotes: ${stringYear.headline}`);
+      expect(!/look swapped/.test(stringYear.headline), `and no swap where there is none: ${stringYear.headline}`);
+
+      // An index error with the list's real length.
+      const indexCode = "#level raw\nnums = [5, 1, 7]\nprint(nums[3])\n";
+      const indexRun = await run(indexCode, { level: "raw", fileName: "idx.py" });
+      const indexFinding = findRuntimeFinding(indexCode, "idx.py", "raw", parsePythonError(indexRun.traceback, indexCode));
+      expect(
+        indexFinding.howToFix.some((l) => /`nums` has 3 items, numbered 0 to 2/.test(l)),
+        `the real length: ${JSON.stringify(indexFinding.howToFix)}`,
+      );
+      console.log("    a swap named, a string quoted, a length read from the list itself");
+    }
   } finally {
     await worker.terminate();
   }

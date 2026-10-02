@@ -5,7 +5,7 @@ import type {
   RawStaticFinding,
   ReactorStepResult,
 } from "./pyodideRunner";
-import { signalInterrupt, tryCreateInterruptBuffer } from "./interruptBuffer";
+import { requestInterrupt, tryCreateInterruptBuffer } from "./interruptBuffer";
 import { tryCreateStdinBuffer, writeStdinLine } from "./stdinBuffer";
 import type {
   ExecutionEventHandler,
@@ -148,7 +148,7 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
       },
       "testResult",
     );
-    deliverTestResult(result, onEvent, request.fileName, request.level);
+    deliverTestResult(result, onEvent, request.fileName, request.level, request.code);
   }
 
   async staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]> {
@@ -210,7 +210,16 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     if (!this.interruptBuffer) {
       return false;
     }
-    signalInterrupt(this.interruptBuffer);
+    // Retried until Python acknowledges it, but only while the requests
+    // that were running when Stop was pressed are still running - so a
+    // retry cannot carry over into whatever runs next.
+    const running = new Set(this.pending.keys());
+    requestInterrupt(this.interruptBuffer, () => {
+      for (const id of running) {
+        if (this.pending.has(id)) return true;
+      }
+      return false;
+    });
     return true;
   }
 

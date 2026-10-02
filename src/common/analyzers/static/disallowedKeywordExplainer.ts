@@ -39,6 +39,12 @@ export function explainDisallowedKeyword(
     );
   }
 
+  // The level that does allow it. Without this the finding says what is
+  // forbidden and never what to do if the student really does want it.
+  howToFix.push(
+    `\`#level advanced\` allows \`${keyword}\`, if you have a reason to use it.`,
+  );
+
   return {
     id: "disallowed-keyword",
     errorType: "DisallowedKeyword",

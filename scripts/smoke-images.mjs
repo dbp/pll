@@ -34,27 +34,27 @@ async function main() {
   pyodide.runPython(readPy("src/common/pyodideBootstrap.py"));
   pyodide.runPython(readPy("src/common/imageLib.py"));
   pyodide.runPython(readPy("src/common/tableLib.py"));
+  // Reactors are here for the end-of-run note about one that is never
+  // started, which is a run-level thing rather than a universe one.
+  pyodide.runPython(readPy("src/common/reactorLib.py"));
 
   // Re-derive PYODIDE_INSTALL_PY rather than parsing the TS file.
   pyodide.runPython(`
 import sys as _sys, types as _types
 _pll_module = _types.ModuleType("pll")
-_pll_image_module = _types.ModuleType("pll.image")
-_pll_table_module = _types.ModuleType("pll.table")
-for _name in PLL_IMAGE_EXPORTS:
-    setattr(_pll_image_module, _name, globals()[_name])
-for _name in PLL_TABLE_EXPORTS:
-    setattr(_pll_table_module, _name, globals()[_name])
-_pll_module.image = _pll_image_module
-_pll_module.table = _pll_table_module
+for _group, _exports in (
+    ("image", PLL_IMAGE_EXPORTS),
+    ("table", PLL_TABLE_EXPORTS),
+    ("reactor", PLL_REACTOR_EXPORTS),
+):
+    _m = _types.ModuleType("pll." + _group)
+    for _name in _exports:
+        setattr(_m, _name, globals()[_name])
+        _pll_initial_globals[_name] = globals()[_name]
+    setattr(_pll_module, _group, _m)
+    _sys.modules["pll." + _group] = _m
 _sys.modules["pll"] = _pll_module
-_sys.modules["pll.image"] = _pll_image_module
-_sys.modules["pll.table"] = _pll_table_module
-for _name in PLL_IMAGE_EXPORTS:
-    _pll_initial_globals[_name] = globals()[_name]
-for _name in PLL_TABLE_EXPORTS:
-    _pll_initial_globals[_name] = globals()[_name]
-del _name
+del _name, _m, _group, _exports
 `);
 
   const callRunFile = pyodide.globals.get("_pll_run_file");
@@ -389,15 +389,18 @@ del _name
     // SVG ignores a paint value it cannot parse, so these used to draw an
     // invisible shape and say nothing.
     for (const [code, needle] of [
-      ['rectangle(30, 40, "solid", 50)', "is not a colour"],
-      ['rectangle(30, 40, "solid", "50")', "is not a colour"],
-      ['circle(10, "solid", None)', "is not a colour"],
-      ['text("hi", 12, 7)', "is not a colour"],
-      ["line(5, 5, {})", "is not a colour"],
-      ['circle(10, "solid", ("r", 0, 0))', "have to be numbers"],
-      ['circle(10, "solid", (300, 0, 0))', "runs from 0 to 255"],
-      ['circle(10, "sloid", "red")', 'expected "solid" or "outline"'],
-      ['regular_polygon(10, 5, "filled", "red")', 'expected "solid" or "outline"'],
+      ['rectangle(30, 40, "solid", 50)', "`color` (the 4th argument) is the number 50, which is not a color"],
+      ['rectangle(30, 40, "solid", "50")', 'the string "50", which is not a color'],
+      ['circle(10, "solid", None)', "`color` (the 3rd argument) is None, which is not a color"],
+      ['text("hi", 12, 7)', "`color` (the 3rd argument) is the number 7, which is not a color"],
+      ["line(5, 5, {})", "is a dictionary, which is not a color"],
+      ['circle(10, "solid", ("r", 0, 0))', 'has a part that is not a number: the string "r"'],
+      ['circle(10, "solid", (300, 0, 0))', "the red part runs from 0 to 255, but it is 300"],
+      ['circle(10, "sloid", "red")', '`mode` (the 2nd argument) should be "solid" or "outline"'],
+      [
+        'regular_polygon(10, 5, "filled", "red")',
+        '`mode` (the 3rd argument) should be "solid" or "outline"',
+      ],
     ]) {
       const result = py(callRunFile, [code, "color.py", SK]);
       expect(
@@ -408,11 +411,11 @@ del _name
       // The message has to name the function the student called, not an
       // internal helper.
       expect(
-        (result.error_message ?? "").startsWith(code.split("(")[0] + ":"),
+        (result.error_message ?? "").startsWith(code.split("(")[0] + "'s "),
         `${code} should be blamed on its own call: ${result.error_message}`,
       );
     }
-    console.log("    nine bad colours and modes, each blamed on its own call");
+    console.log("    nine bad colours and modes, each named by argument and position");
 
     // And every documented form still works.
     const good = [
@@ -468,6 +471,188 @@ del _name
     expect(zero.stdout.trim().split("\n")[0] === "0 0", `empty_image stays 0x0: ${zero.stdout}`);
     expect(zero.stdout.trim().split("\n")[1] === "1", `a fractional size still rounds up: ${zero.stdout}`);
     console.log("    flat-bottomed, measured exactly, and still zero when empty");
+  }
+
+  console.log("\n[18] every argument is checked when the function is called");
+  {
+    // Before this, a wrong argument was accepted and only failed later,
+    // inside the rendering code, as "'str' object has no attribute
+    // 'width'" - after the broken picture had already been displayed.
+    const RED = 'circle(5, "solid", "red")';
+    for (const [code, kind, needle] of [
+      // A value that is not an image, named by position.
+      [`beside(${RED}, "austria")`, "TypeError", `beside's 2nd argument is the string "austria", not an image`],
+      [`above(${RED}, 3)`, "TypeError", "above's 2nd argument is the number 3, not an image"],
+      [`overlay(${RED}, None)`, "TypeError", "overlay's 2nd argument is None, not an image"],
+      // The images in one list rather than one by one.
+      [`beside([${RED}, ${RED}])`, "TypeError", "beside takes the images themselves, not a list of them"],
+      // An aligned combiner counts past the alignment argument.
+      [`beside_align("top", ${RED}, "x")`, "TypeError", "beside_align's 3rd argument is the string"],
+      [`place_image(${RED}, 1, 2, "scene")`, "TypeError", "place_image's 4th argument is the string"],
+      [`image_width("nope")`, "TypeError", "image_width's 1st argument is the string"],
+      // Sizes.
+      ['rectangle("20", 20, "solid", "red")', "TypeError", "rectangle's `width` (the 1st argument) must be a number"],
+      ['rectangle(-20, 20, "solid", "red")', "ValueError", "rectangle's `width` (the 1st argument) cannot be negative, but it is -20"],
+      [`scale(0, ${RED})`, "ValueError", "scale's `factor` (the 1st argument) has to be more than 0"],
+      ['text(5, 20, "red")', "TypeError", "text's `value` (the 1st argument) must be a string"],
+      ['regular_polygon(40, 2, "solid", "red")', "ValueError", "`sides` (the 2nd argument) cannot be less than 3"],
+      // Arguments the other way round, which Python reports from deep
+      // inside the arithmetic.
+      [`rotate(${RED}, 45)`, "TypeError", "rotate takes the `angle` first, then the image: write rotate(45, image)"],
+      [`scale(${RED}, 2)`, "TypeError", "scale takes the `factor` first, then the image: write scale(2, image)"],
+      // `+` between images, which looks plausible and is not a thing.
+      [`${RED} + ${RED}`, "TypeError", "Images cannot be joined with `+`"],
+      // An image where a number, a mode or a colour belongs. These are the
+      // messages that *describe* an image, and so the ones where an
+      // internal class name would show.
+      [`rectangle(${RED}, 20, "solid", "red")`, "TypeError", "`width` (the 1st argument) must be a number, but it is an image"],
+      [`circle(5, ${RED}, "red")`, "ValueError", '`mode` (the 2nd argument) should be "solid" or "outline", but it is an image'],
+      [`circle(5, "solid", ${RED})`, "ValueError", "`color` (the 3rd argument) is an image, which is not a color"],
+    ]) {
+      const result = py(callRunFile, [code, "args.py", SK]);
+      const message = result.error_message ?? "";
+      expect(
+        result.ok === false && result.error_type === kind && message.includes(needle),
+        `${code} -> ${kind} "${needle}", got ${result.error_type}: ${message}`,
+      );
+      // An internal class name sends a student looking for code they did
+      // not write.
+      expect(
+        !/_Rectangle|_Circle|_Frame|_Beside|_Above|_Overlay|_Scale|_Rotate|_Text|_Line|_Crop|_Flip|_PlaceImage|_LayeredXY/.test(message),
+        `${code} must not name an internal class: ${message}`,
+      );
+    }
+    console.log("    eighteen wrong arguments caught at the call, none naming an internal class");
+
+    // And the shapes that are legitimately odd still work.
+    for (const code of [
+      'print(image_width(rectangle(0, 0, "solid", "red")))',
+      'print(image_width(line(-5, -5, "red")))',
+      `print(image_width(rotate(45, ${RED})))`,
+      `print(image_width(overlay_xy(${RED}, -3, -3, ${RED})))`,
+      `print(image_width(beside()))`,
+    ]) {
+      const result = py(callRunFile, [code, "fine.py", SK]);
+      expect(result.ok === true, `${code} should still work: ${result.error_message ?? ""}`);
+    }
+    console.log("    zero sizes, negative offsets and no arguments at all still fine");
+  }
+
+  console.log("\n[19] a reactor that is never started says so");
+  {
+    // A reactor is a value. One that is built and never started does
+    // nothing at all, and said nothing at all about why - which looks
+    // exactly like a program that is broken somewhere else.
+    const draw = 'def draw(n):\n    return circle(5, "solid", "red")\n\n\n';
+    const idle = py(callRunFile, [`${draw}r = reactor(init=0, to_draw=draw)\nprint("built")\n`, "rx.py", SK]);
+    expect(idle.ok === true, `the program itself is fine: ${idle.error_message ?? ""}`);
+    expect(idle.stdout === "built\n", `and runs to the end: ${JSON.stringify(idle.stdout)}`);
+    expect(
+      /note: a reactor was made but never started/.test(idle.stderr ?? ""),
+      `the note should say what is missing: ${JSON.stringify(idle.stderr)}`,
+    );
+    expect(
+      /\.interact\(\)/.test(idle.stderr ?? ""),
+      `and name the fix: ${JSON.stringify(idle.stderr)}`,
+    );
+
+    // Started, so nothing to say.
+    const started = py(callRunFile, [`${draw}reactor(init=0, to_draw=draw).interact()\n`, "rx2.py", SK]);
+    expect(started.ok === true, `a started reactor runs: ${started.error_message ?? ""}`);
+    expect(
+      !/never started/.test(started.stderr ?? ""),
+      `and gets no note: ${JSON.stringify(started.stderr)}`,
+    );
+
+    // And the note is about this run only, not every reactor ever built.
+    const again = py(callRunFile, [`${draw}reactor(init=0, to_draw=draw).interact()\n`, "rx3.py", SK]);
+    expect(
+      !/never started/.test(again.stderr ?? ""),
+      `the last run's reactors are forgotten: ${JSON.stringify(again.stderr)}`,
+    );
+    console.log("    noted when idle, silent when started, and reset each run");
+  }
+
+  console.log("\n[20] a misspelled colour is refused, with the name it meant");
+  {
+    // SVG ignores a paint value it cannot parse, so "bleu" drew an
+    // invisible shape and said nothing. Names are checked against the CSS
+    // colours, which are exactly the names SVG accepts.
+    for (const [code, needle] of [
+      ['circle(5, "solid", "bleu")', 'Did you mean "blue"?'],
+      ['circle(5, "solid", "rd")', 'Did you mean "red"?'],
+      ['circle(5, "solid", "purpel")', 'Did you mean "purple"?'],
+      ['rectangle(5, 5, "solid", "yelow")', 'Did you mean "yellow"?'],
+      // Nothing like a colour: no guess, just the forms that work.
+      ['circle(5, "solid", "zzzzzzz")', 'Use a name like "red", a hex code'],
+    ]) {
+      const result = py(callRunFile, [code, "badcolor.py", SK]);
+      expect(
+        result.ok === false && result.error_type === "ValueError" &&
+          (result.error_message ?? "").includes(needle),
+        `${code} -> "${needle}", got ${result.error_type}: ${result.error_message}`,
+      );
+      // The list of names is PLL's: Python itself knows no colours at all.
+      expect(
+        (result.error_message ?? "").includes("which is not a color name PLL knows."),
+        `${code} should say whose names these are, got ${result.error_message}`,
+      );
+    }
+
+    // Every name in the list has to be accepted, or a colour that works
+    // today stops working - which is worse than the typo this catches.
+    // Read from the library's own globals rather than a session's: the
+    // list is private, as it should be.
+    const [count, rejected] = pyodide
+      .runPython(
+        [
+          "bad = []",
+          "for name in sorted(_PLL_CSS_COLOR_NAMES):",
+          "    try:",
+          '        circle(1, "solid", name)',
+          "    except Exception:",
+          "        bad.append(name)",
+          "[len(_PLL_CSS_COLOR_NAMES), bad]",
+        ].join("\n"),
+      )
+      .toJs();
+    // 148 is the whole of CSS Color 4. Asserted so a name dropped from the
+    // list fails here rather than refusing a colour a student used.
+    expect(count === 148, `expected the whole CSS list, got ${count} names`);
+    expect(rejected.length === 0, `these are in the list and refused: ${rejected.join(", ")}`);
+
+    // Case does not matter in CSS, and the keywords are not names.
+    const others = py(callRunFile, [
+      [
+        'circle(5, "solid", "Red")',
+        'circle(5, "solid", "DARKSLATEGREY")',
+        'circle(5, "solid", "transparent")',
+        'circle(5, "solid", "rebeccapurple")',
+      ].join("\n"),
+      "casecolor.py",
+      SK,
+    ]);
+    expect(others.ok === true, `case and keywords still work: ${others.error_message ?? ""}`);
+    console.log("    four misspellings named, all 148 CSS colours accepted");
+  }
+
+  console.log("\n[21] the prompt says a compile warning once too");
+  {
+    // The REPL compiles the statements and the last expression separately,
+    // and at a checked level validates the instrumentation first - so a
+    // warning came out more than once there as well.
+    const replOut = py(callReplEval, ["def f():\n    return 3(4)\n", SK]);
+    const said = ((replOut.stderr ?? "").match(/warning: line 2:/g) ?? []).length;
+    expect(said === 1, `the prompt says it once, got ${said}: ${JSON.stringify(replOut.stderr)}`);
+
+    // And at the prompt as in a file, an error it predicts is not repeated.
+    const failing = py(callReplEval, ["3(4)\n", SK]);
+    expect(failing.ok === false, "calling a number fails");
+    expect(
+      !/warning:/.test(failing.stderr ?? ""),
+      `no warning beside the error it predicted: ${JSON.stringify(failing.stderr)}`,
+    );
+    console.log("    once at the prompt, and not beside the error it predicted");
   }
 
   callRunFile.destroy?.();

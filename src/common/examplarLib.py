@@ -314,11 +314,19 @@ def _pll_examplar_compile_tests(test_source, filename):
         # source rather than compiling whatever it got to.
         tree = _ex_ast.parse(test_source, filename=filename)
     pieces = []
-    for node in tree.body:
-        if isinstance(node, _PLL_EXAMPLAR_DEFINITIONS):
-            pieces.append(
-                compile(_ex_ast.Module(body=[node], type_ignores=[]), filename, "exec")
-            )
+    # Recorded and dropped, like the test phase's: the run that follows
+    # compiles the same file and says each warning once.
+    try:
+        with _pll_recording_compile_warnings():
+            for node in tree.body:
+                if isinstance(node, _PLL_EXAMPLAR_DEFINITIONS):
+                    pieces.append(
+                        compile(
+                            _ex_ast.Module(body=[node], type_ignores=[]), filename, "exec"
+                        )
+                    )
+    finally:
+        del _pll_compile_warnings[:]
     return pieces
 
 
@@ -430,15 +438,16 @@ def _pll_examplar_run(test_source, bundle_json):
         }
 
     provides = list(bundle.get("provides") or ())
-    # The student's own file failing to parse is their problem to fix, and
-    # the normal run reports it properly - say so once rather than once per
-    # implementation.
+    # The student's own file not compiling is their problem to fix, and the
+    # normal run reports it properly - say so once rather than once per
+    # implementation. Some code parses and does not compile (`case Boa:`),
+    # so this covers both and says neither.
     try:
         test_pieces = _pll_examplar_compile_tests(test_source, "hw.py")
     except SyntaxError as e:
         return {
             "ok": False,
-            "error": "your file does not parse yet: %s (line %s)" % (e.msg, e.lineno),
+            "error": "your file has a syntax error: %s (line %s)" % (e.msg, e.lineno),
         }
 
     attribution = _pll_examplar_attribution(test_source, provides)

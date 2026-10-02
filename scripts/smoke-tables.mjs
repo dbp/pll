@@ -457,6 +457,217 @@ table(["i"], [[i] for i in range(500)])
     console.log("    seven bad inputs, each named precisely");
   }
 
+  console.log("\n[15] the table library's own messages say what to do");
+  {
+    const T = 't = table(["month", "riders"], [["Jan", 1121], ["Feb", 982]])\n';
+    const CSV = [
+      'with open("cars.csv", "w") as f:',
+      '    f.write("name,mpg,day\\nvw,29,Mon\\nhonda,33,Tue\\nford,,Wed\\n")',
+      'c = load_table("cars.csv")',
+      "",
+    ].join("\n");
+
+    for (const [label, code, kind, needle] of [
+      // Building a table. "Row 1" used to mean the second row, and the row
+      // itself was never shown.
+      [
+        "short row",
+        'table(["month", "riders"], [["Jan", 1121], ["Feb"]])',
+        "ValueError",
+        'the 2nd row, ["Feb"], has 1 value, but the table has 2 columns: month, riders',
+      ],
+      [
+        "long row",
+        'table(["month", "riders"], [["Jan", 1121, 9]])',
+        "ValueError",
+        'the 1st row, ["Jan", 1121, 9], has 3 values',
+      ],
+      // One string is iterable, so these used to come apart into letters.
+      [
+        "column names as one string",
+        'table("month, riders", [["Jan", 1121]])',
+        "TypeError",
+        'column names should be a list of strings, like ["month", "riders"]',
+      ],
+      [
+        "rows not nested",
+        'table(["month", "riders"], ["Jan", 1121])',
+        "TypeError",
+        'the 1st row is the string "Jan". Put every row inside one outer list',
+      ],
+      [
+        "duplicate columns",
+        'table(["month", "month"], [["Jan", "Feb"]])',
+        "ValueError",
+        'two columns called "month"',
+      ],
+      // Rows: a dict's own errors say nothing about the table.
+      ["row key typo", `${T}t.row(0)["rider"]`, "KeyError", 'this row has no column "rider" (it has: month, riders). Did you mean "riders"?'],
+      ["row key case", `${T}t.row(0)["Riders"]`, "KeyError", "Column names are case-sensitive."],
+      ["row attribute", `${T}t.row(0).riders`, "AttributeError", 'use square brackets: row["riders"]'],
+      ["row by name", `${T}t.row("Mar")`, "TypeError", 'row expects a row number, but got the string "Mar"'],
+      ["row out of range", `${T}t.row(5)`, "IndexError", "this table's rows are numbered 0 to 1"],
+      ["column typo", `${T}t.column("rider")`, "KeyError", 'Did you mean "riders"?'],
+      // Functions passed to the table methods.
+      [
+        "filter given a value",
+        `${T}t.filter(t.row(0)["riders"] < 1000)`,
+        "TypeError",
+        "filter calls your function with one row at a time",
+      ],
+      [
+        "filter function takes two",
+        `${T}def below(r, limit):\n    return r["riders"] < limit\n\nt.filter(below)`,
+        "TypeError",
+        "filter calls `below` with one row, but `below` takes 2 parameters",
+      ],
+      [
+        "filter returns a number",
+        `${T}def below(r):\n    return r["riders"]\n\nt.filter(below)`,
+        "TypeError",
+        "has to return True or False, but `below` returned the number 1121 for the 1st row",
+      ],
+      [
+        "transform given a value",
+        `${CSV}c.transform_column("mpg", int())`,
+        "TypeError",
+        "no brackets after it - `int`, not `int()`",
+      ],
+      // Options that used to be ignored.
+      [
+        "ascending as a string",
+        `${T}t.order_by("riders", ascending="False")`,
+        "TypeError",
+        'ascending has to be True or False, but it is the string "False"',
+      ],
+      [
+        "select_columns given one name",
+        `${T}t.select_columns("month")`,
+        "TypeError",
+        'a list of column names, like ["month"]',
+      ],
+      [
+        "add_column over an existing one",
+        `${T}t.add_column("riders", [1, 2])`,
+        "ValueError",
+        'use transform_column("riders", ...)',
+      ],
+      [
+        "add_column with too few values",
+        `${T}t.add_column("extra", [1])`,
+        "ValueError",
+        'given 1 value for "extra", but the table has 2 rows',
+      ],
+      // Converting, and charting what cannot be charted.
+      [
+        "conversion fails on one cell",
+        `${CSV}c.transform_column("mpg", int)`,
+        "ValueError",
+        'transform_column("mpg", int) failed on the 3rd row, whose value is blank (""). A blank cell cannot be converted; write a function that decides what a blank should become',
+      ],
+      // A column a name starts: too far for a spelling match, and still
+      // almost certainly what was meant.
+      [
+        "a column name that starts another",
+        't = table(["name", "hours-worked"], [["a", 1]])\nt.column("hours")',
+        "KeyError",
+        'Did you mean "hours-worked"?',
+      ],
+      [
+        "histogram with no bins",
+        `${T}t.histogram("riders", bins=0)`,
+        "ValueError",
+        "histogram's `bins` has to be 1 or more",
+      ],
+      [
+        "numbers still text",
+        `${CSV}c.mean("mpg")`,
+        "TypeError",
+        'transform_column("mpg", float) first',
+      ],
+      // The convert advice is wrong for a column of words, so it is not given.
+      [
+        "a column of words",
+        `${CSV}c.histogram("day")`,
+        "TypeError",
+        "That column holds text, so there is nothing to measure",
+      ],
+      [
+        "bar_chart the wrong way round",
+        `${T}t.bar_chart("riders", "month")`,
+        "TypeError",
+        'bar_chart takes the labels column first: bar_chart("month", "riders")',
+      ],
+      // Reading a file.
+      // An image where a row number or a bool belongs: the one place a
+      // table message describes an image, and so where an internal class
+      // name would show. The libraries share one globals dict, so there
+      // can only be one `_pll_describe` - it lives in the bootstrap.
+      [
+        "an image where a row number belongs",
+        `${T}t.row(circle(5, "solid", "red"))`,
+        "TypeError",
+        "row expects a row number, but got an image",
+      ],
+      [
+        "an image where a bool belongs",
+        `${T}t.order_by("riders", ascending=circle(5, "solid", "red"))`,
+        "TypeError",
+        "ascending has to be True or False, but it is an image",
+      ],
+      [
+        "a web page instead of a CSV",
+        'with open("page.csv", "w") as f:\n    f.write("<!DOCTYPE html>\\n<html></html>\\n")\nload_table("page.csv")',
+        "ValueError",
+        "gave back a web page, not a CSV file",
+      ],
+    ]) {
+      const result = py(callRunFile, code, "f6.py", SK);
+      const message = result.error_message ?? "";
+      expect(
+        result.ok === false && result.error_type === kind && message.includes(needle),
+        `${label}: wanted ${kind} "${needle}", got ${result.error_type}: ${message}`,
+      );
+    }
+    console.log("    twenty-nine table, row, CSV and chart messages name the fix");
+
+    // A missing file lists the ones that are there, which is usually the
+    // whole answer.
+    const missing = py(callRunFile, 'load_table("car.csv")', "f6.py", SK);
+    // A close name answers it outright, rather than sitting in a list.
+    expect(
+      (missing.error_message ?? "").includes('Did you mean "cars.csv"?'),
+      `a near-miss names the file: ${missing.error_message}`,
+    );
+    expect(
+      !(missing.error_message ?? "").includes("Check the spelling"),
+      `and does not also say to check the spelling: ${missing.error_message}`,
+    );
+    // Nothing close: the files that are there.
+    const unrelated = py(callRunFile, 'load_table("zebra.csv")', "f6.py", SK);
+    expect(
+      (unrelated.error_message ?? "").includes("The CSV files next to your program are:"),
+      `nothing close lists the real ones: ${unrelated.error_message}`,
+    );
+    // File names are quoted the course's way.
+    expect(!/'car\.csv'/.test(missing.error_message ?? ""), `no Python repr quotes: ${missing.error_message}`);
+
+    // Rows still have to be dicts, or every test written against one breaks.
+    const asDict = py(
+      callRunFile,
+      `${T}print(t.row(0) == {"month": "Jan", "riders": 1121})\nprint(sorted(t.row(0).keys()))\nprint(t.rows() == [{"month": "Jan", "riders": 1121}, {"month": "Feb", "riders": 982}])`,
+      "row.py",
+      SK,
+    );
+    expect(asDict.ok === true, `rows still behave as dicts: ${asDict.error_message ?? ""}`);
+    expect(
+      (asDict.stdout ?? "").trim().split("\n").join("|") ===
+        "True|['month', 'riders']|True",
+      `a row compares equal to the plain dict a test is written with: ${asDict.stdout}`,
+    );
+    console.log("    and a row is still a dict: equal, keyed and ordered the same");
+  }
+
   callRunFile.destroy?.();
   callReplEval.destroy?.();
 

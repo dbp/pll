@@ -27,11 +27,30 @@ import { PLL_VENDOR_DIR, VENDORED_WHEELS } from "./pythonVendor";
 import { waitForStdinLine } from "./stdinBuffer";
 import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "./workerProtocol";
 
+/**
+ * Where Pyodide's package-loading progress goes.
+ *
+ * It has to be given somewhere: left out, Pyodide logs to `console.log`,
+ * which in Node is **stdout** - and the command line promises that only
+ * the program's own output appears there, so `pll hw.py > out.txt` on any
+ * file with tests captured "Loading atomicwrites, attrs, ..." as though
+ * the program had printed it.
+ */
+const packageProgress: PackageLoadOptions = {
+  messageCallback: (message: string) => console.error(message),
+  errorCallback: (message: string) => console.error(message),
+};
+
+export interface PackageLoadOptions {
+  messageCallback?: (message: string) => void;
+  errorCallback?: (message: string) => void;
+}
+
 /** The slice of the Pyodide API the worker uses. */
 export interface PyodideInstance {
   runPython(code: string): unknown;
-  loadPackage(names: string | string[]): Promise<unknown>;
-  loadPackagesFromImports(code: string): Promise<unknown>;
+  loadPackage(names: string | string[], options?: PackageLoadOptions): Promise<unknown>;
+  loadPackagesFromImports(code: string, options?: PackageLoadOptions): Promise<unknown>;
   setStdin(options: {
     stdin?: () => string | null | undefined;
     autoEOF?: boolean;
@@ -195,6 +214,11 @@ export function createWorkerHost(
           instance.setInterruptBuffer(new Uint8Array(interruptBuffer));
         }
         instance.runPython(PYODIDE_BOOTSTRAP_PY);
+        if (interruptBuffer) {
+          // PLL's SIGINT handler acknowledges a delivered Stop here, so the
+          // host knows to stop re-asserting it (see interruptBuffer.ts).
+          instance.globals.set("_pll_interrupt_view", new Uint8Array(interruptBuffer));
+        }
         instance.runPython(PLL_IMAGE_LIB_PY);
         instance.runPython(PLL_TABLE_LIB_PY);
         // After the image lib: `to_draw` handlers use the image primitives.
@@ -227,7 +251,7 @@ export function createWorkerHost(
     if (!httpPatchPromise) {
       const instance = ready();
       httpPatchPromise = instance
-        .loadPackage("pyodide-http")
+        .loadPackage("pyodide-http", packageProgress)
         .then(() => void instance.runPython(PYODIDE_HTTP_PATCH_PY));
     }
     return httpPatchPromise;
@@ -235,7 +259,7 @@ export function createWorkerHost(
 
   function ensurePytest(): Promise<unknown> {
     if (!pytestPromise) {
-      pytestPromise = ready().loadPackage("pytest");
+      pytestPromise = ready().loadPackage("pytest", packageProgress);
     }
     return pytestPromise;
   }
@@ -258,9 +282,14 @@ export function createWorkerHost(
   }
 
   /**
-   * Drop a pending Stop before running anything. Without this, a Stop that
-   * arrived after the interpreter finished (or one it never polled) would
-   * raise `KeyboardInterrupt` in whatever the student ran next.
+   * Drop a pending Stop before every request. Without this, a Stop that
+   * arrived after the interpreter finished (or one it never polled, pressed
+   * while files were loading) would raise `KeyboardInterrupt` in whatever
+   * ran next - the next run's static checks, typically, which then reported
+   * that they had failed.
+   *
+   * This cannot lose a Stop: `requestInterrupt` puts one back for as long as
+   * a request that was running when it was pressed is still running.
    */
   function dropPendingInterrupt(): void {
     if (interruptBuffer) {
@@ -289,6 +318,9 @@ export function createWorkerHost(
   }
 
   return async function handle(data: WorkerInbound): Promise<void> {
+    if (data.type !== "init") {
+      dropPendingInterrupt();
+    }
     try {
       switch (data.type) {
         case "init": {
@@ -299,7 +331,6 @@ export function createWorkerHost(
           break;
         }
         case "runFile": {
-          dropPendingInterrupt();
           const result = withLiveEmit(() =>
             callPython<RunResult>("_pll_run_file", [
               data.code,
@@ -314,7 +345,6 @@ export function createWorkerHost(
           break;
         }
         case "replEval": {
-          dropPendingInterrupt();
           const result = callPython<RunResult>("_pll_repl_eval", [
             data.code,
             data.sessionKey,
@@ -339,12 +369,12 @@ export function createWorkerHost(
           break;
         }
         case "loadPackages": {
-          await ready().loadPackagesFromImports(data.code);
+          await ready().loadPackagesFromImports(data.code, packageProgress);
           // `loadPackagesFromImports` only sees imports, and `to_pandas`
           // keeps its own inside the method, so it has to be asked for
           // by name.
           if (PANDAS_METHOD_RE.test(data.code)) {
-            await ready().loadPackage("pandas");
+            await ready().loadPackage("pandas", packageProgress);
           }
           if (NETWORK_IMPORT_RE.test(data.code)) {
             await ensureHttpShim();
@@ -358,7 +388,6 @@ export function createWorkerHost(
           break;
         }
         case "runTests": {
-          dropPendingInterrupt();
           await ensurePytest();
           const result = callPython<TestRunResult>("_pll_run_tests", [
             data.code,

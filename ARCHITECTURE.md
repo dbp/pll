@@ -452,23 +452,52 @@ so every later run, in every file, waits behind it. Only a window reload
 recovered.
 
 `interruptBuffer.ts` is the fix, and it is the same shape as
-`stdinBuffer.ts`: a one-byte `SharedArrayBuffer` passed to the worker on
+`stdinBuffer.ts`: a small `SharedArrayBuffer` passed to the worker on
 `init` and handed to Pyodide via `setInterruptBuffer`. Writing SIGINT (2)
-into it makes the interpreter raise `KeyboardInterrupt` at its next bytecode
-check. It has to be shared memory for the same reason stdin does - the
-thread we need to reach is blocked.
+into its first byte makes the interpreter raise `KeyboardInterrupt` at its
+next bytecode check. It has to be shared memory for the same reason stdin
+does - the thread we need to reach is blocked.
 
-The Python side needed no changes. `_pll_run_file` already catches
-`BaseException`, so an interrupt arrives as an ordinary error result
-(`error_type: "KeyboardInterrupt"`) with the `finally` still capturing
-whatever the program printed first. It finds no analyzer and renders as a
-plain error entry.
+Pyodide's check reads that byte and then writes 0 over it, in two separate
+steps, so a Stop written between them is erased and the program runs on.
+A Stop is therefore re-asserted every `INTERRUPT_RETRY_MS` until PLL's
+SIGINT handler, installed by the bootstrap, sets the second byte to
+acknowledge it - and only while a request that was running when Stop was
+pressed is still running, so a retry cannot carry over into whatever runs
+next. The handler consumes repeats of a Stop it has already raised, so a
+retry that loses the race with the acknowledgement does not raise a second
+`KeyboardInterrupt` into PLL's own clean-up.
+
+`_pll_run_file` catches `BaseException`, so a Stop in the student's code
+arrives as an ordinary error result (`error_type: "KeyboardInterrupt"`)
+with the `finally` still capturing whatever the program printed first, and
+the analyzer words it "The program was stopped." A Stop retried into the
+moment a run starts can instead land while PLL is still parsing and
+instrumenting the file, outside that `except`; `_pll_stoppable` turns one
+there into the same stopped result, for a file, a prompt line or the tests.
 
 `PythonRuntime.interrupt()` is synchronous - there is no point posting a
 message to a blocked thread - and returns false when no buffer could be
 created, so the host can say so rather than appear to work. The worker
-clears the buffer before every run, so a Stop that arrived just after a
-program finished cannot fire into the next one.
+clears the buffer before every request, so a Stop that nothing took
+(pressed as a program finished, or while files loaded) cannot fire into
+whatever runs next - usually the next run's static checks. The retry is
+what makes that safe: a Stop meant for the request itself is put back.
+
+### A Stop ends the whole run
+
+A file run is several steps - libraries and files load, the Examplar
+check, the file's own tests, then the program - and a Stop lands in
+whichever is running. What the student asked for is that nothing more
+runs. `_pll_run_tests` treats `KeyboardInterrupt` as the end of the test
+phase: the tests that finished keep their results, the one running is
+marked `stopped`, and the rest are not run. `ReplSession.executeFile`, and
+the CLI's `runFile`, check `stopRequestedSeq` between the steps and end the
+run with a banner saying what was not run. The same checks catch a Stop
+pressed while something loads, which reaches no running Python at all and
+used to be lost. A step that fails *because* of a Stop - static analysis,
+or loading pytest, interrupted part-way - reports the Stop, not a failure
+of its own.
 
 Two limits are inherent to the mechanism, and PLL reports them rather than
 hiding them: the check happens between Python bytecodes, so a tight loop
@@ -868,8 +897,8 @@ part is the policy underneath, which already is shared.
 The program's own stdout is the only thing on stdout; everything PLL says
 *about* the run goes to stderr. So `pll hw.py > out.txt` captures exactly
 what the program printed. Exit codes are distinct so an autograder can tell
-the cases apart: `0` ok, `1` the program raised, `2` level checks blocked
-it, `3` a test failed, `64` bad usage.
+the cases apart: `0` ok, `1` the program raised (or Ctrl+C stopped it), `2`
+level checks blocked it, `3` a test failed, `64` bad usage.
 
 ### Packaging
 

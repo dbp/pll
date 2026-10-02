@@ -102,6 +102,235 @@ def _format_cell(value):
 
 
 # -----------------------------------------------------------------------------
+# Naming things in messages
+# -----------------------------------------------------------------------------
+
+_PLL_ORDINALS = ("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th")
+
+
+def _pll_ordinal(index):
+    """`1st`, `2nd`, ... for a 0-based position.
+
+    Used instead of the index itself wherever a message would otherwise
+    have to say "Row 1" about the second row.
+    """
+    if index < len(_PLL_ORDINALS):
+        return _PLL_ORDINALS[index]
+    return "%dth" % (index + 1)
+
+
+def _pll_literal(value, limit=60):
+    """A value written the way it would be written in a program.
+
+    `["Feb"]`, not `['Feb']`: a student reads the message next to their own
+    source, and showing them something they did not type makes them look
+    for a difference that is not there.
+    """
+    if isinstance(value, str):
+        text = '"%s"' % value
+    elif isinstance(value, (list, tuple)):
+        text = "[%s]" % ", ".join(_pll_literal(v, limit) for v in value)
+    elif value is None or isinstance(value, bool):
+        text = repr(value)
+    elif isinstance(value, (int, float)):
+        text = _format_cell(value)
+    else:
+        text = repr(value)
+    if len(text) > limit:
+        return text[: limit - 4] + " ...]" if text.startswith("[") else text[: limit - 3] + "..."
+    return text
+
+
+def _pll_closest(name, candidates):
+    """The candidate `name` was probably meant to be, and why.
+
+    Returns `(candidate, note)`, where the note explains a match that
+    differs only in case - which is the commonest of these and the one a
+    student is least likely to spot by reading.
+    """
+    if not isinstance(name, str):
+        return (None, "")
+    for candidate in candidates:
+        if candidate.lower() == name.lower():
+            return (candidate, " Column names are case-sensitive.")
+    # Only one column starting with what was written: `hours` for
+    # `hours-worked`, `drinks` for `drinks-sold`. Too far for a spelling
+    # match, and still almost certainly what was meant.
+    starting = [c for c in candidates if c.lower().startswith(name.lower()) and name]
+    if len(starting) == 1:
+        return (starting[0], "")
+    best = None
+    best_distance = None
+    for candidate in candidates:
+        distance = _pll_edit_distance(name.lower(), candidate.lower())
+        if best_distance is None or distance < best_distance:
+            best = candidate
+            best_distance = distance
+    # Close enough to be a typo rather than a different word.
+    if best is not None and best_distance <= max(1, len(best) // 3):
+        return (best, "")
+    return (None, "")
+
+
+def _pll_q(name):
+    """A column name written as a student writes it: `"month"`.
+
+    `%r` gives `'month'`, which is not what they typed; a message that
+    quotes their code differently from how they wrote it sends them looking
+    for a difference that is not there.
+    """
+    return _pll_literal(name) if isinstance(name, str) else repr(name)
+
+
+def _pll_no_column(name, columns, what="the table"):
+    """The one wording for a column that is not there."""
+    suggestion, note = _pll_closest(name, columns)
+    return "%s has no column %s (it has: %s).%s%s" % (
+        what,
+        _pll_q(name),
+        ", ".join(columns),
+        " Did you mean %s?" % _pll_q(suggestion) if suggestion is not None else "",
+        note,
+    )
+
+
+def _pll_function_name(fn):
+    """`` `below_1k` `` for a message about a function the student passed."""
+    name = getattr(fn, "__name__", None)
+    return "`%s`" % name if name and name != "<lambda>" else "the function given"
+
+
+def _pll_check_function(fn, who, takes):
+    """A function argument, checked before it is used.
+
+    Two mistakes hide here. Passing the *result* of a call rather than the
+    function - `transform_column("servings", int())` - and passing a
+    function that takes the wrong number of things, which fails inside the
+    library with a message pointing at the `def` rather than at the call.
+    """
+    if not callable(fn):
+        raise TypeError(
+            "%s needs a function, but got %s. %s calls your function with "
+            "%s at a time, so give it the function's name with no brackets "
+            "after it - `int`, not `int()`." % (who, _pll_describe(fn), who, takes)
+        )
+    count = _pll_parameter_count(fn)
+    if count is None or count == 1:
+        return fn
+    named = _pll_function_name(fn)
+    if count == 0:
+        raise TypeError(
+            "%s calls %s with %s, but %s takes no parameters."
+            % (who, named, takes, named)
+        )
+    raise TypeError(
+        "%s calls %s with %s, but %s takes %d parameters."
+        % (who, named, takes, named, count)
+    )
+
+
+def _pll_parameter_count(fn):
+    """How many arguments `fn` must be called with, or None if unknowable.
+
+    Read off the code object rather than with `inspect`, which is slower
+    and would be imported only for this. Anything that is not a plain
+    Python function - a builtin like `int`, a class, a partial - gives
+    None, and is left to Python to check.
+    """
+    code = getattr(fn, "__code__", None)
+    if code is None:
+        return None
+    if code.co_flags & 0x04:  # *args: takes any number
+        return None
+    required = code.co_argcount
+    defaults = getattr(fn, "__defaults__", None)
+    if defaults:
+        required -= len(defaults)
+    if getattr(fn, "__self__", None) is not None:
+        required -= 1
+    return required
+
+
+def _pll_apply_to_cell(fn, value, index, name):
+    """`fn(value)`, with the row and value named if it fails.
+
+    `transform_column("tickets", int)` on a column with one blank cell
+    fails with "invalid literal for int() with base 10: ''", which says
+    nothing about which row or which column.
+    """
+    try:
+        return fn(value)
+    except Exception as exc:
+        if type(exc).__name__ == "TypeCheckError":
+            # The function's own annotation does not fit what
+            # transform_column hands it - a question about the `def`, not
+            # about this row's data. Left alone so the type checker's own
+            # explanation reaches the student intact.
+            raise
+        # What to do about it, rather than Python's own words after a colon:
+        # a blank cell needs a decision, which is a function of their own.
+        fn_name = getattr(fn, "__name__", "the function")
+        if value == "":
+            advice = (
+                "A blank cell cannot be converted; write a function that "
+                "decides what a blank should become, and give that to "
+                "transform_column instead."
+            )
+        else:
+            advice = "%s cannot convert %s." % (
+                "`%s`" % fn_name if fn_name != "the function" else "The function",
+                _pll_literal(value),
+            )
+        raise type(exc)(
+            "transform_column(%s, %s) failed on the %s row, whose value is %s. %s"
+            % (
+                _pll_q(name),
+                fn_name,
+                _pll_ordinal(index),
+                'blank ("")' if value == "" else _pll_literal(value),
+                advice,
+            )
+        ) from None
+
+
+class Row(dict):
+    """One row of a table: a dict that can explain itself.
+
+    A plain dict answers `r["rider"]` with `KeyError: 'rider'` - a bare
+    name, with nothing about the table it came from or the columns it does
+    have - and `r.riders` with "'dict' object has no attribute 'riders'".
+    Both now say what the table methods say.
+
+    It stays a `dict` in every other way, so a row still compares equal to
+    the plain dict a test is written with, and everything that works on a
+    dict still works.
+    """
+
+    __slots__ = ()
+
+    def __missing__(self, key):
+        raise KeyError(_pll_no_column(key, list(self), "this row"))
+
+    def __getattr__(self, name):
+        # Dunder and private lookups are Python's own probing (`copy`,
+        # `__deepcopy__`, Pyodide's conversion); they have to keep failing
+        # the ordinary way or those mechanisms break.
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name in self:
+            raise AttributeError(
+                'to get a value out of a row, use square brackets: row["%s"]' % name
+            )
+        raise AttributeError(
+            "%s Values come out of a row with square brackets, like row[%s]."
+            % (
+                _pll_no_column(name, list(self), "this row"),
+                _pll_q(list(self)[0] if self else "column"),
+            )
+        )
+
+
+# -----------------------------------------------------------------------------
 # The Table class
 # -----------------------------------------------------------------------------
 
@@ -114,10 +343,33 @@ class Table:
         Each row is a list/tuple aligned with `columns`. Rows may also be
         dicts; missing keys default to None.
         """
+        # A single string is iterable, so `table("month, riders", ...)` used
+        # to come apart into letters and be reported as duplicate columns.
+        if isinstance(columns, str):
+            raise TypeError(
+                "table's column names should be a list of strings, like "
+                '["month", "riders"] - not one string.'
+            )
         cols = list(columns)
+        for c in cols:
+            if not isinstance(c, str):
+                raise TypeError(
+                    "table's column names have to be strings, but one of them "
+                    "is %s." % _pll_describe(c)
+                )
         if len(cols) != len(set(cols)):
-            raise ValueError("Duplicate column names: %r" % (cols,))
+            repeated = sorted({c for c in cols if cols.count(c) > 1})
+            raise ValueError(
+                "table has two columns called %s. Column names have to be "
+                "different, so give one of them another name."
+                % ", ".join(_pll_q(c) for c in repeated)
+            )
 
+        if isinstance(rows, str):
+            raise TypeError(
+                "table's rows should be a list of rows, like "
+                '[["Jan", 1], ["Feb", 2]] - not one string.'
+            )
         data = {c: [] for c in cols}
         n = 0
         for row in rows:
@@ -125,12 +377,30 @@ class Table:
             if isinstance(row, dict):
                 for c in cols:
                     data[c].append(row.get(c))
+            elif isinstance(row, str) or not hasattr(row, "__iter__"):
+                # `table(columns, ["Jan", 1])` - the values of one row where
+                # a list of rows belongs. Iterating it would take a string
+                # apart into letters and blame the wrong thing.
+                raise TypeError(
+                    "each row should be a list of values, but the %s row is "
+                    "%s. Put every row inside one outer list: "
+                    "table(columns, [[...], [...]])."
+                    % (_pll_ordinal(n - 1), _pll_describe(row))
+                )
             else:
                 row_seq = list(row)
                 if len(row_seq) != len(cols):
                     raise ValueError(
-                        "Row %d has %d values but the table has %d columns"
-                        % (n - 1, len(row_seq), len(cols))
+                        "the %s row, %s, has %d value%s, but the table has %d "
+                        "columns: %s"
+                        % (
+                            _pll_ordinal(n - 1),
+                            _pll_literal(row_seq),
+                            len(row_seq),
+                            "" if len(row_seq) == 1 else "s",
+                            len(cols),
+                            ", ".join(cols),
+                        )
                     )
                 for c, v in zip(cols, row_seq):
                     data[c].append(v)
@@ -169,12 +439,22 @@ class Table:
 
     def row(self, index):
         """Row at `index` as a {column: value} dict."""
+        # Checked before the comparison below, which otherwise fails inside
+        # `row` with "'<' not supported between instances of 'str' and
+        # 'int'" - naming neither `row` nor the argument.
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise TypeError(
+                "row expects a row number, but got %s. To find rows by a "
+                "value, use filter." % _pll_describe(index)
+            )
         if index < 0 or index >= self._length:
             raise IndexError(
-                "row index %d out of range (table has %d rows)"
-                % (index, self._length)
+                "there is no row %d: this table's rows are numbered 0 to %d."
+                % (index, self._length - 1)
+                if self._length > 0
+                else "there is no row %d: this table has no rows." % index
             )
-        return {c: self._data[c][index] for c in self._columns}
+        return Row((c, self._data[c][index]) for c in self._columns)
 
     def rows(self):
         """All rows as a list of {column: value} dicts."""
@@ -184,12 +464,25 @@ class Table:
 
     def filter(self, predicate):
         """Keep rows where `predicate(row_dict)` is truthy."""
-        if not callable(predicate):
-            raise TypeError("filter expects a function, got %r" % (predicate,))
+        _pll_check_function(predicate, "filter", "one row")
         keep = []
         for i in range(self._length):
-            row = {c: self._data[c][i] for c in self._columns}
-            if predicate(row):
+            row = Row((c, self._data[c][i]) for c in self._columns)
+            verdict = predicate(row)
+            if not isinstance(verdict, bool):
+                # A number is truthy, so a predicate that returns the value
+                # it meant to compare used to keep every row in silence.
+                raise TypeError(
+                    "the function given to filter has to return True or "
+                    "False, but %s returned %s for the %s row. Did you mean "
+                    "to compare it with something?"
+                    % (
+                        _pll_function_name(predicate),
+                        _pll_describe(verdict),
+                        _pll_ordinal(i),
+                    )
+                )
+            if verdict:
                 keep.append(i)
         new_data = {c: [self._data[c][i] for i in keep] for c in self._columns}
         return Table._from_columns(self._columns, new_data, len(keep))
@@ -197,10 +490,11 @@ class Table:
     def transform_column(self, name, fn):
         """Replace `name` with the result of `fn(value)` applied to each value."""
         self._require_column(name)
-        if not callable(fn):
-            raise TypeError("transform_column expects a function, got %r" % (fn,))
+        _pll_check_function(fn, "transform_column", "one value")
         new_data = {c: list(self._data[c]) for c in self._columns}
-        new_data[name] = [fn(v) for v in self._data[name]]
+        new_data[name] = [
+            _pll_apply_to_cell(fn, v, i, name) for i, v in enumerate(self._data[name])
+        ]
         return Table._from_columns(self._columns, new_data, self._length)
 
     def add_column(self, name, values_or_fn):
@@ -210,18 +504,29 @@ class Table:
         that takes a row dict and returns the value for that row.
         """
         if name in self._data:
-            raise ValueError("Column %r already exists" % name)
+            raise ValueError(
+                "this table already has a column called %s. To change the "
+                "values in it, use transform_column(%s, ...)."
+                % (_pll_q(name), _pll_q(name))
+            )
         if callable(values_or_fn):
+            _pll_check_function(values_or_fn, "add_column", "one row")
             new_values = []
             for i in range(self._length):
-                row = {c: self._data[c][i] for c in self._columns}
+                row = Row((c, self._data[c][i]) for c in self._columns)
                 new_values.append(values_or_fn(row))
         else:
             new_values = list(values_or_fn)
             if len(new_values) != self._length:
                 raise ValueError(
-                    "Column %r has %d values, but the table has %d rows"
-                    % (name, len(new_values), self._length)
+                    "add_column was given %d value%s for %s, but the table "
+                    "has %d rows."
+                    % (
+                        len(new_values),
+                        "" if len(new_values) == 1 else "s",
+                        _pll_q(name),
+                        self._length,
+                    )
                 )
         new_columns = self._columns + [name]
         new_data = {c: list(self._data[c]) for c in self._columns}
@@ -230,6 +535,13 @@ class Table:
 
     def select_columns(self, names):
         """Keep only the columns in `names`, in that order."""
+        # One string is iterable, so `select_columns("name")` used to come
+        # apart into letters and complain about a column called 'n'.
+        if isinstance(names, str):
+            raise TypeError(
+                "select_columns takes a list of column names, like [%s] - "
+                "not one name on its own." % _pll_q(names)
+            )
         names = list(names)
         for n in names:
             self._require_column(n)
@@ -239,6 +551,13 @@ class Table:
     def order_by(self, name, ascending=True):
         """Sort rows by `name` (ascending by default)."""
         self._require_column(name)
+        # `ascending="False"` is a non-empty string, so it used to sort
+        # ascending without a word.
+        if not isinstance(ascending, bool):
+            raise TypeError(
+                "order_by's ascending has to be True or False, but it is %s."
+                % _pll_describe(ascending)
+            )
         # Sort indices to keep all columns in lockstep.
         order = sorted(
             range(self._length),
@@ -301,7 +620,7 @@ class Table:
         self._require_column(x)
         self._require_column(y)
         labels = [_format_cell(v) for v in self._data[x]]
-        values = self._numeric_column(y, "bar_chart")
+        values = self._numeric_column(y, "bar_chart", swap_with=x)
         return _PllChart(_render_bar_chart(labels, values, x, y, title))
 
     def scatter_chart(self, x, y, title=None):
@@ -330,14 +649,20 @@ class Table:
         values = self._numeric_column(name, "histogram")
         if bin_width is not None:
             if bin_width <= 0:
-                raise ValueError("bin_width must be greater than 0")
+                raise ValueError(
+                    "histogram's `bin_width` has to be more than 0, but it is %s."
+                    % _format_cell(bin_width)
+                )
             if not values:
                 bins = 1
             else:
                 span = max(values) - min(values)
                 bins = max(1, int(_math.ceil(span / bin_width))) if span > 0 else 1
         if bins < 1:
-            raise ValueError("bins must be >= 1")
+            raise ValueError(
+                "histogram's `bins` has to be 1 or more - it is how many bars "
+                "to draw - but it is %s." % _format_cell(bins)
+            )
         return _PllChart(_render_histogram(values, bins, name, title))
 
     # ---- Charts: the rest of the Pyret set ----
@@ -525,30 +850,64 @@ class Table:
 
     def _require_column(self, name):
         if name not in self._data:
-            raise KeyError(
-                "No column named %r (have: %s)" % (name, ", ".join(self._columns))
-            )
+            raise KeyError(_pll_no_column(name, self._columns))
 
-    def _numeric_column(self, name, op):
+    def _numeric_column(self, name, op, swap_with=None):
+        """The column as numbers, or an error saying why it is not.
+
+        `swap_with` is the other column of a two-column chart, so a chart
+        given its arguments the wrong way round can say so.
+        """
         self._require_column(name)
         out = []
-        for v in self._data[name]:
+        for index, v in enumerate(self._data[name]):
             f = _to_number(v)
             if f is None:
-                hint = ""
-                if isinstance(v, str):
-                    # By far the most likely cause: the table came from a
-                    # CSV, where every column is text until converted.
-                    hint = (
-                        ". If this came from load_table, convert it first: "
-                        "t.transform_column(%r, float)" % name
-                    )
-                raise TypeError(
-                    "%s needs a numeric column; column %r contains %r%s"
-                    % (op, name, v, hint)
-                )
+                raise TypeError(self._not_numeric(name, v, index, op, swap_with))
             out.append(f)
         return out
+
+    def _looks_numeric(self, name):
+        """Whether a column is numbers written as text, rather than words.
+
+        What separates `"1123"`, which only needs converting, from `"Mon"`,
+        which is simply not a number - and so decides whether advising
+        `transform_column(..., float)` would help or mislead.
+        """
+        values = [v for v in self._data[name] if v is not None and v != ""]
+        if not values:
+            return False
+        numeric = sum(1 for v in values if _pll_reads_as_number(v))
+        return numeric * 2 >= len(values)
+
+    def _not_numeric(self, name, value, index, op, swap_with):
+        """Why `op` cannot use this column, and what would fix it."""
+        base = (
+            "%s needs a column of numbers, but column %s holds %s in the %s row"
+            % (op, _pll_q(name), _pll_describe(value), _pll_ordinal(index))
+        )
+        # Arguments the wrong way round: the labels column was given where
+        # the measured one belongs, and the other one is the numbers.
+        if (
+            swap_with is not None
+            and not self._looks_numeric(name)
+            and self._looks_numeric(swap_with)
+        ):
+            return "%s. %s takes the labels column first: %s(%s, %s)." % (
+                base,
+                op,
+                op,
+                _pll_q(name),
+                _pll_q(swap_with),
+            )
+        if self._looks_numeric(name):
+            # Numbers written as text, which is every column of a CSV.
+            return (
+                "%s. Values read from a CSV are text until they are "
+                "converted: transform_column(%s, float) first."
+                % (base, _pll_q(name))
+            )
+        return "%s. That column holds text, so there is nothing to measure." % base
 
 
 # -----------------------------------------------------------------------------
@@ -582,6 +941,28 @@ def table_from_columns(data):
     return Table._from_columns(cols, data, n)
 
 
+def _pll_refuse_html(text, source):
+    """Stop early when the address gave a web page rather than a CSV.
+
+    A GitHub file's own address serves the page you look at in a browser,
+    not the file, and the page parsed as CSV produced "Line 15 of '...' has
+    9 value(s) but there are 1 columns (<!DOCTYPE html>)" - a message about
+    a line nobody wrote.
+    """
+    start = text.lstrip()[:200].lower()
+    if not (start.startswith("<!doctype html") or start.startswith("<html")):
+        return
+    hint = ""
+    if "github.com" in str(source):
+        hint = (
+            " On GitHub, open the file and use the address behind the Raw "
+            "button (raw.githubusercontent.com)."
+        )
+    raise ValueError(
+        '"%s" gave back a web page, not a CSV file.%s' % (source, hint)
+    )
+
+
 def load_table(source):
     """Read a CSV into a table, from a file beside your program or a URL.
 
@@ -606,6 +987,7 @@ def load_table(source):
     says what it means.
     """
     text = _pll_read_source(source, "load_table")
+    _pll_refuse_html(text, source)
     # `csv` rather than `split(",")`: quoted fields containing commas and
     # newlines are ordinary in real data, and getting them wrong shifts
     # every later column without saying anything.
@@ -623,8 +1005,9 @@ def load_table(source):
         for name in header:
             if name in seen:
                 raise ValueError(
-                    "%r has two columns called %r. Column names have to be "
-                    "different, so give one of them another name." % (source, name)
+                    "%s has two columns called %s. Column names have to be "
+                    "different, so give one of them another name."
+                    % (_pll_q(source), _pll_q(name))
                 )
             seen.add(name)
     blank = [i for i, name in enumerate(header) if not name]
@@ -699,6 +1082,24 @@ def _to_number(value):
             return None
         return float(value)
     return None
+
+
+def _pll_reads_as_number(value):
+    """Whether this value *could* be a number.
+
+    Wider than `_to_number`, which refuses a string on purpose: this is
+    only for deciding whether to suggest a conversion, and `"29"` from a
+    CSV is exactly the case where suggesting one is right.
+    """
+    if _to_number(value) is not None:
+        return True
+    if not isinstance(value, str):
+        return False
+    try:
+        float(value.strip())
+    except ValueError:
+        return False
+    return True
 
 
 def _sum_numeric(values):

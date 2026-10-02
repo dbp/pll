@@ -23,11 +23,174 @@ import re as _pll_img_re
 #: the functional forms, so `rgb(1, 2, 3)` keeps working.
 _PLL_COLOR_HEX_RE = _pll_img_re.compile(r"^#(?:[0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
 _PLL_COLOR_FN_RE = _pll_img_re.compile(r"^(?:rgb|rgba|hsl|hsla)\(.+\)$")
-#: A colour *name*. Not checked against a list of the real ones - see
-#: `_pll_check_color` for why - so this only says it is shaped like a word.
+#: A colour *name*: shaped like a word, and then checked against the list
+#: below. SVG silently ignores a paint value it cannot parse, so "bleu"
+#: drew an invisible shape and said nothing at all.
 _PLL_COLOR_NAME_RE = _pll_img_re.compile(r"^[A-Za-z]+$")
 
+#: Every named colour in CSS Color 4 - the names SVG accepts - plus the two
+#: keywords that are not colours but are paint values. Case-insensitive, as
+#: CSS is. There are 148 names; the count is asserted by the smoke tests, so
+#: dropping one fails loudly rather than rejecting a colour that works.
+_PLL_CSS_COLOR_NAMES = frozenset(
+    """
+    aliceblue antiquewhite aqua aquamarine azure beige bisque black
+    blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse
+    chocolate coral cornflowerblue cornsilk crimson cyan darkblue
+    darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki
+    darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon
+    darkseagreen darkslateblue darkslategray darkslategrey darkturquoise
+    darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick
+    floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod
+    gray green greenyellow grey honeydew hotpink indianred indigo ivory
+    khaki lavender lavenderblush lawngreen lemonchiffon lightblue
+    lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen
+    lightgrey lightpink lightsalmon lightseagreen lightskyblue
+    lightslategray lightslategrey lightsteelblue lightyellow lime
+    limegreen linen magenta maroon mediumaquamarine mediumblue
+    mediumorchid mediumpurple mediumseagreen mediumslateblue
+    mediumspringgreen mediumturquoise mediumvioletred midnightblue
+    mintcream mistyrose moccasin navajowhite navy oldlace olive
+    olivedrab orange orangered orchid palegoldenrod palegreen
+    paleturquoise palevioletred papayawhip peachpuff peru pink plum
+    powderblue purple rebeccapurple red rosybrown royalblue saddlebrown
+    salmon sandybrown seagreen seashell sienna silver skyblue slateblue
+    slategray slategrey snow springgreen steelblue tan teal thistle
+    tomato turquoise violet wheat white whitesmoke yellow yellowgreen
+""".split()
+)
+
+_PLL_COLOR_KEYWORDS = frozenset(("transparent", "currentcolor", "none"))
+
 _PLL_MODES = ("solid", "outline")
+
+
+#: Filled in at the end of this module, from the functions themselves, so
+#: a message can say "the 3rd argument (mode)" and show the whole contract
+#: without a second list of parameter names to keep in step.
+_PLL_PARAMS = {}
+
+_PLL_ORDINALS = ("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th")
+
+
+def _pll_ordinal(index):
+    """`1st`, `2nd`, ... for a 0-based argument position."""
+    if index < len(_PLL_ORDINALS):
+        return _PLL_ORDINALS[index]
+    return "%dth" % (index + 1)
+
+
+def _pll_where(who, param):
+    """" (the 3rd argument)", or "" when the position is not known."""
+    names = _PLL_PARAMS.get(who)
+    if not names or param not in names:
+        return ""
+    return " (the %s argument)" % _pll_ordinal(names.index(param))
+
+
+def _pll_contract(who):
+    """" The arguments are: rectangle(width, height, mode, color)." """
+    names = _PLL_PARAMS.get(who)
+    # Only worth showing when there are enough arguments to get lost
+    # among; `frame(image)` explains itself.
+    if not names or len(names) < 3:
+        return ""
+    return " The arguments are: %s(%s)." % (who, ", ".join(names))
+
+
+def _pll_check_image(value, who, index):
+    """One argument of a combining function.
+
+    Checked when the function is called. Before this, `beside(a, "austria")`
+    was built happily and only failed later, inside the rendering code,
+    with "'str' object has no attribute 'width'" - naming neither `beside`
+    nor which argument was wrong, and after the broken picture had already
+    been displayed.
+    """
+    if isinstance(value, Image):
+        return value
+    raise TypeError(
+        "%s's %s argument is %s, not an image."
+        % (who, _pll_ordinal(index), _pll_describe(value))
+    )
+
+
+def _pll_check_images(images, who, offset=0):
+    """Every image argument of a combining function.
+
+    `offset` is how many arguments come before them, so `beside_align`
+    counts its images from the second position.
+    """
+    if len(images) == 1 and isinstance(images[0], (list, tuple)):
+        raise TypeError(
+            "%s takes the images themselves, not a list of them: "
+            "write %s(first, second) rather than %s([first, second])."
+            % (who, who, who)
+        )
+    for index, value in enumerate(images):
+        _pll_check_image(value, who, index + offset)
+    return images
+
+
+def _pll_check_number(value, who, param):
+    """A number, which may be negative - an offset or an angle."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(
+            "%s's `%s`%s must be a number, but it is %s.%s"
+            % (who, param, _pll_where(who, param), _pll_describe(value), _pll_contract(who))
+        )
+    return value
+
+
+def _pll_check_size(value, who, param, least=0):
+    """A size in pixels: a number, and never negative.
+
+    A string size (`rectangle("20", 20, ...)`) and a negative one were both
+    accepted, and drew the wrong thing or nothing at all without a word.
+    """
+    _pll_check_number(value, who, param)
+    if value < least:
+        raise ValueError(
+            "%s's `%s`%s cannot be %s, but it is %s.%s"
+            % (
+                who,
+                param,
+                _pll_where(who, param),
+                "negative" if least == 0 else "less than %s" % _pll_number(least),
+                _pll_number(value),
+                _pll_contract(who),
+            )
+        )
+    return value
+
+
+def _pll_check_positive(value, who, param):
+    """A number that has to be more than zero, like a scale factor."""
+    _pll_check_number(value, who, param)
+    if value <= 0:
+        raise ValueError(
+            "%s's `%s`%s has to be more than 0, but it is %s.%s"
+            % (who, param, _pll_where(who, param), _pll_number(value), _pll_contract(who))
+        )
+    return value
+
+
+def _pll_check_order(first, second, who, param):
+    """The two arguments the other way round.
+
+    `rotate(image, 45)` fails inside the arithmetic with "float() argument
+    must be a string or a real number, not '_Frame'", which names an
+    internal class and not the mistake.
+    """
+    if (
+        isinstance(first, Image)
+        and not isinstance(second, bool)
+        and isinstance(second, (int, float))
+    ):
+        raise TypeError(
+            "%s takes the `%s` first, then the image: write %s(%s, image)."
+            % (who, param, who, _pll_number(second))
+        )
 
 
 def _pll_check_color(color, who):
@@ -38,40 +201,64 @@ def _pll_check_color(color, who):
     nothing at all. Checked here, at construction, rather than when the
     picture renders, so the error points at the line that made the mistake.
 
-    A *name* is only checked for shape, not against the list of real CSS
-    colours: getting that list slightly wrong would reject a colour that
-    works, which is worse than the typo it would catch. So `"rd"` still
-    draws nothing - see the note in the readme.
+    A *name* is checked against the CSS colours, which are the names SVG
+    accepts, so a misspelling is caught rather than drawn as nothing. The
+    list is the whole of CSS Color 4 and its length is asserted by the
+    tests: rejecting a colour that works would be worse than the typo.
     """
     if isinstance(color, str):
-        if (
-            _PLL_COLOR_NAME_RE.match(color)
-            or _PLL_COLOR_HEX_RE.match(color)
-            or _PLL_COLOR_FN_RE.match(color)
-        ):
+        if _PLL_COLOR_HEX_RE.match(color) or _PLL_COLOR_FN_RE.match(color):
             return color
-        raise ValueError(
-            "%s: %r is not a colour. Use a name like \"red\", a hex code like "
-            "\"#ff0000\", or (red, green, blue) numbers from 0 to 255." % (who, color)
-        )
+        if _PLL_COLOR_NAME_RE.match(color):
+            lowered = color.lower()
+            if lowered in _PLL_CSS_COLOR_NAMES or lowered in _PLL_COLOR_KEYWORDS:
+                return color
+            raise ValueError(_pll_unknown_colour(who, color))
+        raise ValueError(_pll_not_a_colour(who, color))
     if isinstance(color, (tuple, list)) and len(color) in (3, 4):
         for i, part in enumerate(color):
             if isinstance(part, bool) or not isinstance(part, (int, float)):
                 raise ValueError(
-                    "%s: a colour's parts have to be numbers, but %r is %s."
-                    % (who, part, type(part).__name__)
+                    "%s's `color`%s has a part that is not a number: %s."
+                    % (who, _pll_where(who, "color"), _pll_describe(part))
                 )
             # The fourth part is opacity, which is written either way round.
             limit = 255 if i < 3 or part > 1 else 1
             if not 0 <= part <= limit:
                 raise ValueError(
-                    "%s: the %s part of a colour runs from 0 to %g, but it is %r."
-                    % (who, "red green blue opacity".split()[i], limit, part)
+                    "%s's `color`%s: the %s part runs from 0 to %g, but it is %s."
+                    % (
+                        who,
+                        _pll_where(who, "color"),
+                        "red green blue opacity".split()[i],
+                        limit,
+                        _pll_number(part),
+                    )
                 )
         return color
-    raise ValueError(
-        "%s: %r is not a colour. Use a name like \"red\", a hex code like "
-        "\"#ff0000\", or (red, green, blue) numbers from 0 to 255." % (who, color)
+    raise ValueError(_pll_not_a_colour(who, color))
+
+
+def _pll_not_a_colour(who, color):
+    """The one wording for "that is not a colour", wherever it is noticed."""
+    return (
+        "%s's `color`%s is %s, which is not a color. Use a name like \"red\", "
+        "a hex code like \"#ff0000\", or (red, green, blue) numbers from 0 to 255."
+        % (who, _pll_where(who, "color"), _pll_describe(color))
+    )
+
+
+def _pll_unknown_colour(who, color):
+    """A word that is shaped like a colour name and is not one."""
+    suggestion = _pll_closest_name(color, _PLL_CSS_COLOR_NAMES)
+    return "%s's `color`%s is %s, which is not a color name PLL knows.%s" % (
+        who,
+        _pll_where(who, "color"),
+        _pll_describe(color),
+        ' Did you mean "%s"?' % suggestion
+        if suggestion is not None
+        else ' Use a name like "red", a hex code like "#ff0000", or '
+        "(red, green, blue) numbers from 0 to 255.",
     )
 
 
@@ -83,7 +270,8 @@ def _pll_check_mode(mode, who):
     """
     if mode not in _PLL_MODES:
         raise ValueError(
-            "%s: expected \"solid\" or \"outline\", got %r" % (who, mode)
+            "%s's `mode`%s should be \"solid\" or \"outline\", but it is %s.%s"
+            % (who, _pll_where(who, "mode"), _pll_describe(mode), _pll_contract(who))
         )
     return mode
 
@@ -184,6 +372,20 @@ class Image:
             _pll_px(self.width),
             _pll_px(self.height),
         )
+
+    def __add__(self, other):
+        """`a + b` on images, which looks plausible and is not a thing.
+
+        Without this, Python's own message names the private classes:
+        "unsupported operand type(s) for +: '_Rectangle' and '_Rectangle'".
+        """
+        raise TypeError(
+            "Images cannot be joined with `+`. Use `beside(a, b)` to put them "
+            "side by side, `above(a, b)` to stack them, or `overlay(a, b)` to "
+            "put one on top of the other."
+        )
+
+    __radd__ = __add__
 
 
 # -----------------------------------------------------------------------------
@@ -868,17 +1070,21 @@ class _Flip(Image):
 
 def circle(radius, mode, color):
     """Solid or outline circle."""
+    _pll_check_size(radius, "circle", "radius")
     return _Circle(radius, _pll_check_mode(mode, "circle"), _pll_check_color(color, "circle"))
 
 
 def square(side, mode, color):
     """Square with the given side length."""
+    _pll_check_size(side, "square", "side")
     return _Rectangle(
         side, side, _pll_check_mode(mode, "square"), _pll_check_color(color, "square")
     )
 
 
 def rectangle(width, height, mode, color):
+    _pll_check_size(width, "rectangle", "width")
+    _pll_check_size(height, "rectangle", "height")
     return _Rectangle(
         width, height,
         _pll_check_mode(mode, "rectangle"), _pll_check_color(color, "rectangle"),
@@ -886,6 +1092,8 @@ def rectangle(width, height, mode, color):
 
 
 def ellipse(width, height, mode, color):
+    _pll_check_size(width, "ellipse", "width")
+    _pll_check_size(height, "ellipse", "height")
     return _Ellipse(
         width, height,
         _pll_check_mode(mode, "ellipse"), _pll_check_color(color, "ellipse"),
@@ -894,6 +1102,7 @@ def ellipse(width, height, mode, color):
 
 def triangle(side, mode, color):
     """Equilateral triangle pointing up."""
+    _pll_check_size(side, "triangle", "side")
     h = side * _math.sqrt(3) / 2.0
     points = [(side / 2.0, 0.0), (side, h), (0.0, h)]
     return _Polygon(
@@ -903,12 +1112,16 @@ def triangle(side, mode, color):
 
 def right_triangle(width, height, mode, color):
     """Right triangle with legs `width` (bottom) and `height` (right)."""
+    _pll_check_size(width, "right_triangle", "width")
+    _pll_check_size(height, "right_triangle", "height")
     points = [(0.0, height), (width, height), (width, 0.0)]
     return _Polygon(points, mode, color)
 
 
 def regular_polygon(side, sides, mode, color):
     """Regular polygon with `sides` sides each `side` units long."""
+    _pll_check_size(side, "regular_polygon", "side")
+    _pll_check_size(sides, "regular_polygon", "sides", least=3)
     if sides < 3:
         raise ValueError("regular_polygon needs at least 3 sides")
     _pll_check_mode(mode, "regular_polygon")
@@ -936,11 +1149,15 @@ def regular_polygon(side, sides, mode, color):
 
 def star(side, mode, color):
     """5-point star with the given outer "side" length."""
+    _pll_check_size(side, "star", "side")
     return star_polygon(side, 5, 2, mode, color)
 
 
 def star_polygon(side, points_count, step, mode, color):
     """An n-pointed star with the given inner step (e.g. 5/2 -> classic star)."""
+    _pll_check_size(side, "star_polygon", "side")
+    _pll_check_size(points_count, "star_polygon", "points_count", least=2)
+    _pll_check_size(step, "star_polygon", "step", least=1)
     if points_count < 3 or step < 1:
         raise ValueError("invalid star_polygon arguments")
     _pll_check_mode(mode, "star_polygon")
@@ -960,44 +1177,58 @@ def star_polygon(side, points_count, step, mode, color):
 
 def line(dx, dy, color):
     """Line going `(dx, dy)` from its top-left anchor."""
+    _pll_check_number(dx, "line", "dx")
+    _pll_check_number(dy, "line", "dy")
     return _Line(dx, dy, _pll_check_color(color, "line"))
 
 
 def text(value, size, color):
+    if not isinstance(value, str):
+        raise TypeError(
+            "text's `value` (the 1st argument) must be a string, but it is %s."
+            " The arguments are: text(value, size, color)." % _pll_describe(value)
+        )
+    _pll_check_positive(size, "text", "size")
     return _Text(value, size, _pll_check_color(color, "text"))
 
 
 def beside(*images):
-    return _Beside(images)
+    return _Beside(_pll_check_images(images, "beside"))
 
 
 def above(*images):
-    return _Above(images)
+    return _Above(_pll_check_images(images, "above"))
 
 
 def overlay(*images):
-    return _Overlay(images)
+    return _Overlay(_pll_check_images(images, "overlay"))
 
 
 def underlay(*images):
     """Like overlay, but first arg is on the bottom."""
-    return _Overlay(list(reversed(images)))
+    return _Overlay(list(reversed(_pll_check_images(images, "underlay"))))
 
 
 def beside_align(y_place, *images):
     """Like `beside`, aligned by "top" / "center" / "bottom"."""
-    return _Beside(images, _pll_check_place(y_place, _PLL_Y_PLACES, "beside_align"))
+    return _Beside(
+        _pll_check_images(images, "beside_align", 1),
+        _pll_check_place(y_place, _PLL_Y_PLACES, "beside_align"),
+    )
 
 
 def above_align(x_place, *images):
     """Like `above`, aligned by "left" / "center" / "right"."""
-    return _Above(images, _pll_check_place(x_place, _PLL_X_PLACES, "above_align"))
+    return _Above(
+        _pll_check_images(images, "above_align", 1),
+        _pll_check_place(x_place, _PLL_X_PLACES, "above_align"),
+    )
 
 
 def overlay_align(x_place, y_place, *images):
     """Like `overlay`, with both axes aligned explicitly."""
     return _Overlay(
-        images,
+        _pll_check_images(images, "overlay_align", 2),
         _pll_check_place(x_place, _PLL_X_PLACES, "overlay_align"),
         _pll_check_place(y_place, _PLL_Y_PLACES, "overlay_align"),
     )
@@ -1006,7 +1237,7 @@ def overlay_align(x_place, y_place, *images):
 def underlay_align(x_place, y_place, *images):
     """Like `overlay_align`, but the first image is on the bottom."""
     return _Overlay(
-        list(reversed(images)),
+        list(reversed(_pll_check_images(images, "underlay_align", 2))),
         _pll_check_place(x_place, _PLL_X_PLACES, "underlay_align"),
         _pll_check_place(y_place, _PLL_Y_PLACES, "underlay_align"),
     )
@@ -1018,56 +1249,79 @@ def overlay_xy(image1, dx, dy, image2):
     Negative offsets move `image2` left / up and the picture grows that way,
     so nothing is ever cut off.
     """
+    _pll_check_image(image1, "overlay_xy", 0)
+    _pll_check_number(dx, "overlay_xy", "dx")
+    _pll_check_number(dy, "overlay_xy", "dy")
+    _pll_check_image(image2, "overlay_xy", 3)
     return _LayeredXY(image1, dx, dy, image2, first_on_top=True)
 
 
 def underlay_xy(image1, dx, dy, image2):
     """`image1` underneath; `image2` moved `dx` right and `dy` down."""
+    _pll_check_image(image1, "underlay_xy", 0)
+    _pll_check_number(dx, "underlay_xy", "dx")
+    _pll_check_number(dy, "underlay_xy", "dy")
+    _pll_check_image(image2, "underlay_xy", 3)
     return _LayeredXY(image1, dx, dy, image2, first_on_top=False)
 
 
 def place_image(image, x, y, scene):
     """Put `image`'s *center* at (x, y) on `scene`, cropped to the scene."""
+    _pll_check_image(image, "place_image", 0)
+    _pll_check_number(x, "place_image", "x")
+    _pll_check_number(y, "place_image", "y")
+    _pll_check_image(scene, "place_image", 3)
     return _PlaceImage(image, x, y, scene)
 
 
 def crop(x, y, width, height, image):
     """The `width` x `height` piece of `image` starting at (x, y)."""
+    _pll_check_number(x, "crop", "x")
+    _pll_check_number(y, "crop", "y")
+    _pll_check_size(width, "crop", "width")
+    _pll_check_size(height, "crop", "height")
+    _pll_check_image(image, "crop", 4)
     return _Crop(x, y, width, height, image)
 
 
 def frame(image):
     """`image` with a thin outline around it, to show its bounding box."""
-    return _Frame(image)
+    return _Frame(_pll_check_image(image, "frame", 0))
 
 
 def empty_scene(width, height):
     """A blank white scene with an outline, to use with `place_image`."""
+    _pll_check_size(width, "empty_scene", "width")
+    _pll_check_size(height, "empty_scene", "height")
     return _Frame(_Rectangle(width, height, "solid", "white"))
 
 
 def rotate(angle, image):
-    return _Rotate(angle, image)
+    _pll_check_order(angle, image, "rotate", "angle")
+    _pll_check_number(angle, "rotate", "angle")
+    return _Rotate(angle, _pll_check_image(image, "rotate", 1))
 
 
 def scale(factor, image):
-    return _Scale(factor, image)
+    _pll_check_order(factor, image, "scale", "factor")
+    _pll_check_positive(factor, "scale", "factor")
+    return _Scale(factor, _pll_check_image(image, "scale", 1))
 
 
 def flip_horizontal(image):
-    return _Flip(image, horizontal=True)
+    return _Flip(_pll_check_image(image, "flip_horizontal", 0), horizontal=True)
 
 
 def flip_vertical(image):
-    return _Flip(image, horizontal=False)
+    return _Flip(_pll_check_image(image, "flip_vertical", 0), horizontal=False)
 
 
 def image_width(image):
-    return _pll_px(image.width)
+    return _pll_px(_pll_check_image(image, "image_width", 0).width)
 
 
 def image_height(image):
-    return _pll_px(image.height)
+    return _pll_px(_pll_check_image(image, "image_height", 0).height)
 
 
 empty_image = _Rectangle(0, 0, "solid", (0, 0, 0, 0))
@@ -1112,3 +1366,18 @@ PLL_IMAGE_EXPORTS = [
     "empty_image",
     "load_image",
 ]
+
+
+# Argument names, read off the functions above rather than written out a
+# second time, so `_pll_where` and `_pll_contract` cannot fall out of step
+# with the contracts they quote. `*images` is left out: a function that
+# takes any number of them has no fixed positions to name.
+for _pll_exported in PLL_IMAGE_EXPORTS:
+    _pll_value = globals()[_pll_exported]
+    if not callable(_pll_value) or isinstance(_pll_value, type):
+        continue
+    _PLL_PARAMS[_pll_exported] = tuple(
+        _name
+        for _name in _pll_value.__code__.co_varnames[: _pll_value.__code__.co_argcount]
+    )
+del _pll_exported, _pll_value

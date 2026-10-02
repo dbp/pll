@@ -95,11 +95,18 @@ export interface ExecutionTestReportChunk {
   skipped: number;
   errors: number;
   tests: TestCaseResult[];
+  /**
+   * A Stop ended the test phase. The tests listed ran (the last, if any,
+   * with outcome "stopped"); the rest did not, and neither did the program.
+   */
+  stopped?: boolean;
+  /** The test that was running when it stopped, or null while loading the file. */
+  stoppedIn?: string | null;
 }
 
 export interface TestCaseResult {
   name: string;
-  outcome: "passed" | "failed" | "skipped" | "error" | string;
+  outcome: "passed" | "failed" | "skipped" | "error" | "stopped" | string;
   lineNumber: number | null;
   message: string | null;
   stdout: string | null;

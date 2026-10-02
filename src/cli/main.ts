@@ -31,8 +31,8 @@ The program's own stdout is the only thing on stdout, so it can be piped;
 everything PLL says about the run goes to stderr.
 
 Exit codes
-  0  ran, tests passed        2  level checks blocked it
-  1  the program raised       3  a test failed
+  0  ran, tests passed                  2  level checks blocked it
+  1  the program raised or was stopped  3  a test failed
 `;
 
 /** Colour only when stderr is a terminal, and never when NO_COLOR is set. */
@@ -160,6 +160,7 @@ export async function main(argv: string[]): Promise<number> {
     return await runFile(runtime, view, {
       file: path.resolve(args.file as string),
       runTests: args.runTests,
+      stopRequested: () => interrupted,
     });
   } catch (err) {
     view.problem(`pll: ${err instanceof Error ? err.message : String(err)}`);

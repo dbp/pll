@@ -317,6 +317,10 @@ export interface TestRunResult {
   traceback: string | null;
   line_number: number | null;
   column: number | null;
+  /** A Stop ended the phase: the remaining tests, and the program, did not run. */
+  stopped?: boolean;
+  /** The test running when it stopped, or null if the file was still loading. */
+  stopped_in?: string | null;
 }
 
 /**
@@ -345,4 +349,10 @@ export interface RawStaticFinding {
   keyword?: "global" | "nonlocal";
   /** For "disallowed-keyword": names declared in the statement. */
   names?: string[];
+  /** For "duplicate-definition": "function" or "class". */
+  definition_kind?: string | null;
+  /** For "field-assigned-type": the type written after `=`, like `int`. */
+  written_type?: string | null;
+  /** For a value thrown away: the expression, as the student wrote it. */
+  expression?: string | null;
 }

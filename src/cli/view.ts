@@ -29,6 +29,8 @@ export class CliView {
   public sawError = false;
   /** Failing + erroring tests across all reports. */
   public testFailures = 0;
+  /** A Stop ended the test phase, so the program is not to be run after it. */
+  public testsStopped = false;
   private imageCount = 0;
 
   constructor(private readonly opts: ViewOptions) {}
@@ -47,6 +49,10 @@ export class CliView {
 
   private green(text: string): string {
     return this.paint("32", text);
+  }
+
+  private yellow(text: string): string {
+    return this.paint("33", text);
   }
 
   /** PLL's own commentary. Always stderr, silenced by --quiet. */
@@ -149,15 +155,35 @@ export class CliView {
   private testReport(event: Extract<ExecutionEvent, { kind: "testReport" }>): void {
     const bad = event.failed + event.errors;
     this.testFailures += bad;
+    if (event.stopped) {
+      this.testsStopped = true;
+    }
     const summary =
       `${event.passed} passed` +
       (event.failed ? `, ${event.failed} failed` : "") +
       (event.errors ? `, ${event.errors} errored` : "") +
-      (event.skipped ? `, ${event.skipped} skipped` : "");
-    this.problem((bad === 0 ? this.green("tests: ") : this.red("tests: ")) + summary);
+      (event.skipped ? `, ${event.skipped} skipped` : "") +
+      (event.stopped
+        ? event.stoppedIn
+          ? `, stopped during ${event.stoppedIn}`
+          : ", stopped before any test ran"
+        : "");
+    const label = event.stopped
+      ? this.yellow("tests: ")
+      : bad === 0
+        ? this.green("tests: ")
+        : this.red("tests: ");
+    this.problem(label + summary);
     for (const test of event.tests) {
       if (test.outcome === "passed") {
         this.note(this.dim(`  ok   ${test.name}`));
+        continue;
+      }
+      if (test.outcome === "stopped") {
+        // Where the Stop landed: not a failure, so not red, and with no
+        // message - the test did nothing wrong.
+        const at = test.lineNumber === null ? "" : ` (line ${test.lineNumber})`;
+        this.problem(this.yellow(`  STOPPED ${test.name}${at}`));
         continue;
       }
       const where = test.lineNumber === null ? "" : ` (line ${test.lineNumber})`;

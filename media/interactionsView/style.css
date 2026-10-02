@@ -305,6 +305,9 @@ button:disabled {
 .entry.testReport.failed {
   border-left: 3px solid var(--vscode-editorError-foreground, #f48771);
 }
+.entry.testReport.stopped {
+  border-left: 3px solid var(--vscode-editorWarning-foreground, #cca700);
+}
 .entry.testReport .summary {
   font-weight: 600;
   font-size: 12px;
@@ -334,6 +337,9 @@ button:disabled {
 }
 .entry.testReport .testRow.skipped .mark {
   color: var(--vscode-descriptionForeground, #999);
+}
+.entry.testReport .testRow.stopped .mark {
+  color: var(--vscode-editorWarning-foreground, #cca700);
 }
 .entry.testReport .testRow .name {
   flex: 1 1 auto;

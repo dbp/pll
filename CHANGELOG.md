@@ -2,7 +2,174 @@
 
 ## Unreleased
 
+### Added
+- **Mistakes that used to run in silence are now reported** at
+  `#level beginner` and `#level intermediate`: a comparison used as a
+  statement inside a function (a test written without `assert`, which
+  always passes), any other value computed and thrown away, `assert(x, 1)`
+  (a pair is never false), a function containing `assert` that nothing ever
+  runs, a method named but not called (`movies["rating"].mean`), an
+  annotation that names a function rather than a type (`t: table`), a
+  dataclass field with no type or written `year = int`, a class with fields
+  and no `@dataclass`, and `a == Boa`, which is always False.
+- **A reactor that is built and never started** now says so at the end of
+  the run, instead of doing nothing without a word.
+- **Misspelled colours are refused with the name you meant.** Colour names
+  are checked against the CSS colours - the names a browser understands -
+  so `"bleu"` says "Did you mean `blue`?" rather than drawing nothing.
+- **Every image function checks its arguments when it is called.**
+  `beside(a, "austria")` names the argument and what it was; a size given
+  as a string or a negative number, a `scale` factor of 0, and a list
+  passed where the images themselves belong are each refused; `rotate(image,
+  45)` says the angle comes first; and `a + b` on two images says to use
+  `beside`, `above` or `overlay`. No message names an internal class.
+- **Table and row errors say what to do.** A row of the wrong length shows
+  the row and the columns; column names given as one string, rows not
+  inside an outer list, and a duplicated name each say what the shape
+  should be; a row explains itself (`this row has no column "rider" ...
+  Did you mean "riders"?`) and says to use square brackets for a field;
+  `row("Mar")` says it wants a row number; out of range says how the rows
+  are numbered; and "no column named ..." suggests the closest one,
+  noting when it differs only in case.
+- **The functions passed to the table methods are checked.** A value passed
+  where a function belongs, a function that takes the wrong number of
+  things, and a `filter` function that returns something other than `True`
+  or `False` are each refused, naming the method and the function.
+  `order_by(..., ascending="False")` and `select_columns("name")` are no
+  longer accepted silently.
+- **`load_table` recognises a web page** instead of parsing HTML as CSV, and
+  points at GitHub's Raw button; a missing file lists the CSV files that
+  are there.
+- **A column that a discarded `add_column` would have made** says so:
+  "`add_column` makes a new table; it does not change `employees`". Only
+  `add_column`, and only when the discarded call is on some other line - a
+  misspelled column stays a misspelled column. At `#level beginner` and
+  `intermediate`, which refuse `employees = employees.add_column(...)`, the
+  fix offered is a new name instead.
+- **A table-row error points at the row**, not at the `table(` line: for a
+  table written one row per line, the third row's mistake is reported on
+  the third row's line.
+
+### Changed
+- **A `#level` line that does not name a level is now an error**, instead of
+  silently running the file at `raw` with none of the checks the student
+  asked for. `#level begginer`, `#level Beginner`, a bare `#level`, a
+  missing space (`#levelbeginner`), and a valid line that is not the first
+  line are each reported, with the level suggested where it is a
+  misspelling. A file with **no** `#level` line is unchanged: it runs as
+  ordinary Python.
+- **A static finding that is only a warning no longer stops the file from
+  running.** The findings that existed before are all errors, so nothing
+  changes for them; the new ones that are about code that still works - a
+  method named but not called, a test nothing runs - are shown and the
+  program goes ahead.
+- **Python's own messages are reworded**, with the shape of the student's
+  own code filled in: `pen_cost() missing 1 required positional argument`
+  becomes "`pen_cost` takes 2 arguments (`num_pens` and `message`), but got
+  1"; `ITunesSong.__init__()` no longer mentions an `__init__` nobody
+  wrote; `'types.UnionType' object is not callable` names the union and its
+  members; `'int' object is not iterable` recognises `for x in len(xs)`;
+  `3(width)` says to write the `*`; and `'ITunesSong' object has no
+  attribute 'yaer'` lists the fields and suggests `year`. Messages no rule
+  recognises are still shown as Python wrote them.
+- **"Finished without returning a value" is now three different messages.**
+  Running off the end, a `return` that returned `None` (naming the
+  `.append(...)` the value came from), and a `match` where no `case` fitted
+  are told apart; a missing union variant and a `[f, r]` that should be
+  `[f, *r]` are named outright. A function that prints instead of returning
+  is asked whether `return` was meant.
+- **Advice that pointed the wrong way has been redirected.** Two functions
+  with the same name no longer get the advice for a reassigned variable;
+  `global` at `#level intermediate` no longer also reports shadowing, and
+  both level findings now name the level that would allow what was written;
+  a dataclass field mismatch is phrased as a field rather than an
+  assignment; a value a library handed over - including a reactor's state,
+  traced back to `init` - says so instead of asking about "the value you
+  passed on this line"; the advice to convert a column with `float` is only
+  given when the column actually holds numbers; a `match` with no fitting
+  case no longer suggests annotating the return type as `None`, which would
+  hide the bug; an annotation like `string` is said to fail, since it
+  does, rather than to be accepted and check nothing; a function returning
+  `None` because one branch ends in `print` is asked "did you mean `return
+  order_amt + 4`?", with that branch's own expression; and a class passed
+  where one of its values was wanted is "the class itself, not one made
+  from it".
+- **A `NameError` gets the hint that fits.** A name an import provides gives
+  the import line (`pd` used to be answered with Python's suggestion of
+  `id`); a name defined further down says which line it is on, rather than
+  asking about the spelling; a forward reference in an *annotation* is told
+  to write the string form (`rest: "NumList"`), which is the only way a
+  type that names itself can be written, rather than to move a definition
+  that cannot move; and `filter(below_1k(r))` explains that `filter` calls
+  the function for you.
+- **Errors raised inside a test are translated too.** Only a type-annotation
+  failure used to be; `can only concatenate list (not "str") to list` and
+  `test_pen_cost() missing 1 required positional argument` reached the test
+  report in Python's words, beside a run that had better ones.
+- **Advice quotes the program, not a fixed example.** The comparison hint
+  names the conversion for the types actually compared and mentions CSV
+  columns only in a file that reads one; `"Total: " + add_shipping(...)`
+  is answered with `str(add_shipping(...))` - the whole call, not the
+  function - and `print("Total:", ...)`, without the space `print` adds
+  itself; `age + 1` where `age` came from `input` is answered with
+  `int(age) + 1`; `song["year"]` with `song.year`; `3(4)` with `3 * 4`;
+  `to_draw=draw_dog(0)` with `to_draw=draw_dog`; and `name = str` in a
+  dataclass with `name: str` - it used to say `name = int` whatever type
+  was written.
+- **`filter("riders" < 1000)` is named as the mistake it is**: a condition
+  given where a function belongs. The comparison is worked out before
+  `filter` runs, so Python's error is about comparing text with a number;
+  the finding says so, and shows the condition inside a function, with
+  `r["riders"]` for the column.
+- **An element that fails its annotation is shown**: "every item in `lst`
+  should be a number, but item 0 is the string "1"", rather than "item 0
+  is not". Python reads the value from the frame the check fired in.
+- **Assigning to a parameter where its field was meant** -
+  `ac = ac.balance + amt` - is answered with `ac.balance = ac.balance +
+  amt`, rather than "Assign `Account` to `ac`".
+- **`int` on typed text says where the text came from.** A word typed at
+  `input()` is explained as what was typed; the bullet about CSV cells
+  appears only in a program that reads one.
+- **What Python can see is now said.** An index error gives the list's
+  real length ("`nums` has 3 items, numbered 0 to 2") rather than a
+  made-up list of 3; two dataclass values given in each other's places
+  are named as swapped, where converting one would have hidden it; a
+  value thrown away suggests `return order_amt + 8` or `ac.balance =
+  ac.balance + amt` from the line itself; and a test written without
+  `assert` suggests `assert pen_cost(0, "huskies") == 1`, not
+  `assert ...`.
+- **Suggestions read as suggestions.** One candidate is "Did you mean
+  `width`?", not "try one of those", and a name that differs only in case
+  says so; a column name that starts another (`hours`, `hours-worked`) is
+  suggested; a missing file names the near miss, rather than listing every
+  CSV beside it; and file names are quoted the way the course writes them.
+- **A table row is a `dict`**, as the course says, in every message - a
+  type error no longer reports "got `Row`" or suggests annotating `Row`.
+- **Two floats that differ only in their last digits** suggest
+  `pytest.approx` instead of leaving `0.9299999999999999 == 0.93` to be
+  puzzled over.
+- **A stopped program says "The program was stopped."** It read
+  "KeyboardInterrupt while running your program", which sounds like
+  something the program did wrong rather than something the student asked
+  for.
+
 ### Fixed
+- **Every runtime error is now reported as a finding**, at the student's own
+  line, instead of as a traceback through PLL's internals (and, for pandas,
+  through pandas'). The useful message was usually the last line of that
+  traceback; now it is the first thing shown.
+- **Syntax errors are findings too**, with better wording where Python's is
+  misleading: `else if` says to write `elif`, `if x = 5` suggests `==` only
+  (never the walrus), `class = 30` says `class` is reserved, a curly quote
+  says where curly quotes come from, and a mixed tab names VS Code's
+  "Convert Indentation to Spaces". Messages that were already clear are
+  left as Python wrote them.
+- **An error in a file with tests was reported twice** — once as the test
+  phase loaded the file, once by the run.
+- **Class names in type messages no longer carry PLL's internal module**
+  (`__pll_test__.Account` is now `Account`).
+- **The CLI printed package-loading progress on stdout**, which is reserved
+  for the program's own output, so `pll hw.py > out.txt` captured it.
 - **A name used before it had a value was not named.** Python words that one
   as `cannot access free variable 'title' ...`, which PLL did not recognise,
   so the report read "Python doesn't know what `this name` means" — in a file
@@ -10,6 +177,43 @@
   the line that sets it rather than to check a spelling that was already
   correct. `UnboundLocalError` is explained too, where before it fell
   through to a bare traceback.
+- **A `SyntaxWarning` is said once, and never beside its own finding.** Each
+  phase compiles the file more than once, and Python printed the warning on
+  every compile - four copies for a missing comma between rows in a file
+  with tests. Now a warning the run's error explains is dropped, and one
+  about a line that never ran is said once, in PLL's words: Python's
+  "perhaps you missed a comma?" for `3(4)` becomes "write the `*`: `3 * 4`".
+- **Stop sometimes did nothing.** Pyodide checks for a Stop by reading the
+  signal and then clearing it, as two separate steps, so a Stop that arrived
+  between them was erased and the program ran on - about one press in twenty
+  to forty in a freshly started program, more under load. A Stop is now
+  re-asserted until Python acknowledges it, and a repeat of one already
+  delivered is consumed rather than raised a second time into PLL's own
+  clean-up. A program that catches the first `KeyboardInterrupt` can still
+  be stopped by the next press. This was also the intermittent
+  `smoke-interrupt` failure, which now has deterministic tests for each part.
+- **A Stop during the tests did not stop the run.** It ended the test that
+  was running, recorded that as the test's error, and carried on: the other
+  tests ran, and then the program - which, if it looped as well, needed a
+  second Stop (and in the command line a second Ctrl+C, which kills `pll`
+  instead of stopping it). A Stop now ends the whole run, wherever it lands.
+  The tests that finished keep their results, the one that was running is
+  marked as stopped, nothing after it runs, and PLL says what was not run.
+  The command line exits 1.
+- **A Stop pressed while something loaded was lost.** With no Python
+  running to take it - Python, libraries, files, pytest or a bundle still
+  loading - the program ran anyway. The run now checks between its steps
+  and ends at the next one, before anything else starts.
+- **A Stop could come back as an error.** One pressed just as a run began
+  landed while PLL was still preparing the file, and was shown as "Internal
+  error: KeyboardInterrupt"; one that nothing took was raised in the next
+  run's static checks instead, as "Static analysis failed". Both are now
+  the Stop they were, and a step that fails because of a Stop (loading
+  pytest, say) no longer reports that as a failure of its own.
+- **`case Boa:` crashed the command line.** Code that parses but does not
+  compile escaped the test phase entirely: exit 64, a doubled traceback,
+  and the file never ran. It is now reported like any other syntax error,
+  at the `case` line, with the missing brackets explained.
 
 ## 0.2.0 (2026-09-30)
 

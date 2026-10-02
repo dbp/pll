@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { findRuntimeFinding } from "./analyzers/registry";
+import { levelHeaderFinding } from "./analyzers/levelHeaderFinding";
 import { enrichStaticFindings } from "./analyzers/static/registry";
 import type { Diagnostics } from "./diagnostics";
 import { parsePythonError } from "./errors/pythonErrorParser";
@@ -39,6 +40,15 @@ import { collectSiblingFiles, folderUri, writeBackSiblingFiles } from "./workspa
  * stuck somewhere the interrupt cannot reach.
  */
 export const STOP_TIMEOUT_MS = 3000;
+
+/**
+ * Said when a Stop arrives before any of the student's code has run: while
+ * Python, packages or files load, or during the static checks. Nothing in
+ * the run gets as far as raising `KeyboardInterrupt`, so the run checks for
+ * the Stop itself (see `stoppedDuring`).
+ */
+const STOPPED_BEFORE_START = "Stopped before the program started. Nothing was run.";
+const STOPPED_BEFORE_INPUT = "Stopped. Your input was not run.";
 
 /**
  * Most lines of program output rendered for a single run.
@@ -99,6 +109,13 @@ interface Session {
    * busy by then.
    */
   runSeq: number;
+  /**
+   * The `runSeq` of the run Stop was last pressed in. A run has several
+   * steps - for a file: the checks, loading, Examplar, the tests and the
+   * program - and a Stop ends all of them, not just the one it lands in:
+   * the run checks this between them.
+   */
+  stopRequestedSeq: number;
   /** Lines of program output rendered so far in the current run. */
   streamLines: number;
   /** Whether this run already reported that output was cut off. */
@@ -286,6 +303,7 @@ export class ReplSession implements vscode.Disposable {
         continuing: false,
         lastLevel: null,
         runSeq: 0,
+        stopRequestedSeq: -1,
         streamLines: 0,
         streamTruncated: false,
       };
@@ -418,6 +436,7 @@ export class ReplSession implements vscode.Disposable {
    * so we check back and say what happened.
    */
   private requestStop(session: Session): void {
+    session.stopRequestedSeq = session.runSeq;
     if (!this.deps.runtime.interrupt()) {
       this.appendToSession(session, {
         kind: "banner",
@@ -445,6 +464,31 @@ export class ReplSession implements vscode.Disposable {
           "KeyboardInterrupt. Reload the window (Developer: Reload Window) to recover.",
       });
     }, STOP_TIMEOUT_MS);
+  }
+
+  /**
+   * Whether Stop was pressed during this run, saying so if it was.
+   *
+   * Asked between the phases of a file run. A Stop lands in whichever
+   * phase is running, but what the student asked for is that nothing more
+   * runs - so a test that loops is the last thing to run, not the first of
+   * several, and the program after the tests does not start.
+   */
+  private stoppedDuring(session: Session, runSeq: number, text: string): boolean {
+    if (session.stopRequestedSeq !== runSeq) {
+      return false;
+    }
+    this.appendToSession(session, { kind: "banner", text });
+    return true;
+  }
+
+  /**
+   * Whether Stop was pressed during the session's current run. A step that
+   * fails then has usually failed *because* of the Stop - the interrupt
+   * landed in it - so its own error message would say the wrong thing.
+   */
+  private wasStopped(session: Session): boolean {
+    return session.stopRequestedSeq === session.runSeq;
   }
 
   private handleClearRequested(): void {
@@ -539,7 +583,11 @@ export class ReplSession implements vscode.Disposable {
       this.setSessionBusy(session, true, "Running...");
       await run();
     } catch (err) {
-      this.feedStream(session, "stderr", `Internal error: ${errorMessage(err)}\n`);
+      if (this.wasStopped(session)) {
+        this.appendToSession(session, { kind: "banner", text: "Stopped." });
+      } else {
+        this.feedStream(session, "stderr", `Internal error: ${errorMessage(err)}\n`);
+      }
     } finally {
       this.flushStreams(session);
       if (workspaceReady) {
@@ -562,13 +610,17 @@ export class ReplSession implements vscode.Disposable {
         return;
       }
     }
-    await this.execute(session, code, () =>
-      this.deps.runtime.replEval(
+    const runSeq = session.runSeq;
+    await this.execute(session, code, async () => {
+      if (this.stoppedDuring(session, runSeq, STOPPED_BEFORE_INPUT)) {
+        return;
+      }
+      await this.deps.runtime.replEval(
         { code, sessionKey: session.key, level },
         (event) =>
           this.handleEvent(session, event, code, "<repl>", undefined, level),
-      ),
-    );
+      );
+    });
   }
 
   private async executeFile(
@@ -606,6 +658,20 @@ export class ReplSession implements vscode.Disposable {
     }
     // Re-post the status: until init finished it read "Loading Python...".
     this.setSessionBusy(session, true, "Starting...");
+    // Before the level's own checks, and at every level: a broken `#level`
+    // line means the file asked for checks and got none, so the level it
+    // fell back to is the symptom rather than the thing to consult. Only
+    // for a file - a prompt line is not a file and has no header.
+    const header = levelHeaderFinding(code, fileName, level);
+    if (header !== null) {
+      this.appendToSession(session, { kind: "finding", finding: serializeFinding(header) });
+      if (document) {
+        this.deps.diagnostics.setFinding(document.uri, document, header);
+      }
+      this.flushStreams(session);
+      this.setSessionBusy(session, false);
+      return;
+    }
     if (levelHasStaticChecks(level)) {
       this.setSessionBusy(session, true, "Checking...");
       if (await this.runStaticChecks(session, code, fileName, level, document)) {
@@ -628,6 +694,13 @@ export class ReplSession implements vscode.Disposable {
       // the code in that same file needs that code to exist, or every test
       // reports a NameError under a perfectly good verdict. Nothing is said
       // about its absence, because early on absence is the normal state.
+      const runSeq = session.runSeq;
+      // Pressed while something loaded - a bundle, libraries, the files
+      // next to this one: no Python was running to raise it, and the
+      // worker drops it before the next request.
+      if (this.stoppedDuring(session, runSeq, STOPPED_BEFORE_START)) {
+        return;
+      }
       let ownCodeIsComplete = true;
       if (known) {
         ownCodeIsComplete = await this.runExamplarPhase(session, code, known);
@@ -635,12 +708,55 @@ export class ReplSession implements vscode.Disposable {
         // anything of the student's runs.
         await this.syncWorkspaceIn(session);
       }
+      if (
+        this.stoppedDuring(
+          session,
+          runSeq,
+          "Stopped while checking your tests. Your own tests and the program were not run.",
+        )
+      ) {
+        return;
+      }
       if (ownCodeIsComplete && (await this.shouldRunTests(session, code))) {
+        // Pressed while pytest loaded, which can take a while the first
+        // time: nothing of the student's has run yet.
+        if (
+          this.stoppedDuring(
+            session,
+            runSeq,
+            "Stopped before the tests started. The tests and the program were not run.",
+          )
+        ) {
+          return;
+        }
         this.setSessionBusy(session, true, "Running tests...");
+        let testsStopped = false;
         await this.deps.runtime.runTests(
           { code, fileName, sessionKey: session.key, level },
-          onEvent,
+          (event) => {
+            if (event.kind === "testReport" && event.stopped) {
+              testsStopped = true;
+            }
+            onEvent(event);
+          },
         );
+        // A Stop pressed as the last test finished arrives after them all.
+        if (
+          this.stoppedDuring(
+            session,
+            runSeq,
+            testsStopped
+              ? "Stopped during the tests. The rest of the tests and the program were not run."
+              : "Stopped after the tests. The program was not run.",
+          )
+        ) {
+          return;
+        }
+      }
+      // Pressed while the file was checked for tests, and there were none
+      // to run.
+      if (this.stoppedDuring(session, runSeq, "Stopped before the program started.")) {
+        return;
       }
       this.setSessionBusy(session, true, "Running...");
       this.stdinSession = session;
@@ -666,7 +782,9 @@ export class ReplSession implements vscode.Disposable {
         return false;
       }
     } catch (err) {
-      this.feedStream(session, "stderr", `Could not check for tests: ${errorMessage(err)}\n`);
+      if (!this.wasStopped(session)) {
+        this.feedStream(session, "stderr", `Could not check for tests: ${errorMessage(err)}\n`);
+      }
       return false;
     }
     this.setSessionBusy(session, true, "Loading pytest...");
@@ -674,10 +792,12 @@ export class ReplSession implements vscode.Disposable {
       await this.deps.runtime.ensurePytest();
       return true;
     } catch (err) {
-      this.appendToSession(session, {
-        kind: "banner",
-        text: `Could not load pytest (${errorMessage(err)}). Skipping tests.`,
-      });
+      if (!this.wasStopped(session)) {
+        this.appendToSession(session, {
+          kind: "banner",
+          text: `Could not load pytest (${errorMessage(err)}). Skipping tests.`,
+        });
+      }
       return false;
     }
   }
@@ -748,8 +868,9 @@ export class ReplSession implements vscode.Disposable {
     } catch (err) {
       const message = errorMessage(err);
       // A SyntaxError here just means the file doesn't parse; the run itself
-      // will surface it. Only flag genuine load/network failures.
-      if (!/syntaxerror|invalid syntax/i.test(message)) {
+      // will surface it. Only flag genuine load/network failures - and not
+      // one caused by a Stop, which the run reports as a Stop.
+      if (!/syntaxerror|invalid syntax/i.test(message) && !this.wasStopped(session)) {
         this.appendToSession(session, {
           kind: "banner",
           text: `Could not load libraries (${message}). Continuing; imports may fail.`,
@@ -830,6 +951,16 @@ export class ReplSession implements vscode.Disposable {
         ...(document ? {} : { sessionKey: session.key }),
       });
     } catch (err) {
+      // Interrupted by a Stop: the run ends here, for that reason.
+      if (
+        this.stoppedDuring(
+          session,
+          session.runSeq,
+          document ? STOPPED_BEFORE_START : STOPPED_BEFORE_INPUT,
+        )
+      ) {
+        return true;
+      }
       this.feedStream(session, "stderr", `Static analysis failed: ${errorMessage(err)}\n`);
       return false;
     }
@@ -846,6 +977,12 @@ export class ReplSession implements vscode.Disposable {
         kind: "finding",
         finding: serializeFinding(finding),
       });
+    }
+    // A warning is something worth saying about code that still works -
+    // a method named but not called, a test nothing runs - so it is shown
+    // and the program goes ahead. Only an error stops the run.
+    if (!findings.some((finding) => finding.severity === "error")) {
+      return false;
     }
     this.appendToSession(session, {
       kind: "banner",
@@ -962,6 +1099,7 @@ export class ReplSession implements vscode.Disposable {
           skipped: event.skipped,
           errors: event.errors,
           tests: event.tests,
+          ...(event.stopped ? { stopped: true, stoppedIn: event.stoppedIn ?? null } : {}),
         });
         break;
     }
@@ -1043,11 +1181,20 @@ export class ReplSession implements vscode.Disposable {
     } catch {
       /* float comparisons may misreport; the rest of the verdict stands */
     }
+    if (this.wasStopped(session)) {
+      return false;
+    }
 
     let result: ExamplarRunResult;
     try {
       result = await this.deps.runtime.examplarRun(code, bundle.json);
     } catch (err) {
+      // Stopped, which surfaces from the worker as a Python traceback. The
+      // card would show that as the reason the check failed; the banner the
+      // caller adds says what actually happened.
+      if (this.wasStopped(session)) {
+        return false;
+      }
       this.appendToSession(session, {
         kind: "examplar",
         card: "failed",

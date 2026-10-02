@@ -67,6 +67,10 @@ and **PLL: Stop Program** in the Command Palette do the same thing. The
 program stops with a `KeyboardInterrupt`, and anything it printed first is
 kept.
 
+Stop works the same way while your tests run. The test that was running is
+marked as stopped, and nothing after it runs - not the rest of the tests,
+and not the program.
+
 This works for ordinary Python code. If your program is stuck inside a
 library (a very long `pandas` operation, for example), or if it catches
 `KeyboardInterrupt` itself, PLL will tell you it could not stop it - reload
@@ -271,9 +275,10 @@ takes a piece out of an image, and `frame(image)` outlines its edges.
 **Size:** `image_width`, `image_height`, `empty_image`.
 
 Colors can be names (`"red"`), hex (`"#ff0000"`), or tuples
-`(red, green, blue)` with values from 0 to 255. Anything else is an error
-rather than an invisible shape — but note that a *misspelled* name (`"rd"`)
-still draws nothing, because PLL does not keep a list of every colour name.
+`(red, green, blue)` with values from 0 to 255. Names are checked against
+the CSS colours, which are the names a browser understands, so a
+misspelling is an error that suggests what you meant (`"rd"` → "Did you
+mean `red`?") rather than an invisible shape. `"transparent"` works too.
 
 ### Loading a picture
 
@@ -558,7 +563,8 @@ terminal (each prints a note, or use `--save-images`) and reactors do not
 animate, but tables print as text and everything else is the same code.
 
 Exit codes make it usable for marking: `0` ran and tests passed, `1` the
-program raised, `2` level checks blocked it, `3` a test failed.
+program raised or was stopped, `2` level checks blocked it, `3` a test
+failed.
 
 Course staff can also build Examplar bundles with it. See
 [pll-python on npm](https://www.npmjs.com/package/pll-python) for that and

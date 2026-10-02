@@ -35,6 +35,8 @@ import json as _pll_json
 import sys as _sys
 import types as _pll_types
 import builtins as _builtins_mod
+import warnings as _pll_warnings
+import re as _pll_src_re
 
 # Must match PLL_WORK_DIR in memfsWorkspace.ts. Sibling files are mounted
 # here and it is cwd, so open("cars.csv") works. It must not sit first on
@@ -157,6 +159,101 @@ def _pll_is_vendor_frame(filename):
     return isinstance(filename, str) and filename.startswith(_PLL_VENDOR_DIR)
 
 
+#: An element failure on an argument: `item 0 of argument "lst" (list) ...`
+#: or `value of key 'a' of argument "d" (dict) ...`.
+_PLL_ELEMENT_FAILURE_RE = _pll_src_re.compile(
+    r'^(item (\d+)|value of key (.+?)) of argument "(\w+)" '
+)
+
+
+def _pll_enrich_index_error(exc, code):
+    """Add how long the list really is to an `IndexError`.
+
+    "list index out of range" says nothing about the list, and the
+    explanation was left to illustrate with a made-up list of 3. The frame
+    the error was raised in holds the real one, and the line says which
+    name was subscripted.
+    """
+    if type(exc) is not IndexError or "out of range" not in str(exc):
+        return
+    tb = exc.__traceback__
+    frame = lineno = None
+    while tb is not None:
+        filename = tb.tb_frame.f_code.co_filename
+        if not _pll_is_vendor_frame(filename) and filename != "<exec>":
+            frame, lineno = tb.tb_frame, tb.tb_lineno
+        tb = tb.tb_next
+    if frame is None or not code:
+        return
+    lines = code.split("\n")
+    if not 0 < lineno <= len(lines):
+        return
+    for name in _pll_src_re.findall(r"([A-Za-z_]\w*)\s*\[", lines[lineno - 1]):
+        value = frame.f_locals.get(name, frame.f_globals.get(name))
+        if isinstance(value, (list, tuple, str)):
+            exc.args = (
+                "%s\n  -> %s has %d item%s" % (
+                    exc.args[0] if exc.args else str(exc),
+                    name,
+                    len(value),
+                    "" if len(value) == 1 else "s",
+                ),
+            )
+            return
+
+
+def _pll_enrich_type_check(exc):
+    """Add what the offending element actually is to an element failure.
+
+    typeguard names the element that failed - "item 0 of argument "lst"
+    (list) is not an instance of float" - but not what it is, which is the
+    one thing a student needs to see: here, the string "1". The value is
+    only reachable from the frame the check fired in, so it is read from
+    there and added as an indented `->` line, which the host reads and
+    which cannot be mistaken for one of a union's member lines.
+
+    Only frames from the student's own file are searched: typeguard's own
+    functions have locals with ordinary names like `value`, and finding one
+    of those first would describe the wrong thing.
+    """
+    if type(exc).__name__ != "TypeCheckError" or not exc.args:
+        return
+    match = _PLL_ELEMENT_FAILURE_RE.match(str(exc))
+    if match is None:
+        return
+    name = match.group(4)
+    frames = []
+    tb = exc.__traceback__
+    while tb is not None:
+        frames.append(tb.tb_frame)
+        tb = tb.tb_next
+    container = None
+    found = False
+    for frame in reversed(frames):
+        filename = frame.f_code.co_filename
+        if _pll_is_vendor_frame(filename) or filename == "<exec>":
+            continue
+        if name in frame.f_locals:
+            container = frame.f_locals[name]
+            found = True
+            break
+    if not found:
+        return
+    try:
+        if match.group(2) is not None:
+            element = container[int(match.group(2))]
+        else:
+            element = container[_ast.literal_eval(match.group(3))]
+    except Exception:
+        return
+    describe = globals().get("_pll_describe")
+    if describe is None:
+        return
+    exc.args = (
+        "%s\n  -> %s is %s" % (exc.args[0], match.group(1), describe(element)),
+    ) + tuple(exc.args[1:])
+
+
 def _pll_format_exception(exc):
     """`format_exception`, minus frames inside the vendored type checker.
 
@@ -246,6 +343,58 @@ def _pll_push(payload):
         emit(_pll_json.dumps(payload))
     except Exception:
         pass
+
+
+# -----------------------------------------------------------------------------
+# Stop
+# -----------------------------------------------------------------------------
+
+#: The worker's view of the interrupt buffer, set after this file loads, or
+#: None when the host has no shared memory (and so no Stop at all). See
+#: `interruptBuffer.ts` for the layout: byte 1 is the acknowledgement.
+_pll_interrupt_view = None
+
+
+def _pll_on_sigint(signum, frame):
+    """Deliver a Stop as `KeyboardInterrupt`, once, and say it was delivered.
+
+    Pyodide's check can overwrite a Stop that arrives at the wrong moment,
+    so the host re-asserts it until it is acknowledged. Two jobs follow:
+
+      - acknowledge, by setting byte 1, so the host stops re-asserting;
+      - ignore a repeat of a Stop already delivered. The host can store one
+        more signal just before it sees the acknowledgement, and raising it
+        would land a second `KeyboardInterrupt` in PLL's own clean-up after
+        the first, turning a clean stop into an internal error.
+
+    A new press clears byte 1 first, so a program that caught the first
+    `KeyboardInterrupt` and carried on can still be stopped.
+    """
+    view = _pll_interrupt_view
+    if view is not None:
+        try:
+            if view[1]:
+                return
+            view[1] = 1
+        except Exception:
+            # A buffer without the second byte: an older host. Behave as
+            # Python always has.
+            pass
+    raise KeyboardInterrupt
+
+
+def _pll_install_sigint():
+    """Route SIGINT through `_pll_on_sigint`. Called once, at load."""
+    try:
+        import signal as _pll_signal
+
+        _pll_signal.signal(_pll_signal.SIGINT, _pll_on_sigint)
+    except Exception:
+        # No signal support: the default handler still raises.
+        pass
+
+
+_pll_install_sigint()
 
 
 class _PllStream:
@@ -452,6 +601,44 @@ class _PllDataclassChecks(_ast.NodeTransformer):
         return node
 
 
+def _pll_hint_name(hint):
+    """An annotation as it was written, as near as can be recovered."""
+    name = getattr(hint, "__name__", None)
+    if isinstance(name, str):
+        return name
+    return str(hint).replace("typing.", "")
+
+
+def _pll_swapped_field(instance, hints, field_name):
+    """Another field whose value fits here, while this value fits there.
+
+    `ITunesSong("Yesterday", 2015, "The Beatles")` gives `singer` a number
+    and `year` a string. Advising `str(...)` for the singer would make the
+    error go away and the song wrong; what happened is that two values were
+    written in each other's places.
+    """
+    import typing as _pll_typing
+
+    def fits(value, hint):
+        origin = _pll_typing.get_origin(hint) or hint
+        if not isinstance(origin, type):
+            return False
+        if origin is float and isinstance(value, int) and not isinstance(value, bool):
+            return True
+        return isinstance(value, origin) and not (
+            origin is int and isinstance(value, bool)
+        )
+
+    mine = getattr(instance, field_name)
+    for other, other_hint in hints.items():
+        if other == field_name or not hasattr(instance, other):
+            continue
+        theirs = getattr(instance, other)
+        if fits(mine, other_hint) and fits(theirs, hints[field_name]):
+            return other
+    return None
+
+
 def _pll_check_dataclass_fields(cls):
     """Wrap a dataclass's `__init__` so its fields are checked.
 
@@ -503,12 +690,119 @@ def _pll_check_dataclass_fields(cls):
         for field_name, hint in cache[0].items():
             if not hasattr(self, field_name):
                 continue
-            check(getattr(self, field_name), [(field_name, hint)], memo)
+            try:
+                check(getattr(self, field_name), [(field_name, hint)], memo)
+            except _pll_type_check_error:
+                # typeguard words this as an assignment ("value assigned to
+                # singer"), because that is the check being reused. Nobody
+                # assigned anything: a field of a value was the wrong type,
+                # and the value is only known here.
+                bad = getattr(self, field_name)
+                shown = '"%s"' % bad if isinstance(bad, str) and '"' not in bad else repr(bad)
+                swapped = _pll_swapped_field(self, cache[0], field_name)
+                raise _pll_type_check_error(
+                    "field %r of %r got %s (%s), not %s%s"
+                    % (
+                        field_name,
+                        cls.__name__,
+                        shown,
+                        type(bad).__name__,
+                        _pll_hint_name(hint),
+                        "\n  -> swapped with %s" % swapped if swapped else "",
+                    )
+                ) from None
 
     __init__.__name__ = "__init__"
     __init__.__qualname__ = "%s.__init__" % cls.__qualname__
     cls.__init__ = __init__
     return cls
+
+
+#: Compile-time warnings for the current file: `(line, message)`, each once.
+_pll_compile_warnings = []
+
+
+@contextlib.contextmanager
+def _pll_recording_compile_warnings():
+    """Record `SyntaxWarning`s from PLL's own compiles instead of printing them.
+
+    Every phase compiles the file more than once - the type-check
+    instrumentation is validated by compiling it, then the real compile
+    follows, and the test phase does both again - and Python prints a
+    `SyntaxWarning` on every one. A missing comma between two table rows
+    came out four times, beside a finding that already explained it.
+
+    Recorded here and said once, after the run, by
+    `_pll_say_compile_warnings`. Any other kind of warning is not PLL's to
+    swallow, and is issued again exactly as it was.
+    """
+    caught = []
+    try:
+        with _pll_warnings.catch_warnings(record=True) as log:
+            _pll_warnings.simplefilter("always", SyntaxWarning)
+            try:
+                yield
+            finally:
+                # Copied before `catch_warnings` restores the filters, so a
+                # compile that raises still has its warnings kept.
+                caught.extend(log)
+    finally:
+        for warning in caught:
+            if issubclass(warning.category, SyntaxWarning):
+                entry = (warning.lineno, str(warning.message))
+                if entry not in _pll_compile_warnings:
+                    _pll_compile_warnings.append(entry)
+            else:
+                _pll_warnings.warn_explicit(
+                    warning.message, warning.category, warning.filename, warning.lineno
+                )
+
+
+def _pll_say_compile_warnings(stream, error_message, source=""):
+    """Say each recorded warning once - unless the run's error already did.
+
+    A warning that predicts the error the run then raised (`'int' object is
+    not callable; perhaps you missed a comma?` before `TypeError: 'int'
+    object is not callable`) is covered by the finding for that error, and
+    printing it beside the finding says the same thing worse. One whose
+    line never ran is the only sign of the mistake, so that one is said.
+    """
+    lines = source.split("\n") if source else []
+    for lineno, message in _pll_compile_warnings:
+        if error_message and message.startswith(error_message):
+            continue
+        text = lines[lineno - 1] if isinstance(lineno, int) and 0 < lineno <= len(lines) else ""
+        stream.write("warning: line %s: %s\n" % (lineno, _pll_reword_warning(message, text)))
+    del _pll_compile_warnings[:]
+
+
+def _pll_reword_warning(message, line=""):
+    """Python's wording, except where it points the wrong way.
+
+    "'int' object is not callable; perhaps you missed a comma?" is Python's
+    guess for `3(width)`, and for a number the guess is wrong: what is
+    missing is a `*`. For a string or a tuple the comma guess is usually
+    right - a list of rows with one comma left out - so those stay.
+
+    The example is taken from the student's own line when it can be read,
+    rather than one fixed example shown whatever they wrote.
+    """
+    if not _pll_src_re.match(
+        r"'(int|float)' object is not callable; perhaps you missed a comma\?", message
+    ):
+        return message
+    written = _pll_src_re.search(r"(\d+(?:\.\d+)?)\s*\(([^()]*)\)", line)
+    if written is None:
+        return (
+            "brackets after a number are a function call, not multiplication. "
+            "To multiply, write a `*` between them."
+        )
+    number, inside = written.group(1), written.group(2).strip()
+    return (
+        "brackets after a number are a function call, not multiplication. "
+        "To multiply, write the `*`: `%s * %s`, not `%s`."
+        % (number, inside or "...", written.group(0))
+    )
 
 
 def _pll_parse_and_instrument(code, filename):
@@ -530,7 +824,8 @@ def _pll_parse_and_instrument(code, filename):
         _PllTopLevelAnnAssign().visit(instrumented)
         _PllDataclassChecks().visit(instrumented)
         _ast.fix_missing_locations(instrumented)
-        compile(instrumented, filename, "exec")
+        with _pll_recording_compile_warnings():
+            compile(instrumented, filename, "exec")
         return instrumented
     except BaseException:
         return tree
@@ -580,9 +875,100 @@ def _pll_should_skip_expr(stmt, index):
 # anything else means a file" is decided in exactly one place and both report
 # the same way when it goes wrong. It lives in the bootstrap because the
 # libraries are exec'd into these globals afterwards, in the same way
-# examplarLib borrows `_pll_fix_ast_ranges`.
+# examplarLib borrows `_pll_fix_ast_ranges`. (`re` itself is imported at the
+# top of the file, with the rest.)
 
-import re as _pll_src_re
+def _pll_describe(value):
+    """A value as a student would name it, for a message about it.
+
+    One copy, here, because the image and table libraries are exec'd into
+    these same globals: two definitions meant the second silently replaced
+    the first, and whichever lost its turn stopped recognising its own
+    types. An image was then described as `a _Rectangle`, naming a class
+    nobody wrote.
+
+    Images and tables are recognised by the same duck-typing the display
+    code uses, so the bootstrap still does not depend on either library.
+    """
+    if value is None:
+        return "None"
+    if isinstance(value, bool):
+        return "%s" % value
+    if isinstance(value, str):
+        return 'the string "%s"' % value
+    if isinstance(value, (int, float)):
+        return "the number %s" % _pll_number(value)
+    if hasattr(value, "_pll_image_data"):
+        return "an image"
+    if hasattr(value, "_pll_table_data"):
+        return "a table"
+    if isinstance(value, dict):
+        return "a row" if type(value).__name__ == "Row" else "a dictionary"
+    if isinstance(value, (list, tuple)):
+        return "a list of %d" % len(value)
+    if callable(value):
+        return "the function `%s`" % getattr(value, "__name__", "given")
+    name = type(value).__name__
+    # A private class is PLL's own; a student has no name for it but the
+    # thing it is.
+    return "a value" if name.startswith("_") else "a %s" % name
+
+
+def _pll_number(value):
+    """`20`, not `20.0`, for a number in a message."""
+    if isinstance(value, float) and value == int(value):
+        return "%d" % int(value)
+    return "%s" % value
+
+
+def _pll_edit_distance(a, b):
+    """Edit distance, counting a swap of two neighbours as one mistake.
+
+    Plain Levenshtein charges two for `yaer` -> `year`, which is enough to
+    push the commonest typo of all past any threshold tight enough to be
+    useful. Lives here because the bootstrap is loaded before the image,
+    table and reactor libraries, all of which suggest a name the student
+    probably meant.
+    """
+    previous = list(range(len(b) + 1))
+    two_back = []
+    for i in range(1, len(a) + 1):
+        current = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            current[j] = min(
+                previous[j] + 1,
+                current[j - 1] + 1,
+                previous[j - 1] + (0 if a[i - 1] == b[j - 1] else 1),
+            )
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                current[j] = min(current[j], two_back[j - 2] + 1)
+        two_back = previous
+        previous = current
+    return previous[len(b)]
+
+
+def _pll_closest_name(name, candidates):
+    """The candidate `name` was probably meant to be, or None.
+
+    Close enough to be a misspelling rather than a different word: a third
+    of the name's length, which covers `yaer` and `outilne` without
+    turning an unrelated word into a confident guess.
+    """
+    if not isinstance(name, str):
+        return None
+    best = None
+    best_distance = None
+    # Sorted, so two candidates the same distance away always give the same
+    # answer: a set's own order is arbitrary and can differ between runs.
+    for candidate in sorted(candidates):
+        distance = _pll_edit_distance(name.lower(), candidate.lower())
+        if best_distance is None or distance < best_distance:
+            best = candidate
+            best_distance = distance
+    if best is None:
+        return None
+    return best if best_distance <= max(1, len(best) // 3) else None
+
 
 _PLL_SCHEME_RE = _pll_src_re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*)://")
 
@@ -635,6 +1021,41 @@ def _pll_fetch_bytes(url, what):
     return bytes(ord(c) & 0xFF for c in xhr.responseText)
 
 
+def _pll_nearby_files(wanted):
+    """" The files here are: cars.csv, trips.csv.", when there are any.
+
+    A missing file is usually a misspelling or a file in another folder,
+    and both are obvious the moment the actual names are in front of you.
+    Only files with the same extension are listed, so asking for a CSV
+    does not produce a directory listing of the whole project.
+    """
+    import os as _pll_os
+
+    folder = _pll_os.path.dirname(wanted) or "."
+    _, extension = _pll_os.path.splitext(wanted)
+    try:
+        names = sorted(
+            name
+            for name in _pll_os.listdir(folder)
+            if not extension or name.lower().endswith(extension.lower())
+        )
+    except OSError:
+        return ""
+    if not names:
+        return ""
+    # A misspelling is the usual reason, and then one name is the answer.
+    close = _pll_closest_name(_pll_os.path.basename(wanted), names)
+    if close is not None:
+        return ' Did you mean "%s"?' % close
+    shown = names[:8]
+    label = extension.lstrip(".").upper() + " " if extension else ""
+    return " The %sfiles next to your program are: %s%s." % (
+        label,
+        ", ".join(shown),
+        ", ..." if len(names) > len(shown) else "",
+    )
+
+
 def _pll_read_source(source, what, binary=False):
     """Read `source` - a URL or a path beside the program - and return it.
 
@@ -662,12 +1083,19 @@ def _pll_read_source(source, what, binary=False):
             with open(stripped, "rb") as handle:
                 data = handle.read()
         except FileNotFoundError:
+            nearby = _pll_nearby_files(stripped)
             raise FileNotFoundError(
-                "There is no file called %r next to your program. Check the "
-                "spelling, or pass an https:// address instead." % stripped
+                'There is no file called "%s" next to your program.%s'
+                % (
+                    stripped,
+                    # A close name answers it; otherwise, say what to check.
+                    nearby
+                    if nearby.startswith(" Did you mean")
+                    else nearby + " Check the spelling, or pass an https:// address instead.",
+                )
             ) from None
         except IsADirectoryError:
-            raise IsADirectoryError("%r is a folder, not a file." % stripped) from None
+            raise IsADirectoryError('"%s" is a folder, not a file.' % stripped) from None
     if binary:
         return data
     try:
@@ -735,6 +1163,99 @@ def _pll_extract_loc(tb_str, fallback_filename):
     return line_no, col
 
 
+def _pll_reset_notes():
+    """Forget anything the last run had to say at the end of it."""
+    reset = globals().get("_pll_reset_reactor_notes")
+    if reset is not None:
+        reset()
+
+
+def _pll_run_notes():
+    """Things worth saying once the program has finished, as stderr text.
+
+    These are not errors: the program ran. They are the cases where it ran
+    and visibly did nothing, and the student has no other evidence of why.
+    The libraries that have something to say provide a `_pll_*_note`
+    function; the bootstrap loads before them, so each is looked up here
+    rather than imported.
+    """
+    notes = []
+    for name in ("_pll_reactor_note",):
+        note = globals().get(name)
+        if note is None:
+            continue
+        try:
+            text = note()
+        except Exception:
+            # A note is a courtesy; it must never take the run down with it.
+            continue
+        if text:
+            notes.append(text)
+    return "".join(notes)
+
+
+def _pll_stopped_run():
+    """A run's result when Stop landed before any of the student's code ran."""
+    return {
+        "ok": False,
+        "stdout": "",
+        "stderr": "",
+        "result_repr": None,
+        "error_type": "KeyboardInterrupt",
+        "error_message": "",
+        "traceback": None,
+        "line_number": None,
+        "column": None,
+        "displays": [],
+    }
+
+
+def _pll_stopped_tests():
+    """A test phase's result when Stop landed before the file was loaded."""
+    return {
+        "ok": False,
+        "internal_error": False,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "errors": 0,
+        "tests": [],
+        "stdout": "",
+        "stderr": "",
+        "error_type": None,
+        "error_message": None,
+        "traceback": None,
+        "line_number": None,
+        "column": None,
+        "displays": [],
+        "stopped": True,
+        "stopped_in": None,
+    }
+
+
+def _pll_stoppable(stopped):
+    """Report a Stop that lands while PLL prepares the file as a Stop.
+
+    A Stop is retried until Python takes it, so one pressed just as a run
+    begins can be taken while the file is still being parsed and
+    instrumented - outside the `except` that reports a Stop in the
+    student's code. From there it escaped as an internal error. `stopped()`
+    is the result to give instead: none of the student's code has run, so
+    there is no output and no line to report.
+    """
+    def decorate(fn):
+        def run(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except KeyboardInterrupt:
+                return stopped()
+        run.__name__ = fn.__name__
+        run.__doc__ = fn.__doc__
+        return run
+    return decorate
+
+
+@_pll_stoppable(_pll_stopped_run)
 def _pll_run_file(code, filename, session_key, level="raw"):
     stdout = _PllStream("stdout")
     stderr = _PllStream("stderr")
@@ -757,11 +1278,14 @@ def _pll_run_file(code, filename, session_key, level="raw"):
     _pll_protect_import_path()
     user_globals = _pll_reset_session(session_key)
     _pll_displays.clear()
+    _pll_reset_notes()
+    del _pll_compile_warnings[:]
     try:
         tree = _pll_parse_and_instrument(code, filename)
         _PllTopLevelExprWrapper().visit(tree)
         _ast.fix_missing_locations(tree)
-        compiled = compile(tree, filename, "exec")
+        with _pll_recording_compile_warnings():
+            compiled = compile(tree, filename, "exec")
     except SyntaxError as e:
         tb_text = "".join(_tb_mod.format_exception(type(e), e, e.__traceback__))
         result["error_type"] = type(e).__name__
@@ -777,10 +1301,15 @@ def _pll_run_file(code, filename, session_key, level="raw"):
     try:
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             exec(compiled, user_globals)
+            # Only once the program has finished: building a reactor and
+            # starting it further down is perfectly ordinary.
+            stderr.write(_pll_run_notes())
         result["ok"] = True
     except SystemExit:
         result["ok"] = True
     except BaseException as e:
+        _pll_enrich_type_check(e)
+        _pll_enrich_index_error(e, code)
         formatted = _pll_format_exception(e)
         result["error_type"] = type(e).__name__
         result["error_message"] = str(e)
@@ -789,6 +1318,9 @@ def _pll_run_file(code, filename, session_key, level="raw"):
         result["line_number"] = line_no
         result["column"] = col
     finally:
+        # After the run, so a warning the run's own error explains can be
+        # left out, and one about a line that never ran can be said.
+        _pll_say_compile_warnings(stderr, result["error_message"], code)
         result["stdout"] = stdout.getvalue()
         result["stderr"] = stderr.getvalue()
         result["displays"] = list(_pll_displays)
@@ -891,12 +1423,44 @@ def _pll_friendly_assert_message(exc, tb_text):
             stripped = stripped.lstrip("+ ").strip()
         lines.append(stripped)
     if lines:
-        return "\n".join(lines)
+        return "\n".join(lines) + _pll_float_note("\n".join(lines))
     for raw in reversed((tb_text or "").splitlines()):
         stripped = raw.strip()
         if stripped.startswith("assert "):
-            return stripped
+            return stripped + _pll_float_note(stripped)
     return "This test failed."
+
+
+#: Two decimal numbers in a failed `assert ... == ...`.
+_PLL_FLOAT_PAIR_RE = _pll_src_re.compile(
+    r"(-?\d+\.\d+(?:e[-+]?\d+)?)\s*==\s*(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)"
+)
+
+
+def _pll_float_note(text):
+    """" ... use pytest.approx", when two numbers differ only in the dust.
+
+    `0.9299999999999999 == 0.93` is how floating point works, not a bug in
+    the student's arithmetic, and nothing in the failure says so.
+    """
+    match = _PLL_FLOAT_PAIR_RE.search(text)
+    if match is None:
+        return ""
+    try:
+        left = float(match.group(1))
+        right = float(match.group(2))
+    except ValueError:
+        return ""
+    if left == right:
+        return ""
+    scale = max(abs(left), abs(right), 1e-12)
+    if abs(left - right) / scale > 1e-6:
+        return ""
+    return (
+        "\nThese differ only in the last few digits, which is how decimals "
+        "work in any computer. Compare them with `pytest.approx`: "
+        "`assert value == pytest.approx(%s)`." % match.group(2)
+    )
 
 
 def _pll_is_async(fn):
@@ -907,8 +1471,13 @@ def _pll_is_async(fn):
         return False
 
 
-def _pll_call_test(fn):
-    """Run one test function. Returns (outcome, message, stdout)."""
+def _pll_call_test(fn, code=""):
+    """Run one test function.
+
+    Returns `(outcome, message, stdout, traceback)`. The traceback is for
+    the host, not the student: the message is one line by design, and the
+    frames are what say which of *their* functions the error came from.
+    """
     import io
 
     buf = io.StringIO()
@@ -919,24 +1488,39 @@ def _pll_call_test(fn):
                     "error",
                     "async tests are not supported.",
                     buf.getvalue().strip() or None,
+                    None,
                 )
             fn()
-        return ("passed", None, buf.getvalue().strip() or None)
+        return ("passed", None, buf.getvalue().strip() or None, None)
+    except KeyboardInterrupt:
+        # A Stop, not something this test did wrong. Recording it as an
+        # error and moving on ran every remaining test - and then the
+        # program - after the student had asked for it all to stop.
+        raise
     except AssertionError as e:
         tb_text = "".join(_tb_mod.format_exception(type(e), e, e.__traceback__))
         return (
             "failed",
             _pll_friendly_assert_message(e, tb_text),
             buf.getvalue().strip() or None,
+            tb_text,
         )
     except BaseException as e:
+        _pll_enrich_type_check(e)
+        _pll_enrich_index_error(e, code)
         name = type(e).__name__
         if name == "Skipped":
-            return ("skipped", str(e).strip() or None, buf.getvalue().strip() or None)
+            return (
+                "skipped",
+                str(e).strip() or None,
+                buf.getvalue().strip() or None,
+                None,
+            )
         return (
             "error",
             name + ": " + (str(e) or "this test raised an exception."),
             buf.getvalue().strip() or None,
+            "".join(_tb_mod.format_exception(type(e), e, e.__traceback__)),
         )
 
 
@@ -967,6 +1551,21 @@ def _pll_iter_tests(ns):
             yield name + "::" + meth_name, _bound
 
 
+def _pll_syntax_result(result, error):
+    """Fill in `result` for a syntax error, wherever it was noticed.
+
+    Parsing and compiling both raise `SyntaxError`, and a student cannot
+    tell the two apart - nor should they have to.
+    """
+    result["internal_error"] = True
+    result["error_type"] = type(error).__name__
+    result["error_message"] = str(error)
+    result["line_number"] = error.lineno
+    result["column"] = (error.offset - 1) if error.offset else None
+    return result
+
+
+@_pll_stoppable(_pll_stopped_tests)
 def _pll_run_tests(code, filename, level="raw"):
     """Run same-file tests (`test_*` / `Test*`) in an isolated namespace.
 
@@ -1001,12 +1600,7 @@ def _pll_run_tests(code, filename, level="raw"):
     try:
         tree = _pll_parse_and_instrument(code, display_name)
     except SyntaxError as e:
-        result["internal_error"] = True
-        result["error_type"] = type(e).__name__
-        result["error_message"] = str(e)
-        result["line_number"] = e.lineno
-        result["column"] = (e.offset - 1) if e.offset else None
-        return result
+        return _pll_syntax_result(result, e)
 
     locs = _pll_test_locations(tree)
     try:
@@ -1016,10 +1610,27 @@ def _pll_run_tests(code, filename, level="raw"):
         # positions onto pytest's injected nodes and yields ranges that
         # Python 3.12+ rejects (`end_lineno` < `lineno`).
         _pll_fix_ast_ranges(tree)
-        compiled = compile(tree, display_name, "exec")
     except Exception:
-        # Assert rewriting failed; keep the type instrumentation.
-        compiled = compile(tree, display_name, "exec")
+        # Assert rewriting failed. It mutates the tree as it goes, so what
+        # is compiled below is whatever it managed; a failure then shows an
+        # empty AssertionError, which is worse than nothing but still runs.
+        pass
+
+    # Some code parses and does not compile. `case Boa:` is the one that
+    # matters here - "name capture 'Boa' makes remaining patterns
+    # unreachable" - and this is where it surfaces. Before, it escaped
+    # `_pll_run_tests` altogether (the old `except` re-ran the same
+    # `compile`, raising from inside the handler), the CLI exited 64 with a
+    # doubled traceback, and the file never ran at all.
+    try:
+        # Recorded and dropped: the run that follows compiles the same file
+        # and says its warnings once, which is once more than enough.
+        with _pll_recording_compile_warnings():
+            compiled = compile(tree, display_name, "exec")
+    except SyntaxError as e:
+        return _pll_syntax_result(result, e)
+    finally:
+        del _pll_compile_warnings[:]
 
     # The tests run inside a real module, registered under the name their
     # classes will report as `__module__`.
@@ -1043,6 +1654,14 @@ def _pll_run_tests(code, filename, level="raw"):
     try:
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             exec(compiled, ns)
+    except KeyboardInterrupt:
+        # Stopped in the file's own top-level code, before any test ran.
+        result["stopped"] = True
+        result["stopped_in"] = None
+        result["stdout"] = stdout.getvalue()
+        result["stderr"] = stderr.getvalue()
+        result["displays"] = list(_pll_displays)
+        return result
     except BaseException as e:
         formatted = _pll_format_exception(e)
         result["internal_error"] = True
@@ -1059,30 +1678,50 @@ def _pll_run_tests(code, filename, level="raw"):
 
     rows = []
     passed = failed = errors = skipped = 0
-    for name, fn in _pll_iter_tests(ns):
-        outcome, message, cap = _pll_call_test(fn)
-        if outcome == "passed":
-            passed += 1
-        elif outcome == "failed":
-            failed += 1
-        elif outcome == "skipped":
-            skipped += 1
-        else:
-            errors += 1
-        rows.append({
-            "name": name,
-            "outcome": outcome,
-            "line_number": locs.get(name),
-            "message": message,
-            "stdout": cap,
-        })
+    current = None
+    try:
+        for name, fn in _pll_iter_tests(ns):
+            current = name
+            outcome, message, cap, tb_text = _pll_call_test(fn, code)
+            if outcome == "passed":
+                passed += 1
+            elif outcome == "failed":
+                failed += 1
+            elif outcome == "skipped":
+                skipped += 1
+            else:
+                errors += 1
+            rows.append({
+                "name": name,
+                "outcome": outcome,
+                "line_number": locs.get(name),
+                "message": message,
+                "stdout": cap,
+                # For the host's explainers only; never shown to a student.
+                "traceback": tb_text,
+            })
+    except KeyboardInterrupt:
+        # A Stop ends the whole phase. The tests that finished keep their
+        # results; the one running is marked as where it stopped; the rest
+        # are not run, and the host does not go on to run the program.
+        result["stopped"] = True
+        result["stopped_in"] = current
+        if current is not None:
+            rows.append({
+                "name": current,
+                "outcome": "stopped",
+                "line_number": locs.get(current),
+                "message": None,
+                "stdout": None,
+                "traceback": None,
+            })
 
     result["passed"] = passed
     result["failed"] = failed
     result["skipped"] = skipped
     result["errors"] = errors
     result["tests"] = rows
-    result["ok"] = failed == 0 and errors == 0
+    result["ok"] = failed == 0 and errors == 0 and not result.get("stopped")
     result["stdout"] = stdout.getvalue()
     result["stderr"] = stderr.getvalue()
     result["displays"] = list(_pll_displays)
@@ -1093,6 +1732,7 @@ def _pll_run_tests(code, filename, level="raw"):
 # REPL-style eval (statements + last-expression value)
 # -----------------------------------------------------------------------------
 
+@_pll_stoppable(_pll_stopped_run)
 def _pll_repl_eval(code, session_key, level="raw"):
     stdout = _PllStream("stdout")
     stderr = _PllStream("stderr")
@@ -1113,6 +1753,7 @@ def _pll_repl_eval(code, session_key, level="raw"):
     _pll_protect_import_path()
     user_globals = _pll_get_session(session_key)
     filename = "<repl>"
+    del _pll_compile_warnings[:]
     try:
         tree = _pll_parse_and_instrument(code, filename)
     except SyntaxError as e:
@@ -1132,11 +1773,13 @@ def _pll_repl_eval(code, session_key, level="raw"):
     try:
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             if tree.body:
-                compiled_stmts = compile(tree, filename, "exec")
+                with _pll_recording_compile_warnings():
+                    compiled_stmts = compile(tree, filename, "exec")
                 exec(compiled_stmts, user_globals)
             if last_expr is not None:
                 expr_module = _ast.Expression(body=last_expr.value)
-                compiled_expr = compile(expr_module, filename, "eval")
+                with _pll_recording_compile_warnings():
+                    compiled_expr = compile(expr_module, filename, "eval")
                 value = eval(compiled_expr, user_globals)
                 if value is not None:
                     payload = _pll_extract_display(value)
@@ -1148,6 +1791,8 @@ def _pll_repl_eval(code, session_key, level="raw"):
     except SystemExit:
         result["ok"] = True
     except BaseException as e:
+        _pll_enrich_type_check(e)
+        _pll_enrich_index_error(e, code)
         formatted = _pll_format_exception(e)
         result["error_type"] = type(e).__name__
         result["error_message"] = str(e)
@@ -1156,6 +1801,7 @@ def _pll_repl_eval(code, session_key, level="raw"):
         result["line_number"] = line_no
         result["column"] = col
     finally:
+        _pll_say_compile_warnings(stderr, result["error_message"], code)
         result["stdout"] = stdout.getvalue()
         result["stderr"] = stderr.getvalue()
         result["displays"] = list(_pll_displays)
@@ -1209,7 +1855,7 @@ _PLL_BUILTINS_MODULE_META = frozenset(
 
 
 class _PllScope:
-    __slots__ = ("node", "kind", "parent", "bindings")
+    __slots__ = ("node", "kind", "parent", "bindings", "declared_elsewhere")
 
     def __init__(self, node, kind, parent):
         self.node = node
@@ -1218,6 +1864,11 @@ class _PllScope:
         # name -> [(lineno, col, kind, module), ...]. `module` is set only
         # for import bindings: the module the name was imported from.
         self.bindings = {}
+        # Names this scope declared `global` or `nonlocal`. An assignment to
+        # one of them rebinds the *outer* name, so it neither shadows nor
+        # reassigns anything here - and the keyword itself is already
+        # reported at the levels that disallow it.
+        self.declared_elsewhere = set()
 
 
 def _pll_arg_names(args):
@@ -1324,7 +1975,10 @@ class _PllScopeBuilder:
             self._walk(node.value, scope)
             return
         if isinstance(node, (_ast.Global, _ast.Nonlocal)):
-            # These don't create bindings.
+            # No binding here, but an assignment further down binds the
+            # outer name rather than a local one. Recorded so the shadowing
+            # and reassignment checks do not report it twice over.
+            scope.declared_elsewhere.update(node.names)
             return
 
         # --- Scope-introducing nodes -------------------------------------
@@ -1413,6 +2067,414 @@ class _PllKeywordVisitor(_ast.NodeVisitor):
     def visit_Nonlocal(self, node):
         self.found.append(("nonlocal", node.lineno, node.col_offset, list(node.names)))
         self.generic_visit(node)
+
+
+#: Annotations students write that are not types. `table` is the function
+#: that makes a table; `Table` is the type. Written out rather than derived
+#: so a name only maps when the replacement is certainly right.
+_PLL_ANNOTATION_FIXES = {
+    "table": "Table",
+    "reactor": "Reactor",
+    "row": "Row",
+    "string": "str",
+    "integer": "int",
+    "boolean": "bool",
+    "number": "float",
+    "Float": "float",
+    "Int": "int",
+    "Str": "str",
+    "Bool": "bool",
+    "image": "Image",
+    "Number": "float",
+    "String": "str",
+    "Boolean": "bool",
+    "Integer": "int",
+}
+
+#: Methods that are nearly always meant to be called. `movies["rating"].mean`
+#: prints `<bound method Series.mean of ...>` and says nothing; `.mean()` is
+#: what was wanted. Only names that are a method everywhere a student meets
+#: them: `columns`, `values` and `shape` are properties in pandas, and
+#: `width` and `height` are properties on an image, so they are not here.
+_PLL_CALLED_METHODS = frozenset(
+    (
+        "mean",
+        "sum",
+        "count",
+        "length",
+        "rows",
+        "head",
+        "tail",
+        "to_pandas",
+        "to_svg",
+        "upper",
+        "lower",
+        "strip",
+        "split",
+        "keys",
+        "items",
+        "sort_values",
+        "value_counts",
+        "describe",
+        "median",
+        "std",
+        "var",
+        "nunique",
+        "interact",
+    )
+)
+
+
+_PLL_SILENCE_TYPES = {
+    "unused-comparison": "UnusedValue",
+    "unused-value": "UnusedValue",
+    "assert-tuple": "AlwaysTrue",
+    "method-not-called": "NotCalled",
+    "annotation-not-a-type": "NotAType",
+    "field-no-type": "FieldNeedsType",
+    "field-assigned-type": "FieldNeedsType",
+    "class-needs-dataclass": "NotADataclass",
+    "compared-with-class": "AlwaysFalse",
+}
+
+_PLL_SILENCE_MESSAGES = {
+    "unused-comparison": "this comparison's result is not used",
+    "unused-value": "this value is not used",
+    "assert-tuple": "this `assert` is always true",
+    "method-not-called": "`%s` is named here but not called",
+    "annotation-not-a-type": "`%s` is not a type",
+    "field-no-type": "the field `%s` has no type",
+    "field-assigned-type": "the field `%s` is assigned a type instead of annotated",
+    "class-needs-dataclass": "`%s` has fields but is not a dataclass",
+    "compared-with-class": "`%s` is a class, so this comparison is always False",
+}
+
+
+#: Functions whose whole job is to be given a function, where naming a
+#: method without calling it is exactly right.
+_PLL_TAKES_A_FUNCTION = frozenset(
+    ("sorted", "map", "filter", "min", "max", "sort", "reduce", "any", "all")
+)
+
+#: Types a student might assign to a field name by mistake: `year = int`
+#: rather than `year: int`.
+_PLL_TYPE_NAMES = frozenset(("int", "float", "str", "bool", "list", "dict", "tuple"))
+
+
+class _PllSilenceVisitor(_ast.NodeVisitor):
+    """Collect mistakes that run without a word being said.
+
+    Each of these is valid Python that does nothing, or does something
+    other than what was meant, and so produces no error at all:
+
+      - a value computed and thrown away inside a function, which is how a
+        test written without `assert` always passes;
+      - `assert(x, 1)`, where the tuple is always true;
+      - a function containing `assert` that is not named `test_...` and is
+        never called, so it never runs;
+      - an annotation naming a function rather than a type, which turns
+        every check on that value off;
+      - a method named but not called, which yields the method object;
+      - a dataclass field with no type, or written `year = int`, which
+        makes no field and goes wrong somewhere else entirely;
+      - a class with fields and no `@dataclass`, whose constructor then
+        "takes no arguments";
+      - `a == Boa`, which is always False.
+
+    Only inside a function for the first one: at the top level a bare
+    expression is displayed, and the course relies on that.
+    """
+
+    __slots__ = (
+        "found",
+        "_depth",
+        "_called",
+        "_asserting",
+        "_classes",
+        "_fields",
+        "_written_types",
+        "_expressions",
+    )
+
+    def __init__(self):
+        self.found = []
+        self._depth = 0
+        # Classes defined in this file, so `== Boa` can be told from `== b`.
+        self._classes = set()
+        # Their field names. A field called `count` or `items` happens to
+        # share its name with a method, and `s.count` is then exactly
+        # right - so those are not "a method you forgot to call".
+        self._fields = set()
+        # For `year = int`: the type written, by position.
+        self._written_types = {}
+        # For a value thrown away: the expression node, by position.
+        self._expressions = {}
+        # Names used anywhere other than as the function's own definition,
+        # so a helper that is never called can be told from one that is.
+        self._called = set()
+        # Functions that contain an `assert`: (name, lineno, col).
+        self._asserting = []
+
+    # ---- functions ----
+
+    def scan(self, tree):
+        """Visit `tree`, with the classes and their fields collected first.
+
+        `a == Boa` is only recognisable as a comparison against a class if
+        `Boa` is already known, and a function written above the class it
+        uses is perfectly ordinary. The field names are wanted for the same
+        reason, by the checks that would otherwise mistake one for a method.
+        """
+        for node in _ast.walk(tree):
+            if not isinstance(node, _ast.ClassDef):
+                continue
+            self._classes.add(node.name)
+            for stmt in node.body:
+                if isinstance(stmt, _ast.AnnAssign) and isinstance(stmt.target, _ast.Name):
+                    self._fields.add(stmt.target.id)
+        self.visit(tree)
+
+    def _function(self, node):
+        self._depth += 1
+        self.generic_visit(node)
+        self._depth -= 1
+        if self._contains_assert(node) and not node.name.startswith("test_"):
+            self._asserting.append((node.name, node.lineno, node.col_offset))
+        returns = node.returns
+        if (
+            isinstance(returns, _ast.Name)
+            and returns.id in _PLL_ANNOTATION_FIXES
+            and returns.id not in self._classes
+        ):
+            self.found.append(
+                (
+                    "annotation-not-a-type",
+                    returns.lineno,
+                    returns.col_offset,
+                    returns.id,
+                )
+            )
+
+    visit_FunctionDef = _function
+    visit_AsyncFunctionDef = _function
+
+    @staticmethod
+    def _contains_assert(node):
+        for child in _ast.walk(node):
+            if isinstance(child, _ast.Assert):
+                return True
+        return False
+
+    def visit_Name(self, node):
+        if isinstance(node.ctx, _ast.Load):
+            self._called.add(node.id)
+        self.generic_visit(node)
+
+    # ---- classes and their fields ----
+
+    def visit_ClassDef(self, node):
+        self._classes.add(node.name)
+        decorated = any(
+            (isinstance(d, _ast.Name) and d.id == "dataclass")
+            or (isinstance(d, _ast.Attribute) and d.attr == "dataclass")
+            or (
+                isinstance(d, _ast.Call)
+                and (
+                    (isinstance(d.func, _ast.Name) and d.func.id == "dataclass")
+                    or (isinstance(d.func, _ast.Attribute) and d.func.attr == "dataclass")
+                )
+            )
+            for d in node.decorator_list
+        )
+        annotated = [
+            stmt
+            for stmt in node.body
+            if isinstance(stmt, _ast.AnnAssign) and isinstance(stmt.target, _ast.Name)
+        ]
+        for stmt in node.body:
+            # `year` on a line of its own: meant as a field, but it is a
+            # use of a name, so it fails as a NameError somewhere else.
+            if (
+                isinstance(stmt, _ast.Expr)
+                and isinstance(stmt.value, _ast.Name)
+                and stmt.value.id not in ("Ellipsis",)
+            ):
+                self.found.append(
+                    (
+                        "field-no-type",
+                        stmt.lineno,
+                        stmt.col_offset,
+                        stmt.value.id,
+                    )
+                )
+            # `year = int`: a class attribute holding a type, which makes
+            # no field at all and goes wrong much later, in the argument
+            # count of a constructor nobody wrote.
+            if (
+                isinstance(stmt, _ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], _ast.Name)
+                and isinstance(stmt.value, _ast.Name)
+                and stmt.value.id in _PLL_TYPE_NAMES
+            ):
+                self.found.append(
+                    (
+                        "field-assigned-type",
+                        stmt.lineno,
+                        stmt.col_offset,
+                        stmt.targets[0].id,
+                    )
+                )
+                # The type they wrote, so the fix quotes it back exactly.
+                self._written_types[(stmt.lineno, stmt.col_offset)] = stmt.value.id
+        # Annotated fields and no `@dataclass`: `X(...)` then fails with
+        # "takes no arguments", which says nothing about the decorator.
+        writes_init = any(
+            isinstance(stmt, _PLL_SCOPE_FUNC) and stmt.name == "__init__"
+            for stmt in node.body
+        )
+        if annotated and not decorated and not writes_init:
+            self.found.append(
+                ("class-needs-dataclass", node.lineno, node.col_offset, node.name)
+            )
+        self.generic_visit(node)
+
+    def visit_Compare(self, node):
+        # `if a == Boa:` is always False - a value is never equal to the
+        # class it was made from. `type(a) == Boa`, though, is a real check.
+        sides = [node.left] + list(node.comparators)
+        if any(
+            isinstance(side, _ast.Call)
+            and isinstance(side.func, _ast.Name)
+            and side.func.id == "type"
+            for side in sides
+        ):
+            self.generic_visit(node)
+            return
+        for side in sides:
+            if (
+                isinstance(side, _ast.Name)
+                and side.id in self._classes
+                and any(isinstance(op, (_ast.Eq, _ast.NotEq)) for op in node.ops)
+            ):
+                self.found.append(
+                    ("compared-with-class", side.lineno, side.col_offset, side.id)
+                )
+        self.generic_visit(node)
+
+    # ---- statements whose value goes nowhere ----
+
+    def visit_Expr(self, node):
+        value = node.value
+        # A method named but not called is the more specific thing to say
+        # about `t.mean` on a line of its own, so it wins.
+        if not self._method_not_called(value) and self._depth > 0 and self._discarded(value):
+            self.found.append(
+                (
+                    "unused-comparison" if isinstance(value, _ast.Compare) else "unused-value",
+                    node.lineno,
+                    node.col_offset,
+                    None,
+                )
+            )
+            self._expressions[(node.lineno, node.col_offset)] = value
+        self.generic_visit(node)
+
+    @staticmethod
+    def _discarded(value):
+        """Whether this expression statement can only be a mistake.
+
+        A call, an await or a yield is there for its effect. A string is a
+        docstring. `...` is a placeholder. Everything else computes
+        something and drops it.
+        """
+        if isinstance(
+            value,
+            (
+                _ast.Call,
+                _ast.Await,
+                _ast.Yield,
+                _ast.YieldFrom,
+                _ast.NamedExpr,
+            ),
+        ):
+            return False
+        if isinstance(value, _ast.Constant):
+            return False
+        return True
+
+    def _method_not_called(self, value):
+        """`movies["rating"].mean` - the method itself, not its result."""
+        if (
+            isinstance(value, _ast.Attribute)
+            and value.attr in _PLL_CALLED_METHODS
+            and value.attr not in self._fields
+        ):
+            self.found.append(
+                ("method-not-called", value.lineno, value.col_offset, value.attr)
+            )
+            return True
+        return False
+
+    def visit_Call(self, node):
+        # A method named but not called, wherever its value is used:
+        # `print(movies["rating"].mean)`.
+        #
+        # Not for a function that takes a function - `sorted(xs,
+        # key=str.lower)` passes `str.lower` deliberately, and that is the
+        # one shape where naming a method without calling it is right.
+        callee = node.func
+        name = callee.id if isinstance(callee, _ast.Name) else None
+        if name in _PLL_TAKES_A_FUNCTION:
+            self.generic_visit(node)
+            return
+        for keyword in node.keywords:
+            if keyword.arg not in ("key", "default_factory"):
+                self._method_not_called(keyword.value)
+        for argument in node.args:
+            self._method_not_called(argument)
+        self.generic_visit(node)
+
+    # ---- asserts ----
+
+    def visit_Assert(self, node):
+        if isinstance(node.test, _ast.Tuple) and node.test.elts:
+            self.found.append(
+                ("assert-tuple", node.lineno, node.col_offset, None)
+            )
+        self.generic_visit(node)
+
+    # ---- annotations ----
+
+    def _annotation(self, node):
+        annotation = getattr(node, "annotation", None)
+        if (
+            isinstance(annotation, _ast.Name)
+            and annotation.id in _PLL_ANNOTATION_FIXES
+            # A class of their own called `Number` is a type, and naming it
+            # in an annotation is right.
+            and annotation.id not in self._classes
+        ):
+            self.found.append(
+                (
+                    "annotation-not-a-type",
+                    annotation.lineno,
+                    annotation.col_offset,
+                    annotation.id,
+                )
+            )
+        self.generic_visit(node)
+
+    visit_AnnAssign = _annotation
+    visit_arg = _annotation
+
+    def uncalled_test_functions(self):
+        """Functions with an `assert` that nothing ever runs."""
+        return [
+            (name, lineno, col)
+            for name, lineno, col in self._asserting
+            if name not in self._called
+        ]
 
 
 def _pll_session_bound_names(session_key):
@@ -1533,6 +2595,11 @@ def _pll_static_analyze(code, level, filename, session_key=None):
 
         # ---- Shadowing first ----
         for name, locs in scope.bindings.items():
+            if name in scope.declared_elsewhere:
+                # `global x` already produced its own finding; an extra
+                # Shadowing for the same name sent students looking for a
+                # second, separate mistake.
+                continue
             if scope.kind == "class":
                 # A name bound in a class body is an *attribute*, not a
                 # variable. `id: int` in a dataclass declares a field, and
@@ -1598,11 +2665,34 @@ def _pll_static_analyze(code, level, filename, session_key=None):
         # ---- Then reassignment (skip names already shadow-flagged) ----
         if reassignment_active(scope.kind):
             for name, locs in scope.bindings.items():
-                if name in shadowed_in_scope:
+                if name in shadowed_in_scope or name in scope.declared_elsewhere:
                     continue
                 if len(locs) > 1:
                     second_loc = locs[1]
                     first_loc = locs[0]
+                    # A `def` written twice is not an accumulator: the
+                    # advice for a reassigned variable (running totals, use
+                    # `sum`) is about something else entirely, and the fix
+                    # is to rename one of them.
+                    definitions = {"functiondef": "function", "classdef": "class"}
+                    both = definitions.get(first_loc[2]) if first_loc[2] == second_loc[2] else None
+                    if both is not None:
+                        findings.append({
+                            "id": "duplicate-definition",
+                            "error_type": "DuplicateDefinition",
+                            "message": (
+                                "there are two %ss named `%s` (lines %d and %d)"
+                                % (both, name, first_loc[0], second_loc[0])
+                            ),
+                            "line_number": second_loc[0],
+                            "column": second_loc[1],
+                            "name_token": name,
+                            "scope_kind": scope.kind,
+                            "first_line_number": first_loc[0],
+                            "first_column": first_loc[1],
+                            "definition_kind": both,
+                        })
+                        continue
                     findings.append({
                         "id": "reassignment",
                         "error_type": "Reassignment",
@@ -1633,6 +2723,40 @@ def _pll_static_analyze(code, level, filename, session_key=None):
             "scope_kind": "function",
             "keyword": keyword,
             "names": list(names),
+        })
+
+    # ---- mistakes that would otherwise run without a word ----
+    silence = _PllSilenceVisitor()
+    silence.scan(tree)
+    for kind, lineno, col, token in silence.found:
+        expression = silence._expressions.get((lineno, col))
+        findings.append({
+            "id": kind,
+            "error_type": _PLL_SILENCE_TYPES[kind],
+            "message": _PLL_SILENCE_MESSAGES[kind] % token if token else _PLL_SILENCE_MESSAGES[kind],
+            "line_number": lineno,
+            "column": col,
+            "name_token": token,
+            "scope_kind": "function",
+            "written_type": silence._written_types.get((lineno, col)),
+            # The student's own text, so the advice can say
+            # `return order_amt + 4` rather than "`return` it".
+            "expression": (
+                _ast.get_source_segment(code, expression) if expression is not None else None
+            ),
+        })
+    for name, lineno, col in silence.uncalled_test_functions():
+        findings.append({
+            "id": "test-not-named",
+            "error_type": "NeverRun",
+            "message": (
+                "`%s` has an `assert` in it, but nothing runs it: a test has "
+                "to be called `test_%s`" % (name, name)
+            ),
+            "line_number": lineno,
+            "column": col,
+            "name_token": name,
+            "scope_kind": "module",
         })
 
     findings.sort(key=lambda f: (f["line_number"] or 0, f["column"] or 0))

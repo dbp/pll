@@ -533,6 +533,221 @@ _g = _pll_get_session("smoke-lib")
     console.log("    fields and attributes clean; class names and rebindings still caught");
   }
 
+  console.log("\n[17] mistakes that would otherwise run without a word");
+  {
+    // Every one of these is valid Python that does nothing, or something
+    // other than what was meant, so there is no error to go on: the only
+    // evidence a student has is a program that seems to work.
+    for (const [label, code, id, line] of [
+      [
+        "a test written without assert",
+        'def pen_cost(n, m):\n    return n * 2\n\n\ndef test_pen_cost():\n    pen_cost(0, "huskies") == 1\n',
+        "unused-comparison",
+        6,
+      ],
+      [
+        "a value computed and dropped",
+        "def deposit(balance, amt):\n    balance + amt\n    return balance\n",
+        "unused-value",
+        2,
+      ],
+      ["assert on a tuple", "def test_add():\n    assert(1 + 1, 2)\n", "assert-tuple", 2],
+      [
+        "a method named but not called",
+        'def report(t):\n    print(t.mean)\n',
+        "method-not-called",
+        2,
+      ],
+      [
+        "an annotation that is a function",
+        'def summarise(t: table) -> str:\n    return "x"\n',
+        "annotation-not-a-type",
+        1,
+      ],
+      [
+        "an annotation that is a misspelling",
+        "def shout(word: string) -> str:\n    return word\n",
+        "annotation-not-a-type",
+        1,
+      ],
+      [
+        "an annotation naming something that is not a function either",
+        "def shrink(pic: image) -> str:\n    return \"x\"\n",
+        "annotation-not-a-type",
+        1,
+      ],
+      [
+        "a helper with an assert that nothing runs",
+        'def check_total():\n    assert 1 == 1\n\n\nprint("hi")\n',
+        "test-not-named",
+        1,
+      ],
+    ]) {
+      const findings = analyze(code, "beginner", "silence.py");
+      const found = findings.find((f) => f.id === id);
+      expect(found !== undefined, `${label}: expected a ${id}, got ${JSON.stringify(findings)}`);
+      if (found !== undefined) {
+        expect(
+          found.line_number === line,
+          `${label}: expected line ${line}, got ${found.line_number}`,
+        );
+      }
+    }
+    console.log("    eight silent mistakes now reported");
+
+    // And the shapes that are correct have to stay silent, or every file
+    // in the course lights up.
+    for (const [label, code] of [
+      ["a top-level expression, which is displayed", '1 + 2\n"a string"\n'],
+      ["a helper that is called", "def check():\n    assert 1 == 1\n\n\ncheck()\n"],
+      ["a real test", "def test_ok():\n    assert 1 == 1\n"],
+      ["a proper annotation", "def shout(word: str) -> str:\n    return word\n"],
+      ["a method that is called", "def report(t):\n    print(t.mean())\n"],
+      ["a docstring", 'def f(x):\n    """What it does."""\n    return x\n'],
+      ["a call for its effect", "def f(xs):\n    xs.append(1)\n    return xs\n"],
+      // A function that takes a function is given one on purpose.
+      ["a method passed as a function", "def f(xs):\n    return sorted(xs, key=str.lower)\n"],
+      // A class that writes its own `__init__` is not a dataclass.
+      [
+        "a class with its own __init__",
+        "class Counter:\n    count: int\n\n    def __init__(self):\n        self.count = 0\n",
+      ],
+      // A dataclass field whose name happens to match a method: `s.count`
+      // is exactly right, and `count` is a very ordinary field name.
+      [
+        "a field named like a method",
+        "from dataclasses import dataclass\n\n\n@dataclass\nclass Song:\n    count: int\n\n\ndef show(s: Song):\n    print(s.count)\n",
+      ],
+      // A class of their own called `Number` is a type.
+      [
+        "an annotation naming their own class",
+        "from dataclasses import dataclass\n\n\n@dataclass\nclass Number:\n    value: int\n\n\ndef twice(n: Number) -> Number:\n    return n\n",
+      ],
+      // `type(a) == Boa` is a real check, however unidiomatic.
+      [
+        "a type() comparison",
+        "from dataclasses import dataclass\n\n\n@dataclass\nclass Boa:\n    name: str\n\n\ndef f(a):\n    return type(a) == Boa\n",
+      ],
+    ]) {
+      const findings = analyze(code, "beginner", "quiet.py");
+      expect(findings.length === 0, `${label} should stay silent, got ${JSON.stringify(findings)}`);
+    }
+    console.log("    and correct code stays silent");
+
+    // Only at the levels that have static checks.
+    const raw = analyze("def test_x():\n    assert(1, 2)\n", "raw", "silence.py");
+    expect(raw.length === 0, `raw has no static checks, got ${JSON.stringify(raw)}`);
+    console.log("    none of them at #level raw");
+  }
+
+  console.log("\n[18] advice that used to point the wrong way");
+  {
+    // A duplicated `def` is not a reassigned variable: the Reassignment
+    // advice is about accumulators and running totals, and the fix here is
+    // to rename one of them.
+    const twice = analyze(
+      "def test_add():\n    assert 1 == 1\n\n\ndef test_add():\n    assert 2 == 2\n",
+      "beginner",
+      "dup.py",
+    );
+    const duplicate = twice.find((f) => f.id === "duplicate-definition");
+    expect(duplicate !== undefined, `expected a duplicate-definition, got ${JSON.stringify(twice)}`);
+    expect(
+      twice.every((f) => f.id !== "reassignment"),
+      `and no reassignment finding: ${JSON.stringify(twice)}`,
+    );
+    if (duplicate !== undefined) {
+      expect(duplicate.first_line_number === 1, `the first one is named: ${duplicate.first_line_number}`);
+      expect(duplicate.definition_kind === "function", `as a function: ${duplicate.definition_kind}`);
+    }
+
+    // `global x` at intermediate produced its own finding *and* a
+    // Shadowing for the same name, which reads as two separate mistakes.
+    const globals_ = analyze(
+      "total = 0\n\n\ndef add(n):\n    global total\n    total = total + n\n",
+      "intermediate",
+      "g.py",
+    );
+    expect(
+      globals_.length === 1 && globals_[0].id === "disallowed-keyword",
+      `only the keyword finding: ${JSON.stringify(globals_)}`,
+    );
+
+    // A dataclass field written the wrong way, which otherwise goes wrong
+    // somewhere else entirely - as a NameError, or in an argument count.
+    const fields = analyze(
+      "from dataclasses import dataclass\n\n\n@dataclass\nclass Boa:\n    name: str\n    year = int\n    length\n",
+      "beginner",
+      "dc.py",
+    );
+    expect(
+      fields.some((f) => f.id === "field-assigned-type" && f.line_number === 7),
+      `\`year = int\` is flagged: ${JSON.stringify(fields)}`,
+    );
+    expect(
+      fields.some((f) => f.id === "field-assigned-type" && f.written_type === "int"),
+      `with the type written carried through: ${JSON.stringify(fields)}`,
+    );
+    const asStr = analyze(
+      "from dataclasses import dataclass\n\n\n@dataclass\nclass Song:\n    name = str\n",
+      "beginner",
+      "dc2.py",
+    );
+    expect(
+      asStr.some((f) => f.id === "field-assigned-type" && f.written_type === "str"),
+      `\`name = str\` carries \`str\`, not \`int\`: ${JSON.stringify(asStr)}`,
+    );
+    expect(
+      fields.some((f) => f.id === "field-no-type" && f.line_number === 8),
+      `a field with no type is flagged: ${JSON.stringify(fields)}`,
+    );
+
+    // A function written above the class it compares against is ordinary,
+    // so the class names are collected before anything else is looked at.
+    const above = analyze(
+      "from dataclasses import dataclass\n\n\ndef f(a):\n    return a == Boa\n\n\n@dataclass\nclass Boa:\n    name: str\n",
+      "beginner",
+      "order.py",
+    );
+    expect(
+      above.some((f) => f.id === "compared-with-class" && f.line_number === 5),
+      `a comparison above the class is still seen: ${JSON.stringify(above)}`,
+    );
+
+    // `if a == Boa:` is always False, and runs without complaint.
+    const compared = analyze(
+      "from dataclasses import dataclass\n\n\n@dataclass\nclass Boa:\n    name: str\n\n\ndef f(a):\n    return a == Boa\n",
+      "beginner",
+      "cmp.py",
+    );
+    expect(
+      compared.some((f) => f.id === "compared-with-class" && f.line_number === 10),
+      `comparing with a class is flagged: ${JSON.stringify(compared)}`,
+    );
+    // Comparing with an ordinary value is not.
+    const fine = analyze(
+      "def f(a, b):\n    return a == b\n",
+      "beginner",
+      "cmp2.py",
+    );
+    expect(fine.length === 0, `an ordinary comparison stays silent: ${JSON.stringify(fine)}`);
+    // Every wrong annotation carries the name as written, which is what
+    // the host's wording is built from. (That wording is checked in
+    // smoke-explainers, which bundles the explainer.)
+    for (const written of ["table", "reactor", "image", "row", "string"]) {
+      const code = `def f(x: ${written}) -> str:\n    return "x"\n`;
+      const found = analyze(code, "beginner", "ann.py").find(
+        (f) => f.id === "annotation-not-a-type",
+      );
+      expect(found !== undefined, `\`${written}\` should be flagged`);
+      if (found !== undefined) {
+        expect(found.name_token === written, `the name is carried: ${found.name_token}`);
+      }
+    }
+    console.log("    five wrong annotations, each carrying the name as written");
+    console.log("    duplicated defs, `global`, field shapes and `== Class`");
+  }
+
   fn.destroy?.();
 
   if (process.exitCode) {

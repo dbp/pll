@@ -21,6 +21,15 @@ _PLL_DEFAULT_TICK_RATE = 1.0 / 28.0
 # second would otherwise hold 100k states alive just so it could rewind.
 _PLL_MAX_TRACE = 10000
 
+def _pll_rx_suggestion(unknown):
+    """" Did you mean `on_tick`?", when one of them is nearly a real one."""
+    for given in unknown:
+        best = _pll_closest_name(given, _PLL_HANDLER_NAMES)
+        if best is not None:
+            return " Did you mean `%s`?" % best
+    return ""
+
+
 _PLL_HANDLER_NAMES = (
     "init",
     "to_draw",
@@ -217,6 +226,38 @@ class Reactor:
         return "<reactor %s state=%r>" % (self.title, self._state)
 
 
+#: Reactors made during the current run. A reactor that is never started
+#: does nothing and says nothing - the commonest way a universe program
+#: appears to do nothing at all - so the run ends with a note about it.
+#: Cleared at the start of every run by `_pll_reset_reactor_notes`.
+_pll_made_reactors = []
+
+
+def _pll_reset_reactor_notes():
+    del _pll_made_reactors[:]
+
+
+def _pll_reactor_note():
+    """A note about reactors that were built and never started, or "".
+
+    Written to stderr at the end of a run: there is nothing to report
+    until the program has finished, and nothing wrong with building a
+    reactor and starting it later in the same program.
+    """
+    idle = [r for r in _pll_made_reactors if not r._pll_already_displayed]
+    if not idle:
+        return ""
+    if len(idle) == 1:
+        return (
+            "note: a reactor was made but never started, so nothing ran. "
+            "Add `.interact()` to start it.\n"
+        )
+    return (
+        "note: %d reactors were made but never started, so nothing ran. "
+        "Add `.interact()` to start them.\n" % len(idle)
+    )
+
+
 def reactor(**handlers):
     """Build a reactor. `init` and `to_draw` are required.
 
@@ -228,10 +269,10 @@ def reactor(**handlers):
     unknown = [k for k in handlers if k not in _PLL_HANDLER_NAMES]
     if unknown:
         raise ValueError(
-            "reactor: unknown handler%s %s. Known: %s"
+            "reactor has no handler called %s.%s The handlers are: %s"
             % (
-                "" if len(unknown) == 1 else "s",
-                ", ".join(repr(u) for u in sorted(unknown)),
+                ", ".join("`%s`" % u for u in sorted(unknown)),
+                _pll_rx_suggestion(sorted(unknown)),
                 ", ".join(_PLL_HANDLER_NAMES),
             )
         )
@@ -242,13 +283,18 @@ def reactor(**handlers):
     for name in ("to_draw", "on_tick", "stop_when", "on_key", "on_mouse", "on_receive"):
         fn = handlers.get(name)
         if fn is not None and not callable(fn):
-            raise ValueError("reactor: `%s` must be a function" % name)
+            raise ValueError(
+                "reactor's `%s` has to be a function, written as its name "
+                "with no brackets after it." % name
+            )
     rate = handlers.get("tick_rate", _PLL_DEFAULT_TICK_RATE)
     if not isinstance(rate, (int, float)) or isinstance(rate, bool) or rate <= 0:
         raise ValueError("reactor: `tick_rate` must be a number of seconds above 0")
     state = handlers.pop("init")
     handlers["tick_rate"] = float(rate)
-    return Reactor(handlers, state)
+    made = Reactor(handlers, state)
+    _pll_made_reactors.append(made)
+    return made
 
 
 def big_bang(init, **handlers):

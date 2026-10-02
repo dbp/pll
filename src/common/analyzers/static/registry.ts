@@ -8,6 +8,19 @@ import {
 } from "./shadowingExplainer";
 import { explainReassignment } from "./reassignmentExplainer";
 import { explainDisallowedKeyword } from "./disallowedKeywordExplainer";
+import {
+  explainAnnotationNotAType,
+  explainAssertTuple,
+  explainClassNeedsDataclass,
+  explainComparedWithClass,
+  explainFieldAssignedType,
+  explainFieldNoType,
+  explainMethodNotCalled,
+  explainTestNotNamed,
+  explainUnusedComparison,
+  explainUnusedValue,
+} from "./silenceExplainer";
+import { explainDuplicateDefinition } from "./duplicateDefinitionExplainer";
 
 export type StaticExplainer = (
   raw: RawStaticFinding,
@@ -22,6 +35,17 @@ const explainers: Record<string, StaticExplainer> = {
   "shadowing-library": explainShadowingLibrary,
   reassignment: explainReassignment,
   "disallowed-keyword": explainDisallowedKeyword,
+  "unused-comparison": explainUnusedComparison,
+  "unused-value": explainUnusedValue,
+  "assert-tuple": explainAssertTuple,
+  "method-not-called": explainMethodNotCalled,
+  "annotation-not-a-type": explainAnnotationNotAType,
+  "test-not-named": explainTestNotNamed,
+  "field-no-type": explainFieldNoType,
+  "field-assigned-type": explainFieldAssignedType,
+  "class-needs-dataclass": explainClassNeedsDataclass,
+  "compared-with-class": explainComparedWithClass,
+  "duplicate-definition": explainDuplicateDefinition,
 };
 
 function fallbackExplainer(

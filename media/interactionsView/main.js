@@ -718,7 +718,9 @@
   function renderTestReport(entry) {
     const failed = (entry.failed || 0) + (entry.errors || 0);
     const div = document.createElement("div");
-    div.className = "entry testReport " + (failed > 0 ? "failed" : "passed");
+    // A stopped phase is neither a pass nor a failure: the student ended it.
+    div.className =
+      "entry testReport " + (entry.stopped ? "stopped" : failed > 0 ? "failed" : "passed");
 
     const summary = document.createElement("div");
     summary.className = "summary";
@@ -727,6 +729,11 @@
     if (entry.failed) parts.push(entry.failed + " failed");
     if (entry.errors) parts.push(entry.errors + " error" + (entry.errors === 1 ? "" : "s"));
     if (entry.skipped) parts.push(entry.skipped + " skipped");
+    if (entry.stopped) {
+      parts.push(
+        entry.stoppedIn ? "stopped during " + entry.stoppedIn : "stopped before any test ran",
+      );
+    }
     if (parts.length === 0) parts.push("no tests collected");
     summary.textContent = "Tests: " + parts.join(", ");
     div.appendChild(summary);
@@ -743,6 +750,8 @@
         mark.className = "mark";
         if (t.outcome === "passed") mark.textContent = "\u2713";
         else if (t.outcome === "skipped") mark.textContent = "\u2013";
+        // A square, as on a Stop button - not the cross a failure gets.
+        else if (t.outcome === "stopped") mark.textContent = "\u25A0";
         else mark.textContent = "\u2717";
         row.appendChild(mark);
 

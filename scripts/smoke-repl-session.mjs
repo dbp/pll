@@ -268,7 +268,9 @@ function makeDiagnostics() {
 
 /**
  * Scriptable runtime. `script.events(kind, request)` returns the events a
- * run should emit; `script.findings` is what staticAnalyze returns.
+ * run should emit; `script.findings` is what staticAnalyze returns. A
+ * function under a method's own name (`script.runTests`, say) replaces that
+ * method, for a test that has to hold one step of a run open.
  */
 function makeRuntime(script = {}) {
   const calls = [];
@@ -280,6 +282,7 @@ function makeRuntime(script = {}) {
     },
     async examplarRun(testSource, bundle) {
       calls.push(["examplarRun", testSource, bundle]);
+      if (script.examplarRun) return script.examplarRun(testSource, bundle);
       if (script.examplarThrows) throw new Error("boom");
       return script.examplarResult ?? { ok: true, provides: [], wheats: [], chaffs: [] };
     },
@@ -339,10 +342,12 @@ function makeRuntime(script = {}) {
     },
     async ensurePytest() {
       calls.push(["ensurePytest"]);
+      if (script.ensurePytest) return script.ensurePytest();
       if (script.pytestFails) throw new Error("no pytest wheel");
     },
     async runTests(request, onEvent) {
       calls.push(["runTests", request.fileName]);
+      if (script.runTests) return script.runTests(request, onEvent);
       onEvent({
         kind: "testReport",
         fileName: request.fileName,
@@ -356,14 +361,17 @@ function makeRuntime(script = {}) {
     },
     async ensurePackages(code) {
       calls.push(["ensurePackages", code]);
+      if (script.ensurePackages) return script.ensurePackages(code);
       if (script.packagesFail) throw new Error("network down");
     },
     async staticAnalyze(request) {
       calls.push(["staticAnalyze", request.fileName, request.level, request.sessionKey]);
+      if (script.staticAnalyze) return script.staticAnalyze(request);
       return script.findings ?? [];
     },
     async mountWorkspaceFiles(files) {
       calls.push(["mountWorkspaceFiles", files.map((f) => f.name).join("|")]);
+      if (script.mountWorkspaceFiles) return script.mountWorkspaceFiles(files);
     },
     async collectWorkspaceFiles() {
       calls.push(["collectWorkspaceFiles"]);
@@ -687,9 +695,17 @@ console.log("\n[8] a runtime NameError becomes a friendly finding");
   repl.dispose();
 }
 
-console.log("\n[9] an unrecognized error falls back to the raw traceback");
+console.log("\n[9] an error with no analyzer of its own is still a finding");
 {
-  const doc = makeDoc("boom.py", "1/0\n");
+  // It used to fall through to the raw traceback, which in PLL means
+  // frames from PLL's own machinery (`File "<exec>", line 560, in table`)
+  // and, for pandas, dozens of lines from inside pandas. The message a
+  // student needs is the last line; a traceback through the implementation
+  // only buries it.
+  // Deliberately an error no analyzer claims: every rewording task adds
+  // rules, and this test is about what happens to whatever is left over.
+  const code = "x = 1\nprint(x / 0)\n";
+  const doc = makeDoc("boom.py", code);
   const { repl, view } = await harness(
     {
       events: () => [
@@ -697,8 +713,15 @@ console.log("\n[9] an unrecognized error falls back to the raw traceback");
           kind: "error",
           errorType: "ZeroDivisionError",
           message: "division by zero",
-          traceback: "Traceback...\nZeroDivisionError: division by zero",
-          lineNumber: 1,
+          traceback: [
+            "Traceback (most recent call last):",
+            '  File "<exec>", line 779, in _pll_run_file',
+            '  File "boom.py", line 2, in <module>',
+            "    print(x / 0)",
+            "          ~~^~~",
+            "ZeroDivisionError: division by zero",
+          ].join("\n"),
+          lineNumber: 2,
           column: null,
           fileName: "boom.py",
         },
@@ -707,11 +730,27 @@ console.log("\n[9] an unrecognized error falls back to the raw traceback");
     },
     doc,
   );
-  await repl.runFile("1/0\n", "boom.py", doc);
+  await repl.runFile(code, "boom.py", doc);
   await settle();
-  const raw = view.entries.find((e) => e.kind === "rawError");
-  expect(!!raw, "an error with no analyzer should show the raw traceback");
-  expect(raw.errorType === "ZeroDivisionError", "the error type should be preserved");
+  expect(
+    !view.entries.some((e) => e.kind === "rawError"),
+    "no error should reach a student as a raw traceback",
+  );
+  const finding = view.entries.find((e) => e.kind === "finding")?.finding;
+  expect(finding !== undefined, "it should arrive as a finding");
+  expect(
+    finding.errorType === "ZeroDivisionError",
+    `Python's own type is kept: ${finding.errorType}`,
+  );
+  expect(/division by zero/.test(finding.headline), `headline: ${finding.headline}`);
+  // Located in the student's file, from the innermost frame that is theirs -
+  // not the `<exec>` frame above it. The view gets the serialized form, so
+  // the location arrives as a label rather than as separate fields.
+  expect(finding.location?.line === 2,
+    `blamed on the student's line, got ${JSON.stringify(finding.location)}`);
+  expect(finding.location?.fileName === "boom.py",
+    `in their file, got ${JSON.stringify(finding.location)}`);
+  console.log(`    ${finding.errorType}: ${finding.headline} (${finding.location.label})`);
   repl.dispose();
 }
 
@@ -1727,6 +1766,475 @@ console.log("\n[44] no directive means no Examplar at all");
   await settle();
   expect(!view.entries.some((e) => e.kind === "examplar"), "no card");
   expect(!runtime.calls.some((c) => c[0] === "examplarRun"), "and nothing is run");
+  repl.dispose();
+}
+
+console.log("\n[45] a warning is shown and the file still runs");
+{
+  // Refusing to run a file over something that works - a helper nothing
+  // calls, a method named but not called - would obstruct more than the
+  // mistake does. Only an error stops the run.
+  const doc = makeDoc("warn.py", "#level beginner\ndef check_total():\n    assert 1 == 1\n");
+  const { repl, view, runtime } = await harness(
+    {
+      events: () => [{ kind: "stdout", text: "ran\n" }, { kind: "done" }],
+      findings: [
+        {
+          id: "test-not-named",
+          error_type: "NeverRun",
+          message: "`check_total` has an `assert` in it, but nothing runs it",
+          line_number: 2,
+          column: 0,
+          name_token: "check_total",
+          scope_kind: "module",
+        },
+      ],
+    },
+    doc,
+  );
+  await repl.runFile(doc.getText(), "warn.py", doc);
+  await settle();
+  expect(
+    view.entries.some((e) => e.kind === "finding" && e.finding.errorType === "NeverRun"),
+    "the warning should be shown",
+  );
+  expect(
+    !view.entries.some((e) => e.kind === "banner" && /not executed/.test(e.text)),
+    `and nothing should say the file was skipped: ${JSON.stringify(view.entries.map((e) => e.text))}`,
+  );
+  expect(
+    runtime.calls.some((c) => c[0] === "runFile"),
+    "the file should still be run",
+  );
+  repl.dispose();
+}
+
+console.log("\n[46] an error still stops the file");
+{
+  const doc = makeDoc("blocked.py", "#level beginner\ndef test_total():\n    assert(1, 2)\n");
+  const { repl, view, runtime } = await harness(
+    {
+      events: () => [{ kind: "done" }],
+      findings: [
+        {
+          id: "assert-tuple",
+          error_type: "AlwaysTrue",
+          message: "this `assert` is always true",
+          line_number: 3,
+          column: 4,
+          name_token: null,
+          scope_kind: "function",
+        },
+      ],
+    },
+    doc,
+  );
+  await repl.runFile(doc.getText(), "blocked.py", doc);
+  await settle();
+  expect(
+    view.entries.some((e) => e.kind === "banner" && /not executed/.test(e.text)),
+    "an error should say the file was not executed",
+  );
+  expect(
+    !runtime.calls.some((c) => c[0] === "runFile"),
+    "and the file must not be run",
+  );
+  repl.dispose();
+}
+
+/* ---------------------------------------------------------------- */
+/* Stopping between the phases of a run                             */
+/* ---------------------------------------------------------------- */
+
+/** Holds one step of a run open until the test opens it. */
+function makeGate() {
+  let open;
+  const promise = new Promise((resolve) => {
+    open = resolve;
+  });
+  return { promise, open: () => open() };
+}
+
+/** Wait for the run to reach a step, which may be past a slow fetch. */
+async function untilStatus(view, status, ms = 10000) {
+  const deadline = Date.now() + ms;
+  while (view.status !== status && Date.now() < deadline) {
+    await settle();
+  }
+  return view.status === status;
+}
+
+const bannerTexts = (view) => view.entries.filter((e) => e.kind === "banner").map((e) => e.text);
+const called = (runtime, name) => runtime.calls.some((c) => c[0] === name);
+/** Anything on the panel that reads as something having gone wrong. */
+const complaints = (view) =>
+  view.entries
+    .filter((e) => (e.kind === "stderr" || e.kind === "banner") && /fail|error|could not/i.test(e.text))
+    .map((e) => e.text);
+
+const LOOPING_TESTS = [
+  "def test_ok():",
+  "    assert True",
+  "",
+  "def test_forever():",
+  "    while True:",
+  "        pass",
+  "",
+  'print("the program")',
+].join("\n");
+
+/** The report of a test phase that a Stop ended in `test_forever`. */
+const stoppedReport = (fileName) => ({
+  kind: "testReport",
+  fileName,
+  passed: 1,
+  failed: 0,
+  skipped: 0,
+  errors: 0,
+  stopped: true,
+  stoppedIn: "test_forever",
+  tests: [
+    { name: "test_ok", outcome: "passed", lineNumber: 1, message: null, stdout: null },
+    { name: "test_forever", outcome: "stopped", lineNumber: 4, message: null, stdout: null },
+  ],
+});
+
+console.log("\n[47] a Stop during the tests ends the run, so the program does not start");
+{
+  // The bug: the Stop ended the looping test, the remaining tests ran, and
+  // then the program ran - after the student had asked for it all to stop.
+  const gate = makeGate();
+  let stopTests = true;
+  const doc = makeDoc("loops.py", LOOPING_TESTS);
+  const { repl, view, runtime } = await harness(
+    {
+      events: () => [{ kind: "done" }],
+      runTests: async (request, onEvent) => {
+        await gate.promise;
+        if (stopTests) {
+          onEvent(stoppedReport(request.fileName));
+        } else {
+          onEvent({ kind: "testReport", fileName: request.fileName, passed: 2, failed: 0,
+            skipped: 0, errors: 0, tests: [] });
+        }
+        onEvent({ kind: "done" });
+      },
+    },
+    doc,
+  );
+  const run = repl.runFile(LOOPING_TESTS, "loops.py", doc);
+  await settle();
+  expect(view.status === "Running tests...", `the tests should be running, status ${view.status}`);
+  view.handlers.onInterrupt();
+  await settle();
+  expect(called(runtime, "interrupt"), "the Stop should reach the runtime");
+  gate.open();
+  await run;
+  await settle();
+  expect(!called(runtime, "runFile"), "the program must not run after a stopped test phase");
+  const report = view.entries.find((e) => e.kind === "testReport");
+  expect(
+    report?.stopped === true && report?.stoppedIn === "test_forever",
+    `the report should say where it stopped: ${JSON.stringify(report)}`,
+  );
+  expect(
+    bannerTexts(view).join("|") ===
+      "Stopped during the tests. The rest of the tests and the program were not run.",
+    `one banner, saying what did not run: ${JSON.stringify(bannerTexts(view))}`,
+  );
+  expect(view.busy === false, "and the session is free again");
+  console.log(`    ${bannerTexts(view)[0]}`);
+
+  // The Stop belonged to that run. The next one runs everything.
+  stopTests = false;
+  await repl.runFile(LOOPING_TESTS, "loops.py", doc);
+  await settle();
+  expect(called(runtime, "runFile"), "the next run should go on to the program");
+  expect(bannerTexts(view).length === 0, `and say nothing about stopping: ${JSON.stringify(bannerTexts(view))}`);
+  repl.dispose();
+}
+
+console.log("\n[48] a Stop as the last test finishes still keeps the program from starting");
+{
+  const gate = makeGate();
+  const doc = makeDoc("loops.py", LOOPING_TESTS);
+  const { repl, view, runtime } = await harness(
+    {
+      events: () => [{ kind: "done" }],
+      // Every test finished before Python next looked for the Stop.
+      runTests: async (request, onEvent) => {
+        await gate.promise;
+        onEvent({ kind: "testReport", fileName: request.fileName, passed: 2, failed: 0,
+          skipped: 0, errors: 0, tests: [] });
+        onEvent({ kind: "done" });
+      },
+    },
+    doc,
+  );
+  const run = repl.runFile(LOOPING_TESTS, "loops.py", doc);
+  await settle();
+  view.handlers.onInterrupt();
+  gate.open();
+  await run;
+  await settle();
+  expect(!called(runtime, "runFile"), "the program must not run");
+  // Not "during the tests": every one of them ran, and the card says so.
+  expect(
+    bannerTexts(view).join("|") === "Stopped after the tests. The program was not run.",
+    `banners: ${JSON.stringify(bannerTexts(view))}`,
+  );
+  console.log(`    ${bannerTexts(view)[0]}`);
+  repl.dispose();
+}
+
+console.log("\n[49] a Stop while pytest loads means no tests and no program");
+{
+  // Loading pytest takes seconds the first time, and runs nothing of the
+  // student's, so a Stop then reaches no running Python at all.
+  const gate = makeGate();
+  const doc = makeDoc("loops.py", LOOPING_TESTS);
+  const { repl, view, runtime } = await harness(
+    { events: () => [{ kind: "done" }], ensurePytest: () => gate.promise },
+    doc,
+  );
+  const run = repl.runFile(LOOPING_TESTS, "loops.py", doc);
+  await settle();
+  expect(view.status === "Loading pytest...", `pytest should be loading, status ${view.status}`);
+  view.handlers.onInterrupt();
+  gate.open();
+  await run;
+  await settle();
+  expect(!called(runtime, "runTests"), "the tests must not start");
+  expect(!called(runtime, "runFile"), "nor the program");
+  expect(
+    bannerTexts(view).join("|") ===
+      "Stopped before the tests started. The tests and the program were not run.",
+    `banners: ${JSON.stringify(bannerTexts(view))}`,
+  );
+  console.log(`    ${bannerTexts(view)[0]}`);
+
+  // A load the Stop broke: there are then no tests to run, and still no
+  // program - and no "Could not load pytest" either.
+  const broken = makeGate();
+  const second = await harness(
+    {
+      events: () => [{ kind: "done" }],
+      ensurePytest: async () => {
+        await broken.promise;
+        throw new Error("Traceback (most recent call last):\nKeyboardInterrupt");
+      },
+    },
+    doc,
+  );
+  const run2 = second.repl.runFile(LOOPING_TESTS, "loops.py", doc);
+  expect(await untilStatus(second.view, "Loading pytest..."), "pytest should be loading");
+  second.view.handlers.onInterrupt();
+  broken.open();
+  await run2;
+  await settle();
+  expect(!called(second.runtime, "runFile"), "the program must not run");
+  expect(complaints(second.view).length === 0, `a Stop is not a failure: ${JSON.stringify(complaints(second.view))}`);
+  expect(
+    bannerTexts(second.view).join("|") === "Stopped before the program started.",
+    `banners: ${JSON.stringify(bannerTexts(second.view))}`,
+  );
+  console.log(`    and when the Stop broke the load: ${bannerTexts(second.view)[0]}`);
+  second.repl.dispose();
+  repl.dispose();
+}
+
+console.log("\n[50] a Stop during the Examplar check: no tests, no program, no failed card");
+{
+  const gate = makeGate();
+  const { repl, view, runtime, doc } = await harness(
+    withBundle({
+      examplarResult: examplarReply({ defines: ["shout"] }),
+      // As the worker reports a Stop in the student's tests: a traceback.
+      examplarRun: async () => {
+        await gate.promise;
+        throw new Error("Traceback (most recent call last):\nKeyboardInterrupt");
+      },
+    }),
+  );
+  const run = repl.runFile(EX_SRC, "hw.py", doc);
+  expect(await untilStatus(view, "Checking your tests..."), `the check should be running, status ${view.status}`);
+  view.handlers.onInterrupt();
+  gate.open();
+  await run;
+  await settle();
+  expect(
+    !view.entries.some((e) => e.kind === "examplar" && e.card === "failed"),
+    "the Stop is not a reason the check failed",
+  );
+  expect(!called(runtime, "runTests"), "the student's own tests must not run");
+  expect(!called(runtime, "runFile"), "nor the program");
+  expect(
+    bannerTexts(view).filter((t) => !/could not reach/.test(t)).join("|") ===
+      "Stopped while checking your tests. Your own tests and the program were not run.",
+    `banners: ${JSON.stringify(bannerTexts(view))}`,
+  );
+  // The check unmounts the student's files, and they must come back even
+  // though the run ends here.
+  const mounts = runtime.calls.filter((c) => c[0] === "mountWorkspaceFiles");
+  expect(mounts.length >= 3, `the workspace should be mounted again after the check: ${JSON.stringify(mounts)}`);
+  console.log(`    ${bannerTexts(view).at(-1)}`);
+
+  // Pressed while pytest loaded for the check: the check does not start.
+  const early = makeGate();
+  const second = await harness(
+    withBundle({ examplarResult: examplarReply(), ensurePytest: () => early.promise }),
+  );
+  const run2 = second.repl.runFile(EX_SRC, "hw.py", second.doc);
+  expect(await untilStatus(second.view, "Checking your tests..."), "pytest should be loading for the check");
+  second.view.handlers.onInterrupt();
+  early.open();
+  await run2;
+  await settle();
+  expect(!called(second.runtime, "examplarRun"), "the check must not start once Stop is pressed");
+  expect(!called(second.runtime, "runFile"), "nor the program");
+  expect(
+    bannerTexts(second.view).some((t) => t.startsWith("Stopped while checking your tests.")),
+    `banners: ${JSON.stringify(bannerTexts(second.view))}`,
+  );
+  second.repl.dispose();
+  repl.dispose();
+}
+
+console.log("\n[51] a Stop before the program starts: nothing runs, and nothing complains");
+{
+  // While the files next to it load.
+  const gate = makeGate();
+  const doc = makeDoc("loops.py", LOOPING_TESTS);
+  const { repl, view, runtime } = await harness(
+    { events: () => [{ kind: "done" }], mountWorkspaceFiles: () => gate.promise },
+    doc,
+  );
+  const run = repl.runFile(LOOPING_TESTS, "loops.py", doc);
+  await settle();
+  expect(view.status === "Loading files...", `files should be loading, status ${view.status}`);
+  view.handlers.onInterrupt();
+  gate.open();
+  await run;
+  await settle();
+  expect(!called(runtime, "runTests") && !called(runtime, "runFile"), "nothing may run");
+  expect(
+    bannerTexts(view).join("|") === "Stopped before the program started. Nothing was run.",
+    `banners: ${JSON.stringify(bannerTexts(view))}`,
+  );
+  console.log(`    ${bannerTexts(view)[0]}`);
+
+  // During the static checks, which the Stop interrupts: their failure is
+  // the Stop, not a broken analyzer. (Only a level with checks has any.)
+  const checked = `#level beginner\n${LOOPING_TESTS}`;
+  const checkedDoc = makeDoc("checked.py", checked);
+  const checking = makeGate();
+  const second = await harness(
+    {
+      events: () => [{ kind: "done" }],
+      staticAnalyze: async () => {
+        await checking.promise;
+        throw new Error("Traceback (most recent call last):\nKeyboardInterrupt");
+      },
+    },
+    checkedDoc,
+  );
+  const run2 = second.repl.runFile(checked, "checked.py", checkedDoc);
+  await settle();
+  expect(second.view.status === "Checking...", `the checks should be running, status ${second.view.status}`);
+  second.view.handlers.onInterrupt();
+  checking.open();
+  await run2;
+  await settle();
+  expect(!called(second.runtime, "runFile"), "the program must not run");
+  expect(
+    complaints(second.view).length === 0,
+    `a Stop is not a failure: ${JSON.stringify(complaints(second.view))}`,
+  );
+  expect(
+    bannerTexts(second.view).join("|") === "Stopped before the program started. Nothing was run.",
+    `banners: ${JSON.stringify(bannerTexts(second.view))}`,
+  );
+  console.log("    and during the static checks, without \"Static analysis failed\"");
+
+  // While packages load, when the Stop breaks the load.
+  const imports = `import numpy\n${LOOPING_TESTS}`;
+  const importsDoc = makeDoc("imports.py", imports);
+  const loading = makeGate();
+  const third = await harness(
+    {
+      events: () => [{ kind: "done" }],
+      ensurePackages: async () => {
+        await loading.promise;
+        throw new Error("Traceback (most recent call last):\nKeyboardInterrupt");
+      },
+    },
+    importsDoc,
+  );
+  const run3 = third.repl.runFile(imports, "imports.py", importsDoc);
+  expect(await untilStatus(third.view, "Loading libraries..."), `libraries should be loading, status ${third.view.status}`);
+  third.view.handlers.onInterrupt();
+  loading.open();
+  await run3;
+  await settle();
+  expect(!called(third.runtime, "runTests") && !called(third.runtime, "runFile"), "nothing may run");
+  expect(complaints(third.view).length === 0, `a Stop is not a failure: ${JSON.stringify(complaints(third.view))}`);
+  expect(
+    bannerTexts(third.view).join("|") === "Stopped before the program started. Nothing was run.",
+    `banners: ${JSON.stringify(bannerTexts(third.view))}`,
+  );
+  console.log("    and while libraries load, without \"Could not load libraries\"");
+  third.repl.dispose();
+  second.repl.dispose();
+  repl.dispose();
+}
+
+console.log("\n[52] a run that fails because of a Stop is not an internal error");
+{
+  const gate = makeGate();
+  const { repl, view, doc } = await harness({
+    events: (kind) =>
+      kind === "runFile"
+        ? [
+            async () => {
+              await gate.promise;
+              throw new Error("Traceback (most recent call last):\nKeyboardInterrupt");
+            },
+          ]
+        : [{ kind: "done" }],
+  });
+  const run = repl.runFile("while True:\n    pass\n", "hello.py", doc);
+  await settle();
+  view.handlers.onInterrupt();
+  gate.open();
+  await run;
+  await settle();
+  expect(complaints(view).length === 0, `no internal error: ${JSON.stringify(complaints(view))}`);
+  expect(bannerTexts(view).join("|") === "Stopped.", `banners: ${JSON.stringify(bannerTexts(view))}`);
+  console.log(`    ${bannerTexts(view)[0]}`);
+  repl.dispose();
+}
+
+console.log("\n[53] at the prompt, a Stop before the input runs means it does not run");
+{
+  const gate = makeGate();
+  const { repl, view, runtime } = await harness({
+    events: () => [{ kind: "result", repr: "2" }, { kind: "done" }],
+    mountWorkspaceFiles: () => gate.promise,
+  });
+  view.handlers.onSubmit("1 + 1");
+  await settle();
+  expect(view.busy === true, "the input should be on its way");
+  view.handlers.onInterrupt();
+  gate.open();
+  await settle();
+  await settle();
+  expect(!called(runtime, "replEval"), "the input must not run");
+  expect(
+    bannerTexts(view).join("|") === "Stopped. Your input was not run.",
+    `banners: ${JSON.stringify(bannerTexts(view))}`,
+  );
+  expect(view.busy === false, "and the prompt is free again");
+  console.log(`    ${bannerTexts(view)[0]}`);
   repl.dispose();
 }
 

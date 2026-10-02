@@ -45,7 +45,15 @@ function fixture(name, ...lines) {
  */
 const RUN_TIMEOUT_MS = 120_000;
 
-function run(args, { stdin = "", signalAfter = null, signal = "SIGINT" } = {}) {
+/**
+ * `signalAfter` sends `signal` once stdout contains that text, and
+ * `signalAfterStderr` once stderr does - for a phase that prints nothing of
+ * its own, like the tests. `signalDelay` is how long after.
+ */
+function run(
+  args,
+  { stdin = "", signalAfter = null, signalAfterStderr = null, signalDelay = 150, signal = "SIGINT" } = {},
+) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(process.execPath, [CLI, "--no-color", ...args], {
       cwd: work,
@@ -64,10 +72,15 @@ function run(args, { stdin = "", signalAfter = null, signal = "SIGINT" } = {}) {
       // Signal only once the program is demonstrably running, rather than
       // on a timer that could fire before Pyodide has booted.
       if (signalAfter && stdout.includes(signalAfter) && timer === null) {
-        timer = setTimeout(() => child.kill(signal), 150);
+        timer = setTimeout(() => child.kill(signal), signalDelay);
       }
     });
-    child.stderr.on("data", (b) => (stderr += b.toString()));
+    child.stderr.on("data", (b) => {
+      stderr += b.toString();
+      if (signalAfterStderr && stderr.includes(signalAfterStderr) && timer === null) {
+        timer = setTimeout(() => child.kill(signal), signalDelay);
+      }
+    });
     child.on("error", reject);
     child.on("close", (code, sig) => {
       if (timer) clearTimeout(timer);
@@ -129,7 +142,17 @@ async function main() {
     expect(/whole number/.test(checked.stderr), `expected the rewritten wording, got ${checked.stderr}`);
     const rawRun = await run([fixture("typed_raw.py", "#level raw", "", ...body)]);
     expect(/TypeError/.test(rawRun.stderr), "raw should fail Python's own way instead");
-    expect(!/whole number/.test(rawRun.stderr), "raw must not type-check");
+    // At raw the annotation is not checked at all, so the failure has to be
+    // about the `+` itself and never about `x`'s declared type. (Python's
+    // own error is still reworded - that is not type checking.)
+    expect(
+      !/annotat|is not an instance of|expects/.test(rawRun.stderr),
+      `raw must not check the annotation, got ${rawRun.stderr}`,
+    );
+    expect(
+      /does not work between/.test(rawRun.stderr),
+      `raw should report the operands, got ${rawRun.stderr}`,
+    );
     console.log("    advanced reported the annotation; raw reported Python's TypeError");
   }
 
@@ -251,6 +274,11 @@ async function main() {
     );
     expect(r.code !== null, `the process should exit on its own, got signal ${r.signal}`);
     expect(/KeyboardInterrupt/.test(r.stderr), `expected KeyboardInterrupt, got ${r.stderr.slice(0, 200)}`);
+    // Something the student asked for, not something their code did wrong.
+    expect(
+      /The program was stopped\./.test(r.stderr) && !/while running your program/.test(r.stderr),
+      `a Stop should read as one: ${r.stderr.slice(0, 300)}`,
+    );
     console.log(`    interrupted; exit=${r.code}`);
   }
 
@@ -328,6 +356,215 @@ async function main() {
     // 8 spaces + "return " is 15 characters, so `missing` starts at 16.
     expect(/deep\.py:3:16\b/.test(r2.stderr), `an indented line blames column 16: ${r2.stderr}`);
     console.log("    columns correct at top level and indented");
+  }
+
+
+  console.log("\n[16] a warning is said and the file still runs");
+  {
+    // A warning is about code that works - a helper nothing runs, a method
+    // named but not called - so refusing to run the file over one would be
+    // a bigger obstruction than the mistake.
+    const warned = fixture(
+      "warn.py",
+      "#level beginner",
+      "",
+      "",
+      "def check_total():",
+      "    assert 1 == 1",
+      "",
+      "",
+      'print("ran anyway")',
+    );
+    const r = await run([warned]);
+    expect(r.code === 0, `a warning should not fail the run, got ${r.code}: ${r.stderr}`);
+    expect(/ran anyway/.test(r.stdout), `and the file runs: ${JSON.stringify(r.stdout)}`);
+    expect(
+      /`check_total` has an `assert` in it, but nothing ever runs it/.test(r.stderr),
+      `the warning is still shown: ${r.stderr}`,
+    );
+    expect(!/File not run/.test(r.stderr), `and nothing says the file was skipped: ${r.stderr}`);
+
+    // An error still stops it.
+    const blocked = fixture(
+      "blocked.py",
+      "#level beginner",
+      "",
+      "",
+      "def test_total():",
+      "    assert(1 + 1, 2)",
+      "",
+      "",
+      'print("should not run")',
+    );
+    const r2 = await run([blocked]);
+    expect(r2.code !== 0, `an error should fail the run, got ${r2.code}`);
+    expect(!/should not run/.test(r2.stdout), `and the file must not run: ${r2.stdout}`);
+    expect(/File not run/.test(r2.stderr), `with the reason given: ${r2.stderr}`);
+    console.log("    warning shown and run continued; error still stops it");
+  }
+
+  console.log("\n[17] code that parses but does not compile, in a file with tests");
+  {
+    // `case Boa:` parses and fails at compile time. The old handler re-ran
+    // the same `compile` from inside its own `except`, so the failure
+    // escaped the test phase: exit 64, a doubled traceback prefixed
+    // `pll:`, and the file never ran.
+    const file = fixture(
+      "capture.py",
+      "#level beginner",
+      "from dataclasses import dataclass",
+      "",
+      "",
+      "@dataclass",
+      "class Boa:",
+      "    name: str",
+      "",
+      "",
+      "@dataclass",
+      "class Armadillo:",
+      "    name: str",
+      "",
+      "",
+      "Animal = Boa | Armadillo",
+      "",
+      "",
+      "def describe(a: Animal) -> str:",
+      "    match a:",
+      "        case Boa:",
+      '            return "boa"',
+      "        case Armadillo(n):",
+      '            return "armadillo"',
+      "",
+      "",
+      "def test_describe():",
+      '    assert describe(Boa("s")) == "boa"',
+    );
+    const r = await run([file]);
+    expect(r.code === 1, `expected exit 1, got ${r.code}`);
+    expect(
+      !/During handling of the above exception/.test(r.stderr),
+      `no doubled traceback: ${r.stderr}`,
+    );
+    expect(
+      !/pll: Traceback/.test(r.stderr),
+      `and no crash of the command itself: ${r.stderr}`,
+    );
+    expect(
+      /`case Boa:` needs brackets: `case Boa\(\):`/.test(r.stderr),
+      `the missing brackets are named: ${r.stderr}`,
+    );
+    // 8 spaces + "case " is 13 characters, so `Boa` starts at 14.
+    expect(/capture\.py:20:14\b/.test(r.stderr), `blamed at the case line: ${r.stderr}`);
+    console.log(`    ${r.stderr.split("\n")[0]}`);
+  }
+
+
+  console.log("\n[18] a compile-time warning is said once, and not beside its own finding");
+  {
+    // Every phase compiles the file more than once, and Python printed a
+    // SyntaxWarning on every compile: four copies for a missing comma
+    // between rows in a file with tests, beside a finding that already
+    // explained it.
+    const comma = fixture(
+      "comma.py",
+      "#level beginner",
+      'shuttle = table(["month", "riders"], [',
+      '    ["Jan", 1121]',
+      '    ["Feb", 982],',
+      "])",
+      "",
+      "",
+      "def test_nothing():",
+      "    assert True",
+    );
+    const r = await run([comma]);
+    expect(!/SyntaxWarning/.test(r.stderr), `no raw SyntaxWarning: ${r.stderr}`);
+    expect(
+      !/perhaps you missed a comma/.test(r.stderr),
+      `and not Python's wording either: ${r.stderr}`,
+    );
+    expect(
+      /A comma is missing between two values in a list/.test(r.stderr),
+      `the finding still explains it: ${r.stderr}`,
+    );
+
+    // A line that never runs has no finding, so its warning is the only
+    // sign of the mistake: said once, in PLL's words, with their operand.
+    const idle = fixture(
+      "idle.py",
+      "#level beginner",
+      "",
+      "",
+      "def never_called():",
+      "    return 3(4)",
+      "",
+      "",
+      'print("ran")',
+    );
+    const r2 = await run([idle]);
+    expect(r2.code === 0, `the file runs: ${r2.code} ${r2.stderr}`);
+    const said = (r2.stderr.match(/warning: line 5:/g) ?? []).length;
+    expect(said === 1, `said exactly once, got ${said}: ${r2.stderr}`);
+    expect(/`3 \* 4`, not `3\(4\)`/.test(r2.stderr), `with their own operand: ${r2.stderr}`);
+    expect(!/perhaps you missed a comma/.test(r2.stderr), `and not the misleading guess: ${r2.stderr}`);
+    console.log("    none beside a finding; one, reworded, for a line that never runs");
+  }
+
+  console.log("\n[19] Ctrl+C during the tests ends the run there");
+  {
+    // It used to stop the looping test, run the rest, and then the program
+    // - which often loops as well, so it took a second Ctrl+C, and that one
+    // kills pll rather than stopping it.
+    const file = fixture(
+      "loops.py",
+      "def test_ok():",
+      "    assert True",
+      "",
+      "",
+      "def test_forever():",
+      "    while True:",
+      "        pass",
+      "",
+      "",
+      "def test_after():",
+      "    assert True",
+      "",
+      "",
+      'print("the program")',
+    );
+    // Printed as pytest finishes loading, just before the tests run.
+    const r = await run([file], { signalAfterStderr: "Loaded", signalDelay: 1000 });
+    expect(!r.timedOut, `pll did not exit after Ctrl+C: ${r.stderr.slice(-400)}`);
+    expect(r.code === 1, `expected exit 1, got ${r.code}: ${r.stderr}`);
+    expect(/ok\s+test_ok/.test(r.stderr), `the test before it keeps its result: ${r.stderr}`);
+    expect(/STOPPED test_forever \(line 5\)/.test(r.stderr), `the looping test is marked: ${r.stderr}`);
+    expect(!/test_after/.test(r.stderr), `the test after it must not run: ${r.stderr}`);
+    expect(
+      /Stopped during the tests\. The rest of the tests and the program were not run\./.test(r.stderr),
+      `it should say what did not run: ${r.stderr}`,
+    );
+    expect(!/the program/.test(r.stdout), `the program must not run: ${JSON.stringify(r.stdout)}`);
+    expect(!/giving up/.test(r.stderr), `one Ctrl+C should be enough: ${r.stderr}`);
+    console.log(`    exit=${r.code}; ${r.stderr.trim().split("\n").at(-1)}`);
+  }
+
+  console.log("\n[20] Ctrl+C before the program starts runs nothing");
+  {
+    // While Python loads: no Python is running to take the Stop, so the
+    // run has to notice it itself, or the program ran anyway. And it should
+    // notice before fetching the program's libraries, not after.
+    const file = fixture("early.py", "#level beginner", "import numpy", 'print("the program")');
+    const r = await run([file], { signalAfterStderr: "[beginner]", signalDelay: 100 });
+    expect(!r.timedOut, `pll did not exit after Ctrl+C: ${r.stderr.slice(-400)}`);
+    expect(r.code === 1, `expected exit 1, got ${r.code}: ${r.stderr}`);
+    expect(r.stdout === "", `nothing should run: ${JSON.stringify(r.stdout)}`);
+    expect(
+      /Stopped before the program started\. Nothing was run\./.test(r.stderr),
+      `it should say nothing ran: ${r.stderr}`,
+    );
+    expect(!/failed|could not/i.test(r.stderr), `and a Stop is not a failure: ${r.stderr}`);
+    expect(!/Loading numpy/.test(r.stderr), `nor should it load libraries for it: ${r.stderr}`);
+    console.log(`    exit=${r.code}; ${r.stderr.trim().split("\n").at(-1)}`);
   }
 
   rmSync(work, { recursive: true, force: true });

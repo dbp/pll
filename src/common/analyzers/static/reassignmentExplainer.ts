@@ -43,6 +43,14 @@ export function explainReassignment(
             `If you're trying to update a value (\`x = x + 1\`, accumulators,` +
               ` running totals), use a built-in like \`sum(...)\`, \`max(...)\`,` +
               ` or a small helper function that returns the new value instead.`,
+            // Inside a function this is exactly what `intermediate` exists
+            // for, and a student has no way to know that from here.
+            ...(raw.scope_kind === "function"
+              ? [
+                  "`#level intermediate` allows changing a variable inside a" +
+                    " function, which is what a running total needs.",
+                ]
+              : []),
           ],
     fileName,
     lineNumber: raw.line_number,

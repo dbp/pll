@@ -8,9 +8,10 @@
  * guards against (the worker never returning) cannot be reproduced with a
  * fake runtime.
  */
-import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { build } from "esbuild";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, join, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -18,9 +19,30 @@ const ROOT = resolve(HERE, "..");
 const WORKER_PATH = resolve(ROOT, "dist", "desktop", "pyodideWorker.js");
 const INDEX_URL = resolve(ROOT, "node_modules", "pyodide");
 
-// Must match src/common/interruptBuffer.ts.
-const INTERRUPT_SAB_BYTES = 1;
-const INTERRUPT_SIGINT = 2;
+// The real module, bundled, so this test uses the same layout and the same
+// retrying Stop as the hosts - a hand-written copy is how the test used to
+// bypass the code it was meant to cover.
+const bundleDir = mkdtempSync(join(ROOT, ".smoke-"));
+writeFileSync(
+  join(bundleDir, "entry.mjs"),
+  'export * from "../src/common/interruptBuffer";\n',
+);
+await build({
+  entryPoints: [join(bundleDir, "entry.mjs")],
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  outfile: join(bundleDir, "out.mjs"),
+  absWorkingDir: ROOT,
+});
+const {
+  INTERRUPT_SAB_BYTES,
+  INTERRUPT_SIGINT,
+  INTERRUPT_ACK_INDEX,
+  requestInterrupt,
+  signalInterrupt,
+} = await import(pathToFileURL(join(bundleDir, "out.mjs")).href);
+rmSync(bundleDir, { recursive: true, force: true });
 
 /** Generous: a bytecode check is immediate, so this only bounds a failure. */
 const INTERRUPT_DEADLINE_MS = 20000;
@@ -108,8 +130,86 @@ async function main() {
     process.exit(1);
   }
 
+  console.log("\n[0] a Stop is retried until it is acknowledged, and no longer");
+  {
+    // Deterministic, with no worker: the race that erases a Stop happens
+    // inside Pyodide and is too rare to hit on purpose, so the retry is
+    // checked on its own, case by case.
+    const fresh = () => {
+      const sab = new SharedArrayBuffer(INTERRUPT_SAB_BYTES);
+      return { sab, view: new Uint8Array(sab) };
+    };
+
+    // Wiped, as Pyodide's check wipes it: put back.
+    {
+      const { sab, view } = fresh();
+      requestInterrupt(sab, () => true, 5, 1000);
+      Atomics.store(view, 0, 0);
+      await sleep(40);
+      expect(Atomics.load(view, 0) === INTERRUPT_SIGINT, "a wiped Stop should be re-asserted");
+    }
+    // Acknowledged: left alone, so nothing more reaches PLL's clean-up.
+    {
+      const { sab, view } = fresh();
+      requestInterrupt(sab, () => true, 5, 1000);
+      Atomics.store(view, INTERRUPT_ACK_INDEX, 1);
+      Atomics.store(view, 0, 0);
+      await sleep(40);
+      expect(Atomics.load(view, 0) === 0, "an acknowledged Stop must not be re-asserted");
+    }
+    // The work it was for has finished: nothing carries into the next run.
+    {
+      const { sab, view } = fresh();
+      let running = true;
+      requestInterrupt(sab, () => running, 5, 1000);
+      running = false;
+      Atomics.store(view, 0, 0);
+      await sleep(40);
+      expect(Atomics.load(view, 0) === 0, "a Stop must not outlive the work it was for");
+    }
+    // A fresh press clears the last one's acknowledgement.
+    {
+      const { sab, view } = fresh();
+      Atomics.store(view, INTERRUPT_ACK_INDEX, 1);
+      requestInterrupt(sab, () => false);
+      expect(Atomics.load(view, INTERRUPT_ACK_INDEX) === 0, "a new press starts unacknowledged");
+      expect(Atomics.load(view, 0) === INTERRUPT_SIGINT, "and stores the signal at once");
+    }
+    // Out of time: stops trying (a loop inside C code never acknowledges).
+    {
+      const { sab, view } = fresh();
+      requestInterrupt(sab, () => true, 5, 30);
+      await sleep(60);
+      Atomics.store(view, 0, 0);
+      await sleep(40);
+      expect(Atomics.load(view, 0) === 0, "retries end at the limit");
+    }
+    console.log("    re-asserted when wiped; left alone once acknowledged, finished or out of time");
+  }
+
   const interruptBuffer = new SharedArrayBuffer(INTERRUPT_SAB_BYTES);
-  const signal = () => Atomics.store(new Uint8Array(interruptBuffer), 0, INTERRUPT_SIGINT);
+  /** A Stop as the hosts send one: retried until acknowledged, while `run` lasts. */
+  const stop = (run) => {
+    let settled = false;
+    run.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    requestInterrupt(interruptBuffer, () => !settled);
+  };
+  /** One bare store, with nothing retrying it - a Stop racing the end of a run. */
+  const signal = () => signalInterrupt(interruptBuffer);
+  /**
+   * A Stop as the hosts send one, pressed when no Python was running to take
+   * it and with nothing left to retry for - pressed while files loaded, or
+   * as a run ended. Unlike `signal`, this clears the acknowledgement left by
+   * the last Stop that landed, as every real press does; with it still set,
+   * PLL's handler swallows the signal as a repeat, and a test that a stale
+   * Stop is dropped would pass whether it was dropped or not.
+   */
+  const staleStop = () => requestInterrupt(interruptBuffer, () => false);
+  /** Python checks for a signal only now and then, so give it time to look. */
+  const POLLS = "total = 0\nfor i in range(300000):\n    total += i\n";
   const pending = () => Atomics.load(new Uint8Array(interruptBuffer), 0);
 
   const worker = new Worker(WORKER_PATH);
@@ -130,7 +230,7 @@ async function main() {
     });
     // Proof the loop is running, rather than a hopeful sleep.
     await session.waitForOutput("before");
-    signal();
+    stop(run);
     const { result } = await withDeadline(run, INTERRUPT_DEADLINE_MS, "interrupted run");
     expect(result.ok === false, `interrupted run should not be ok, got ok=${result.ok}`);
     expect(
@@ -160,13 +260,13 @@ async function main() {
     console.log("    ok");
 
     console.log("\n[4] a Stop nobody consumed does not fire into the next run");
-    // Signal with nothing running, as happens when Stop races the end of a run.
-    signal();
+    // Pressed with nothing running, as happens when Stop races the end of a run.
+    staleStop();
     expect(pending() === INTERRUPT_SIGINT, "the signal should be pending before the next run");
     const later = await withDeadline(
       session.send({
         type: "runFile",
-        code: 'print("clean")\n',
+        code: `${POLLS}print("clean")\n`,
         fileName: "clean.py",
         sessionKey: "s1",
         level: "raw",
@@ -196,7 +296,7 @@ async function main() {
     // Now that it is definitely running, measure a second of it.
     await sleep(1000);
     const duringSecond = session.displays - before;
-    signal();
+    stop(printRun);
     const noisy = await withDeadline(printRun, INTERRUPT_DEADLINE_MS, "interrupted print loop");
     expect(
       noisy.result.error_type === "KeyboardInterrupt",
@@ -214,6 +314,226 @@ async function main() {
       `one second of printing should coalesce into few messages, got ${duringSecond}`,
     );
     console.log(`    messages for 1s of printing: ${duringSecond} (uncoalesced was ~230000)`);
+
+    console.log("\n[6] a Stop overwritten by Pyodide's own check is re-asserted");
+    // Pyodide's check reads the signal and then writes 0 over it, as two
+    // steps, so a Stop stored between them was erased and the program ran
+    // on - about one Stop in twenty to forty in a freshly started worker,
+    // which is why this test used to fail now and then. The race is too
+    // rare to hit on purpose, so do exactly what the check does instead:
+    // store the Stop, then wipe it. Only the retry can bring it back.
+    const ATTEMPTS = 5;
+    let lost = 0;
+    for (let i = 0; i < ATTEMPTS; i++) {
+      const marker = `go${i}`;
+      const attempt = session.send({
+        type: "runFile",
+        code: `print("${marker}")\nwhile True:\n    pass\n`,
+        fileName: "again.py",
+        sessionKey: "s1",
+        level: "raw",
+      });
+      await session.waitForOutput(marker);
+      stop(attempt);
+      // The clobber, as `_Py_CheckEmscriptenSignals_Helper` does it.
+      Atomics.store(new Uint8Array(interruptBuffer), 0, 0);
+      try {
+        const { result } = await withDeadline(attempt, 5000, `attempt ${i}`);
+        if (result.error_type !== "KeyboardInterrupt") lost++;
+      } catch {
+        lost++;
+        break; // the worker is stuck in the loop; nothing after this can run
+      }
+    }
+    expect(lost === 0, `${lost} of ${ATTEMPTS} wiped Stops were never re-asserted`);
+    console.log(`    ${ATTEMPTS - lost} of ${ATTEMPTS} wiped Stops still stopped the program`);
+
+    console.log("\n[7] a retried Stop does not leak into the next program");
+    const next = await withDeadline(
+      session.send({
+        type: "runFile",
+        code: 'total = 0\nfor i in range(200000):\n    total = total + i\nprint("finished", total)\n',
+        fileName: "next.py",
+        sessionKey: "s1",
+        level: "raw",
+      }),
+      INTERRUPT_DEADLINE_MS,
+      "run after many stops",
+    );
+    expect(
+      next.result.ok === true && next.result.stdout.includes("finished"),
+      `the next program must run to the end: ${next.result.error_type ?? "ok"}`,
+    );
+    console.log("    ok");
+
+    console.log("\n[8] a program that caught the first Stop can be stopped by the next");
+    // The acknowledgement is per press: a repeat of a delivered Stop is
+    // consumed, so it cannot fire into PLL's clean-up - but a new press
+    // starts over, or a program that catches KeyboardInterrupt and carries
+    // on could never be stopped again.
+    const stubborn = session.send({
+      type: "runFile",
+      code: [
+        "import time",
+        "try:",
+        '    print("first loop")',
+        "    while True:",
+        "        pass",
+        "except KeyboardInterrupt:",
+        '    print("caught it")',
+        // Output is coalesced and only sent on a later write, so pause past
+        // the flush interval and write again to get "caught it" out.
+        "started = time.time()",
+        "while time.time() - started < 0.2:",
+        "    pass",
+        'print("second loop")',
+        "while True:",
+        "    pass",
+      ].join("\n"),
+      fileName: "stubborn.py",
+      sessionKey: "s1",
+      level: "raw",
+    });
+    let stubbornSettled = false;
+    stubborn.then(() => (stubbornSettled = true), () => (stubbornSettled = true));
+    await session.waitForOutput("first loop");
+    stop(stubborn);
+    await session.waitForOutput("second loop");
+    expect(session.streamed.includes("caught it"), "the program caught the first Stop");
+    // Stray repeats of the delivered Stop, as a retry racing the
+    // acknowledgement would store: each must be consumed, not raised. Stored
+    // again and again, because a single store can be erased by the very race
+    // this file is about - and a repeat that never arrives proves nothing.
+    for (let i = 0; i < 30; i++) {
+      if (pending() === 0) signal();
+      await sleep(10);
+    }
+    expect(
+      Atomics.load(new Uint8Array(interruptBuffer), INTERRUPT_ACK_INDEX) === 1,
+      "the first Stop should be acknowledged",
+    );
+    expect(!stubbornSettled, "a repeat of a delivered Stop must be consumed, not raised");
+    // A new press stops it.
+    stop(stubborn);
+    const stubbornResult = await withDeadline(stubborn, INTERRUPT_DEADLINE_MS, "second stop");
+    expect(
+      stubbornResult.result.error_type === "KeyboardInterrupt",
+      `the second press should stop it, got ${stubbornResult.result.error_type}`,
+    );
+    console.log("    the repeat was consumed; the next press stopped it");
+
+    console.log("\n[9] a Stop during the tests ends the test phase");
+    {
+      // Recording the Stop as one test's error and carrying on ran every
+      // remaining test - each of which could loop as well - and then the
+      // program, after the student had asked for it all to stop.
+      await session.send({ type: "loadPytest" });
+      const code = [
+        "def double(n):",
+        "    return n * 2",
+        "",
+        "",
+        "def test_double():",
+        "    assert double(2) == 4",
+        "",
+        "",
+        "def test_forever():",
+        "    while True:",
+        "        pass",
+        "",
+        "",
+        "def test_after():",
+        "    assert double(3) == 6",
+      ].join("\n");
+      const tests = session.send({
+        type: "runTests",
+        code,
+        fileName: "tests.py",
+        sessionKey: "s1",
+        level: "raw",
+      });
+      // Test output is not streamed, so there is nothing to wait for: give
+      // the phase time to reach the loop. The retry delivers the Stop
+      // whenever Python next runs, so the exact moment does not matter.
+      await sleep(1500);
+      stop(tests);
+      const { result } = await withDeadline(tests, INTERRUPT_DEADLINE_MS, "stopped test phase");
+      expect(result.stopped === true, `the phase should be marked stopped: ${JSON.stringify(result.stopped)}`);
+      expect(result.stopped_in === "test_forever", `stopped in the looping test: ${result.stopped_in}`);
+      expect(!result.internal_error, "a Stop is not PLL failing");
+      const names = (result.tests ?? []).map((t) => `${t.name}:${t.outcome}`);
+      expect(
+        names.join(",") === "test_double:passed,test_forever:stopped",
+        `the test before it kept its result, and the one after never ran: ${names.join(",")}`,
+      );
+      expect(result.errors === 0 && result.failed === 0, "a Stop is counted as neither a failure nor an error");
+      expect(result.ok === false, "a stopped phase is not ok");
+      console.log(`    ${names.join(", ")}; test_after not run`);
+
+      // Stopped while the file's own top-level code ran, before any test.
+      const loading = session.send({
+        type: "runTests",
+        code: "while True:\n    pass\n\n\ndef test_never():\n    assert True\n",
+        fileName: "top.py",
+        sessionKey: "s1",
+        level: "raw",
+      });
+      await sleep(500);
+      stop(loading);
+      const top = await withDeadline(loading, INTERRUPT_DEADLINE_MS, "stopped while loading");
+      expect(top.result.stopped === true, "stopped while loading the file");
+      // Python's None arrives as `undefined`; the host normalises it to null.
+      expect(top.result.stopped_in == null, `no test was running: ${top.result.stopped_in}`);
+      expect(!top.result.internal_error, "and that is not an internal error either");
+      console.log("    and while the file itself was loading, before any test");
+    }
+
+    console.log("\n[10] a Stop nobody took does not reach the next run's checks");
+    {
+      // Pressed while files loaded, so no Python was running to take it and
+      // the run ended at the editor's next check. The next run starts with
+      // its static checks, not the program, and they used to be the ones to
+      // raise it: "Static analysis failed: KeyboardInterrupt".
+      for (const request of [
+        { type: "staticAnalyze", code: POLLS, level: "beginner", fileName: "a.py", sessionKey: null },
+        { type: "hasTests", code: `${POLLS}def test_a():\n    pass\n` },
+        { type: "checkSyntax", code: "x = 1" },
+      ]) {
+        staleStop();
+        let failure = null;
+        await session.send(request).catch((err) => (failure = err.message));
+        expect(failure === null, `${request.type} should ignore an old Stop, got ${failure}`);
+      }
+      console.log("    static checks, the test check and the prompt's syntax check all ran");
+    }
+
+    console.log("\n[11] a Stop that lands while the file is prepared is still a Stop");
+    {
+      // Long enough to prepare that the retry lands while PLL is still
+      // parsing and instrumenting it, outside the `except` that reports a
+      // Stop in the student's code. It used to escape from there as an
+      // error, which the hosts showed as "Internal error: KeyboardInterrupt".
+      const big =
+        Array.from({ length: 4000 }, (_, i) => `def f${i}(n):\n    return n + ${i}\n`).join("\n") +
+        "\ndef test_a():\n    assert f1(1) == 2\n";
+      for (const type of ["runTests", "runFile", "replEval"]) {
+        const run = session.send({ type, code: big, fileName: "big.py", sessionKey: "s1", level: "raw" });
+        stop(run);
+        let failure = null;
+        const reply = await withDeadline(run, INTERRUPT_DEADLINE_MS, `early stop of ${type}`).catch(
+          (err) => {
+            failure = err.message.split("\n").at(-1) || err.message;
+            return null;
+          },
+        );
+        expect(failure === null, `${type} should report the Stop, not fail: ${failure}`);
+        if (reply === null) continue;
+        const stoppedAs =
+          type === "runTests" ? reply.result.stopped === true : reply.result.error_type === "KeyboardInterrupt";
+        expect(stoppedAs, `${type} should say it was stopped: ${JSON.stringify(reply.result).slice(0, 200)}`);
+      }
+      console.log("    tests, a program and a prompt line each came back stopped");
+    }
   } finally {
     await worker.terminate();
   }

@@ -188,7 +188,7 @@ be fast and honest rather than secret.
 | Code | Meaning |
 | --- | --- |
 | 0 | Ran, and any tests passed |
-| 1 | The program raised |
+| 1 | The program raised, or Ctrl+C stopped it |
 | 2 | Level checks found problems, so it was not run |
 | 3 | A test failed |
 | 64 | Bad usage, or PLL could not start |
