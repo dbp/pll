@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+### Changed
+- **An error a test raised reads like any other error.** It goes through the
+  same explanations as an error the program raises, so a `NameError` inside
+  a test gets PLL's wording too, where before only a few kinds did. The test card and the command line show it the way a
+  finding is shown everywhere else: its type, where it happened (in a helper
+  the test called, say, rather than the test's own line), and what to do.
+- **An error in a reactor's handler is explained** - `on_tick`, `to_draw`
+  and the rest. It used to be shown as Python's raw traceback, through PLL's
+  own frames.
+- **A library's error is named by its class alone** (`ParserError`, not
+  `pandas.errors.ParserError`), as the built-in ones always were.
+- **The editor and the command line say the same things about a run**, in
+  the same words, because they now run the same steps. "Static analysis
+  found 2 problems. The file was not run." replaces both "Static analysis
+  found issues. File not executed." and "... 2 problem(s). File not run.";
+  a checker that fails says "Static analysis failed (...). Running anyway."
+  in both; and a saved file is "Saved out.csv next to hello.py." rather than
+  "next to this file".
+
+### Fixed
+- **A tab in the indentation is pointed at**, at column 1, rather than at the
+  first character after it.
+- **A top-level error in a file with tests was reported twice in the
+  editor** - once as the tests were looked for, once by the program. It is
+  reported once, by the program, as the command line already did.
+- **The command line wrote files back even when it had failed to load
+  them** for the program. The editor never did, and now neither does.
+
+## 0.3.0 (2026-10-02)
+
+### Breaking
+- **A `#level` line that does not name a level is now an error**, instead of
+  silently running the file at `raw` with none of the checks the student
+  asked for. `#level begginer`, `#level Beginner`, a bare `#level`, a
+  missing space (`#levelbeginner`), and a valid line that is not the first
+  line are each reported, with the level suggested where it is a
+  misspelling. A file with **no** `#level` line is unchanged: it runs as
+  ordinary Python.
+- **New checks at `#level beginner` and `intermediate` can stop a file that
+  used to run.** The mistakes listed under Added that used to run in
+  silence are errors, except a method named but not called and a test
+  nothing runs, which are warnings and let the file run. A file stopped by
+  one was not doing what it looked like it was doing, but it did run.
+- **More library calls refuse what they used to accept.** A colour *name*
+  that is not one (`"bleu"`), the image arguments listed under Added, a
+  function given to a table method that takes the wrong number of things or
+  whose `filter` returns something other than `True` or `False`,
+  `order_by(..., ascending="False")` and `select_columns("name")` each stop
+  the file with a message, where before they drew nothing, did the wrong
+  thing, or failed later somewhere less helpful.
+- **The command line exits 1 when Ctrl+C stops it**, wherever the Stop
+  lands - during the tests or before the program starts - rather than going
+  on to run the program.
+
 ### Added
 - **Mistakes that used to run in silence are now reported** at
   `#level beginner` and `#level intermediate`: a comparison used as a
@@ -51,13 +105,6 @@
   the third row's line.
 
 ### Changed
-- **A `#level` line that does not name a level is now an error**, instead of
-  silently running the file at `raw` with none of the checks the student
-  asked for. `#level begginer`, `#level Beginner`, a bare `#level`, a
-  missing space (`#levelbeginner`), and a valid line that is not the first
-  line are each reported, with the level suggested where it is a
-  misspelling. A file with **no** `#level` line is unchanged: it runs as
-  ordinary Python.
 - **A static finding that is only a warning no longer stops the file from
   running.** The findings that existed before are all errors, so nothing
   changes for them; the new ones that are about code that still works - a
