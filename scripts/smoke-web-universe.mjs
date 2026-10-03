@@ -17,13 +17,12 @@
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { openFile } from "./webbench.mjs";
+import { expect, fail, passed } from "./lib/check.mjs";
 const PORT = process.env.VSCODE_WEB_PORT || "3018";
 // The sample registers with ws://localhost:8080, so the test has to use
 // that port too - it is checking the sample as written.
 const WS_PORT = "8080";
 const panel = (p) => p.frameLocator("iframe.webview").frameLocator("iframe#active-frame");
-let ok = true;
-const expect = (c, m) => { if (!c) { console.error("  FAIL: " + m); ok = false; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -138,9 +137,9 @@ try {
   expect(/40, 120/.test(await value.innerText()), "on_receive should record the other world");
 } catch (err) {
   console.error(err);
-  ok = false;
+  fail(String(err));
 }
 
-console.log(ok ? "\nsmoke-web-universe: ok" : "\nsmoke-web-universe: FAILED");
+console.log(passed() ? "\nsmoke-web-universe: ok" : "\nsmoke-web-universe: FAILED");
 await shutDown();
-process.exit(ok ? 0 : 1);
+process.exit(passed() ? 0 : 1);

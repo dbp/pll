@@ -5,9 +5,9 @@
 # returns a new `Image`; nothing mutates. Each `Image` knows how to render
 # itself as an SVG fragment positioned in a parent box.
 #
-# This module is loaded into Pyodide alongside `pyodideBootstrap.py`. The
-# bootstrap then injects the public names directly into the user's module
-# globals so a beginner can write `circle(50, "solid", "red")` with no
+# This module is loaded into Pyodide after the bootstrap (`bootstrap/`).
+# The install step then injects the public names directly into the user's
+# module globals so a beginner can write `circle(50, "solid", "red")` with no
 # import boilerplate (matching the HtDP/Pyret experience).
 
 import base64 as _pll_img_b64
@@ -1046,7 +1046,7 @@ class _Flip(Image):
 
 
 # -----------------------------------------------------------------------------
-# Public API (exported into user globals by the bootstrap)
+# Public API (exported into user globals by the install step)
 # -----------------------------------------------------------------------------
 
 def circle(radius, mode, color):
@@ -1308,7 +1308,7 @@ def image_height(image):
 empty_image = _Rectangle(0, 0, "solid", (0, 0, 0, 0))
 
 
-# Names exported into user globals by the bootstrap. Keep this list explicit
+# Names exported into user globals by the install step. Keep this list explicit
 # so we don't accidentally leak helpers (anything starting with `_` would
 # already be filtered, but being explicit avoids drift).
 PLL_IMAGE_EXPORTS = [

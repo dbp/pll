@@ -747,11 +747,11 @@ stderr:
 === tc-dict-value (exit 1)
 stderr:
   student.py [beginner]
-  TypeMismatch: `total` expects every value in `d` to be a whole number (`int`), but the value for key 'a' is the string "1".
+  TypeMismatch: `total` expects every value in `d` to be a whole number (`int`), but the value for key "a" is the string "1".
     at student.py:5
   
   How to fix:
-    - Look at the value for key 'a' of the dict you passed for `d`.
+    - Look at the value for key "a" of the dict you passed for `d`.
     - Every one has to match the annotation, not just the first.
 
 === tc-bool-as-int (exit 1)
@@ -1137,7 +1137,29 @@ stderr:
     - Write it as `#level beginner`, with a space.
   
 
-=== header-not-first (exit 0)
+=== header-not-first (exit 2)
+stderr:
+  student.py [raw]
+  Level: `#level beginner` only counts on the first line, so none of its checks ran.
+    at student.py:2
+  
+  How to fix:
+    - Move it to the very first line of the file, above the code.
+    - Leave the line out altogether to run the file as ordinary Python.
+  
+
+=== header-under-comment (exit 2)
+stderr:
+  student.py [raw]
+  Level: `#level beginner` only counts on the first line, so none of its checks ran.
+    at student.py:2
+  
+  How to fix:
+    - Move it to the very top of the file, above the comments.
+    - Leave the line out altogether to run the file as ordinary Python.
+  
+
+=== header-in-docstring (exit 0)
 stdout:
   x
 stderr:
@@ -1331,6 +1353,18 @@ stderr:
   How to fix:
     - Write `Table` instead.
     - As it stands the annotation is accepted and nothing about this value is checked.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-annotation-row (exit 2)
+stderr:
+  student.py [beginner]
+  NotAType: `row` is not a type Python knows.
+    at student.py:2:10
+  
+  How to fix:
+    - Write `dict` instead.
+    - There is nothing called `row`, so this line fails as soon as it runs.
   
   Static analysis found 1 problem. The file was not run.
 

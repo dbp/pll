@@ -9,26 +9,9 @@
  * Also checks that `_pll_live_emit` fires once per stdout write so the
  * interactions view can show a prompt before input() waits.
  */
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 
-import { loadPyodide } from "pyodide";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
-
-function readPy(rel) {
-  return readFileSync(resolve(ROOT, rel), "utf8");
-}
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
+import { expect, passed } from "./lib/check.mjs";
+import { bootPll } from "./lib/pyodide.mjs";
 
 function call(fn, args) {
   const proxy = fn(...args);
@@ -47,9 +30,7 @@ function stdoutTexts(result) {
 }
 
 async function main() {
-  const indexURL = resolve(ROOT, "node_modules", "pyodide");
-  const pyodide = await loadPyodide({ indexURL });
-  pyodide.runPython(readPy("src/common/pyodideBootstrap.py"));
+  const pyodide = await bootPll();
 
   const runFile = pyodide.globals.get("_pll_run_file");
   const lines = ["Ada", "1"];
@@ -136,7 +117,7 @@ async function main() {
     expect(result.error_type === "EOFError", "expected EOFError, got " + result.error_type);
   }
 
-  if (!ok) {
+  if (!passed()) {
     console.error("\ninput smoke failed");
     process.exit(1);
   }

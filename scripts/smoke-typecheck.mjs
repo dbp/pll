@@ -10,80 +10,23 @@
  *
  * Requires `pnpm run build` so dist/desktop/pyodideWorker.js exists.
  */
-import { build } from "esbuild";
-import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { dirname, join, resolve } from "node:path";
-import { Worker } from "node:worker_threads";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
-const WORKER_PATH = resolve(ROOT, "dist", "desktop", "pyodideWorker.js");
-const INDEX_URL = resolve(ROOT, "node_modules", "pyodide");
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
-
-function talk(worker) {
-  let nextId = 1;
-  const pending = new Map();
-  worker.on("message", (msg) => {
-    if (msg.type === "display" || msg.type === "stdinRequest") return;
-    const p = pending.get(msg.id);
-    if (!p) return;
-    pending.delete(msg.id);
-    if (msg.type === "error") p.reject(new Error(msg.message));
-    else p.resolve(msg);
-  });
-  worker.on("error", (err) => {
-    for (const p of pending.values()) p.reject(err);
-    pending.clear();
-  });
-  return (payload) => {
-    const id = nextId++;
-    const promise = new Promise((res, rej) => pending.set(id, { resolve: res, reject: rej }));
-    worker.postMessage({ id, ...payload });
-    return promise;
-  };
-}
+import { expect, passed } from "./lib/check.mjs";
+import { importSource } from "./lib/bundle.mjs";
+import { INDEX_URL } from "./lib/pyodide.mjs";
+import { startWorker, talk } from "./lib/worker.mjs";
 
 /** Bundle the host-side analyzer so the rewritten messages can be checked. */
 async function loadAnalyzer() {
-  const tmp = mkdtempSync(join(ROOT, ".smoke-"));
-  writeFileSync(
-    join(tmp, "entry.mjs"),
-    `
-export { findRuntimeFinding } from "../src/common/analyzers/registry";
-export { pythonErrorFrom } from "../src/common/errors/pythonError";
-export { deliverTestResult } from "../src/common/deliverResult";
-export { explainTestReport } from "../src/common/analyzers/runtimeFinding";
-`,
-  );
-  await build({
-    entryPoints: [join(tmp, "entry.mjs")],
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    outfile: join(tmp, "out.mjs"),
-    loader: { ".py": "text", ".whl": "base64" },
-    external: ["vscode"],
-    absWorkingDir: ROOT,
-  });
-  const mod = await import(pathToFileURL(join(tmp, "out.mjs")).href);
-  rmSync(tmp, { recursive: true, force: true });
+  const mod = await importSource(`
+export { findRuntimeFinding } from "./src/common/analyzers/registry";
+export { pythonErrorFrom } from "./src/common/errors/pythonError";
+export { deliverTestResult } from "./src/common/deliverResult";
+export { explainTestReport } from "./src/common/analyzers/runtimeFinding";
+`);
   return mod;
 }
 
 async function main() {
-  if (!existsSync(WORKER_PATH)) {
-    console.error(`Missing ${WORKER_PATH}. Run \`pnpm run build\` first.`);
-    process.exit(1);
-  }
   const { findRuntimeFinding, pythonErrorFrom, deliverTestResult, explainTestReport } = await loadAnalyzer();
 
   /**
@@ -101,8 +44,8 @@ async function main() {
     test?.finding
       ? [test.finding.headline, ...test.finding.howToFix].join("\n")
       : (test?.message ?? "");
-  const worker = new Worker(WORKER_PATH);
-  const send = talk(worker);
+  const worker = startWorker();
+  const { send } = talk(worker);
   let session = 0;
   /** Run a file and return its result dict. */
   const run = (code, opts = {}) =>
@@ -628,7 +571,6 @@ async function main() {
       console.log(`    report message: ${JSON.stringify((test.message ?? "").split("\n")[0])}`);
     }
 
-
     console.log("\n[18] a `None` result is told apart from running off the end");
     {
       // One message for every `None` - "it finished without returning a
@@ -1116,8 +1058,8 @@ async function main() {
     await worker.terminate();
   }
 
-  console.log(`\nsmoke-typecheck: ${ok ? "ok" : "FAILED"}`);
-  if (!ok) process.exit(1);
+  console.log(`\nsmoke-typecheck: ${passed() ? "ok" : "FAILED"}`);
+  if (!passed()) process.exit(1);
 }
 
 main().catch((err) => {

@@ -2,38 +2,44 @@
 //
 // Lives inside the WebviewView. Holds the currently-displayed session's
 // entry log + an input row, and talks to the extension host via postMessage.
-// The session manager on the host owns per-file session state; we just
-// mirror whatever's "currently shown" via vscode.setState so we restore
-// fast on webview reload.
+// The session manager on the host owns per-file session state, and replays
+// it whenever this view (re)loads and says it is ready. The one thing only
+// the view knows is the prompt's input history, and that is all it saves.
 //
-// Host -> view messages:
-//   { type: "append", entry }                - append to current session
-//   { type: "appendMany", entries }          - append a batch (bursts of output)
+// The messages, in summary. Their types are `HostToView` and `ViewToHost`
+// in src/common/interactionsView.ts, which also checks every message this
+// sends before acting on it.
+//
+// Host -> view:
+//   { type: "appendMany", entries }          - append a batch of entries
 //   { type: "reactorPatch", id, patch }      - update a live reactor card
 //   { type: "clear" }                        - clear current session entries
 //   { type: "prompt", kind }                 - change prompt for current
 //   { type: "busy", busy, status? }          - busy state for current
 //   { type: "awaitingInput", awaiting, prefix? } - program input() is waiting
-//   { type: "replay", mode: "session", title, entries, prompt, busy, status?, awaitingInput?, inputPrefix? }
-//   { type: "replay", mode: "session", title, entries, prompt, busy, status? }
-//                                            - swap to a different session
+//   { type: "replay", mode: "session", title, entries, prompt, busy, status?,
+//     awaitingInput?, inputPrefix? }         - show a session, from scratch
 //   { type: "empty", message }               - no session active
 //   { type: "title", title }                 - update header title in place
 //   { type: "focusInput" }
 //
-// View -> host messages:
-//   { type: "ready" }
+// View -> host:
+//   { type: "ready" }                        - (re)loaded; send a replay
 //   { type: "submit", code }
 //   { type: "interrupt" }
 //   { type: "clearRequested" }
+//   { type: "reactorControl", id, action, index? }
+//   { type: "reactorInput", id, event }
 //   { type: "openLocation", fileName, line, column? }
 //   { type: "saveSvg", svg, source? }
+//   { type: "saveCsv", csv, source? }
 
 (function () {
   const vscode = acquireVsCodeApi();
 
+  const saved = vscode.getState();
   /** @type {{ mode: "session" | "empty", emptyMessage: string, title: string, entries: any[], prompt: "primary" | "continuation", busy: boolean, status: string, awaitingInput: boolean, inputPrefix: string, history: string[] }} */
-  const state = vscode.getState() ?? {
+  const state = {
     mode: "empty",
     emptyMessage: "Open a Python file to start an interactions session.",
     title: "",
@@ -43,11 +49,8 @@
     status: "",
     awaitingInput: false,
     inputPrefix: "",
-    history: [],
+    history: Array.isArray(saved?.history) ? saved.history : [],
   };
-  if (typeof state.awaitingInput !== "boolean") state.awaitingInput = false;
-  if (typeof state.inputPrefix !== "string") state.inputPrefix = "";
-  if (typeof state.status !== "string") state.status = "";
 
   const body = document.body;
   const titleEl = document.getElementById("title");
@@ -68,8 +71,13 @@
   /** Track whether the stream is scrolled (close to) the bottom; if so, auto-scroll. */
   let stickToBottom = true;
 
+  /**
+   * Save what only this view knows. The entries are not saved: the host
+   * replays them on every load, and saving them meant serialising the whole
+   * log - every SVG with it - on each reactor frame, 28 times a second.
+   */
   function persist() {
-    vscode.setState(state);
+    vscode.setState({ history: state.history });
   }
 
   function applyMode() {
@@ -112,7 +120,6 @@
     statusEl.textContent = state.status;
     applyInputEnabled();
     refreshEmptyIfNeeded();
-    persist();
   }
 
   function setAwaitingInput(awaiting, prefix) {
@@ -120,13 +127,11 @@
     state.inputPrefix = awaiting ? (prefix || "") : "";
     setPromptText();
     applyInputEnabled();
-    persist();
   }
 
   function clearStream() {
     reactorCards.clear();
     state.entries = [];
-    persist();
     renderAll();
   }
 
@@ -173,14 +178,9 @@
     scrollToBottom();
   }
 
-  function appendEntry(entry) {
-    appendEntries([entry]);
-  }
-
   /**
-   * Append a batch of entries with one persist, one DOM insertion and one
-   * scroll. Doing those per entry is what made a printing loop unusable:
-   * `persist()` serializes the whole entry log, so it is O(n) per call.
+   * Append a batch of entries with one DOM insertion and one scroll. Doing
+   * those per entry is what made a printing loop unusable.
    */
   function appendEntries(entries) {
     if (!entries || entries.length === 0) return;
@@ -191,7 +191,6 @@
       fragment.appendChild(buildEntryNode(entry));
     }
     stream.appendChild(fragment);
-    persist();
     if (stickToBottom) scrollToBottom();
   }
 
@@ -914,26 +913,13 @@
     const msg = event.data;
     if (!msg || typeof msg !== "object") return;
     switch (msg.type) {
-      case "append":
-        if (state.mode !== "session") return;
-        appendEntry(msg.entry);
-        break;
       case "appendMany":
         if (state.mode !== "session") return;
         appendEntries(msg.entries);
         break;
       case "reactorPatch":
         if (state.mode !== "session") return;
-        // Mirror into `state.entries` too, so a webview reload redraws the
-        // frame we are actually on rather than the first one.
-        for (const entry of state.entries) {
-          if (entry.kind === "reactor" && entry.id === msg.id) {
-            Object.assign(entry, msg.patch);
-            break;
-          }
-        }
         patchReactorCard(msg.id, msg.patch);
-        persist();
         break;
       case "clear":
         if (state.mode !== "session") return;
@@ -943,7 +929,6 @@
         if (state.mode !== "session") return;
         state.prompt = msg.kind === "continuation" ? "continuation" : "primary";
         setPromptText();
-        persist();
         break;
       case "busy":
         if (state.mode !== "session") return;
@@ -960,7 +945,6 @@
         state.entries = Array.isArray(msg.entries) ? msg.entries.slice() : [];
         state.prompt = msg.prompt === "continuation" ? "continuation" : "primary";
         state.busy = !!msg.busy;
-        persist();
         applyMode();
         applyTitle();
         renderAll();
@@ -976,7 +960,6 @@
         state.busy = false;
         state.awaitingInput = false;
         state.inputPrefix = "";
-        persist();
         applyMode();
         applyTitle();
         renderAll();
@@ -985,7 +968,6 @@
       case "title":
         if (state.mode !== "session") return;
         state.title = typeof msg.title === "string" ? msg.title : "";
-        persist();
         applyTitle();
         break;
       case "focusInput":

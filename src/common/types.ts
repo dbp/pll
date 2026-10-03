@@ -82,6 +82,11 @@ export interface ExecutionReactorChunk {
 
 export interface ExecutionDoneChunk {
   kind: "done";
+  /**
+   * The status the program ended itself with - `sys.exit(3)` is 3, and
+   * `sys.exit()` 0 - or absent when it simply finished.
+   */
+  exitCode?: number;
 }
 
 export interface ExecutionTestReportChunk {
@@ -214,11 +219,21 @@ export interface PythonRuntime {
    * Apply one event to a running reactor and get the frame it produced.
    * `event` is the JSON of `{kind, ...}`; see `Reactor.react`.
    */
-  reactorStep(reactorId: string, event: string): Promise<ReactorStepResult>;
+  /**
+   * Apply one event to a running reactor. What its handlers print or show
+   * arrives through `onEvent`, as a run's output does, labelled `fileName`.
+   */
+  reactorStep(
+    reactorId: string,
+    event: string,
+    output?: { onEvent: ExecutionEventHandler; fileName: string },
+  ): Promise<ReactorStepResult>;
   /** Show an earlier or later recorded frame, applying no event. */
   reactorSeek(reactorId: string, index: number): Promise<ReactorStepResult>;
   /** Forget a reactor, so its recorded states can be collected. */
   reactorDispose(reactorId: string): Promise<void>;
+  /** Forget a session and the names its runs defined. */
+  endSession(sessionKey: string): Promise<void>;
   /**
    * Ask a running program to stop, by raising `KeyboardInterrupt` at the
    * interpreter's next bytecode check. Synchronous on purpose: the worker is
@@ -233,5 +248,16 @@ export interface PythonRuntime {
    * (no trailing newline) or `null` (EOF / cancel).
    */
   setStdinHandler(handler: (() => Promise<string | null>) | null): void;
+  /**
+   * Who hears what Pyodide says while it loads a package: "Loading pytest,
+   * ..." or, `failed`, why it could not. Without one, the host's log.
+   */
+  setPackageNoteHandler(handler: ((text: string, failed: boolean) => void) | null): void;
+  /**
+   * Told when Python had to be replaced - its worker stopped, or it could
+   * no longer run - and so every session's names are gone. The request in
+   * flight fails with `PythonLostError`; the next starts a new Python.
+   */
+  setPythonLostHandler(handler: (() => void) | null): void;
   dispose(): void;
 }

@@ -18,7 +18,7 @@ Pyodide's assets come from. `common/workerRuntime.ts` and
 
 ```
 src/
-├── extension.ts                   Desktop entrypoint (Node host)
+├── desktop/extension.ts           Desktop entrypoint (Node host)
 ├── web/extension.ts               Web entrypoint (vscode.dev)
 ├── web/pyodideWorker.ts           Browser Worker: boots Pyodide via importScripts
 ├── web/pyodideRuntime.ts          Spawns the browser Worker
@@ -67,7 +67,16 @@ src/
     ├── wire.ts                    The shapes of what the Python side returns
     ├── pythonVendor.ts            Bundled typeguard / typing_extensions wheels
     ├── deliverResult.ts           Translates Python results to ExecutionEvents
-    ├── pyodideBootstrap.py        Real Python: run / repl-eval / tests / static analyzer
+    ├── bootstrap/                 Real Python, one file per concern, loaded in order:
+    │   ├── typeChecking.py        the level's checks; typeguard set up
+    │   ├── errorInfo.py           an exception described for the host
+    │   ├── sessions.py            per-file globals; output in program order
+    │   ├── stop.py                Stop as KeyboardInterrupt, acknowledged
+    │   ├── compile.py             AST passes over the student's code
+    │   ├── libraryHelpers.py      what the libraries share (sources, names)
+    │   ├── running.py             run a file / a prompt line
+    │   ├── tests.py               the file's own tests
+    │   └── staticAnalysis.py      the checks made before a program runs
     ├── imageLib.py                Real Python: SVG image primitives + combinators
     ├── reactorLib.py              Real Python: reactor values + history
     ├── examplarLib.py             Real Python: wheat/chaff build + run
@@ -109,9 +118,9 @@ media/
 ```
 
 The static analyzer (scope builder, shadowing/reassignment checks) lives
-in `pyodideBootstrap.py`. esbuild's `text` loader inlines that file as a
-string at build time so it is loaded into Pyodide once on init. Analysis
-therefore runs in the same Python interpreter that runs the user's code,
+in `bootstrap/staticAnalysis.py`. esbuild's `text` loader inlines the
+Python files as strings at build time, and they are loaded into Pyodide
+once on init. Analysis therefore runs in the same Python interpreter that runs the user's code,
 in both desktop and web hosts.
 
 Prompt submissions use the language level of the last Run File
@@ -469,7 +478,7 @@ the program finishes. Binary files and subdirectories are ignored.
 asynchronous. Both hosts run Pyodide in a worker and bridge that with
 two pieces:
 
-1. **Live output.** `_pll_push` in `pyodideBootstrap.py` optionally
+1. **Live output.** `_pll_push` in `bootstrap/sessions.py` optionally
    calls `_pll_live_emit` (a JS callback) on every stdout/stderr write
    and every image/table. The worker posts a `display` message so the
    prompt of `input("Choice: ")` appears *before* the program blocks.
@@ -554,6 +563,16 @@ interactions view says so and points at reloading the window. Terminating
 and respawning the worker would cover those cases; it is deliberately not
 implemented, because one interpreter is shared by every session and killing
 it discards all of their globals.
+
+A Python that is *already* gone is another matter, since there is nothing
+left to discard. If the Node worker exits, or the interpreter in any worker
+can no longer run (Pyodide refuses every call after a fatal error, and the
+worker marks such a reply `finished`), the runtime fails the request in
+flight with `PythonLostError`, ends that worker, and starts a new one for
+the next request; every file that has run says that its names are gone.
+`os._exit()` and `os.abort()`, which would end the interpreter, are
+replaced (in `bootstrap/running.py`) by an exit like `sys.exit()`'s, so a
+program calling them ends and Python carries on.
 
 ### Why output has to be throttled
 
@@ -943,7 +962,10 @@ The program's own stdout is the only thing on stdout; everything PLL says
 *about* the run goes to stderr. So `pll hw.py > out.txt` captures exactly
 what the program printed. Exit codes are distinct so an autograder can tell
 the cases apart: `0` ok, `1` the program raised (or Ctrl+C stopped it), `2`
-level checks blocked it, `3` a test failed, `64` bad usage.
+level checks blocked it, `3` a test failed, `64` bad usage. A program that
+ends itself with `sys.exit(n)` exits with `n`, as CPython would: Python
+records the status in the result's `exit_code` (`_pll_exit_status`), the
+`done` event carries it, and `runFile` returns it ahead of a test failure.
 
 ### Packaging
 

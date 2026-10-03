@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
 import {
-  isMountableName,
-  selectMountableFiles,
-  selectWritebackFiles,
+  readSiblingFiles,
+  writeSiblingFiles,
+  type SiblingFolder,
   type WorkspaceFile,
 } from "./workspaceFilePolicy";
 
@@ -23,72 +23,40 @@ function openDocumentText(uri: vscode.Uri): string | undefined {
 }
 
 /**
- * Text files in the same folder as `documentUri`. Prefers unsaved editor
- * buffers over disk so a CSV the student is editing is what `open` sees.
+ * The folder `documentUri` is in, through `vscode.workspace.fs` - or null
+ * for an untitled file, which is in no folder.
  */
-export async function collectSiblingFiles(
-  documentUri: vscode.Uri,
-): Promise<WorkspaceFile[]> {
+function siblingFolder(documentUri: vscode.Uri): SiblingFolder | null {
   const folder = folderUri(documentUri);
   if (!folder) {
-    return [];
+    return null;
   }
-  let listing: [string, vscode.FileType][];
-  try {
-    listing = await vscode.workspace.fs.readDirectory(folder);
-  } catch {
-    return [];
-  }
-  const candidates: { name: string; contents: string | Uint8Array }[] = [];
-  for (const [name, type] of listing) {
-    if (type !== vscode.FileType.File) {
-      continue;
-    }
-    if (!isMountableName(name)) {
-      continue;
-    }
-    const uri = vscode.Uri.joinPath(folder, name);
-    const fromEditor = openDocumentText(uri);
-    if (fromEditor !== undefined) {
-      candidates.push({ name, contents: fromEditor });
-      continue;
-    }
-    try {
-      candidates.push({ name, contents: await vscode.workspace.fs.readFile(uri) });
-    } catch {
-      /* skip unreadable files */
-    }
-  }
-  return selectMountableFiles(candidates);
+  const at = (name: string) => vscode.Uri.joinPath(folder, name);
+  return {
+    files: async () =>
+      (await vscode.workspace.fs.readDirectory(folder))
+        .filter(([, type]) => type === vscode.FileType.File)
+        .map(([name]) => name),
+    // An unsaved buffer over the disk: a CSV the student is editing is
+    // what `open` should see.
+    read: async (name) => openDocumentText(at(name)) ?? (await vscode.workspace.fs.readFile(at(name))),
+    write: async (name, text) => {
+      await vscode.workspace.fs.writeFile(at(name), new TextEncoder().encode(text));
+    },
+  };
 }
 
-/**
- * Write changed/new data files next to the running script. Returns the
- * basenames that were written.
- */
+/** Text and picture files in the same folder as `documentUri`. */
+export async function collectSiblingFiles(documentUri: vscode.Uri): Promise<WorkspaceFile[]> {
+  const folder = siblingFolder(documentUri);
+  return folder ? readSiblingFiles(folder) : [];
+}
+
+/** Write changed and new data files next to the file. Returns their names. */
 export async function writeBackSiblingFiles(
   documentUri: vscode.Uri,
   files: WorkspaceFile[],
 ): Promise<string[]> {
-  const folder = folderUri(documentUri);
-  if (!folder) {
-    return [];
-  }
-  const written: string[] = [];
-  for (const file of selectWritebackFiles(files)) {
-    const uri = vscode.Uri.joinPath(folder, file.name);
-    try {
-      // Only text files are writeback-eligible, so this is a string; the
-      // union exists for the pictures that are mounted and never written.
-      const bytes =
-        typeof file.contents === "string"
-          ? new TextEncoder().encode(file.contents)
-          : file.contents;
-      await vscode.workspace.fs.writeFile(uri, bytes);
-      written.push(file.name);
-    } catch {
-      /* skip files the host refuses to write */
-    }
-  }
-  return written;
+  const folder = siblingFolder(documentUri);
+  return folder ? writeSiblingFiles(folder, files) : [];
 }

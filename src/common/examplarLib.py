@@ -367,6 +367,10 @@ def _pll_examplar_run_one(test_pieces, code_blob, provided=(), only=None):
     )
     try:
         exec(_ex_marshal.loads(_ex_b64.b64decode(code_blob)), namespace)
+    except KeyboardInterrupt:
+        # A Stop, not a broken implementation: reported as one, it read
+        # "the bundle may need rebuilding".
+        raise
     except BaseException as e:
         return {
             "loaded": False,
@@ -389,6 +393,11 @@ def _pll_examplar_run_one(test_pieces, code_blob, provided=(), only=None):
         try:
             fn()
             results[name] = _pll_examplar_outcome(None)
+        except KeyboardInterrupt:
+            # A Stop ends the whole check. Recorded as this test's error, it
+            # let the next implementation run the same test - which, if it
+            # loops, needed another Stop, and another, one per implementation.
+            raise
         except BaseException as e:
             results[name] = _pll_examplar_outcome(e)
     return {"loaded": True, "tests": results, "student_defines": student_defines}

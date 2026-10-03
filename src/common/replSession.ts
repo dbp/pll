@@ -6,6 +6,7 @@ import {
   type Entry,
   type PromptKind,
   type ReactorPatch,
+  type SessionDisplayState,
 } from "./interactionsView";
 import { DEFAULT_LEVEL, parseLevel, type Level } from "./level";
 import type { BundleStore } from "./examplarSource";
@@ -15,6 +16,7 @@ import type { ExecutionEvent, PythonRuntime } from "./types";
 import type { UniverseConnect } from "./universeClient";
 import { collectSiblingFiles, folderUri, writeBackSiblingFiles } from "./workspaceFiles";
 import { errorText } from "./errorText";
+import { PythonLostError } from "./pythonLost";
 
 /**
  * How long to wait after a Stop before telling the student it did not work.
@@ -48,7 +50,7 @@ export interface ReplDeps {
  * A per-Python-file logical session. Owns its own entry log, REPL
  * continuation buffer, and (on the Python side, by sharing the same
  * `key`) its own globals dict, so each file's `Run File` and REPL
- * evaluations are independent.
+ * evaluations are independent. It lasts until its file is closed.
  *
  * Pyodide is single-threaded so executions are serialized through one
  * shared exec chain; while one session is executing, submissions to
@@ -106,7 +108,13 @@ export class ReplSession implements vscode.Disposable {
   /** Currently-shown session key, or null if no Python file has been active. */
   private activeKey: string | null = null;
 
-  /** All Python operations serialize through this chain (Pyodide is single-threaded). */
+  /**
+   * Every run - a file, a prompt line, a reactor's step or seek - is queued
+   * here, so one finishes before the next starts and their output cannot
+   * interleave. What runs none of the student's code stays off it: starting
+   * Python, a Stop (which has to reach the run in progress), asking whether
+   * a prompt line is complete yet, and discarding a reactor.
+   */
   private execChain: Promise<void> = Promise.resolve();
 
   private initialized = false;
@@ -115,6 +123,7 @@ export class ReplSession implements vscode.Disposable {
   private initError: string | null = null;
 
   private readonly editorWatcher: vscode.Disposable;
+  private readonly closeWatcher: vscode.Disposable;
 
   /**
    * Session whose file is currently executing `input()`. Either runtime
@@ -140,6 +149,7 @@ export class ReplSession implements vscode.Disposable {
         this.appendToSession(session, entry);
       },
       patch: (session, id, patch) => this.patchReactorEntry(session, id, patch),
+      output: (session, event, program) => this.handleEvent(session, event, program),
       enqueue: (task) => this.enqueue(task),
     });
     deps.view.setHandlers({
@@ -148,8 +158,15 @@ export class ReplSession implements vscode.Disposable {
       onClearRequested: () => this.handleClearRequested(),
       onReactorControl: (id, action, index) => this.reactors.control(id, action, index),
       onReactorInput: (id, event) => this.reactors.input(id, event as ReactorEvent),
+      onOpenLocation: (fileName, line, column) => void this.openLocation(fileName, line, column),
+      onViewReady: () => {
+        const session = this.activeSession();
+        if (session) this.deps.view.showSession(this.displayStateOf(session));
+        return session !== null;
+      },
     });
     deps.runtime.setStdinHandler(() => this.provideStdin());
+    deps.runtime.setPythonLostHandler(() => this.handlePythonLost());
 
     // Keep the visible session in sync with the active editor.
     this.editorWatcher = vscode.window.onDidChangeActiveTextEditor((editor) =>
@@ -158,6 +175,9 @@ export class ReplSession implements vscode.Disposable {
     // Pick up the editor that's already active at activation time (the
     // common case when the extension activates via `onLanguage:python`).
     this.handleActiveEditorChange(vscode.window.activeTextEditor);
+    this.closeWatcher = vscode.workspace.onDidCloseTextDocument((document) =>
+      this.handleDocumentClosed(document),
+    );
 
     // Eagerly start Pyodide so first interaction isn't blocked by load time.
     void this.ensureInitialized();
@@ -187,15 +207,28 @@ export class ReplSession implements vscode.Disposable {
     this.handleInterrupt();
   }
 
+  /**
+   * Clear the visible session - its entries and its reactors' clocks, not
+   * just the panel. The panel's Clear button and **PLL: Clear Interactions**
+   * both come here; the command used to clear only the view, so the entries
+   * came back with the session and a reactor ticked on with no card.
+   */
+  clearActiveSession(): void {
+    this.handleClearRequested();
+  }
+
   dispose(): void {
     this.reactors.disposeAll();
     this.editorWatcher.dispose();
+    this.closeWatcher.dispose();
   }
 
   /* -------- Init -------- */
 
   private async ensureInitialized(): Promise<boolean> {
     if (this.initPromise) return this.initPromise;
+    // A fresh attempt is loading again, whatever the last one said.
+    this.initError = null;
     // Surface "Loading..." status on the active session (if any).
     this.refreshActiveBusy();
     this.initPromise = (async () => {
@@ -203,9 +236,13 @@ export class ReplSession implements vscode.Disposable {
         await this.deps.runtime.initialize();
       } catch (err) {
         this.initError = errorText(err);
+        // Not remembered, so the next run tries again rather than reporting
+        // this failure until the window is reloaded.
+        this.initPromise = null;
         return false;
       }
       this.initialized = true;
+      this.initError = null;
       this.refreshActiveBusy();
       return true;
     })();
@@ -213,10 +250,10 @@ export class ReplSession implements vscode.Disposable {
   }
 
   /**
-   * Record a failed Pyodide start in the session's own log. `initPromise` is
-   * memoized, so this has to be reported per attempt rather than once: the
-   * eager warm-up in the constructor has no session to report against, and a
-   * later Run File clears the stream before it asks.
+   * Record a failed Pyodide start in the session's own log - per attempt,
+   * since each run tries again: the eager warm-up in the constructor has no
+   * session to report against, and a later Run File clears the stream before
+   * it asks.
    */
   private reportInitFailure(session: Session): void {
     this.appendToSession(session, {
@@ -250,21 +287,73 @@ export class ReplSession implements vscode.Disposable {
     }
   }
 
+  /**
+   * Python stopped completely and the next run starts a new one, so every
+   * file's names are gone, and every reactor's state. Said in each file
+   * that has run - not only the one whose run was going - or that file's
+   * next prompt line would fail with a NameError and no reason why.
+   */
+  private handlePythonLost(): void {
+    this.reactors.disposeAll();
+    for (const session of this.sessions.values()) {
+      if (session.runSeq === 0) continue;
+      this.flushStreams(session);
+      this.appendToSession(session, {
+        kind: "banner",
+        text:
+          "Python stopped completely, so the next run starts a new one. " +
+          "Everything this file defined is gone; run it again to define it.",
+      });
+    }
+  }
+
+  /**
+   * A file's session ends when the file is closed: its entries, its
+   * reactors, and the names its runs defined. Without this, every file
+   * opened in a window kept all of them until the window closed.
+   *
+   * Queued, so a run of the file still finishes first, and checked again
+   * when its turn comes: VS Code closes and reopens a document whose
+   * language mode is changed, and that file is still open.
+   */
+  private handleDocumentClosed(document: vscode.TextDocument): void {
+    const key = document.uri.toString();
+    if (!this.sessions.has(key)) return;
+    void this.enqueue(async () => {
+      const session = this.sessions.get(key);
+      if (!session || vscode.workspace.textDocuments.some((d) => d.uri.toString() === key)) {
+        return;
+      }
+      this.reactors.disposeAllFor(session);
+      this.sessions.delete(key);
+      this.stopPending.delete(key);
+      if (this.activeKey === key) {
+        this.activeKey = null;
+        this.deps.view.showEmpty();
+      }
+      await this.deps.runtime.endSession(key).catch(() => undefined);
+    });
+  }
+
   private setActive(key: string): void {
     if (this.activeKey === key) return;
     this.activeKey = key;
     const session = this.sessions.get(key);
     if (!session) return;
-    this.deps.view.showSession({
+    this.deps.view.showSession(this.displayStateOf(session));
+  }
+
+  /** Everything the view needs to show `session` from scratch. */
+  private displayStateOf(session: Session): SessionDisplayState {
+    return {
       title: this.titleFor(session),
       entries: session.entries,
       prompt: session.prompt,
       busy: this.computeVisibleBusy(session),
       status: this.visibleStatus(session),
       awaitingInput: this.stdinPending?.session === session,
-      inputPrefix:
-        this.stdinPending?.session === session ? this.stdinPending.prefix : "",
-    });
+      inputPrefix: this.stdinPending?.session === session ? this.stdinPending.prefix : "",
+    };
   }
 
   /* -------- Session bookkeeping -------- */
@@ -448,6 +537,35 @@ export class ReplSession implements vscode.Disposable {
     }, STOP_TIMEOUT_MS);
   }
 
+  /**
+   * Open a location an entry names. It belongs to the session showing it:
+   * its own file, or one beside it - a helper module it imports. Resolved
+   * here rather than by bare name, which opened the wrong `main.py` when
+   * two folders had one.
+   */
+  private async openLocation(fileName: string, line: number, column: number | null): Promise<void> {
+    const session = this.activeSession();
+    if (!session) return;
+    const folder = folderUri(session.documentUri);
+    const uri =
+      fileName === session.fileName
+        ? session.documentUri
+        : folder !== undefined
+          ? vscode.Uri.joinPath(folder, fileName)
+          : null;
+    if (uri === null) return;
+    // `line` is 1-based and `column` 0-based, as a finding's location is.
+    const position = new vscode.Position(Math.max(0, line - 1), Math.max(0, column ?? 0));
+    try {
+      await vscode.window.showTextDocument(uri, {
+        selection: new vscode.Range(position, position),
+        preserveFocus: false,
+      });
+    } catch {
+      /* the file is not there to open */
+    }
+  }
+
   private handleClearRequested(): void {
     const session = this.activeSession();
     if (session) this.clearSession(session);
@@ -522,10 +640,9 @@ export class ReplSession implements vscode.Disposable {
   /* -------- Execution -------- */
 
   /**
-   * Shared envelope for every Python execution: load packages the code
-   * imports, mount the sibling files, run, then flush pending output and
-   * copy changed files back. Internal failures land in the session's stderr
-   * instead of propagating.
+   * Run a prompt line, at the level of the file's last run (or `raw`). The
+   * steps - packages, sibling files, the checks, the run - are
+   * `runInputPlan`'s.
    */
   private async executeRepl(session: Session, code: string): Promise<void> {
     const level = session.lastLevel ?? DEFAULT_LEVEL;
@@ -555,7 +672,6 @@ export class ReplSession implements vscode.Disposable {
     this.setSessionBusy(session, true, "Starting...");
 
     this.deps.diagnostics.clear(document.uri);
-    this.deps.view.registerFile(fileName, document.uri);
 
     const level = parseLevel(code);
     // Record the level *before* running so the header reflects it even if
@@ -588,7 +704,8 @@ export class ReplSession implements vscode.Disposable {
 
   /**
    * Run `plan` with this session as its host, and leave the session idle
-   * after, whatever happened.
+   * after, whatever happened. A failure of PLL's own is shown in the
+   * session's stderr rather than thrown.
    */
   private async runWithSession(
     session: Session,
@@ -599,7 +716,10 @@ export class ReplSession implements vscode.Disposable {
     try {
       await plan(this.hostFor(session, program, document));
     } catch (err) {
-      this.feedStream(session, "stderr", `Internal error: ${errorText(err)}\n`);
+      // Python stopping is said in every session, by `handlePythonLost`.
+      if (!(err instanceof PythonLostError)) {
+        this.feedStream(session, "stderr", `Internal error: ${errorText(err)}\n`);
+      }
     } finally {
       this.flushStreams(session);
       this.setSessionBusy(session, false);
@@ -638,10 +758,8 @@ export class ReplSession implements vscode.Disposable {
       say: (text) => entry({ kind: "banner", text }),
       status: (text) => this.setSessionBusy(session, true, text),
       stopRequested: () => session.stopRequestedSeq === runSeq,
-      siblingFiles: async () =>
-        folderUri(session.documentUri) ? collectSiblingFiles(session.documentUri) : [],
-      writeBack: async (files) =>
-        folderUri(session.documentUri) ? writeBackSiblingFiles(session.documentUri, files) : [],
+      siblingFiles: () => collectSiblingFiles(session.documentUri),
+      writeBack: (files) => writeBackSiblingFiles(session.documentUri, files),
       examplarCard: (card) => entry(card),
       aroundProgram: async (run) => {
         this.stdinSession = session;
@@ -690,8 +808,11 @@ export class ReplSession implements vscode.Disposable {
     }
     if (this.isActive(pending.session)) {
       this.deps.view.setAwaitingInput(false);
-      this.deps.view.setBusy(true, "Running...");
     }
+    // Through the session, not just the view: the session's own status said
+    // "Waiting for input..." for the rest of the run, and showed it again
+    // whenever its file was switched back to.
+    this.setSessionBusy(pending.session, true, "Running...");
     pending.resolve(line);
   }
 
@@ -804,8 +925,9 @@ export class ReplSession implements vscode.Disposable {
   /**
    * Append one line of output, unless this run has already produced more
    * than we will render. Reports the cut-off once so output never just stops
-   * without explanation, and keeps pointing at Stop, since a run that hits
-   * this is usually a loop the student wants to end.
+   * without explanation, and says how to end what is printing: usually a
+   * loop, which Stop ends - or a reactor's handlers, which print after its
+   * run is over, so that Stop has nothing to stop and Pause is the answer.
    */
   private appendStreamLine(
     session: Session,
@@ -815,11 +937,14 @@ export class ReplSession implements vscode.Disposable {
     if (session.streamLines >= MAX_STREAM_LINES_PER_RUN) {
       if (!session.streamTruncated) {
         session.streamTruncated = true;
+        const reactor = !session.busy && this.reactors.anyPlaying(session);
         this.appendToSession(session, {
           kind: "banner",
           text:
             `Output stopped after ${MAX_STREAM_LINES_PER_RUN} lines. ` +
-            "If the program is still running, press Stop to end it.",
+            (reactor
+              ? "The reactor is still running; press Pause on it to stop it."
+              : "If the program is still running, press Stop to end it."),
         });
       }
       return;

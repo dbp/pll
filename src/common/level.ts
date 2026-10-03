@@ -81,8 +81,8 @@ export interface LevelHeaderProblem {
  *
  *   #level begginer      a name that is not a level
  *   #levelbeginner       the space missed out
- *   # my lab 1           something above it, so it is not the first line
- *   #level beginner
+ *   # my lab 1           something above it - a comment, or code - so it
+ *   #level beginner      is not the first line
  */
 export function levelHeaderProblem(source: string): LevelHeaderProblem | null {
   const lines = source.split(/\r?\n/);
@@ -137,37 +137,92 @@ export function levelHeaderProblem(source: string): LevelHeaderProblem | null {
 }
 
 /**
- * A valid header sitting below the top of the file, where it does nothing.
- *
- * Only the opening run of comments is searched. A `#level` line further
- * down could be inside a docstring, and inventing an error out of a string
- * literal would be worse than missing a misplaced header.
+ * A valid header sitting below the top of the file, where it does nothing -
+ * under a comment, or under code. Only a line that is a comment counts: a
+ * `#level` line inside a docstring is text, and inventing an error out of a
+ * string would be worse than missing a header.
  */
 function misplacedHeader(
   lines: string[],
   from: number,
   valid: RegExp,
 ): LevelHeaderProblem | null {
+  const comments = commentLines(lines);
+  let underCode = false;
   for (let i = from; i < lines.length; i++) {
     const line = lines[i].trim();
     if (line.length === 0) {
       continue;
     }
-    if (!line.startsWith("#")) {
-      return null;
+    if (!comments[i]) {
+      underCode = true;
+      continue;
     }
     if (valid.test(line)) {
       return {
         line: i + 1,
         message: `\`${line}\` only counts on the first line, so none of its checks ran.`,
         howToFix: [
-          "Move it to the very top of the file, above the comments.",
+          underCode
+            ? "Move it to the very first line of the file, above the code."
+            : "Move it to the very top of the file, above the comments.",
           "Leave the line out altogether to run the file as ordinary Python.",
         ],
       };
     }
   }
   return null;
+}
+
+/**
+ * Which lines are comments: a `#` first on the line, outside any string.
+ * The tokenizer that knows for certain is Python's, in the worker; this
+ * only has to tell a comment from a line of a triple-quoted string, the
+ * one place a line can begin with `#` and not be one.
+ */
+function commentLines(lines: string[]): boolean[] {
+  const comments: boolean[] = [];
+  // The quotes of a triple-quoted string still open: `"""` or `'''`.
+  let open: string | null = null;
+  for (const line of lines) {
+    comments.push(open === null && line.trimStart().startsWith("#"));
+    let i = 0;
+    while (i < line.length) {
+      if (open !== null) {
+        const close = closingQuote(line, i, open);
+        if (close < 0) break;
+        i = close + open.length;
+        open = null;
+        continue;
+      }
+      const c = line[i];
+      if (c === "#") break;
+      if (c === '"' || c === "'") {
+        if (line.startsWith(c.repeat(3), i)) {
+          open = c.repeat(3);
+          i += 3;
+          continue;
+        }
+        const close = closingQuote(line, i + 1, c);
+        i = close < 0 ? line.length : close + 1;
+        continue;
+      }
+      i += 1;
+    }
+  }
+  return comments;
+}
+
+/** Where `quote` next closes a string in `line`, from `from`, or -1. */
+function closingQuote(line: string, from: number, quote: string): number {
+  for (let i = from; i < line.length; i++) {
+    if (line[i] === "\\") {
+      i += 1;
+    } else if (line.startsWith(quote, i)) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 function levelList(): string {

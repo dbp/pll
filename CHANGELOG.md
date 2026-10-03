@@ -9,6 +9,10 @@
   own tests and the program. Bundles are cached on disk, so an offline run
   still gets its verdict, and the verdict does not change the exit code.
 
+- **The command line takes options in the usual forms**: `--save-images=out`,
+  `-qv`, and `--` before a file whose name starts with a dash. `examplar
+  build` takes `--out` as well as `-o`.
+
 ### Changed
 - **An error a test raised reads like any other error.** It goes through the
   same explanations as an error the program raises, so a `NameError` inside
@@ -28,7 +32,43 @@
   in both; and a saved file is "Saved out.csv next to hello.py." rather than
   "next to this file".
 
+- **The command line exits with the status a program ends itself with**,
+  as `python` would: `sys.exit(3)` exits 3 (and `os._exit(5)` 5), where
+  every program that ended itself used to exit 0. A status other than 0
+  outranks a failed test's 3, which is still listed.
+- **Closing a file ends its session**: its output in the panel, its
+  reactors, and the names its runs defined, which were kept until the
+  window closed - for every file opened in it. Opening the file again
+  starts afresh. A run still going when the file closes finishes first.
+
 ### Fixed
+- **Stop ends an Examplar check.** A Stop was recorded as the running test's
+  error and the check carried on, so a test that looped needed one Stop for
+  each known implementation - and the panel meanwhile suggested reloading
+  the window.
+- **What a reactor's handlers print is shown.** A `print` in `on_tick` or
+  `to_draw` went to a log no student sees; it now appears in the panel like
+  the program's own output.
+- **PLL: Clear Interactions clears the session**, as the panel's Clear
+  button does. It cleared only the panel: the output came back when the file
+  was shown again, and a reactor kept ticking with no card.
+- **A location opens the right file, at the right column.** Two `main.py`s in
+  different folders opened whichever ran last, and the cursor landed one
+  column to the left of the error.
+- **The status after `input()` is answered** reads "Running..." again, rather
+  than "Waiting for input..." whenever the file is shown.
+- **A failed load is tried again.** A dropped connection while pytest or the
+  network shim loaded - or a failed start of Python itself - lasted until the
+  window was reloaded.
+- **A Python that stops completely is replaced** by the next run, instead
+  of every later run waiting forever (a worker that crashed) or failing
+  until the window was reloaded (a fatal error inside Pyodide). Every file
+  that had run says that what it defined is gone, not only the one that
+  was running. A crashed worker is noticed on desktop and the command line;
+  a fatal error, on the web too.
+- **`os._exit()` and `os.abort()` end the program, not Python.** They ended
+  the interpreter every file shares, so every later run, of any file,
+  failed. They now end a program the way `sys.exit()` does.
 - **A `None` is traced to where it came from.** `print(x.total)` with `x =
   deposit(...)` said "`print(...)` gave back `None`" - the first call on the
   line, and the one that only wrapped the value. It now says "`x` is
@@ -46,6 +86,29 @@
   reported once, by the program, as the command line already did.
 - **The command line wrote files back even when it had failed to load
   them** for the program. The editor never did, and now neither does.
+- **`pll x.py --save-images --quiet` says the directory is missing**,
+  rather than saving pictures to a directory called `--quiet`.
+- **`sys.exit("message")` shows its message**, in the panel and on the
+  command line, as Python prints it; it was dropped.
+- **A `#level` line under code is reported**, as one under comments
+  already was, instead of the file running as ordinary Python without a
+  word. (0.3.0 said this was so; it was true only under comments.) A
+  `#level` line inside a docstring is still just text.
+- **The advice for an annotation `row` is `dict`**, the type of a row. It
+  said `Row`, which is not a name a program has, so following it gave a
+  NameError.
+- **A reactor that floods the panel is pointed at Pause.** Its handlers
+  print after its run is over, so the banner's "press Stop" had nothing to
+  stop.
+- **`pll -q` no longer prints Pyodide's "Loading ..." and "Loaded ..."
+  lines** when a file has tests. The tests' result is still shown, and so is
+  a package that fails to load.
+- **A dict's key is quoted the way its value is** in a type message: `the
+  value for key "a" is the string "1"`, not `key 'a'`.
+- **An empty `pll.pyodideIndexUrl` means the default** in the web version,
+  rather than a Python that cannot start. The setting's description no
+  longer asks for a trailing slash, which was never needed, and says it
+  applies to the web version only.
 
 ## 0.3.0 (2026-10-02)
 

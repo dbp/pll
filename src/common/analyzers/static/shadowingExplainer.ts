@@ -1,6 +1,6 @@
 import type { Level } from "../../level";
 import type { RawStaticFindingOf } from "../../wire";
-import type { AnalysisFinding } from "../types";
+import { staticFindingFor, type AnalysisFinding } from "../types";
 
 /** Friendly noun for the kind of scope the outer binding lives in. */
 function outerScopeNoun(kind: string | null | undefined): string {
@@ -36,10 +36,7 @@ export function explainShadowing(
     ? ` (first defined on line ${outerLine}, in ${outerNoun})`
     : ` in ${outerNoun}`;
 
-  return {
-    id: "shadowing",
-    errorType: "Shadowing",
-    message: raw.message,
+  return staticFindingFor(raw, level, fileName, {
     headline: `\`${name}\` is already defined${outerHint}.`,
     howToFix: [
       `Rename the inner \`${name}\` to something distinct (e.g. \`${name}_inner\`,` +
@@ -47,15 +44,7 @@ export function explainShadowing(
       `Or, if you want to use the outer \`${name}\`, just read it directly` +
         ` without making a new variable.`,
     ],
-    fileName,
-    lineNumber: raw.line_number,
-    column: raw.column,
-    nameToken: raw.name_token,
-    severity: "error",
-    raw: JSON.stringify(raw),
-    origin: "static",
-    level,
-  };
+  });
 }
 
 /**
@@ -69,25 +58,14 @@ export function explainShadowingBuiltin(
   const name = raw.name_token ?? "this name";
   const headline = `\`${name}\` is the name of a Python built-in.`;
 
-  return {
-    id: "shadowing-builtin",
-    errorType: "Shadowing",
-    message: raw.message,
+  return staticFindingFor(raw, level, fileName, {
     headline,
     howToFix: [
       `Pick a different name. Common patterns: \`my_${name}\`, \`${name}_value\`,` +
         ` \`${name}s\` (plural), or a more specific noun describing what this` +
         ` value represents.`,
     ],
-    fileName,
-    lineNumber: raw.line_number,
-    column: raw.column,
-    nameToken: raw.name_token,
-    severity: "error",
-    raw: JSON.stringify(raw),
-    origin: "static",
-    level,
-  };
+  });
 }
 
 /** Friendly noun for the library a predefined name comes from. */
@@ -118,10 +96,7 @@ export function explainShadowingLibrary(
   const noun = libraryNoun(raw.library);
   const headline = `\`${name}\` is already defined by ${noun}.`;
 
-  return {
-    id: "shadowing-library",
-    errorType: "Shadowing",
-    message: raw.message,
+  return staticFindingFor(raw, level, fileName, {
     headline,
     howToFix: [
       `Pick a different name for your definition - for example \`my_${name}\`,` +
@@ -129,13 +104,5 @@ export function explainShadowingLibrary(
       `If you meant to use the library's \`${name}\`, call it directly instead of` +
         ` defining a new \`${name}\` of your own.`,
     ],
-    fileName,
-    lineNumber: raw.line_number,
-    column: raw.column,
-    nameToken: raw.name_token,
-    severity: "error",
-    raw: JSON.stringify(raw),
-    origin: "static",
-    level,
-  };
+  });
 }

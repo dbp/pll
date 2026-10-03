@@ -5,48 +5,15 @@
  * `pnpm run build` so dist/desktop/pyodideWorker.js exists.
  */
 import { createServer } from "node:http";
-import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
-import { Worker } from "node:worker_threads";
+import { expect, passed } from "./lib/check.mjs";
+import { importSource } from "./lib/bundle.mjs";
+import { INDEX_URL } from "./lib/pyodide.mjs";
+import { startWorker, talk } from "./lib/worker.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
-const WORKER_PATH = resolve(ROOT, "dist", "desktop", "pyodideWorker.js");
-const INDEX_URL = resolve(ROOT, "node_modules", "pyodide");
-
-const STDIN_SAB_BYTES = 64 * 1024;
-const STDIN_STATE_INDEX = 0;
-const STDIN_LENGTH_INDEX = 1;
-const STDIN_PAYLOAD_OFFSET = 8;
-const STDIN_STATE_LINE = 1;
-const STDIN_STATE_EOF = 2;
+// The real layout, so the test cannot agree with itself and not the worker.
+const { STDIN_SAB_BYTES, writeStdinLine } = await importSource('export * from "./src/common/stdinBuffer";\n');
 
 const CARS_CSV = "name,mpg\nvw,29\nhonda,33\nford,18\n";
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
-
-function writeStdinLine(sab, line) {
-  const state = new Int32Array(sab);
-  if (line === null) {
-    Atomics.store(state, STDIN_STATE_INDEX, STDIN_STATE_EOF);
-    Atomics.notify(state, STDIN_STATE_INDEX);
-    return;
-  }
-  const encoded = new TextEncoder().encode(line);
-  const max = sab.byteLength - STDIN_PAYLOAD_OFFSET;
-  const n = Math.min(encoded.length, max);
-  new Uint8Array(sab, STDIN_PAYLOAD_OFFSET).set(encoded.subarray(0, n));
-  Atomics.store(state, STDIN_LENGTH_INDEX, n);
-  Atomics.store(state, STDIN_STATE_INDEX, STDIN_STATE_LINE);
-  Atomics.notify(state, STDIN_STATE_INDEX);
-}
 
 function startCsvServer() {
   return new Promise((resolveServer) => {
@@ -67,67 +34,14 @@ function startCsvServer() {
   });
 }
 
-function talk(worker, stdinLines) {
-  let nextId = 1;
-  const pending = new Map();
-  const displays = [];
-  let stdinCalls = 0;
-
-  worker.on("message", (msg) => {
-    if (msg.type === "display") {
-      displays.push(msg.payload);
-      return;
-    }
-    if (msg.type === "stdinRequest") {
-      stdinCalls += 1;
-      writeStdinLine(stdinLines.sab, stdinLines.queue.shift() ?? null);
-      return;
-    }
-    const p = pending.get(msg.id);
-    if (!p) {
-      return;
-    }
-    pending.delete(msg.id);
-    if (msg.type === "error") {
-      p.reject(new Error(msg.message));
-    } else {
-      p.resolve(msg);
-    }
-  });
-
-  worker.on("error", (err) => {
-    for (const p of pending.values()) {
-      p.reject(err);
-    }
-    pending.clear();
-  });
-
-  return {
-    displays,
-    get stdinCalls() {
-      return stdinCalls;
-    },
-    send(payload) {
-      const id = nextId++;
-      const promise = new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
-      });
-      worker.postMessage({ id, ...payload });
-      return promise;
-    },
-  };
-}
-
 async function main() {
-  if (!existsSync(WORKER_PATH)) {
-    console.error(`Missing ${WORKER_PATH}. Run \`pnpm run build\` first.`);
-    process.exit(1);
-  }
 
   const sab = new SharedArrayBuffer(STDIN_SAB_BYTES);
-  const stdinLines = { sab, queue: [] };
-  const worker = new Worker(WORKER_PATH);
-  const session = talk(worker, stdinLines);
+  const stdinLines = { queue: [] };
+  const worker = startWorker();
+  const session = talk(worker, {
+    onStdinRequest: () => writeStdinLine(sab, stdinLines.queue.shift() ?? null),
+  });
 
   try {
     console.log("\n[1] desktop worker init");
@@ -259,12 +173,84 @@ async function main() {
       pandasFile !== undefined && pandasFile.contents.includes("honda"),
       "efficient_pandas.csv should contain honda",
     );
+
+    console.log("\n[5] a reactor handler's print reaches the host");
+    {
+      await session.send({
+        type: "runFile",
+        code: [
+          "def tick(n):",
+          '    print("tick", n)',
+          "    return n + 1",
+          "def draw(n):",
+          '    return circle(5, "solid", "red")',
+          "r = reactor(init=0, on_tick=tick, to_draw=draw)",
+          "r.interact()",
+        ].join("\n"),
+        fileName: "rx.py",
+        sessionKey: "desktop-reactor",
+        level: "raw",
+      });
+      const id = session.displays.find((d) => d.type === "reactor")?.id;
+      const before = session.displays.length;
+      const step = await session.send({ type: "reactorStep", reactorId: id, event: '{"kind":"tick"}' });
+      expect(step.result.ok === true, "the tick should succeed");
+      const printed = session.displays
+        .slice(before)
+        .filter((d) => d.type === "stdout")
+        .map((d) => d.text)
+        .join("");
+      expect(printed === "tick 0\n", `the handler's print is streamed: ${JSON.stringify(printed)}`);
+      console.log(`    streamed ${JSON.stringify(printed)}`);
+    }
+    console.log("\n[6] an ended session's names are gone, and only its");
+    {
+      const define = (sessionKey) =>
+        session.send({ type: "runFile", code: "kept = 41\n", fileName: "s.py", sessionKey, level: "raw" });
+      const read = (sessionKey) =>
+        session.send({ type: "replEval", code: "kept + 1", sessionKey, level: "raw" });
+      await define("ends");
+      await define("stays");
+      expect((await read("ends")).result.result_repr === "42", "defined in the session to be ended");
+      await session.send({ type: "endSession", sessionKey: "ends" });
+      const after = (await read("ends")).result;
+      expect(after.error_type === "NameError", `gone once it ends: ${after.error_type} ${after.result_repr}`);
+      expect((await read("stays")).result.result_repr === "42", "another session's are untouched");
+      console.log(`    after ending: ${after.error_type}`);
+    }
+    console.log("\n[7] os._exit ends the program, not Python; a fatal error says Python is finished");
+    {
+      const run = (code, sessionKey = "exits") =>
+        session.send({ type: "runFile", code, fileName: "x.py", sessionKey, level: "raw" });
+      const exited = await run('import os\nprint("before")\nos._exit(0)\nprint("after")\n');
+      expect(exited.result.ok && exited.result.stdout === "before\n", `the program ends there: ${JSON.stringify(exited.result.stdout)}`);
+      const aborted = await run("import os\nos.abort()\n");
+      expect(aborted.result.ok, "so does os.abort()");
+      // The status reaches the host, and a message is shown, as Python shows it.
+      const coded = await run("import sys\nsys.exit(3)\n");
+      expect(coded.result.exit_code === 3, `the status is carried: ${coded.result.exit_code}`);
+      const said = await run('import sys\nsys.exit("no data file")\n');
+      expect(said.result.exit_code === 1 && said.result.stderr === "no data file\n",
+        `a message is written to stderr: ${JSON.stringify(said.result.stderr)} ${said.result.exit_code}`);
+      const finished = await run('print("done")\n');
+      expect(finished.result.exit_code == null, `a program that just finishes has none: ${finished.result.exit_code}`);
+      const after = await run('print("still here")\n', "another");
+      expect(after.result.stdout === "still here\n", `and Python carries on: ${JSON.stringify(after.result.stdout)}`);
+      // The real abort, which nothing can survive: the reply says so, so the
+      // host can start a new Python rather than fail every run after this.
+      const fatal = await run("import posix\nposix.abort()\n").then(
+        () => null,
+        (err) => err.reply,
+      );
+      expect(fatal?.finished === true, `a fatal error is marked finished: ${JSON.stringify(fatal)}`);
+      console.log(`    os._exit and os.abort end the program; posix.abort -> finished=${fatal?.finished}`);
+    }
   } finally {
     await worker.terminate();
   }
 
-  console.log(`\nsmoke-desktop-parity: ${ok ? "ok" : "FAILED"}`);
-  if (!ok) {
+  console.log(`\nsmoke-desktop-parity: ${passed() ? "ok" : "FAILED"}`);
+  if (!passed()) {
     process.exit(1);
   }
 }

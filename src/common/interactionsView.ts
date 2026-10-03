@@ -3,6 +3,7 @@ import type { SerializedFinding } from "./analyzers/findingLocation";
 import type { ExamplarEntry } from "./examplarPhase";
 import type { ExecutionImageChunk, ExecutionTableChunk, ExecutionTestReportChunk } from "./types";
 import type { UniverseStatus } from "./universeClient";
+import { showInfo } from "./notify";
 
 /**
  * The PLL interactions view replaces both the pseudoterminal REPL and the
@@ -116,10 +117,6 @@ export type PromptKind = "primary" | "continuation";
 /* Host-side message types                                         */
 /* -------------------------------------------------------------- */
 
-interface HostMessageAppend {
-  type: "append";
-  entry: Entry;
-}
 interface HostMessageAppendMany {
   type: "appendMany";
   entries: Entry[];
@@ -169,7 +166,6 @@ interface HostMessageFocus {
   type: "focusInput";
 }
 type HostToView =
-  | HostMessageAppend
   | HostMessageAppendMany
   | HostMessageReactorPatch
   | HostMessageClear
@@ -180,6 +176,71 @@ type HostToView =
   | HostMessageEmpty
   | HostMessageTitle
   | HostMessageFocus;
+
+/* -------------------------------------------------------------- */
+/* View-side message types                                         */
+/* -------------------------------------------------------------- */
+
+type ViewToHost =
+  | { type: "ready" }
+  | { type: "submit"; code: string }
+  | { type: "interrupt" }
+  | { type: "clearRequested" }
+  /** play / pause / step / back / reset / seek on a reactor card. */
+  | { type: "reactorControl"; id: string; action: string; index?: number }
+  /** A key press or mouse event over a reactor's picture. */
+  | { type: "reactorInput"; id: string; event: object }
+  | { type: "openLocation"; fileName: string; line: number; column: number | null }
+  | { type: "saveSvg"; svg: string; source?: string }
+  | { type: "saveCsv"; csv: string; source?: string };
+
+/**
+ * A message from the webview as one of `ViewToHost`, or null when it is not
+ * one. The webview is PLL's own script, but what crosses `postMessage` is
+ * only data, so each field is checked rather than trusted.
+ */
+function viewMessage(msg: unknown): ViewToHost | null {
+  if (!msg || typeof msg !== "object") return null;
+  const m = msg as Record<string, unknown>;
+  const text = (value: unknown) => typeof value === "string";
+  const optional = (value: unknown, kind: "string" | "number") =>
+    value === undefined || typeof value === kind;
+  switch (m.type) {
+    case "ready":
+    case "interrupt":
+    case "clearRequested":
+      return { type: m.type };
+    case "submit":
+      return text(m.code) ? { type: "submit", code: m.code as string } : null;
+    case "reactorControl":
+      return text(m.id) && text(m.action) && optional(m.index, "number")
+        ? { type: "reactorControl", id: m.id as string, action: m.action as string, index: m.index as number | undefined }
+        : null;
+    case "reactorInput":
+      return text(m.id) && m.event !== null && typeof m.event === "object"
+        ? { type: "reactorInput", id: m.id as string, event: m.event as object }
+        : null;
+    case "openLocation":
+      return text(m.fileName) && typeof m.line === "number"
+        ? {
+            type: "openLocation",
+            fileName: m.fileName as string,
+            line: m.line,
+            column: typeof m.column === "number" ? m.column : null,
+          }
+        : null;
+    case "saveSvg":
+      return text(m.svg) && optional(m.source, "string")
+        ? { type: "saveSvg", svg: m.svg as string, source: m.source as string | undefined }
+        : null;
+    case "saveCsv":
+      return text(m.csv) && optional(m.source, "string")
+        ? { type: "saveCsv", csv: m.csv as string, source: m.source as string | undefined }
+        : null;
+    default:
+      return null;
+  }
+}
 
 export interface SessionDisplayState {
   /** Header title shown at the top of the view (typically the file name). */
@@ -204,6 +265,17 @@ export interface InteractionsHandlers {
   onReactorControl(id: string, action: string, index?: number): void;
   /** A key press or mouse event over a reactor's picture. */
   onReactorInput(id: string, event: unknown): void;
+  /**
+   * A click on a location: `fileName` as the entry shows it, a 1-based
+   * line, a 0-based column (or null). Resolved by the session manager,
+   * which knows whose output the entry is.
+   */
+  onOpenLocation(fileName: string, line: number, column: number | null): void;
+  /**
+   * The webview has (re)loaded and has nothing on it: show it the visible
+   * session with `showSession`, or return false when there is none.
+   */
+  onViewReady(): boolean;
 }
 
 /**
@@ -229,23 +301,11 @@ export class InteractionsView
   private webviewReady = false;
   private readonly disposables: vscode.Disposable[] = [];
 
-  // Mirror of what is currently displayed (always the active session, or
-  // an "empty" placeholder when no Python file is active). The session
-  // manager keeps the per-session authoritative state; this is just what
-  // the view will show on reload.
+  // Only whether a session is showing. What it shows is the session
+  // manager's, which replays it when the webview (re)loads - so there is no
+  // copy here to keep in step.
   private mode: "session" | "empty" = "empty";
-  private emptyMessage = "Open a Python file to start an interactions session.";
-  private title = "";
-  private entries: Entry[] = [];
-  private prompt: PromptKind = "primary";
-  private busy = false;
-  private status: string | undefined = undefined;
-  private awaitingInput = false;
-  private inputPrefix = "";
-
-  // Map of display fileName -> document URI, used to honor click-to-open
-  // requests coming from the webview's error-location links.
-  private readonly fileMap = new Map<string, vscode.Uri>();
+  private readonly emptyMessage = "Open a Python file to start an interactions session.";
 
   // Appends waiting to be sent as one `appendMany`.
   private pendingAppends: Entry[] = [];
@@ -260,12 +320,6 @@ export class InteractionsView
     this.handlers = handlers;
   }
 
-  /** Tell the view that `displayName` (as it appears in error locations)
-   *  corresponds to the given URI; clicking such a link will open it. */
-  registerFile(displayName: string, uri: vscode.Uri): void {
-    this.fileMap.set(displayName, uri);
-  }
-
   /* -------- Session swapping -------- */
 
   /**
@@ -277,20 +331,29 @@ export class InteractionsView
     this.mode = "session";
     // The replay carries every entry, so anything queued is already in it.
     this.dropPendingAppends();
-    this.title = state.title;
-    this.entries = [...state.entries];
-    this.prompt = state.prompt;
-    this.busy = state.busy;
-    this.status = state.status;
-    this.awaitingInput = state.awaitingInput ?? false;
-    this.inputPrefix = state.inputPrefix ?? "";
-    this.post(this.replayMessage());
+    this.post({
+      type: "replay",
+      mode: "session",
+      title: state.title,
+      entries: [...state.entries],
+      prompt: state.prompt,
+      busy: state.busy,
+      status: state.status,
+      awaitingInput: state.awaitingInput ?? false,
+      inputPrefix: state.inputPrefix ?? "",
+    });
+  }
+
+  /** Show no session: the one that was showing has ended. */
+  showEmpty(): void {
+    this.mode = "empty";
+    this.dropPendingAppends();
+    this.post({ type: "empty", message: this.emptyMessage });
   }
 
   /** Update the header title without otherwise changing state. */
   setTitle(title: string): void {
     if (this.mode !== "session") return;
-    this.title = title;
     this.post({ type: "title", title });
   }
 
@@ -301,7 +364,6 @@ export class InteractionsView
 
   append(entry: Entry): void {
     if (this.mode !== "session") return;
-    this.entries.push(entry);
     this.pendingAppends.push(entry);
     if (this.appendTimer === null) {
       this.appendTimer = setTimeout(() => this.flushAppends(), APPEND_FLUSH_MS);
@@ -315,18 +377,11 @@ export class InteractionsView
    */
   updateReactor(id: string, patch: ReactorPatch): void {
     if (this.mode !== "session") return;
-    for (const entry of this.entries) {
-      if (entry.kind === "reactor" && entry.id === id) {
-        Object.assign(entry, patch);
-        break;
-      }
-    }
     this.post({ type: "reactorPatch", id, patch });
   }
 
   clear(): void {
     if (this.mode !== "session") return;
-    this.entries = [];
     // Queued appends belong to entries that no longer exist; sending them
     // after a clear would resurrect them.
     this.dropPendingAppends();
@@ -335,18 +390,11 @@ export class InteractionsView
 
   setPrompt(kind: PromptKind): void {
     if (this.mode !== "session") return;
-    this.prompt = kind;
     this.post({ type: "prompt", kind });
   }
 
   setBusy(busy: boolean, status?: string): void {
     if (this.mode !== "session") return;
-    this.busy = busy;
-    this.status = status;
-    if (!busy) {
-      this.awaitingInput = false;
-      this.inputPrefix = "";
-    }
     this.post({ type: "busy", busy, status });
     if (!busy) {
       this.post({ type: "awaitingInput", awaiting: false });
@@ -360,13 +408,7 @@ export class InteractionsView
    */
   setAwaitingInput(awaiting: boolean, prefix?: string): void {
     if (this.mode !== "session") return;
-    this.awaitingInput = awaiting;
-    this.inputPrefix = awaiting ? (prefix ?? "") : "";
-    this.post({
-      type: "awaitingInput",
-      awaiting,
-      prefix: this.inputPrefix,
-    });
+    this.post({ type: "awaitingInput", awaiting, prefix: awaiting ? (prefix ?? "") : "" });
   }
 
   /** Reveal the view (creating it if necessary). */
@@ -408,34 +450,19 @@ export class InteractionsView
   }
 
   private handleMessage(msg: unknown): void {
-    if (!msg || typeof msg !== "object") return;
-    const m = msg as {
-      type?: string;
-      code?: string;
-      svg?: string;
-      csv?: string;
-      source?: string;
-      fileName?: string;
-      line?: number;
-      column?: number;
-      id?: string;
-      action?: string;
-      index?: number;
-      event?: unknown;
-    };
+    const m = viewMessage(msg);
+    if (m === null) return;
     switch (m.type) {
       case "ready":
         this.webviewReady = true;
-        if (this.mode === "session") {
-          this.post(this.replayMessage());
-        } else {
-          this.post({ type: "empty", message: this.emptyMessage });
+        // A fresh webview has nothing on it; the session manager says what
+        // it should show.
+        if (!this.handlers?.onViewReady()) {
+          this.showEmpty();
         }
         break;
       case "submit":
-        if (typeof m.code === "string" && this.handlers) {
-          this.handlers.onSubmit(m.code);
-        }
+        this.handlers?.onSubmit(m.code);
         break;
       case "interrupt":
         this.handlers?.onInterrupt();
@@ -444,47 +471,21 @@ export class InteractionsView
         this.handlers?.onClearRequested();
         break;
       case "reactorControl":
-        if (typeof m.id === "string" && typeof m.action === "string") {
-          this.handlers?.onReactorControl(m.id, m.action, m.index);
-        }
+        this.handlers?.onReactorControl(m.id, m.action, m.index);
         break;
       case "reactorInput":
-        if (typeof m.id === "string" && m.event && typeof m.event === "object") {
-          this.handlers?.onReactorInput(m.id, m.event);
-        }
+        this.handlers?.onReactorInput(m.id, m.event);
         break;
       case "openLocation":
-        if (typeof m.fileName === "string" && typeof m.line === "number") {
-          void this.handleOpenLocation(m.fileName, m.line, m.column);
-        }
+        this.handlers?.onOpenLocation(m.fileName, m.line, m.column);
         break;
       case "saveSvg":
-        if (typeof m.svg === "string") {
-          void this.saveText("image", "svg", m.svg, m.source);
-        }
+        void this.saveText("image", "svg", m.svg, m.source);
         break;
       case "saveCsv":
-        if (typeof m.csv === "string") {
-          void this.saveText("table", "csv", m.csv, m.source);
-        }
+        void this.saveText("table", "csv", m.csv, m.source);
         break;
     }
-  }
-
-  private async handleOpenLocation(
-    fileName: string,
-    line: number,
-    column: number | undefined,
-  ): Promise<void> {
-    const uri = this.fileMap.get(fileName);
-    if (!uri) return;
-    const lineIndex = Math.max(0, line - 1);
-    const colIndex = Math.max(0, (column ?? 1) - 1);
-    const position = new vscode.Position(lineIndex, colIndex);
-    await vscode.window.showTextDocument(uri, {
-      selection: new vscode.Range(position, position),
-      preserveFocus: false,
-    });
   }
 
   /** Offer a save dialog for generated text (image SVG / table CSV). */
@@ -504,25 +505,10 @@ export class InteractionsView
     });
     if (!target) return;
     await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(contents));
-    vscode.window.showInformationMessage(`Saved ${what} to ${target.fsPath}`);
+    void showInfo(`saved the ${what} to ${target.fsPath}.`);
   }
 
   /* -------- Internals -------- */
-
-  /** Everything the view needs to render the current session from scratch. */
-  private replayMessage(): HostMessageReplay {
-    return {
-      type: "replay",
-      mode: "session",
-      title: this.title,
-      entries: this.entries,
-      prompt: this.prompt,
-      busy: this.busy,
-      status: this.status,
-      awaitingInput: this.awaitingInput,
-      inputPrefix: this.inputPrefix,
-    };
-  }
 
   private dropPendingAppends(): void {
     this.pendingAppends = [];
@@ -613,15 +599,12 @@ export class InteractionsView
 /* -------- Helpers -------- */
 
 /**
- * Convert an AnalysisFinding into the shape the webview renders. Exposed
- * for callers (e.g. the session manager) that need to manufacture
- * FindingEntry objects directly without going through `appendFinding`.
+ * The nonce that lets the view's own script run under its CSP. It has to be
+ * unguessable - anything that could predict it could run a script of its
+ * own in the view - so it comes from the platform's cryptographic source,
+ * which both hosts have, rather than `Math.random`.
  */
 function makeNonce(): string {
-  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let out = "";
-  for (let i = 0; i < 32; i++) {
-    out += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return out;
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }

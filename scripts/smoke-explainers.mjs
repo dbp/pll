@@ -5,26 +5,19 @@
  * This bundles the relevant TS modules with esbuild on the fly so we don't
  * need a separate build step.
  */
-import { build } from "esbuild";
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { expect, passed } from "./lib/check.mjs";
+import { importSource, ROOT } from "./lib/bundle.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
-const tmp = mkdtempSync(join(ROOT, ".smoke-"));
-const entry = join(tmp, "entry.mjs");
-
-writeFileSync(
-  entry,
-  `
-import { parseLevel, levelHeaderProblem } from "../src/common/level";
-import { levelHeaderFinding } from "../src/common/analyzers/levelHeaderFinding";
-import { explainSyntaxError } from "../src/common/errors/syntaxExplainer";
-import { enrichStaticFindings } from "../src/common/analyzers/static/registry";
-import { formatFriendlyError } from "../src/common/errorFormatter";
-import { findRuntimeFinding } from "../src/common/analyzers/registry";
-import { LIBRARY_SIGNATURES } from "../src/common/errors/libraryFacts";
+const mod = await importSource(`
+import { parseLevel, levelHeaderProblem } from "./src/common/level";
+import { levelHeaderFinding } from "./src/common/analyzers/levelHeaderFinding";
+import { explainSyntaxError } from "./src/common/errors/syntaxExplainer";
+import { enrichStaticFindings } from "./src/common/analyzers/static/registry";
+import { formatFriendlyError } from "./src/common/errorFormatter";
+import { findRuntimeFinding } from "./src/common/analyzers/registry";
+import { LIBRARY_SIGNATURES } from "./src/common/errors/libraryFacts";
 
 export {
   parseLevel,
@@ -36,21 +29,7 @@ export {
   findRuntimeFinding,
   LIBRARY_SIGNATURES,
 };
-`,
-);
-
-await build({
-  entryPoints: [entry],
-  bundle: true,
-  platform: "node",
-  format: "esm",
-  outfile: join(tmp, "out.mjs"),
-  loader: { ".py": "text" },
-  external: ["vscode"],
-  absWorkingDir: ROOT,
-});
-
-const mod = await import(pathToFileURL(join(tmp, "out.mjs")).href);
+`);
 
 /**
  * A `PythonError`, as `pythonErrorFrom` builds one from `_pll_error_info`.
@@ -96,14 +75,6 @@ function pyErrorLine(errorLine, frames, options = {}) {
     (/name '(\w+)' is not defined/.exec(message) ?? /cannot access (?:free|local) variable '(\w+)'/.exec(message));
   if (named && facts.name === undefined) facts.name = named[1];
   return pyError(type, message, frames, { ...options, facts });
-}
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
 }
 
 console.log("\n[parseLevel]");
@@ -500,13 +471,26 @@ console.log("[a #level line that names nothing valid is an error, not silence]")
     "# name\n# date\n\n#level intermediate\nx = 1\n",
   );
   expect(afterSeveral?.line === 4, `found past several comments, got ${afterSeveral?.line}`);
-  // Only the opening comments are searched. A `#level` line further down
-  // could be inside a docstring, and erroring on a string literal would be
-  // worse than missing a misplaced header.
+  // Below code too, anywhere in the file - but only on a line that is a
+  // comment. A `#level` line inside a docstring is text, and erroring on a
+  // string literal would be worse than missing a misplaced header.
   expect(
     mod.levelHeaderProblem('x = 1\n"""\n#level beginner\n"""\n') === null,
     "a #level inside a docstring is not a misplaced header",
   );
+  const lines = (code) => mod.levelHeaderProblem(code)?.line ?? null;
+  const underCode = mod.levelHeaderProblem("x = 1\n#level beginner\n");
+  expect(underCode?.line === 2, `a header under code is reported: ${underCode?.line}`);
+  expect(/above the code/.test(underCode?.howToFix[0] ?? ""), `and moved above it: ${underCode?.howToFix[0]}`);
+  expect(lines('"""Lab 1."""\n#level beginner\n') === 2, "under a module docstring");
+  expect(lines("x = 1  # a\n'''\n#level beginner\n'''\n#level beginner\n") === 5,
+    "past a docstring, at the line that is a comment");
+  expect(lines("x = '#level beginner'\n") === null, "not inside a one-line string");
+  expect(lines('s = """\n#level beginner"""\n') === null, "not in a string that closes on that line");
+  expect(lines('x = "a\\"b"\n#level beginner\n') === 2, "an escaped quote does not open a string");
+  expect(lines('x = 1  # """\n#level beginner\n') === 2, "quotes in a comment do not either");
+  expect(lines("x = 1\n# level 2 of the game\n") === null, "an ordinary comment further down is not one");
+  expect(lines("#level beginner\nx = 1\n#level advanced\n") === null, "a file with a header on top is fine");
   expect(
     mod.levelHeaderProblem("# just a note\n# another\nx = 1\n") === null,
     "comments with no header at all stay silent",
@@ -919,7 +903,6 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     !/no column named/.test(notPandas.headline),
     `a dict in a file named pandas.py is not a DataFrame: ${notPandas.headline}`,
   );
-
 
   // -- a class passed where one of its instances was wanted --------------
   const classItself = finding(
@@ -1351,8 +1334,9 @@ console.log("[annotations: the function wording only where there is a function]"
   }
 
   // Nothing is called `image`, and `row` is a method of a table rather
-  // than a function that makes one - so neither gets told it is one.
-  for (const [written, type] of [["image", "Image"], ["row", "Row"], ["string", "str"]]) {
+  // than a function that makes one - so neither gets told it is one. A row
+  // is a `dict`: `Row` is not a name a student's program has.
+  for (const [written, type] of [["image", "Image"], ["row", "dict"], ["string", "str"]]) {
     const found = annotation(written);
     expect(
       found.headline === `\`${written}\` is not a type Python knows.`,
@@ -1699,6 +1683,25 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
     `the element is described: ${item.headline}`,
   );
 
+  // A dict's key in the quotes its value is described in, not Python's.
+  const keyed = (element, value) =>
+    finding(
+      pyErrorLine(
+        `TypeCheckError: ${element} of argument "d" (dict) is not an instance of int`,
+        [["student.py", 4], ["student.py", 2, "total"]],
+        { facts: value ? { elementValue: value } : {} },
+      ),
+      "def total(d: dict[str, int]) -> int:\n    return 0\n",
+    );
+  const valueOf = keyed("value of key 'a'", 'the string "1"');
+  expect(/the value for key "a" is the string "1"\.$/.test(valueOf.headline), `one kind of quote: ${valueOf.headline}`);
+  expect(valueOf.howToFix.some((l) => l.includes('key "a"')), `in the advice too: ${JSON.stringify(valueOf.howToFix)}`);
+  expect(/key "b"/.test(keyed("key 'b'").headline), `a key itself: ${keyed("key 'b'").headline}`);
+  // Not a string, or quoted the way it is because of what is in it: as Python wrote it.
+  expect(/key 1 /.test(keyed("value of key 1").headline), `a number key: ${keyed("value of key 1").headline}`);
+  expect(keyed(`value of key 'say "hi"'`).headline.includes(`key 'say "hi"'`),
+    `a key with a quote in it: ${keyed(`value of key 'say "hi"'`).headline}`);
+
   // mut-local-not-field: the line reads the field it meant to change.
   const field = finding(
     pyErrorLine(
@@ -1893,9 +1896,7 @@ console.log("[fourth pass: every replayed case read for the same patterns]");
   console.log("    suggestions, lengths, counts, empty classes, swaps and expressions from the program");
 }
 
-rmSync(tmp, { recursive: true, force: true });
-
-if (!ok) {
+if (!passed()) {
   console.log("\nFAILED");
   process.exit(1);
 }

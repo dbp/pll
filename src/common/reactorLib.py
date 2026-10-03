@@ -13,6 +13,7 @@
 # event. A loop in here would hold the worker and the whole exec chain for as
 # long as the animation ran, which is the failure mode `Stop` exists for.
 
+import contextlib as _rx_contextlib
 import json as _rx_json
 
 _PLL_DEFAULT_TICK_RATE = 1.0 / 28.0
@@ -437,10 +438,16 @@ def _pll_reactor_step(rid, event_json):
     running = _pll_reactors.get(rid)
     if running is None:
         return {"ok": False, "gone": True}
+    # What the handlers print goes where the program's own output goes. Not
+    # redirected, it went to the worker's console, and a student debugging
+    # `on_tick` with `print` saw nothing at all.
+    stdout = _PllStream("stdout")
+    stderr = _PllStream("stderr")
     try:
         event = _rx_json.loads(event_json)
-        computed = running.step(event)
-        view = _pll_reactor_view(rid, running)
+        with _rx_contextlib.redirect_stdout(stdout), _rx_contextlib.redirect_stderr(stderr):
+            computed = running.step(event)
+            view = _pll_reactor_view(rid, running)
         outgoing = []
         for message in running.current.outgoing() if computed else ():
             try:

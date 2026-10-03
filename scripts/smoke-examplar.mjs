@@ -10,44 +10,17 @@
  * The bundle primitives themselves need Pyodide and are covered by
  * `smoke-examplar-build.mjs`.
  */
-import { build } from "esbuild";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
+import { join } from "node:path";
+import { expect, passed } from "./lib/check.mjs";
+import { importSource } from "./lib/bundle.mjs";
 
 async function load() {
-  const tmp = mkdtempSync(join(ROOT, ".smoke-"));
-  const entry = join(tmp, "entry.mjs");
-  const { writeFileSync } = await import("node:fs");
-  writeFileSync(
-    entry,
-    `export * from "../src/common/examplarSource";
-export { createFileStore } from "../src/cli/bundleStore";
-`,
-  );
-  await build({
-    entryPoints: [entry],
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    outfile: join(tmp, "out.mjs"),
-    absWorkingDir: ROOT,
-  });
-  const mod = await import(pathToFileURL(join(tmp, "out.mjs")).href);
-  rmSync(tmp, { recursive: true, force: true });
+  const mod = await importSource(`export * from "./src/common/examplarSource";
+export { createFileStore } from "./src/cli/bundleStore";
+`);
   return mod;
 }
 
@@ -220,7 +193,7 @@ async function main() {
   }
 
   rmSync(work, { recursive: true, force: true });
-  if (!ok) {
+  if (!passed()) {
     console.error("\nsmoke-examplar: FAILED");
     process.exit(1);
   }

@@ -199,3 +199,56 @@ export function selectWritebackFiles(files: WorkspaceFile[]): WorkspaceFile[] {
   }
   return selected;
 }
+
+/**
+ * A script's folder, as a host reaches it: the editor through
+ * `vscode.workspace.fs`, the command line through Node's. Everything else
+ * about sibling files - which, how many, how big - is decided here, so
+ * `open("data.csv")` sees the same files in both.
+ */
+export interface SiblingFolder {
+  /** The names of the plain files in it. */
+  files(): Promise<string[]>;
+  read(name: string): Promise<string | Uint8Array>;
+  write(name: string, text: string): Promise<void>;
+}
+
+/** The files a program in `folder` gets to read, within the limits. */
+export async function readSiblingFiles(folder: SiblingFolder): Promise<WorkspaceFile[]> {
+  let names: string[];
+  try {
+    names = await folder.files();
+  } catch {
+    return [];
+  }
+  const candidates: MountCandidate[] = [];
+  for (const name of names) {
+    if (!isMountableName(name)) {
+      continue;
+    }
+    try {
+      candidates.push({ name, contents: await folder.read(name) });
+    } catch {
+      /* skip unreadable files */
+    }
+  }
+  return selectMountableFiles(candidates);
+}
+
+/** Write back the files a run changed or made. Returns their names. */
+export async function writeSiblingFiles(
+  folder: SiblingFolder,
+  files: WorkspaceFile[],
+): Promise<string[]> {
+  const written: string[] = [];
+  for (const file of selectWritebackFiles(files)) {
+    try {
+      // `selectWritebackFiles` keeps text only: no picture is written back.
+      await folder.write(file.name, file.contents as string);
+      written.push(file.name);
+    } catch {
+      /* skip files the host refuses to write */
+    }
+  }
+  return written;
+}

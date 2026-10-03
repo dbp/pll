@@ -4,8 +4,9 @@
  * build time - so the libraries stay editable as real Python rather than as
  * template literals.
  *
- * Loaded once, in this order, into one interpreter (see `workerHost.ts`):
- *   1. PYODIDE_BOOTSTRAP_PY  - running files, prompt lines and tests; the
+ * Loaded once, in this order, into one interpreter (see `installPll`):
+ *   1. PLL_BOOTSTRAP_PY      - the files in `bootstrap/`, in its order:
+ *                              running files, prompt lines and tests; the
  *                              static checks; describing errors
  *   2. PLL_IMAGE_LIB_PY      - images
  *   3. PLL_TABLE_LIB_PY      - tables and charts
@@ -18,15 +19,48 @@
  * The bootstrap loads first and depends on none of the libraries: it
  * duck-types `_pll_image_data` / `_pll_table_data` when it displays a value,
  * and looks up the few library functions it calls when it calls them.
+ *
+ * The host calls these entry points, each returning JSON-friendly data:
+ *
+ *   _pll_run_file(code, filename, session_key, level)       running.py
+ *   _pll_repl_eval(code, session_key, level)                running.py
+ *   _pll_repl_check(source)                                 running.py
+ *   _pll_has_tests(code)                                    tests.py
+ *   _pll_run_tests(code, filename, level)                   tests.py
+ *   _pll_static_analyze(code, level, filename, session_key) staticAnalysis.py
  */
 
-import bootstrapSource from "./pyodideBootstrap.py";
+import typeCheckingSource from "./bootstrap/typeChecking.py";
+import errorInfoSource from "./bootstrap/errorInfo.py";
+import sessionsSource from "./bootstrap/sessions.py";
+import stopSource from "./bootstrap/stop.py";
+import compileSource from "./bootstrap/compile.py";
+import libraryHelpersSource from "./bootstrap/libraryHelpers.py";
+import runningSource from "./bootstrap/running.py";
+import testsSource from "./bootstrap/tests.py";
+import staticAnalysisSource from "./bootstrap/staticAnalysis.py";
 import imageLibSource from "./imageLib.py";
 import tableLibSource from "./tableLib.py";
 import reactorLibSource from "./reactorLib.py";
 import examplarLibSource from "./examplarLib.py";
 
-export const PYODIDE_BOOTSTRAP_PY = bootstrapSource;
+/**
+ * The bootstrap, one file per concern. They share one set of globals, so a
+ * function may call one defined in any of them; the order matters only for
+ * what runs as a file loads - `errorInfo` reads the vendor directory from
+ * `typeChecking`, and `tests` decorates with `running`'s `_pll_stoppable`.
+ */
+export const PLL_BOOTSTRAP_PY: ReadonlyArray<string> = [
+  typeCheckingSource,
+  errorInfoSource,
+  sessionsSource,
+  stopSource,
+  compileSource,
+  libraryHelpersSource,
+  runningSource,
+  testsSource,
+  staticAnalysisSource,
+];
 export const PLL_IMAGE_LIB_PY = imageLibSource;
 export const PLL_TABLE_LIB_PY = tableLibSource;
 export const PLL_REACTOR_LIB_PY = reactorLibSource;

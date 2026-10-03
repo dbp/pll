@@ -35,20 +35,17 @@ import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { openFile } from "./webbench.mjs";
+import { expect, passed } from "./lib/check.mjs";
+import { ROOT } from "./lib/bundle.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
 const CLI = resolve(ROOT, "dist-cli", "cli.cjs");
 const PORT = process.env.VSCODE_WEB_PORT || "3019";
 const BUNDLE_PORT = process.env.PLL_BUNDLE_PORT || "8099";
 
 const SHOTS = process.env.PLL_SHOTS || null;
 const panel = (p) => p.frameLocator("iframe.webview").frameLocator("iframe#active-frame");
-let ok = true;
-const expect = (c, m) => { if (!c) { console.error("  FAIL: " + m); ok = false; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function requireFreePort(port, what) {
@@ -424,9 +421,9 @@ async function runAndCards(name, timeout = 150_000) {
   console.log("11 it holds up its own function's coverage, and only its own");
 }
 
-console.log(ok ? "\nsmoke-web-examplar: ok" : "\nsmoke-web-examplar: FAILED");
+console.log(passed() ? "\nsmoke-web-examplar: ok" : "\nsmoke-web-examplar: FAILED");
 await browser.close();
 await new Promise((res) => bundleSrv.server.close(res));
 try { process.kill(-web.pid, "SIGTERM"); } catch { web.kill("SIGTERM"); }
 rmSync(tmp, { recursive: true, force: true });
-process.exit(ok ? 0 : 1);
+process.exit(passed() ? 0 : 1);

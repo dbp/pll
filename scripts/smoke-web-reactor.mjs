@@ -15,6 +15,7 @@
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { openFile } from "./webbench.mjs";
+import { expect, passed } from "./lib/check.mjs";
 const PORT = process.env.VSCODE_WEB_PORT || "3017";
 /**
  * Refuse to start if the port is already taken. `vscode-test-web` prints
@@ -51,8 +52,6 @@ function startServer() {
   });
 }
 const panel = (p) => p.frameLocator("iframe.webview").frameLocator("iframe#active-frame");
-let ok = true;
-const expect = (c, m) => { if (!c) { console.error("  FAIL: " + m); ok = false; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // `|| null`, not `??`: an empty VSCODE_WEB_URL means "start one".
@@ -182,9 +181,9 @@ await input.press("Enter");
 await panel(page).locator("#stream").getByText("4", { exact: true }).first().waitFor({ timeout: 30_000 });
 console.log("10 the prompt still works alongside running reactors");
 
-console.log(ok ? "\nsmoke-web-reactor: ok" : "\nsmoke-web-reactor: FAILED");
+console.log(passed() ? "\nsmoke-web-reactor: ok" : "\nsmoke-web-reactor: FAILED");
 await browser.close();
 if (server?.pid) {
   try { process.kill(-server.pid, "SIGTERM"); } catch { server.kill("SIGTERM"); }
 }
-process.exit(ok ? 0 : 1);
+process.exit(passed() ? 0 : 1);

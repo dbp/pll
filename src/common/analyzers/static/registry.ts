@@ -1,6 +1,6 @@
 import type { Level } from "../../level";
 import type { RawStaticFinding, RawStaticFindingOf } from "../../wire";
-import type { AnalysisFinding } from "../types";
+import { staticFindingFor, type AnalysisFinding } from "../types";
 import {
   explainShadowing,
   explainShadowingBuiltin,
@@ -47,26 +47,20 @@ const explainers: {
   "duplicate-definition": explainDuplicateDefinition,
 };
 
+/**
+ * For a kind Python reports and this file has no explainer for. Both halves
+ * ship in one build, so this is a check added on one side and not the
+ * other - said as that, rather than dropped.
+ */
 function fallbackExplainer(
   raw: RawStaticFinding,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  return {
-    id: raw.id,
-    errorType: raw.error_type || "StaticError",
-    message: raw.message,
-    headline: raw.message,
+  return staticFindingFor(raw, level, fileName, {
+    headline: `PLL found a problem here (\`${raw.id}\`) but has no explanation for it.`,
     howToFix: [],
-    fileName,
-    lineNumber: raw.line_number,
-    column: raw.column,
-    nameToken: raw.name_token,
-    severity: "error",
-    raw: JSON.stringify(raw),
-    origin: "static",
-    level,
-  };
+  });
 }
 
 /**
@@ -79,8 +73,6 @@ export function enrichStaticFindings(
   fileName: string,
 ): AnalysisFinding[] {
   return rawFindings.map((raw) => {
-    // An id this version does not know - a newer bootstrap, say - still
-    // gets Python's own wording rather than nothing.
     const explainer =
       (explainers as Record<string, (raw: RawStaticFinding, level: Level, fileName: string) => AnalysisFinding>)[
         raw.id

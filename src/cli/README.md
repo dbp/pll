@@ -201,6 +201,11 @@ be fast and honest rather than secret.
 Distinct codes so an autograder can tell "the level rejected this" from
 "the tests failed" from "it crashed".
 
+A program that ends itself with `sys.exit(n)` exits with `n` instead, as it
+would under `python` - so a program can produce any of these codes itself.
+`sys.exit()` is 0, and `sys.exit("message")` prints the message and is 1.
+A status other than 0 outranks a failed test's 3.
+
 ## Piping
 
 The program's own stdout is the **only** thing on stdout. Everything

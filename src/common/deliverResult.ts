@@ -42,7 +42,8 @@ export function deliverRunResult(
   if (error !== null) {
     onEvent({ kind: "error", error, fileName });
   }
-  onEvent({ kind: "done" });
+  const exitCode = result.exit_code;
+  onEvent(typeof exitCode === "number" ? { kind: "done", exitCode } : { kind: "done" });
 }
 
 /**

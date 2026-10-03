@@ -6,7 +6,8 @@ import {
 } from "../common/workerRuntime";
 import type { WorkerOutbound } from "../common/workerProtocol";
 
-const DEFAULT_INDEX_URL = "https://cdn.jsdelivr.net/pyodide/v0.29.3/full/";
+/** The Pyodide this build was made with, on the CDN; set by esbuild. */
+declare const PLL_PYODIDE_INDEX_URL: string;
 
 /** Web host: Pyodide runs in a browser `Worker` loading assets over HTTP. */
 export class WebPyodideRuntime extends WorkerPythonRuntime {
@@ -15,9 +16,10 @@ export class WebPyodideRuntime extends WorkerPythonRuntime {
   }
 
   protected resolveIndexUrl(): string {
+    // Empty is as good as unset: there is no Pyodide at "".
     return (
-      vscode.workspace.getConfiguration("pll").get<string>("pyodideIndexUrl") ??
-      DEFAULT_INDEX_URL
+      vscode.workspace.getConfiguration("pll").get<string>("pyodideIndexUrl") ||
+      PLL_PYODIDE_INDEX_URL
     );
   }
 

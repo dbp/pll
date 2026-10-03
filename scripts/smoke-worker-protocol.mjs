@@ -7,24 +7,11 @@
  * so no Pyodide is involved: this checks request/reply correlation, error
  * propagation, live display streaming, and the stdin round-trip.
  */
-import { build } from "esbuild";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
+import { expect, passed } from "./lib/check.mjs";
+import { importSource } from "./lib/bundle.mjs";
 
 /** Let the runtime's internal `await initialize()` hops settle. */
 const tick = () => new Promise((r) => setTimeout(r, 0));
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
 
 async function rejects(promise, pattern, msg) {
   try {
@@ -37,30 +24,16 @@ async function rejects(promise, pattern, msg) {
 }
 
 async function load() {
-  const tmp = mkdtempSync(join(ROOT, ".smoke-"));
-  const entry = join(tmp, "entry.mjs");
-  writeFileSync(
-    entry,
-    `
-export { WorkerPythonRuntime } from "../src/common/workerRuntime";
-export * as stdin from "../src/common/stdinBuffer";
-`,
-  );
-  await build({
-    entryPoints: [entry],
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    outfile: join(tmp, "out.mjs"),
-    loader: { ".py": "text" },
-    absWorkingDir: ROOT,
-  });
-  const mod = await import(pathToFileURL(join(tmp, "out.mjs")).href);
-  rmSync(tmp, { recursive: true, force: true });
+  const mod = await importSource(`
+export { WorkerPythonRuntime } from "./src/common/workerRuntime";
+export { createWorkerHost } from "./src/common/workerHost";
+export { onceSuccessful } from "./src/common/onceSuccessful";
+export * as stdin from "./src/common/stdinBuffer";
+`);
   return mod;
 }
 
-const { WorkerPythonRuntime, stdin } = await load();
+const { WorkerPythonRuntime, createWorkerHost, onceSuccessful, stdin } = await load();
 
 /**
  * A runtime whose "worker" is a function the test controls. `respond` is
@@ -94,6 +67,8 @@ function makeRuntime(respond) {
     sent,
     reply: (msg) => handlers.onMessage(msg),
     fail: (err) => handlers.onError(err),
+    /** The worker dies, as a crashed Node worker does. */
+    exit: () => handlers.onExit?.(),
     get terminated() {
       return terminated;
     },
@@ -236,6 +211,34 @@ console.log("\n[5] live displays stream during runFile, and only during a run");
   expect(events.length === before, "displays after the run should be dropped");
 }
 
+console.log("\n[5b] a reactor step streams its handlers' output too");
+{
+  // A handler's `print` used to reach nobody: the runtime only listened for
+  // live output during a file run.
+  const h = makeRuntime(
+    autoInit((msg, hs) => {
+      if (msg.type === "reactorStep") {
+        hs.onMessage({ type: "display", payload: { type: "stdout", text: "tick 0\n" } });
+        hs.onMessage({ id: msg.id, type: "reactorFrame", result: { ok: true, index: 1 } });
+      }
+    }),
+  );
+  await h.runtime.initialize();
+  const events = [];
+  const reply = await h.runtime.reactorStep("r1", '{"kind":"tick"}', {
+    onEvent: (e) => events.push(e),
+    fileName: "rx.py",
+  });
+  expect(reply.ok === true && reply.index === 1, "the frame still comes back");
+  expect(
+    events.map((e) => `${e.kind}:${e.text}`).join("|") === "stdout:tick 0\n",
+    `the print is delivered: ${JSON.stringify(events)}`,
+  );
+  const before = events.length;
+  h.reply({ type: "display", payload: { type: "stdout", text: "late" } });
+  expect(events.length === before, "and nothing after the step is");
+}
+
 console.log("\n[6] a failed run becomes an error event, then done");
 {
   const h = makeRuntime(
@@ -347,7 +350,157 @@ console.log("\n[9] requests before initialize() still initialize first");
   );
 }
 
-console.log(`\nsmoke-worker-protocol: ${ok ? "ok" : "FAILED"}`);
-if (!ok) {
+console.log("\n[10] a failed load is tried again; a successful one is remembered");
+{
+  // Cached as a rejected promise, one failure lasted until the window was
+  // reloaded: one dropped connection while pytest loaded, and no tests ran.
+  let calls = 0;
+  const load = onceSuccessful(async () => {
+    calls += 1;
+    if (calls === 1) throw new Error("network down");
+    return "loaded";
+  });
+  await rejects(load(), /network down/, "the first attempt fails");
+  expect((await load()) === "loaded", "the second is made, and succeeds");
+  await load();
+  expect(calls === 2, `and then remembered: ${calls} attempts`);
+}
+
+console.log("\n[11] a failed start is tried again, in a fresh worker");
+{
+  let attempts = 0;
+  const h = makeRuntime((msg, hs) => {
+    if (msg.type !== "init") return;
+    attempts += 1;
+    if (attempts === 1) hs.onMessage({ id: msg.id, type: "error", message: "no wasm" });
+    else hs.onMessage({ id: msg.id, type: "ready" });
+  });
+  await rejects(h.runtime.initialize(), /no wasm/, "the first start fails");
+  expect(h.terminated, "and its worker is ended");
+  await h.runtime.initialize();
+  expect(attempts === 2, `the next call starts again: ${attempts} attempts`);
+}
+
+console.log("\n[12] the worker tries pytest again after a failed load");
+{
+  // A Pyodide with nothing in it but what the worker calls.
+  let pytestLoads = 0;
+  const callable = Object.assign(() => ({ toJs: () => ({}), destroy() {} }), { destroy() {} });
+  const instance = {
+    runPython() {},
+    setStdin() {},
+    setInterruptBuffer() {},
+    loadPackagesFromImports: async () => undefined,
+    loadPackage: async (name) => {
+      if (name === "pytest" && ++pytestLoads === 1) throw new Error("network down");
+    },
+    globals: { get: () => callable, set() {} },
+    FS: new Proxy({}, { get: () => () => ({ isDir: () => true, mode: 0 }) }),
+  };
+  const posted = [];
+  const handle = createWorkerHost({
+    post: (msg) => posted.push(msg),
+    loadPyodide: async () => instance,
+    stdinUnavailableMessage: "no stdin",
+  });
+  await handle({ id: 1, type: "init", indexUrl: "/x/" });
+  await handle({ id: 2, type: "loadPytest" });
+  await handle({ id: 3, type: "loadPytest" });
+  const replies = posted.filter((m) => m.id !== undefined).map((m) => `${m.id}:${m.type}`);
+  expect(
+    replies.join(",") === "1:ready,2:error,3:pytestReady",
+    `failed, then loaded on the next request: ${replies.join(",")}`,
+  );
+}
+
+console.log("\n[13] a worker that dies is replaced by the next request");
+{
+  // It was kept: the run in flight failed, and every later request was
+  // posted to a worker that was no longer there, and waited forever.
+  let inits = 0;
+  const h = makeRuntime((msg, hs) => {
+    if (msg.type === "init") {
+      inits += 1;
+      hs.onMessage({ id: msg.id, type: "ready" });
+    } else if (msg.type === "replEval" && inits > 1) {
+      hs.onMessage({ id: msg.id, type: "result", result: { ...RESULT, result_repr: "2" } });
+    }
+  });
+  await h.runtime.initialize();
+  const lost = h.runtime.replEval({ code: "1 + 1", sessionKey: "s" }, () => {});
+  while (!h.sent.some((m) => m.type === "replEval")) await new Promise((r) => setTimeout(r, 1));
+  let told = 0;
+  h.runtime.setPythonLostHandler(() => (told += 1));
+  h.exit();
+  await rejects(lost, /Python stopped completely/, "the request in flight fails, saying why");
+  expect(told === 1, `whoever asked is told, once: ${told}`);
+  const events = [];
+  await h.runtime.replEval({ code: "1 + 1", sessionKey: "s" }, (e) => events.push(e));
+  expect(inits === 2, `a new worker was started: ${inits} inits`);
+  expect(events.some((e) => e.kind === "result" && e.repr === "2"), "and it answers");
+}
+
+console.log("\n[13b] so is a worker whose Python can no longer run");
+{
+  // `os.abort()`, or a fatal error in Pyodide: the worker lives on, but
+  // every call into Python fails, so every run of every file failed until
+  // the window was reloaded.
+  let inits = 0;
+  const h = makeRuntime((msg, hs) => {
+    if (msg.type === "init") {
+      inits += 1;
+      hs.onMessage({ id: msg.id, type: "ready" });
+    } else if (msg.type === "replEval" && inits === 1) {
+      hs.onMessage({ id: msg.id, type: "error", message: "Pyodide already fatally failed and can no longer be used.", finished: true });
+    } else if (msg.type === "replEval") {
+      hs.onMessage({ id: msg.id, type: "result", result: { ...RESULT, result_repr: "2" } });
+    }
+  });
+  let told = 0;
+  h.runtime.setPythonLostHandler(() => (told += 1));
+  await h.runtime.initialize();
+  await rejects(h.runtime.replEval({ code: "1 + 1", sessionKey: "s" }, () => {}), /Python stopped completely/,
+    "the request fails as Python being gone, not with Pyodide's words");
+  expect(h.terminated, "the worker is ended");
+  expect(told === 1, `whoever asked is told: ${told}`);
+  const events = [];
+  await h.runtime.replEval({ code: "1 + 1", sessionKey: "s" }, (e) => events.push(e));
+  expect(inits === 2 && events.some((e) => e.kind === "result" && e.repr === "2"), `and a new one answers: ${inits} inits`);
+  // An ordinary failure is not that.
+  const ordinary = makeRuntime(autoInit((msg, hs) => {
+    if (msg.type === "replEval") hs.onMessage({ id: msg.id, type: "error", message: "boom" });
+  }));
+  await ordinary.runtime.initialize();
+  await rejects(ordinary.runtime.replEval({ code: "1", sessionKey: "s" }, () => {}), /^boom$/, "an ordinary error is passed on");
+  expect(!ordinary.terminated, "and the worker kept");
+}
+
+console.log("\n[14] ending a session never starts Python just to do it");
+{
+  const h = makeRuntime(autoInit((msg, w) => {
+    if (msg.type === "endSession") w.onMessage({ id: msg.id, type: "sessionEnded" });
+  }));
+  await h.runtime.endSession("file:///a.py");
+  expect(h.sent.length === 0, `nothing sent before Python is started: ${JSON.stringify(h.sent.map((m) => m.type))}`);
+  await h.runtime.initialize();
+  await h.runtime.endSession("file:///a.py");
+  const ends = h.sent.filter((m) => m.type === "endSession");
+  expect(ends.length === 1 && ends[0].sessionKey === "file:///a.py", `then it is asked: ${JSON.stringify(ends)}`);
+}
+
+console.log("\n[15] what Pyodide says while loading goes to whoever the host names");
+{
+  const h = makeRuntime(autoInit());
+  await h.runtime.initialize();
+  const heard = [];
+  h.runtime.setPackageNoteHandler((text, failed) => heard.push([text, failed]));
+  h.reply({ type: "packageNote", text: "Loading pytest", failed: false });
+  h.reply({ type: "packageNote", text: "URI mismatch", failed: true });
+  expect(JSON.stringify(heard) === JSON.stringify([["Loading pytest", false], ["URI mismatch", true]]),
+    `each note, and whether it is a failure: ${JSON.stringify(heard)}`);
+}
+
+console.log(`\nsmoke-worker-protocol: ${passed() ? "ok" : "FAILED"}`);
+if (!passed()) {
   process.exit(1);
 }

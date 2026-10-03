@@ -146,6 +146,8 @@ export const CASES = [
   { name: "header-bare", code: ["#level", 'print("x")'] },
   { name: "header-no-space", code: ["#levelbeginner", 'print("x")'] },
   { name: "header-not-first", code: ['print("x")', B] },
+  { name: "header-under-comment", code: ["# Lab 1", B, 'print("x")'] },
+  { name: "header-in-docstring", code: ['"""Lab 1', B, '"""', 'print("x")'] },
   { name: "header-unknown-word", code: ["#level easy", 'print("x")'] },
 
   // ---- static findings ----------------------------------------------------
@@ -164,6 +166,7 @@ export const CASES = [
   { name: "st-assert-tuple", code: [B, "def test_total():", "    assert(1, 2)"] },
   { name: "st-method-not-called", code: [B, 'movies = table(["rating"], [[1], [2]])', "def avg() -> int:", "    return movies.count", "print(avg())"] },
   { name: "st-annotation-not-a-type", code: [B, "def f(t: table) -> int:", "    return 1"] },
+  { name: "st-annotation-row", code: [B, "def f(r: row) -> int:", "    return 1"] },
   { name: "st-test-not-named", code: [B, "def double(n: int) -> int:", "    return n * 2", "", "def check_double():", "    assert double(2) == 4", "", 'print("ran")'] },
   { name: "st-field-no-type", code: [B, ...dataclass("@dataclass", "class Song:", "    title: str", "    year = 1999")] },
   { name: "st-field-assigned-type", code: [B, ...dataclass("@dataclass", "class Song:", "    title: str", "    year = int")] },

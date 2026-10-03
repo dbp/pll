@@ -1,13 +1,12 @@
 import * as vscode from "vscode";
-import type { Diagnostics } from "./diagnostics";
 import { editorCopy, editorCut, editorPaste } from "./editorClipboard";
 import type { InteractionsView } from "./interactionsView";
 import type { ReplSession } from "./replSession";
 import { errorText } from "./errorText";
+import { showError, showWarning } from "./notify";
 
 export interface ExtensionServices {
   repl: ReplSession;
-  diagnostics: Diagnostics;
   view: InteractionsView;
 }
 
@@ -27,7 +26,7 @@ export function registerCommands(
       runActiveFile(services).catch(reportError),
     ),
     vscode.commands.registerCommand("pll.clearInteractions", () =>
-      services.view.clear(),
+      services.repl.clearActiveSession(),
     ),
     vscode.commands.registerCommand("pll.stopProgram", () =>
       services.repl.stopActiveProgram(),
@@ -47,12 +46,12 @@ export function registerCommands(
 async function runActiveFile(services: ExtensionServices): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
-    vscode.window.showWarningMessage("Python Language Levels: no active editor.");
+    void showWarning("no active editor.");
     return;
   }
   const document = editor.document;
   if (document.languageId !== "python") {
-    vscode.window.showWarningMessage("Python Language Levels: active file is not Python.");
+    void showWarning("active file is not Python.");
     return;
   }
 
@@ -61,6 +60,5 @@ async function runActiveFile(services: ExtensionServices): Promise<void> {
 }
 
 function reportError(err: unknown): void {
-  const message = errorText(err);
-  vscode.window.showErrorMessage(`Python Language Levels: ${message}`);
+  void showError(errorText(err));
 }

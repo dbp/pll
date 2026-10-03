@@ -1,6 +1,6 @@
 import type { Level } from "../../level";
 import type { RawStaticFindingOf } from "../../wire";
-import type { AnalysisFinding } from "../types";
+import { staticFindingFor, type AnalysisFinding } from "../types";
 
 /**
  * Build an AnalysisFinding for a `global` / `nonlocal` statement at a level
@@ -45,19 +45,8 @@ export function explainDisallowedKeyword(
     `\`#level advanced\` allows \`${keyword}\`, if you have a reason to use it.`,
   );
 
-  return {
-    id: "disallowed-keyword",
-    errorType: "DisallowedKeyword",
-    message: raw.message,
+  return staticFindingFor(raw, level, fileName, {
     headline,
     howToFix,
-    fileName,
-    lineNumber: raw.line_number,
-    column: raw.column,
-    nameToken: raw.name_token,
-    severity: "error",
-    raw: JSON.stringify(raw),
-    origin: "static",
-    level,
-  };
+  });
 }

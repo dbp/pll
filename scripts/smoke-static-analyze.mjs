@@ -2,73 +2,30 @@
 /**
  * Smoke test for the language-level static analyzer.
  *
- * Boots Pyodide in Node, loads the bootstrap, and runs
- * `_pll_static_analyze` against each sample file. Asserts a sensible set
+ * Boots Pyodide in Node with PLL installed the way the worker installs it,
+ * and runs `_pll_static_analyze` against each sample file. Asserts a sensible set
  * of findings is produced (or none, for the OK sample).
  *
  * Usage: node scripts/smoke-static-analyze.mjs
  */
 import { readFileSync, readdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 
-import { loadPyodide } from "pyodide";
+import { bootPll } from "./lib/pyodide.mjs";
+import { expect, passed } from "./lib/check.mjs";
+import { importSource } from "./lib/bundle.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
+const { enrichStaticFindings } = await importSource(
+  'export { enrichStaticFindings } from "./src/common/analyzers/static/registry";',
+);
+import { ROOT } from "./lib/bundle.mjs";
 
 function readPy(rel) {
   return readFileSync(resolve(ROOT, rel), "utf8");
 }
 
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    process.exitCode = 1;
-  }
-}
-
 async function main() {
-  const indexURL = resolve(ROOT, "node_modules", "pyodide");
-  const pyodide = await loadPyodide({ indexURL });
-  const bootstrap = readPy("src/common/pyodideBootstrap.py");
-  pyodide.runPython(bootstrap);
-
-  // Load the libraries + install step exactly like the extension does, so
-  // the analyzer sees the library names (`circle`, `table`, `animate`, ...)
-  // a real session starts with. Re-derived here rather than parsing the TS
-  // (same convention as smoke-images.mjs); includes the reactor library so
-  // its names are labeled too.
-  pyodide.runPython(readPy("src/common/imageLib.py"));
-  pyodide.runPython(readPy("src/common/tableLib.py"));
-  pyodide.runPython(readPy("src/common/reactorLib.py"));
-  pyodide.runPython(`
-import sys as _sys, types as _types
-_pll_module = _types.ModuleType("pll")
-_pll_image_module = _types.ModuleType("pll.image")
-_pll_table_module = _types.ModuleType("pll.table")
-_pll_reactor_module = _types.ModuleType("pll.reactor")
-for _name in PLL_IMAGE_EXPORTS:
-    setattr(_pll_image_module, _name, globals()[_name])
-for _name in PLL_TABLE_EXPORTS:
-    setattr(_pll_table_module, _name, globals()[_name])
-for _name in PLL_REACTOR_EXPORTS:
-    setattr(_pll_reactor_module, _name, globals()[_name])
-_pll_module.image = _pll_image_module
-_pll_module.table = _pll_table_module
-_pll_module.reactor = _pll_reactor_module
-_sys.modules["pll"] = _pll_module
-_sys.modules["pll.image"] = _pll_image_module
-_sys.modules["pll.table"] = _pll_table_module
-_sys.modules["pll.reactor"] = _pll_reactor_module
-for _name in PLL_IMAGE_EXPORTS:
-    _pll_initial_globals[_name] = globals()[_name]
-for _name in PLL_TABLE_EXPORTS:
-    _pll_initial_globals[_name] = globals()[_name]
-for _name in PLL_REACTOR_EXPORTS:
-    _pll_initial_globals[_name] = globals()[_name]
-del _name
-`);
+  const pyodide = await bootPll();
 
   const fn = pyodide.globals.get("_pll_static_analyze");
   const analyze = (code, level, fileName, sessionKey = null) => {
@@ -98,7 +55,7 @@ del _name
         f.outer_line_number != null
           ? ` (outer: line ${f.outer_line_number} in ${f.outer_scope_kind})`
           : "";
-      console.log(`      [${f.id}] line ${f.line_number}: ${f.message}${outer}`);
+      console.log(`      [${f.id}] line ${f.line_number}: ${f.error_type} ${f.name_token ?? ""}${outer}`);
     }
     const ids = findings.map((f) => f.id);
     expect(ids.includes("shadowing"), "missing 'shadowing' (count -> count inside increment)");
@@ -117,7 +74,7 @@ del _name
     );
     console.log(`    findings: ${findings.length}`);
     for (const f of findings) {
-      console.log(`      [${f.id}] line ${f.line_number}: ${f.message}`);
+      console.log(`      [${f.id}] line ${f.line_number}: ${f.error_type} ${f.name_token ?? ""}`);
     }
     const reassignments = findings.filter((f) => f.id === "reassignment");
     expect(
@@ -152,7 +109,7 @@ del _name
     );
     console.log(`    findings: ${findings.length}`);
     for (const f of findings) {
-      console.log(`      [${f.id}] line ${f.line_number}: ${f.message}`);
+      console.log(`      [${f.id}] line ${f.line_number}: ${f.error_type} ${f.name_token ?? ""}`);
     }
     expect(findings.length === 0, "intermediate_ok should pass at intermediate");
   }
@@ -185,7 +142,7 @@ del _name
     );
     console.log(`    findings: ${findings.length}`);
     for (const f of findings) {
-      console.log(`      [${f.id}] line ${f.line_number}: ${f.message}`);
+      console.log(`      [${f.id}] line ${f.line_number}: ${f.error_type} ${f.name_token ?? ""}`);
     }
     const ids = findings.map((f) => f.id);
     expect(ids.includes("shadowing"), "intermediate must still flag shadowing");
@@ -207,7 +164,7 @@ del _name
     console.log(`    findings: ${findings.length}`);
     for (const f of findings) {
       console.log(
-        `      [${f.id}] line ${f.line_number}: ${f.message} (keyword=${f.keyword})`,
+        `      [${f.id}] line ${f.line_number}: ${f.error_type} ${f.name_token ?? ""} (keyword=${f.keyword})`,
       );
     }
     const kw = findings.filter((f) => f.id === "disallowed-keyword");
@@ -748,13 +705,87 @@ _g = _pll_get_session("smoke-lib")
     console.log("    duplicated defs, `global`, field shapes and `== Class`");
   }
 
+  console.log("\n[19] each finding carries what its explanation reads, and nothing false");
+  {
+    // `scope_kind` only from the checks that walk scopes, which know it: it
+    // used to be a constant on the others, "function" even for a `global`
+    // at the top of a file.
+    const IN_SCOPE = new Set([
+      "shadowing", "shadowing-builtin", "shadowing-library", "reassignment", "duplicate-definition",
+    ]);
+    const code = [
+      "global g",
+      "list = 1",
+      "x = 1",
+      "x = 2",
+      "def f(n: string):",
+      "    n == 1",
+      "    assert (n, 1)",
+      "def helper():",
+      "    assert True",
+      "class P:",
+      "    a: int",
+      "    b",
+      "",
+    ].join("\n");
+    const findings = analyze(code, "beginner", "shapes.py");
+    const ids = new Set(findings.map((f) => f.id));
+    for (const id of ["disallowed-keyword", "shadowing-builtin", "reassignment", "annotation-not-a-type",
+      "unused-comparison", "assert-tuple", "test-not-named", "class-needs-dataclass", "field-no-type"]) {
+      expect(ids.has(id), `${id} is found: ${[...ids].join(", ")}`);
+    }
+    for (const f of findings) {
+      expect(!("message" in f), `${f.id} has no message: nothing reads one`);
+      expect(typeof f.error_type === "string" && f.error_type !== "", `${f.id} has an error type`);
+      expect(("scope_kind" in f) === IN_SCOPE.has(f.id),
+        `${f.id} ${IN_SCOPE.has(f.id) ? "carries" : "does not carry"} a scope kind: ${f.scope_kind}`);
+    }
+    const keyword = findings.find((f) => f.id === "disallowed-keyword");
+    expect(keyword?.keyword === "global" && keyword?.names?.join() === "g", `the keyword and its names: ${JSON.stringify(keyword)}`);
+    const unused = findings.find((f) => f.id === "unused-comparison");
+    expect(unused?.expression === "n == 1", `the expression as written: ${unused?.expression}`);
+    // The type written after `=`, so the fix quotes it back: not always int.
+    const typed = analyze("@dataclass\nclass Song:\n    title = str\n", "beginner", "typed.py")
+      .find((f) => f.id === "field-assigned-type");
+    expect(typed?.written_type === "str" && typed?.name_token === "title",
+      `the field and the type written: ${JSON.stringify(typed)}`);
+    // A helper with an `assert` in it is fine once something calls it.
+    const helpers = analyze(
+      "def check(x):\n    assert x > 0\n\ndef test_it():\n    check(1)\n\ndef lonely():\n    assert True\n",
+      "beginner",
+      "helpers.py",
+    ).filter((f) => f.id === "test-not-named").map((f) => f.name_token);
+    expect(helpers.join() === "lonely", `only the helper nothing calls: ${helpers.join()}`);
+    console.log(`    ${findings.map((f) => f.id + ("scope_kind" in f ? `(${f.scope_kind})` : "")).join(" ")}`);
+  }
+
+  console.log("\n[20] every type the advice names is one a student's program has");
+  {
+    // `t: row` was told to write `Row`, which no program has: following the
+    // advice gave a NameError. Each name Python reports, through the host's
+    // wording, to the name it suggests - which has to evaluate in a session.
+    const names = pyodide.runPython("sorted(_PLL_NOT_A_TYPE)").toJs();
+    const evaluate = pyodide.globals.get("_pll_repl_eval");
+    const suggested = [];
+    for (const written of names) {
+      const raw = analyze(`def f(x: ${written}) -> int:\n    return 1\n`, "beginner", "ann.py")
+        .filter((f) => f.id === "annotation-not-a-type");
+      const [finding] = enrichStaticFindings(raw, "beginner", "ann.py");
+      const type = /^Write `([^`]+)` instead\.$/.exec(finding?.howToFix?.[0] ?? "")?.[1];
+      expect(type !== undefined, `\`${written}\` gets a replacement: ${JSON.stringify(finding?.howToFix)}`);
+      if (type === undefined) continue;
+      const result = evaluate(type, `types-${written}`, "raw").toJs({ dict_converter: Object.fromEntries });
+      expect(result.ok && !result.error_type, `\`${written}\` -> \`${type}\`, which a program has: ${result.error_type ?? "ok"}`);
+      suggested.push(`${written}->${type}`);
+    }
+    evaluate.destroy?.();
+    console.log(`    ${suggested.join(" ")}`);
+  }
+
   fn.destroy?.();
 
-  if (process.exitCode) {
-    console.log("\nFAILED");
-  } else {
-    console.log("\nALL SMOKE TESTS PASSED");
-  }
+  console.log(passed() ? "\nALL SMOKE TESTS PASSED" : "\nFAILED");
+  if (!passed()) process.exitCode = 1;
 }
 
 main().catch((err) => {

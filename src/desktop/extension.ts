@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type * as vscode from "vscode";
-import { activateWithRuntime } from "./common/activate";
-import { DesktopPyodideRuntime } from "./desktop/pyodideRuntime";
+import { activateWithRuntime } from "../common/activate";
+import { DesktopPyodideRuntime } from "./pyodideRuntime";
 
 export function activate(context: vscode.ExtensionContext): void {
   const root = context.extensionPath;

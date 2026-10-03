@@ -14,22 +14,11 @@
  */
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { build } from "esbuild";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolve } from "node:path";
+import { expect, passed } from "./lib/check.mjs";
+import { importSource } from "./lib/bundle.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
 
 /** Encode one unmasked text frame (server -> client). */
 function frame(text) {
@@ -111,26 +100,12 @@ function startServer() {
 }
 
 async function loadTransport() {
-  const tmp = mkdtempSync(join(ROOT, ".smoke-"));
-  writeFileSync(
-    join(tmp, "entry.mjs"),
-    `export {
+  const mod = await importSource(`export {
   connectUniverse,
   validateUniverseUrl,
   UNIVERSE_CONNECT_HELP,
-} from "../src/common/universeClient";
-`,
-  );
-  await build({
-    entryPoints: [join(tmp, "entry.mjs")],
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    outfile: join(tmp, "out.mjs"),
-    absWorkingDir: ROOT,
-  });
-  const mod = await import(pathToFileURL(join(tmp, "out.mjs")).href);
-  rmSync(tmp, { recursive: true, force: true });
+} from "./src/common/universeClient";
+`);
   return mod;
 }
 
@@ -244,7 +219,7 @@ async function main() {
   socket2.close();
   srv.server.close();
 
-  if (!ok) {
+  if (!passed()) {
     console.error("\nsmoke-universe: FAILED");
     process.exit(1);
   }

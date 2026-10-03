@@ -47,6 +47,7 @@ export class DesktopPyodideRuntime extends WorkerPythonRuntime {
     worker.on("error", (err) =>
       handlers.onError(err instanceof Error ? err : new Error(String(err))),
     );
+    worker.on("exit", () => handlers.onExit?.());
     return {
       post: (msg) => worker.postMessage(msg),
       terminate: () => void worker.terminate(),

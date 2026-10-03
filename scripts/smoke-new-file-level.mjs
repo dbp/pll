@@ -7,21 +7,8 @@
  * header, which are left alone, and that what gets written parses back to
  * the level that was asked for.
  */
-import { build } from "esbuild";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
+import { expect, passed } from "./lib/check.mjs";
+import { importSource } from "./lib/bundle.mjs";
 
 const VSCODE_STUB = `
 class Uri {
@@ -71,27 +58,11 @@ export { Uri };
 `;
 
 async function load() {
-  const tmp = mkdtempSync(join(ROOT, ".smoke-"));
-  writeFileSync(join(tmp, "vscode.mjs"), VSCODE_STUB);
-  writeFileSync(
-    join(tmp, "entry.mjs"),
-    `
-export { registerNewFileLevel, headerFor } from "../src/common/newFileLevel";
-export { parseLevel } from "../src/common/level";
-export * as vscodeStub from "./vscode.mjs";
-`,
-  );
-  await build({
-    entryPoints: [join(tmp, "entry.mjs")],
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    outfile: join(tmp, "out.mjs"),
-    alias: { vscode: join(tmp, "vscode.mjs") },
-    absWorkingDir: ROOT,
-  });
-  const mod = await import(pathToFileURL(join(tmp, "out.mjs")).href);
-  rmSync(tmp, { recursive: true, force: true });
+  const mod = await importSource(`
+export { registerNewFileLevel, headerFor } from "./src/common/newFileLevel";
+export { parseLevel } from "./src/common/level";
+export * as vscodeStub from "vscode";
+`, { vscodeStub: VSCODE_STUB });
   return mod;
 }
 
@@ -168,5 +139,5 @@ __setSetting("newFileLevel", "advanced");
 
 watcher.dispose();
 
-console.log(`\nsmoke-new-file-level: ${ok ? "ok" : "FAILED"}`);
-if (!ok) process.exit(1);
+console.log(`\nsmoke-new-file-level: ${passed() ? "ok" : "FAILED"}`);
+if (!passed()) process.exit(1);

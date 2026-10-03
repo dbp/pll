@@ -6,26 +6,17 @@
  * Requires `pnpm run build` so out/test/*.js exists.
  */
 import { createRequire } from "node:module";
-import { existsSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 
-import { loadPyodide } from "pyodide";
+import { expect, passed } from "./lib/check.mjs";
+import { bootPll } from "./lib/pyodide.mjs";
+import { ROOT } from "./lib/bundle.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
 const POLICY_PATH = resolve(ROOT, "out/test/workspaceFilePolicy.js");
 const MEMFS_PATH = resolve(ROOT, "out/test/memfsWorkspace.js");
 
 const CARS_CSV = "name,mpg\nvw,29\nhonda,33\nford,18\n";
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
 
 function requireBuilt(path) {
   if (!existsSync(path)) {
@@ -106,9 +97,7 @@ function testPolicy() {
 }
 
 async function testMemfsAndPython() {
-  const indexURL = resolve(ROOT, "node_modules", "pyodide");
-  const pyodide = await loadPyodide({ indexURL });
-  pyodide.runPython(readFileSync(resolve(ROOT, "src/common/pyodideBootstrap.py"), "utf8"));
+  const pyodide = await bootPll();
   const FS = pyodide.FS;
 
   console.log("\n[2] mount sibling csv; open() reads it");
@@ -251,8 +240,8 @@ async function main() {
   testPolicy();
   await testMemfsAndPython();
 
-  console.log(`\nsmoke-workspace-files: ${ok ? "ok" : "FAILED"}`);
-  if (!ok) {
+  console.log(`\nsmoke-workspace-files: ${passed() ? "ok" : "FAILED"}`);
+  if (!passed()) {
     process.exit(1);
   }
 }

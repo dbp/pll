@@ -13,6 +13,7 @@ import {
   type UniverseSocket,
   type UniverseStatus,
 } from "./universeClient";
+import { PythonLostError } from "./pythonLost";
 
 /** The program a run is running: what its errors are explained against. */
 export interface ProgramInfo {
@@ -40,6 +41,8 @@ export interface ReactorHost<Owner> {
   append(owner: Owner, entry: Entry): void;
   /** Update a reactor's card in place. */
   patch(owner: Owner, id: string, patch: ReactorPatch): void;
+  /** Show what a handler printed or displayed, as the program's output is shown. */
+  output(owner: Owner, event: ExecutionEvent, program: ProgramInfo): void;
   /** Run `task` in turn with everything else that uses the interpreter. */
   enqueue(task: () => Promise<void>): Promise<void>;
 }
@@ -140,11 +143,19 @@ export class ReactorController<Owner> {
     void this.react(driver, event);
   }
 
+  /** Whether one of `owner`'s reactors is playing on its own clock. */
+  anyPlaying(owner: Owner): boolean {
+    for (const driver of this.reactors.values()) {
+      if (driver.owner === owner && driver.playing) return true;
+    }
+    return false;
+  }
+
   /** Stop and forget every reactor `owner` has, and tell Python to as well. */
   disposeAllFor(owner: Owner): void {
     for (const [id, driver] of [...this.reactors]) {
       if (driver.owner === owner) {
-        this.dispose(id, { fromPython: true });
+        this.dispose(id, { inPythonToo: true });
       }
     }
   }
@@ -152,11 +163,11 @@ export class ReactorController<Owner> {
   /** Stop every clock and close every socket; Python is going away too. */
   disposeAll(): void {
     for (const id of [...this.reactors.keys()]) {
-      this.dispose(id, { fromPython: false });
+      this.dispose(id, { inPythonToo: false });
     }
   }
 
-  private dispose(id: string, opts: { fromPython: boolean }): void {
+  private dispose(id: string, opts: { inPythonToo: boolean }): void {
     const driver = this.reactors.get(id);
     if (!driver) return;
     this.pause(driver);
@@ -169,7 +180,7 @@ export class ReactorController<Owner> {
       driver.socket = null;
     }
     this.reactors.delete(id);
-    if (opts.fromPython) {
+    if (opts.inPythonToo) {
       void this.host.runtime.reactorDispose(id).catch(() => undefined);
     }
   }
@@ -201,11 +212,16 @@ export class ReactorController<Owner> {
     driver.inFlight = true;
     try {
       await this.host.enqueue(async () => {
-        const reply = await this.host.runtime.reactorStep(driver.id, JSON.stringify(event));
+        const reply = await this.host.runtime.reactorStep(driver.id, JSON.stringify(event), {
+          onEvent: (shown) => this.host.output(driver.owner, shown, driver.program),
+          fileName: driver.program.fileName,
+        });
         this.apply(driver, reply);
       });
     } catch (err) {
       this.pause(driver);
+      // Said once for every file, not once per reactor (see ReplSession).
+      if (err instanceof PythonLostError) return;
       this.host.append(driver.owner, { kind: "stderr", text: `Reactor error: ${errorText(err)}` });
     } finally {
       driver.inFlight = false;
@@ -219,13 +235,14 @@ export class ReactorController<Owner> {
         this.apply(driver, reply);
       });
     } catch (err) {
+      if (err instanceof PythonLostError) return;
       this.host.append(driver.owner, { kind: "stderr", text: `Reactor error: ${errorText(err)}` });
     }
   }
 
   private apply(driver: ReactorDriver<Owner>, result: ReactorStepResult): void {
     if (result.gone) {
-      this.dispose(driver.id, { fromPython: false });
+      this.dispose(driver.id, { inPythonToo: false });
       return;
     }
     if (!result.ok) {

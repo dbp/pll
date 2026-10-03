@@ -1,6 +1,6 @@
 import type { Level } from "../../level";
 import type { RawStaticFindingOf } from "../../wire";
-import type { AnalysisFinding } from "../types";
+import { staticFindingFor, type AnalysisFinding } from "../types";
 
 /**
  * Two `def`s (or two `class`es) with the same name.
@@ -21,10 +21,7 @@ export function explainDuplicateDefinition(
   const first = raw.first_line_number;
   const where =
     typeof first === "number" && first > 0 ? ` (lines ${first} and ${raw.line_number})` : "";
-  return {
-    id: raw.id,
-    errorType: raw.error_type || "DuplicateDefinition",
-    message: raw.message,
+  return staticFindingFor(raw, level, fileName, {
     headline: `There are two ${kind} named \`${name}\`${where}.`,
     howToFix: [
       "Rename one of them. Python keeps only the second, so the first never runs.",
@@ -32,13 +29,5 @@ export function explainDuplicateDefinition(
         ? "A test copied and not renamed vanishes this way: only the last one is run."
         : "Both definitions are kept in the file, but only the last name points at anything.",
     ],
-    fileName,
-    lineNumber: raw.line_number,
-    column: raw.column,
-    nameToken: raw.name_token,
-    severity: "error",
-    raw: JSON.stringify(raw),
-    origin: "static",
-    level,
-  };
+  });
 }

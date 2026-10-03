@@ -81,7 +81,12 @@ _REPR_ROWS = 6
 # -----------------------------------------------------------------------------
 
 def _format_cell(value):
-    """Render a cell value to a short display string."""
+    """Render a cell value to a short display string.
+
+    Short means rounded (`%g`), which suits a table and not a message: a
+    value quoted back to the student goes through `_pll_number`, which
+    shows it as it is.
+    """
     if value is None:
         return ""
     if isinstance(value, bool):
@@ -627,7 +632,7 @@ class Table:
             if bin_width <= 0:
                 raise ValueError(
                     "histogram's `bin_width` has to be more than 0, but it is %s."
-                    % _format_cell(bin_width)
+                    % _pll_number(bin_width)
                 )
             if not values:
                 bins = 1
@@ -637,7 +642,7 @@ class Table:
         if bins < 1:
             raise ValueError(
                 "histogram's `bins` has to be 1 or more - it is how many bars "
-                "to draw - but it is %s." % _format_cell(bins)
+                "to draw - but it is %s." % _pll_number(bins)
             )
         return _PllChart(_render_histogram(values, bins, name, title))
 
@@ -1757,7 +1762,7 @@ def _render_histogram(values, bins, name, title):
 
 
 # -----------------------------------------------------------------------------
-# Names exported into user globals by the bootstrap.
+# Names exported into user globals by the install step.
 # -----------------------------------------------------------------------------
 
 PLL_TABLE_EXPORTS = [

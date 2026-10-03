@@ -6,24 +6,14 @@
  * `_pll_has_tests` and `_pll_run_tests`.
  */
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 
-import { loadPyodide } from "pyodide";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
+import { expect, passed } from "./lib/check.mjs";
+import { bootPll } from "./lib/pyodide.mjs";
+import { ROOT } from "./lib/bundle.mjs";
 
 function readPy(rel) {
   return readFileSync(resolve(ROOT, rel), "utf8");
-}
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
 }
 
 function call(fn, args) {
@@ -37,9 +27,7 @@ function call(fn, args) {
 }
 
 async function main() {
-  const indexURL = resolve(ROOT, "node_modules", "pyodide");
-  const pyodide = await loadPyodide({ indexURL });
-  pyodide.runPython(readPy("src/common/pyodideBootstrap.py"));
+  const pyodide = await bootPll();
   await pyodide.loadPackage("pytest");
 
   const hasTests = pyodide.globals.get("_pll_has_tests");
@@ -152,7 +140,7 @@ def test_add():
   hasTests.destroy?.();
   runTests.destroy?.();
 
-  if (!ok) {
+  if (!passed()) {
     console.error("\nsmoke-tests: FAILED");
     process.exit(1);
   }

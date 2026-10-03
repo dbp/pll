@@ -24,9 +24,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CASES } from "./golden/cases.mjs";
+import { ROOT } from "./lib/bundle.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
 const CLI = resolve(ROOT, "dist-cli", "cli.cjs");
 const EXPECTED = join(HERE, "golden", "expected.txt");
 const PARALLEL = 4;

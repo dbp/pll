@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { showInfo, showWarning } from "./notify";
 
 /**
  * Python Language Levels ships beginner-friendly defaults via `configurationDefaults`,
@@ -86,14 +87,14 @@ export async function checkConflictingExtensions(
 
   const summary =
     active.length === 1
-      ? `Python Language Levels: detected an installed extension that may emit Python diagnostics outside the beginner setup: ${active[0].label}.`
-      : `Python Language Levels: detected ${active.length} installed extensions that may emit Python diagnostics outside the beginner setup: ${active
+      ? `detected an installed extension that may emit Python diagnostics outside the beginner setup: ${active[0].label}.`
+      : `detected ${active.length} installed extensions that may emit Python diagnostics outside the beginner setup: ${active
           .map((e) => e.label)
           .join(", ")}.`;
 
   const OPEN = "Show & Disable";
   const DISMISS = "Don't ask again";
-  const choice = await vscode.window.showWarningMessage(summary, OPEN, DISMISS);
+  const choice = await showWarning(summary, OPEN, DISMISS);
 
   if (choice === OPEN) {
     for (const ext of active) {
@@ -103,8 +104,8 @@ export async function checkConflictingExtensions(
         // ignore – the extension might not expose this command in some hosts
       }
     }
-    await vscode.window.showInformationMessage(
-      'For each extension, click the gear icon and choose "Disable (Workspace)", then reload the window.',
+    await showInfo(
+      'for each extension, click the gear icon and choose "Disable (Workspace)", then reload the window.',
       "Reload Window",
     ).then((c) => {
       if (c === "Reload Window") {

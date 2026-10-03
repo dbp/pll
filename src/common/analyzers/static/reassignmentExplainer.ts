@@ -1,6 +1,6 @@
 import { levelRefusesReassignment, type Level } from "../../level";
 import type { RawStaticFindingOf } from "../../wire";
-import type { AnalysisFinding } from "../types";
+import { staticFindingFor, type AnalysisFinding } from "../types";
 
 /**
  * Build an AnalysisFinding for "name is assigned more than once in the same
@@ -22,10 +22,7 @@ export function explainReassignment(
   const firstLineHint =
     firstLine !== null && firstLine > 0 ? ` (first assigned on line ${firstLine})` : "";
 
-  return {
-    id: "reassignment",
-    errorType: "Reassignment",
-    message: raw.message,
+  return staticFindingFor(raw, level, fileName, {
     headline: `\`${name}\` is already assigned${firstLineHint}.`,
     // Refused here, but not inside a function: then the fix is to move the
     // work into one.
@@ -54,14 +51,6 @@ export function explainReassignment(
                 ]
               : []),
           ],
-    fileName,
-    lineNumber: raw.line_number,
-    column: raw.column,
-    nameToken: raw.name_token,
-    severity: "error",
-    raw: JSON.stringify(raw),
-    origin: "static",
-    level,
-  };
+  });
 }
 

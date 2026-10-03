@@ -10,22 +10,13 @@
  * Requires `pnpm run build`.
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { expect, passed } from "./lib/check.mjs";
+import { ROOT } from "./lib/bundle.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
 const CLI = resolve(ROOT, "dist-cli", "cli.cjs");
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
 
 const work = mkdtempSync(join(tmpdir(), "pll-examplar-"));
 function write(rel, ...lines) {
@@ -357,7 +348,7 @@ async function main() {
   }
 
   rmSync(work, { recursive: true, force: true });
-  if (!ok) {
+  if (!passed()) {
     console.error("\nsmoke-examplar-build: FAILED");
     process.exit(1);
   }

@@ -45,6 +45,8 @@ export interface RunResult extends WireError {
   result_repr: string | null;
   /** Typed displays produced by top-level expressions (images and tables). */
   displays: DisplayData[];
+  /** The status the program ended itself with (`sys.exit(3)`), if it did. */
+  exit_code?: number | null;
 }
 
 export type DisplayData =
@@ -246,12 +248,17 @@ export interface TestRunResult extends WireError {
 /** What every static finding carries, whatever it is about. */
 interface StaticFindingBase {
   error_type: string;
-  message: string;
   line_number: number | null;
   column: number | null;
   name_token: string | null;
-  /** The kind of scope the finding is in: "module", "function", "class", ... */
-  scope_kind: string | null;
+}
+
+/**
+ * Carried by the checks that walk scopes, which are the ones that know:
+ * "module", "function", "lambda", "class" or "comprehension".
+ */
+interface InScope {
+  scope_kind: string;
 }
 
 /** The mistakes that used to run in silence: a value thrown away, and the like. */
@@ -274,25 +281,25 @@ export type SilenceFindingId =
  */
 export type RawStaticFinding = StaticFindingBase &
   (
-    | {
+    | (InScope & {
         id: "shadowing";
         /** The nearest enclosing binding of the same name. */
         outer_line_number?: number | null;
         outer_column?: number | null;
         outer_scope_kind?: string | null;
-      }
-    | { id: "shadowing-builtin" }
+      })
+    | (InScope & { id: "shadowing-builtin" })
     /** `library` is "image", "table", "reactor" or "library". */
-    | { id: "shadowing-library"; library?: string | null }
+    | (InScope & { id: "shadowing-library"; library?: string | null })
     /** Where the name was first assigned. */
-    | { id: "reassignment"; first_line_number?: number | null; first_column?: number | null }
-    | {
+    | (InScope & { id: "reassignment"; first_line_number?: number | null; first_column?: number | null })
+    | (InScope & {
         id: "duplicate-definition";
         first_line_number?: number | null;
         first_column?: number | null;
         /** "function" or "class" - or "both", for one of each. */
         definition_kind?: string | null;
-      }
+      })
     /** `names` are those the statement declares. */
     | { id: "disallowed-keyword"; keyword: "global" | "nonlocal"; names: string[] }
     | { id: "test-not-named" }

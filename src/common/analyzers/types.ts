@@ -1,13 +1,12 @@
 import type { Level } from "../level";
 import type { PythonError } from "../errors/pythonError";
+import type { RawStaticFinding } from "../wire";
 
 export interface AnalysisFinding {
   /** Short id like "name-error" or "shadowing". */
   id: string;
   /** The exception/lint type, e.g. "NameError", "Shadowing", "Reassignment". */
   errorType: string;
-  /** Plain Python-style message used as a fallback. */
-  message: string;
   /** Beginner-friendly headline (single line). */
   headline: string;
   /** Beginner-friendly next steps, one entry per bullet. */
@@ -16,14 +15,12 @@ export interface AnalysisFinding {
   fileName: string;
   /** 1-based line number in the analyzed file (null if unknown). */
   lineNumber: number | null;
-  /** 1-based column (null if unknown). */
+  /** 0-based column (null if unknown); labels show it 1-based. */
   column: number | null;
   /** Identifier the issue is about (used to narrow the highlight). */
   nameToken: string | null;
   /** Severity hint - matches vscode.DiagnosticSeverity values without importing it here. */
   severity: "error" | "warning" | "info";
-  /** Original raw traceback / linter output for debugging. */
-  raw: string;
   /**
    * Where the finding came from. Used so the diagnostics layer can label
    * the source ("pll / runtime" vs "pll / static") and so future
@@ -59,14 +56,36 @@ export function runtimeFindingFor(
   const { error, fileName, level } = input;
   return {
     errorType: error.errorType,
-    message: error.message,
     fileName,
     lineNumber: error.lineNumber,
     column: error.column,
     nameToken: error.nameToken,
     severity: "error",
-    raw: error.traceback,
     origin: "runtime",
+    level,
+    ...fields,
+  };
+}
+
+/**
+ * A static finding about `raw`, given its explanation. What it is and where
+ * are the raw finding's own.
+ */
+export function staticFindingFor(
+  raw: RawStaticFinding,
+  level: Level,
+  fileName: string,
+  fields: Pick<AnalysisFinding, "headline" | "howToFix"> & Partial<AnalysisFinding>,
+): AnalysisFinding {
+  return {
+    id: raw.id,
+    errorType: raw.error_type,
+    fileName,
+    lineNumber: raw.line_number,
+    column: raw.column,
+    nameToken: raw.name_token,
+    severity: "error",
+    origin: "static",
     level,
     ...fields,
   };

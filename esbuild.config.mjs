@@ -6,12 +6,34 @@ import * as esbuild from "esbuild";
 const require = createRequire(import.meta.url);
 
 /**
- * The exact Pyodide installed here - the same build whose assets are copied
- * into `vendor/pyodide` and whose version the web host's CDN default names.
+ * The exact Pyodide installed here, and so the one PLL is tested with: its
+ * assets are copied into `vendor/pyodide` for desktop, the web host loads
+ * this version from the CDN, and the CLI depends on exactly it. This is the
+ * one place the version comes from.
  */
 const PYODIDE_VERSION = JSON.parse(
   fs.readFileSync(require.resolve("pyodide/package.json"), "utf8"),
 ).version;
+
+/** Where the web host loads that Pyodide from. */
+const PYODIDE_CDN_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+
+/**
+ * The `pll.pyodideIndexUrl` setting's default is in the manifest, which
+ * cannot compute it - so the build refuses to go on when it names another
+ * version, rather than ship a web extension running a Pyodide nobody tested.
+ */
+function checkIndexUrlDefault() {
+  const manifest = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+  const declared =
+    manifest.contributes?.configuration?.properties?.["pll.pyodideIndexUrl"]?.default;
+  if (declared !== PYODIDE_CDN_URL) {
+    throw new Error(
+      `package.json: the default of pll.pyodideIndexUrl is ${JSON.stringify(declared)}, ` +
+        `but the installed Pyodide is ${PYODIDE_VERSION}. Set it to ${JSON.stringify(PYODIDE_CDN_URL)}.`,
+    );
+  }
+}
 
 /** Files loadPyodide fetches from indexURL (JS loader is bundled into dist/). */
 const PYODIDE_ASSETS = [
@@ -56,7 +78,7 @@ const baseOptions = {
 /** @type {esbuild.BuildOptions} */
 const desktopOptions = {
   ...baseOptions,
-  entryPoints: ["src/extension.ts"],
+  entryPoints: ["src/desktop/extension.ts"],
   outfile: "dist/extension.js",
   platform: "node",
   format: "cjs",
@@ -75,6 +97,7 @@ const webExtensionOptions = {
   external: ["vscode"],
   define: {
     global: "globalThis",
+    PLL_PYODIDE_INDEX_URL: JSON.stringify(PYODIDE_CDN_URL),
   },
 };
 
@@ -208,6 +231,7 @@ const allConfigs = [
   testLibOptions,
 ];
 
+checkIndexUrlDefault();
 copyPyodideAssets();
 
 if (watch) {

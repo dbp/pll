@@ -11,37 +11,15 @@
  * or CORS.
  */
 import { execFileSync, spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 
-import { build } from "esbuild";
-import { loadPyodide } from "pyodide";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
+import { importSource } from "./lib/bundle.mjs";
+import { expect, passed } from "./lib/check.mjs";
+import { bootPll } from "./lib/pyodide.mjs";
 
 // The hosts' own regex, bundled, rather than a copy that could drift from it.
-const bundled = await build({
-  entryPoints: [resolve(ROOT, "src/common/packages.ts")],
-  bundle: true,
-  write: false,
-  format: "esm",
-  platform: "node",
-});
-const { NETWORK_IMPORT_RE } = await import(
-  "data:text/javascript;base64," + Buffer.from(bundled.outputFiles[0].text).toString("base64")
-);
+const { NETWORK_IMPORT_RE } = await importSource('export { NETWORK_IMPORT_RE } from "./src/common/packages";');
 
 const CARS_CSV = "name,mpg\nvw,29\nhonda,33\nford,18\n";
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
 
 /**
  * Same idea as src/desktop/xhrPolyfill.ts + syncHttp.ts: Node has no
@@ -182,9 +160,7 @@ server.listen(0, "127.0.0.1", () => {
 async function main() {
   installNodeXHR();
 
-  const indexURL = resolve(ROOT, "node_modules", "pyodide");
-  const pyodide = await loadPyodide({ indexURL });
-  pyodide.runPython(readFileSync(resolve(ROOT, "src/common/pyodideBootstrap.py"), "utf8"));
+  const pyodide = await bootPll();
 
   const userCode = [
     "import pandas as pd",
@@ -234,8 +210,8 @@ async function main() {
     close();
   }
 
-  console.log(`\nsmoke-pandas: ${ok ? "ok" : "FAILED"}`);
-  if (!ok) {
+  console.log(`\nsmoke-pandas: ${passed() ? "ok" : "FAILED"}`);
+  if (!passed()) {
     process.exit(1);
   }
 }

@@ -6,44 +6,14 @@
  * "register exports into the per-session template" install snippet, then
  * runs each scenario through `_pll_run_file` / `_pll_repl_eval`.
  */
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 
-import { loadPyodide } from "pyodide";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
-
-function readText(rel) {
-  return readFileSync(resolve(ROOT, rel), "utf8");
-}
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
+import { expect, passed } from "./lib/check.mjs";
+import { bootPll } from "./lib/pyodide.mjs";
 
 const SK = "test:tables";
 
 async function main() {
-  const indexURL = resolve(ROOT, "node_modules", "pyodide");
-  const pyodide = await loadPyodide({ indexURL });
-  pyodide.runPython(readText("src/common/pyodideBootstrap.py"));
-  pyodide.runPython(readText("src/common/imageLib.py"));
-  pyodide.runPython(readText("src/common/tableLib.py"));
-  // Install image + table exports into the per-session template, mirroring
-  // what PYODIDE_INSTALL_PY does in the runtime.
-  pyodide.runPython(`
-for _name in PLL_IMAGE_EXPORTS:
-    _pll_initial_globals[_name] = globals()[_name]
-for _name in PLL_TABLE_EXPORTS:
-    _pll_initial_globals[_name] = globals()[_name]
-del _name
-`);
+  const pyodide = await bootPll();
 
   const callRunFile = pyodide.globals.get("_pll_run_file");
   const callReplEval = pyodide.globals.get("_pll_repl_eval");
@@ -579,6 +549,13 @@ table(["i"], [[i] for i in range(500)])
         "ValueError",
         "histogram's `bins` has to be 1 or more",
       ],
+      // The value as the student wrote it, not rounded the way a cell is.
+      [
+        "histogram with a negative width",
+        `${T}t.histogram("riders", bin_width=-0.123456789)`,
+        "ValueError",
+        "but it is -0.123456789.",
+      ],
       [
         "numbers still text",
         `${CSV}c.mean("mpg")`,
@@ -671,7 +648,7 @@ table(["i"], [[i] for i in range(500)])
   callRunFile.destroy?.();
   callReplEval.destroy?.();
 
-  if (!ok) {
+  if (!passed()) {
     console.log("\nFAILED");
     process.exit(1);
   }

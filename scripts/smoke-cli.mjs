@@ -12,20 +12,11 @@
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { expect, passed } from "./lib/check.mjs";
+import { ROOT } from "./lib/bundle.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
 const CLI = resolve(ROOT, "dist-cli", "cli.cjs");
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
 
 const work = mkdtempSync(join(tmpdir(), "pll-cli-"));
 function fixture(name, ...lines) {
@@ -237,7 +228,14 @@ async function main() {
     const r = await run([file, "--quiet"]);
     expect(r.stdout === "just this\n", `stdout: ${JSON.stringify(r.stdout)}`);
     expect(r.stderr === "", `stderr should be empty, got ${JSON.stringify(r.stderr)}`);
-    console.log("    nothing but the program on either stream");
+    // Loading pytest is PLL's business, and quiet; the tests' result is not.
+    const tested = fixture("quiet_tests.py", "def test_a():", "    assert 1 == 1", 'print("ran")');
+    const t = await run([tested, "--quiet"]);
+    expect(!/Load(ing|ed) /.test(t.stderr), `no package loading under --quiet: ${JSON.stringify(t.stderr)}`);
+    expect(/tests: 1 passed/.test(t.stderr), `but the tests' result: ${JSON.stringify(t.stderr)}`);
+    const loud = await run([tested]);
+    expect(/Loading .*pytest/.test(loud.stderr), `without it, the loading is said: ${JSON.stringify(loud.stderr.slice(0, 200))}`);
+    console.log("    nothing but the program on either stream, and the tests' result");
   }
 
   console.log("\n[10] usage problems are reported, not crashed on");
@@ -362,7 +360,6 @@ async function main() {
     console.log("    columns correct at top level and indented");
   }
 
-
   console.log("\n[16] a warning is said and the file still runs");
   {
     // A warning is about code that works - a helper nothing runs, a method
@@ -461,7 +458,6 @@ async function main() {
     expect(/capture\.py:20:14\b/.test(r.stderr), `blamed at the case line: ${r.stderr}`);
     console.log(`    ${r.stderr.split("\n")[0]}`);
   }
-
 
   console.log("\n[18] a compile-time warning is said once, and not beside its own finding");
   {
@@ -571,8 +567,46 @@ async function main() {
     console.log(`    exit=${r.code}; ${r.stderr.trim().split("\n").at(-1)}`);
   }
 
+  console.log("\n[21] os._exit ends the program; Python itself failing is the program's failure");
+  {
+    const exits = fixture("exits.py", "import os", 'print("before")', "os._exit(0)", 'print("after")');
+    const r = await run([exits]);
+    expect(r.code === 0 && r.stdout === "before\n", `ends there, like sys.exit: exit=${r.code} ${JSON.stringify(r.stdout)}`);
+    const fatal = fixture("fatal.py", "import posix", "posix.abort()");
+    const f = await run([fatal]);
+    expect(f.code === 1, `exit 1, not a usage error: ${f.code}`);
+    expect(/pll: Python stopped completely\./.test(f.stderr), `said plainly: ${f.stderr.trim().split("\n").at(-1)}`);
+    expect(!/Could not save files/.test(f.stderr), `with no files to copy back: ${f.stderr}`);
+    console.log(`    exit=${f.code}; ${f.stderr.trim().split("\n").at(-1)}`);
+  }
+
+  console.log("\n[22] a program's own exit status is passed on, as python would");
+  {
+    const cases = [
+      [["import sys", "sys.exit(3)"], 3],
+      [["import sys", "sys.exit()"], 0],
+      [["import sys", 'sys.exit("no data file")'], 1, /^no data file$/m],
+      [["raise SystemExit(True)"], 1],
+      [["import sys", "sys.exit(-1)"], 255],
+      [["import sys", "sys.exit(256)"], 0],
+      [["import os", "os._exit(5)"], 5],
+      [["import os", "os.abort()"], 134],
+      // A failure the program reports outranks the tests'.
+      [["def test_a():", "    assert 1 == 2", "", "import sys", "sys.exit(4)"], 4],
+      [['print("finished")'], 0],
+    ];
+    const seen = [];
+    for (const [lines, want, stderr] of cases) {
+      const r = await run([fixture(`exit_${seen.length}.py`, ...lines), "--quiet"]);
+      expect(r.code === want, `${lines.at(-1)} should exit ${want}, got ${r.code}`);
+      if (stderr) expect(stderr.test(r.stderr), `${lines.at(-1)} says why: ${JSON.stringify(r.stderr)}`);
+      seen.push(`${lines.at(-1)}->${r.code}`);
+    }
+    console.log(`    ${seen.join("  ")}`);
+  }
+
   rmSync(work, { recursive: true, force: true });
-  if (!ok) {
+  if (!passed()) {
     console.error("\nsmoke-cli: FAILED");
     process.exit(1);
   }

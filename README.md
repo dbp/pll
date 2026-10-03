@@ -565,7 +565,8 @@ animate, but tables print as text and everything else is the same code.
 
 Exit codes make it usable for marking: `0` ran and tests passed, `1` the
 program raised or was stopped, `2` level checks blocked it, `3` a test
-failed.
+failed. A program that ends itself with `sys.exit(n)` exits with `n`, as
+under `python`.
 
 Course staff can also build Examplar bundles with it. See
 [pll-python on npm](https://www.npmjs.com/package/pll-python) for that and

@@ -8,107 +8,23 @@
  * guards against (the worker never returning) cannot be reproduced with a
  * fake runtime.
  */
-import { build } from "esbuild";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { dirname, join, resolve } from "node:path";
-import { Worker } from "node:worker_threads";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
-const WORKER_PATH = resolve(ROOT, "dist", "desktop", "pyodideWorker.js");
-const INDEX_URL = resolve(ROOT, "node_modules", "pyodide");
+import { expect, passed } from "./lib/check.mjs";
+import { importSource } from "./lib/bundle.mjs";
+import { INDEX_URL } from "./lib/pyodide.mjs";
+import { startWorker, talk } from "./lib/worker.mjs";
 
 // The real module, bundled, so this test uses the same layout and the same
 // retrying Stop as the hosts - a hand-written copy is how the test used to
 // bypass the code it was meant to cover.
-const bundleDir = mkdtempSync(join(ROOT, ".smoke-"));
-writeFileSync(
-  join(bundleDir, "entry.mjs"),
-  'export * from "../src/common/interruptBuffer";\n',
-);
-await build({
-  entryPoints: [join(bundleDir, "entry.mjs")],
-  bundle: true,
-  platform: "node",
-  format: "esm",
-  outfile: join(bundleDir, "out.mjs"),
-  absWorkingDir: ROOT,
-});
 const {
   INTERRUPT_SAB_BYTES,
   INTERRUPT_SIGINT,
   INTERRUPT_ACK_INDEX,
   requestInterrupt,
-} = await import(pathToFileURL(join(bundleDir, "out.mjs")).href);
-rmSync(bundleDir, { recursive: true, force: true });
+} = await importSource('export * from "./src/common/interruptBuffer";\n');
 
 /** Generous: a bytecode check is immediate, so this only bounds a failure. */
 const INTERRUPT_DEADLINE_MS = 20000;
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
-
-function talk(worker) {
-  let nextId = 1;
-  let displays = 0;
-  let streamed = "";
-  const pending = new Map();
-  worker.on("message", (msg) => {
-    if (msg.type === "display") {
-      displays += 1;
-      if (msg.payload?.type === "stdout") streamed += msg.payload.text;
-      return;
-    }
-    if (msg.type === "stdinRequest") return;
-    const p = pending.get(msg.id);
-    if (!p) return;
-    pending.delete(msg.id);
-    if (msg.type === "error") p.reject(new Error(msg.message));
-    else p.resolve(msg);
-  });
-  worker.on("error", (err) => {
-    for (const p of pending.values()) p.reject(err);
-    pending.clear();
-  });
-  return {
-    get displays() {
-      return displays;
-    },
-    get streamed() {
-      return streamed;
-    },
-    /**
-     * Wait until the program has actually started.
-     *
-     * Signalling on a timer is a race the worker wins: `runFile` clears any
-     * pending interrupt before it runs (so a stale Stop cannot kill the
-     * *next* program), and if the worker had not dequeued the request yet,
-     * that clear wipes the signal and the loop runs forever. Waiting for
-     * the program's own output removes the race.
-     */
-    async waitForOutput(text, ms = 20000) {
-      const deadline = Date.now() + ms;
-      while (!streamed.includes(text)) {
-        if (Date.now() > deadline) {
-          throw new Error(`no ${JSON.stringify(text)} within ${ms}ms`);
-        }
-        await sleep(25);
-      }
-    },
-    send(payload) {
-      const id = nextId++;
-      const promise = new Promise((res, rej) => pending.set(id, { resolve: res, reject: rej }));
-      worker.postMessage({ id, ...payload });
-      return promise;
-    },
-  };
-}
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
@@ -124,10 +40,6 @@ function withDeadline(promise, ms, label) {
 }
 
 async function main() {
-  if (!existsSync(WORKER_PATH)) {
-    console.error(`Missing ${WORKER_PATH}. Run \`pnpm run build\` first.`);
-    process.exit(1);
-  }
 
   console.log("\n[0] a Stop is retried until it is acknowledged, and no longer");
   {
@@ -211,7 +123,7 @@ async function main() {
   const POLLS = "total = 0\nfor i in range(300000):\n    total += i\n";
   const pending = () => Atomics.load(new Uint8Array(interruptBuffer), 0);
 
-  const worker = new Worker(WORKER_PATH);
+  const worker = startWorker();
   const session = talk(worker);
 
   try {
@@ -283,7 +195,7 @@ async function main() {
     // The case that matters: every print calls back into JS, so without
     // coalescing this posts a few hundred thousand messages a second and the
     // host never gets around to processing the student's Stop.
-    const before = session.displays;
+    const before = session.displays.length;
     const printRun = session.send({
       type: "runFile",
       code: 'while True:\n    print("hello")\n',
@@ -294,7 +206,7 @@ async function main() {
     await session.waitForOutput("hello");
     // Now that it is definitely running, measure a second of it.
     await sleep(1000);
-    const duringSecond = session.displays - before;
+    const duringSecond = session.displays.length - before;
     stop(printRun);
     const noisy = await withDeadline(printRun, INTERRUPT_DEADLINE_MS, "interrupted print loop");
     expect(
@@ -533,11 +445,42 @@ async function main() {
       }
       console.log("    tests, a program and a prompt line each came back stopped");
     }
+
+    console.log("\n[12] one Stop ends an Examplar check, however many implementations it has");
+    {
+      // The check runs the student's tests once per implementation. A Stop
+      // used to be recorded as one test's error, and the next implementation
+      // ran the same looping test again - one press per implementation.
+      const built = await session.send({
+        type: "examplarBuild",
+        sources: JSON.stringify({
+          wheats: {
+            reference: "def shout(w):\n    return w.upper() + '!'\n",
+            alternative: "def shout(w):\n    return (w + '!').upper()\n",
+          },
+          chaffs: { shout: { 1: "def shout(w):\n    return w\n" } },
+        }),
+      });
+      expect(built.result?.ok === true, `the bundle builds: ${JSON.stringify(built.result?.error)}`);
+      const check = session.send({
+        type: "examplarRun",
+        testSource: "def test_shout():\n    while True:\n        pass\n",
+        bundle: JSON.stringify(built.result.bundle),
+      });
+      await sleep(1000);
+      stop(check);
+      let failure = null;
+      await withDeadline(check, INTERRUPT_DEADLINE_MS, "stopped Examplar check").catch(
+        (err) => (failure = err.message),
+      );
+      expect(failure !== null && /KeyboardInterrupt/.test(failure), `the check ends as a Stop: ${failure}`);
+      console.log("    stopped once, and the second implementation never ran its loop");
+    }
   } finally {
     await worker.terminate();
   }
 
-  if (!ok) {
+  if (!passed()) {
     console.error("\nsmoke-interrupt: FAILED");
     process.exit(1);
   }

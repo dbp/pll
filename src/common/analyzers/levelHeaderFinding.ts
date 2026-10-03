@@ -22,7 +22,6 @@ export function levelHeaderFinding(
   return {
     id: "level-header",
     errorType: "Level",
-    message: problem.message,
     headline: problem.message,
     howToFix: problem.howToFix,
     fileName,
@@ -30,7 +29,6 @@ export function levelHeaderFinding(
     column: null,
     nameToken: null,
     severity: "error",
-    raw: problem.message,
     origin: "static",
     level,
   };

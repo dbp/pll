@@ -1,62 +1,37 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
-  isMountableName,
-  selectMountableFiles,
-  selectWritebackFiles,
+  readSiblingFiles,
+  writeSiblingFiles,
+  type SiblingFolder,
   type WorkspaceFile,
 } from "../common/workspaceFilePolicy";
 
 /**
- * Sibling files, over Node's filesystem instead of `vscode.workspace.fs`.
- *
- * Every rule about *which* files and *how big* lives in
- * `workspaceFilePolicy`, shared with the extension, so `open("data.csv")`
- * sees the same set here as it does in the editor. Only the reading and
- * writing differ. There is no editor, so unlike the extension there are no
- * unsaved buffers to prefer over disk.
+ * The script's folder over Node's filesystem. There is no editor, so unlike
+ * the extension there are no unsaved buffers to prefer over the disk.
  */
-export async function collectSiblingFiles(scriptPath: string): Promise<WorkspaceFile[]> {
+function siblingFolder(scriptPath: string): SiblingFolder {
   const folder = path.dirname(path.resolve(scriptPath));
-  let entries;
-  try {
-    entries = await fs.readdir(folder, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const candidates: { name: string; contents: string | Uint8Array }[] = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !isMountableName(entry.name)) {
-      continue;
-    }
-    try {
-      candidates.push({ name: entry.name, contents: await fs.readFile(path.join(folder, entry.name)) });
-    } catch {
-      /* skip unreadable files, as the extension does */
-    }
-  }
-  return selectMountableFiles(candidates);
+  return {
+    files: async () =>
+      (await fs.readdir(folder, { withFileTypes: true }))
+        .filter((entry) => entry.isFile())
+        .map((entry) => entry.name),
+    read: (name) => fs.readFile(path.join(folder, name)),
+    write: (name, text) => fs.writeFile(path.join(folder, name), text, "utf8"),
+  };
 }
 
-/** Write changed data files back next to the script. Returns basenames. */
-export async function writeBackSiblingFiles(
+/** Text and picture files next to the script. */
+export function collectSiblingFiles(scriptPath: string): Promise<WorkspaceFile[]> {
+  return readSiblingFiles(siblingFolder(scriptPath));
+}
+
+/** Write changed data files back next to the script. Returns their names. */
+export function writeBackSiblingFiles(
   scriptPath: string,
   files: WorkspaceFile[],
 ): Promise<string[]> {
-  const folder = path.dirname(path.resolve(scriptPath));
-  const written: string[] = [];
-  for (const file of selectWritebackFiles(files)) {
-    try {
-      // Writeback is text only; `selectWritebackFiles` has already dropped
-      // anything that arrived as bytes.
-      if (typeof file.contents !== "string") {
-        continue;
-      }
-      await fs.writeFile(path.join(folder, file.name), file.contents, "utf8");
-      written.push(file.name);
-    } catch {
-      /* skip files we cannot write */
-    }
-  }
-  return written;
+  return writeSiblingFiles(siblingFolder(scriptPath), files);
 }

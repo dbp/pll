@@ -36,6 +36,6 @@ export function activateWithRuntime(
     { dispose: () => runtime.dispose() },
   );
 
-  registerCommands(context, { repl, diagnostics, view });
+  registerCommands(context, { repl, view });
   void checkConflictingExtensions(context);
 }

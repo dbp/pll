@@ -1,6 +1,6 @@
 import type { Level } from "../../level";
-import type { RawStaticFinding, RawStaticFindingOf, SilenceFindingId } from "../../wire";
-import type { AnalysisFinding } from "../types";
+import type { RawStaticFindingOf, SilenceFindingId } from "../../wire";
+import { staticFindingFor, type AnalysisFinding } from "../types";
 
 /**
  * Findings for code that would otherwise run without a word being said.
@@ -13,11 +13,16 @@ import type { AnalysisFinding } from "../types";
  * student's only evidence is a program that seems to work.
  */
 
-/** The replacement for an annotation that names something that is not a type. */
+/**
+ * The replacement for an annotation that names something that is not a
+ * type. Every one has to be a name a student's code has: a row is a `dict`
+ * - PLL's `Row` subclasses it - and `Row` itself is not one of them, so
+ * advising it led straight to a NameError.
+ */
 const TYPE_FOR: Record<string, string> = {
   table: "Table",
   reactor: "Reactor",
-  row: "Row",
+  row: "dict",
   string: "str",
   integer: "int",
   boolean: "bool",
@@ -41,31 +46,6 @@ const TYPE_FOR: Record<string, string> = {
  */
 const FUNCTION_NOT_TYPE = new Set(["table", "reactor"]);
 
-function finding(
-  raw: RawStaticFinding,
-  level: Level,
-  fileName: string,
-  headline: string,
-  howToFix: string[],
-  severity: AnalysisFinding["severity"],
-): AnalysisFinding {
-  return {
-    id: raw.id,
-    errorType: raw.error_type || "StaticError",
-    message: raw.message,
-    headline,
-    howToFix,
-    fileName,
-    lineNumber: raw.line_number,
-    column: raw.column,
-    nameToken: raw.name_token,
-    severity,
-    raw: JSON.stringify(raw),
-    origin: "static",
-    level,
-  };
-}
-
 /** `pen_cost(0, "huskies") == 1` - a test written without `assert`. */
 export function explainUnusedComparison(
   raw: RawStaticFindingOf<SilenceFindingId>,
@@ -74,17 +54,13 @@ export function explainUnusedComparison(
 ): AnalysisFinding {
   // Their own comparison, not `assert ...`.
   const shown = raw.expression ? `\`assert ${raw.expression}\`` : "`assert ...`";
-  return finding(
-    raw,
-    level,
-    fileName,
-    "This comparison's answer is not used, so nothing checks it.",
-    [
+  return staticFindingFor(raw, level, fileName, {
+    headline: "This comparison's answer is not used, so nothing checks it.",
+    howToFix: [
       `Did you mean ${shown}? Without \`assert\` the comparison is worked out and thrown away, so the test always passes.`,
       "At the top level a line like this is displayed; inside a function nothing shows it.",
     ],
-    "error",
-  );
+  });
 }
 
 /** `ac.balance + amt` on a line of its own. */
@@ -108,14 +84,10 @@ export function explainUnusedValue(
         : [
             `Did you mean \`return ${expression}\`? On its own, the value is worked out and thrown away.`,
           ];
-  return finding(
-    raw,
-    level,
-    fileName,
-    "This line works out a value and then throws it away.",
-    [...howToFix, "Nothing in Python changes as a result of this line."],
-    "error",
-  );
+  return staticFindingFor(raw, level, fileName, {
+    headline: "This line works out a value and then throws it away.",
+    howToFix: [...howToFix, "Nothing in Python changes as a result of this line."],
+  });
 }
 
 /** `assert(x, 1)` - a tuple, which is always true. */
@@ -124,17 +96,13 @@ export function explainAssertTuple(
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  return finding(
-    raw,
-    level,
-    fileName,
-    "This `assert` has brackets around two things, so it is always true.",
-    [
+  return staticFindingFor(raw, level, fileName, {
+    headline: "This `assert` has brackets around two things, so it is always true.",
+    howToFix: [
       "`assert(a, b)` checks a pair, and a pair is never false - the test passes whatever happens.",
       "Write `assert a == b`, with no brackets after `assert`.",
     ],
-    "error",
-  );
+  });
 }
 
 /** `movies["rating"].mean` - the method, not its result. */
@@ -144,17 +112,14 @@ export function explainMethodNotCalled(
   fileName: string,
 ): AnalysisFinding {
   const method = raw.name_token ?? "the method";
-  return finding(
-    raw,
-    level,
-    fileName,
-    `\`${method}\` is named here but never called.`,
-    [
+  return staticFindingFor(raw, level, fileName, {
+    headline: `\`${method}\` is named here but never called.`,
+    howToFix: [
       `Add the brackets: \`.${method}()\`.`,
       `Without them this is the method itself, which displays as \`<bound method ...>\`.`,
     ],
-    "warning",
-  );
+    severity: "warning",
+  });
 }
 
 /** `t: table` - the function that makes tables, not the type. */
@@ -173,12 +138,9 @@ export function explainAnnotationNotAType(
   // `string` and `Float` are not names at all, so the line fails with a
   // NameError the moment it runs - and saying "accepted" there is false.
   const exists = FUNCTION_NOT_TYPE.has(written);
-  return finding(
-    raw,
-    level,
-    fileName,
+  return staticFindingFor(raw, level, fileName, {
     headline,
-    type !== null
+    howToFix: type !== null
       ? [
           `Write \`${type}\` instead.`,
           exists
@@ -186,8 +148,7 @@ export function explainAnnotationNotAType(
             : `There is nothing called \`${written}\`, so this line fails as soon as it runs.`,
         ]
       : ["Nothing about this value is being checked as a result."],
-    "error",
-  );
+  });
 }
 
 /** A function with an `assert` that nothing ever runs. */
@@ -197,17 +158,14 @@ export function explainTestNotNamed(
   fileName: string,
 ): AnalysisFinding {
   const name = raw.name_token ?? "this function";
-  return finding(
-    raw,
-    level,
-    fileName,
-    `\`${name}\` has an \`assert\` in it, but nothing ever runs it.`,
-    [
+  return staticFindingFor(raw, level, fileName, {
+    headline: `\`${name}\` has an \`assert\` in it, but nothing ever runs it.`,
+    howToFix: [
       `Rename it \`test_${name}\` and it will run with the other tests.`,
       "Only functions whose names start with `test_` are run automatically.",
     ],
-    "warning",
-  );
+    severity: "warning",
+  });
 }
 
 /** `year` on a line of its own in a dataclass body. */
@@ -217,19 +175,15 @@ export function explainFieldNoType(
   fileName: string,
 ): AnalysisFinding {
   const name = raw.name_token ?? "this field";
-  return finding(
-    raw,
-    level,
-    fileName,
-    `The field \`${name}\` has no type, so it is not a field at all.`,
-    [
+  return staticFindingFor(raw, level, fileName, {
+    headline: `The field \`${name}\` has no type, so it is not a field at all.`,
+    howToFix: [
       `Every field of a dataclass needs a type: \`${name}: int\`, \`${name}: str\`, and so on.`,
       // The NameError this used to lead to is no longer reached - this is
       // reported before the program runs - so it is not mentioned.
       `On a line of its own, \`${name}\` only uses the name; it does not declare anything.`,
     ],
-    "error",
-  );
+  });
 }
 
 /** `year = int` where `year: int` was meant. */
@@ -240,17 +194,13 @@ export function explainFieldAssignedType(
 ): AnalysisFinding {
   const name = raw.name_token ?? "this field";
   const type = raw.written_type ?? "int";
-  return finding(
-    raw,
-    level,
-    fileName,
-    `\`${name} = ${type}\` sets \`${name}\` to the type itself; did you mean \`${name}: ${type}\`?`,
-    [
+  return staticFindingFor(raw, level, fileName, {
+    headline: `\`${name} = ${type}\` sets \`${name}\` to the type itself; did you mean \`${name}: ${type}\`?`,
+    howToFix: [
       "A field is declared with a colon, not an `=`.",
       `With an \`=\` there is no \`${name}\` field, and the constructor ends up with the wrong number of arguments.`,
     ],
-    "error",
-  );
+  });
 }
 
 /** A class with annotated fields and no `@dataclass`. */
@@ -260,17 +210,13 @@ export function explainClassNeedsDataclass(
   fileName: string,
 ): AnalysisFinding {
   const name = raw.name_token ?? "this class";
-  return finding(
-    raw,
-    level,
-    fileName,
-    `\`${name}\` lists fields but has no \`@dataclass\`, so \`${name}(...)\` takes no arguments.`,
-    [
+  return staticFindingFor(raw, level, fileName, {
+    headline: `\`${name}\` lists fields but has no \`@dataclass\`, so \`${name}(...)\` takes no arguments.`,
+    howToFix: [
       `Write \`@dataclass\` on the line above \`class ${name}\`.`,
       "Add `from dataclasses import dataclass` at the top of the file if it is not there.",
     ],
-    "error",
-  );
+  });
 }
 
 /** `if a == Boa:` - a value is never equal to the class it was made from. */
@@ -280,15 +226,11 @@ export function explainComparedWithClass(
   fileName: string,
 ): AnalysisFinding {
   const name = raw.name_token ?? "a class";
-  return finding(
-    raw,
-    level,
-    fileName,
-    `\`${name}\` is a class, so comparing a value with it is always False.`,
-    [
+  return staticFindingFor(raw, level, fileName, {
+    headline: `\`${name}\` is a class, so comparing a value with it is always False.`,
+    howToFix: [
       `Use \`match\` to tell the kinds apart: \`case ${name}(...):\`.`,
       `\`${name}\` is the blueprint; a value made from it is never equal to it.`,
     ],
-    "error",
-  );
+  });
 }

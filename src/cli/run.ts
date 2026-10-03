@@ -82,8 +82,23 @@ export async function runFile(
 
   if (outcome === "blocked") return EXIT.blocked;
   if (outcome === "stopped" || view.sawError) return EXIT.programError;
+  // The program's own status, as `python` would exit with it. A failure it
+  // chose to report outranks the tests', which were already listed.
+  if (view.exitCode !== null && processStatus(view.exitCode) !== 0) {
+    return processStatus(view.exitCode);
+  }
   if (view.testFailures > 0) return EXIT.testsFailed;
   return EXIT.ok;
+}
+
+/**
+ * A status as the shell sees it: the low byte, which is what an exit status
+ * is on POSIX. `sys.exit(256)` exits 0 under CPython too; one too large to
+ * be a status at all is a failure.
+ */
+function processStatus(code: number): number {
+  if (!Number.isSafeInteger(code)) return EXIT.programError;
+  return ((code % 256) + 256) % 256;
 }
 
 export { DEFAULT_LEVEL };

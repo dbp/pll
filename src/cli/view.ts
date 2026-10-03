@@ -32,6 +32,8 @@ export class CliView {
   public sawError = false;
   /** Failing + erroring tests across all reports. */
   public testFailures = 0;
+  /** What the program ended itself with (`sys.exit(n)`), if it did. */
+  public exitCode: number | null = null;
   private imageCount = 0;
 
   constructor(private readonly opts: ViewOptions) {}
@@ -130,6 +132,7 @@ export class CliView {
         this.problem(this.red(`${event.error.errorType}: ${event.error.message}`));
         break;
       case "done":
+        if (event.exitCode !== undefined) this.exitCode = event.exitCode;
         break;
     }
   }

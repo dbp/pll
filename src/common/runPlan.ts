@@ -9,6 +9,7 @@ import { needsPackages } from "./packages";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 import type { WorkspaceFile } from "./workspaceFilePolicy";
 import { errorText } from "./errorText";
+import { PythonLostError } from "./pythonLost";
 
 /**
  * The steps of a run, written once for every host.
@@ -227,6 +228,7 @@ async function withFiles(
   run: () => Promise<RunOutcome>,
 ): Promise<RunOutcome> {
   let mounted = false;
+  let lost = false;
   try {
     await loadPackages(runtime, host, code);
     mounted = await mount(runtime, host);
@@ -235,12 +237,15 @@ async function withFiles(
     }
     return await run();
   } catch (err) {
+    lost = err instanceof PythonLostError;
     if (stopped(host, "Stopped.")) {
       return "stopped";
     }
     throw err;
   } finally {
-    if (mounted) {
+    // A Python that stopped took its files with it: there is nothing to
+    // copy back, and asking would start a new Python only to find that out.
+    if (mounted && !lost) {
       await writeBack(runtime, host, fileName);
     }
   }

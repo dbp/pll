@@ -1,10 +1,13 @@
 import * as path from "node:path";
+import { parseCommandLine, type CliOption } from "./args";
 import { runExamplar } from "./examplar";
 import { createCliRuntime } from "./runtime";
 import { EXIT, runFile } from "./run";
 import { createLineReader } from "./stdin";
 import { CliView } from "./view";
 import { errorText } from "../common/errorText";
+import { PythonLostError } from "../common/pythonLost";
+import type { PythonRuntime } from "../common/types";
 
 declare const PLL_CLI_VERSION: string;
 
@@ -34,7 +37,17 @@ everything PLL says about the run goes to stderr.
 Exit codes
   0  ran, tests passed                  2  level checks blocked it
   1  the program raised or was stopped  3  a test failed
+A program that ends with \`sys.exit(n)\` exits with n, as it would under
+\`python\`; \`sys.exit("message")\` prints the message and exits with 1.
 `;
+
+/**
+ * Pyodide's "Loading pytest, ..." is commentary, so `--quiet` silences it;
+ * a package that failed to load is a problem, and is said regardless.
+ */
+function sayPackageNotes(runtime: PythonRuntime, view: CliView): void {
+  runtime.setPackageNoteHandler((text, failed) => (failed ? view.problem(text) : view.note(text)));
+}
 
 /** Colour only when stderr is a terminal, and never when NO_COLOR is set. */
 function colorDefault(): boolean {
@@ -52,42 +65,42 @@ interface Args {
   error?: string;
 }
 
+const OPTIONS: Record<string, CliOption> = {
+  "no-tests": { type: "boolean" },
+  "save-images": { type: "string", needs: "a directory" },
+  quiet: { type: "boolean", short: "q" },
+  "no-color": { type: "boolean" },
+  help: { type: "boolean", short: "h" },
+  version: { type: "boolean", short: "v" },
+};
+
 export function parseArgs(argv: string[]): Args {
+  const line = parseCommandLine(argv, OPTIONS);
+  if ("error" in line) {
+    return {
+      runTests: true,
+      quiet: false,
+      color: colorDefault(),
+      help: false,
+      version: false,
+      error: line.error,
+    };
+  }
+  const { values, positionals } = line;
   const args: Args = {
-    runTests: true,
-    quiet: false,
-    color: colorDefault(),
-    help: false,
-    version: false,
+    file: positionals[0],
+    runTests: values["no-tests"] !== true,
+    saveImagesDir: values["save-images"] as string | undefined,
+    quiet: values.quiet === true,
+    color: colorDefault() && values["no-color"] !== true,
+    help: values.help === true,
+    version: values.version === true,
   };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--no-tests") args.runTests = false;
-    else if (arg === "-q" || arg === "--quiet") args.quiet = true;
-    else if (arg === "--no-color") args.color = false;
-    else if (arg === "-h" || arg === "--help") args.help = true;
-    else if (arg === "-v" || arg === "--version") args.version = true;
-    else if (arg === "--save-images") {
-      const dir = argv[++i];
-      if (dir === undefined) {
-        args.error = "--save-images needs a directory";
-        return args;
-      }
-      args.saveImagesDir = dir;
-    } else if (arg.startsWith("-")) {
-      args.error = `unknown option ${arg}`;
-      return args;
-    } else if (args.file === undefined) {
-      args.file = arg;
-    } else {
-      args.error = `unexpected extra argument ${arg}`;
-      return args;
-    }
-  }
-  if (!args.help && !args.version && args.file === undefined) {
+  if (positionals.length > 1) {
+    args.error = `unexpected extra argument ${positionals[1]}`;
+  } else if (!args.help && !args.version && args.file === undefined) {
     args.error = "no file given";
-  }
-  if (args.file !== undefined && !args.file.endsWith(".py")) {
+  } else if (args.file !== undefined && !args.file.endsWith(".py")) {
     args.error = `${args.file} is not a .py file`;
   }
   return args;
@@ -108,6 +121,7 @@ export async function main(argv: string[]): Promise<number> {
       color: colorDefault() && !leading.includes("--no-color"),
     });
     const runtime = createCliRuntime();
+    sayPackageNotes(runtime, view);
     try {
       return await runExamplar(runtime, view, argv.slice(at + 1));
     } catch (err) {
@@ -138,6 +152,7 @@ export async function main(argv: string[]): Promise<number> {
     color: args.color,
   });
   const runtime = createCliRuntime();
+  sayPackageNotes(runtime, view);
   const reader = createLineReader();
   runtime.setStdinHandler(() => reader.read());
 
@@ -165,7 +180,9 @@ export async function main(argv: string[]): Promise<number> {
     });
   } catch (err) {
     view.problem(`pll: ${errorText(err)}`);
-    return EXIT.usage;
+    // Python stopping under the program is the program's failure, not a
+    // mistake in how `pll` was run.
+    return err instanceof PythonLostError ? EXIT.programError : EXIT.usage;
   } finally {
     process.off("SIGINT", onSigint);
     reader.close();

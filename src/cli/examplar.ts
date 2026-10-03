@@ -9,6 +9,7 @@ import type { PythonRuntime } from "../common/types";
 import { EXIT } from "./run";
 import type { CliView } from "./view";
 import { errorText } from "../common/errorText";
+import { parseCommandLine, type CliOption } from "./args";
 
 export const EXAMPLAR_USAGE = `pll examplar - author Examplar bundles
 
@@ -33,7 +34,7 @@ The bytecode is compiled by the Pyodide this package pins, so it always
 matches the interpreter that will run it - which is the reason to build
 bundles with this tool rather than a local python.
 
-  -o FILE           write here instead of stdout
+  -o, --out FILE    write here instead of stdout
   --verify TESTS    check the bundle with your own suite: it must pass on
                     every wheat and fail on every chaff. A chaff no test can
                     catch is a broken chaff, and better found now. Chaffs are
@@ -49,45 +50,36 @@ interface BuildArgs {
   error?: string;
 }
 
+const BUILD_OPTIONS: Record<string, CliOption> = {
+  out: { type: "string", short: "o", needs: "a file" },
+  verify: { type: "string", needs: "a test file" },
+  help: { type: "boolean", short: "h" },
+};
+
 export function parseExamplarArgs(argv: string[]): BuildArgs {
-  const args: BuildArgs = { help: false };
+  if (argv[0] === "-h" || argv[0] === "--help") {
+    return { help: true };
+  }
   if (argv[0] !== "build") {
-    args.error =
-      argv.length === 0
-        ? "examplar needs a subcommand"
-        : `unknown examplar subcommand ${argv[0]}`;
-    if (argv[0] === "-h" || argv[0] === "--help") {
-      args.error = undefined;
-      args.help = true;
-    }
-    return args;
+    return {
+      help: false,
+      error: argv.length === 0 ? "examplar needs a subcommand" : `unknown examplar subcommand ${argv[0]}`,
+    };
   }
-  for (let i = 1; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "-h" || arg === "--help") args.help = true;
-    else if (arg === "-o") {
-      args.out = argv[++i];
-      if (args.out === undefined) {
-        args.error = "-o needs a file";
-        return args;
-      }
-    } else if (arg === "--verify") {
-      args.verify = argv[++i];
-      if (args.verify === undefined) {
-        args.error = "--verify needs a test file";
-        return args;
-      }
-    } else if (arg.startsWith("-")) {
-      args.error = `unknown option ${arg}`;
-      return args;
-    } else if (args.dir === undefined) {
-      args.dir = arg;
-    } else {
-      args.error = `unexpected extra argument ${arg}`;
-      return args;
-    }
+  const line = parseCommandLine(argv.slice(1), BUILD_OPTIONS);
+  if ("error" in line) {
+    return { help: false, error: line.error };
   }
-  if (!args.help && args.dir === undefined) {
+  const { values, positionals } = line;
+  const args: BuildArgs = {
+    dir: positionals[0],
+    out: values.out as string | undefined,
+    verify: values.verify as string | undefined,
+    help: values.help === true,
+  };
+  if (positionals.length > 1) {
+    args.error = `unexpected extra argument ${positionals[1]}`;
+  } else if (!args.help && args.dir === undefined) {
     args.error = "no directory given";
   }
   return args;

@@ -2,60 +2,23 @@
 /**
  * Smoke test for the image library + top-level auto-display.
  *
- * Boots Pyodide in Node, loads the bootstrap, image library, and install
- * snippet, then exercises both code paths (run-file and repl-eval) and
+ * Boots Pyodide in Node with PLL installed the way the worker installs it,
+ * then exercises both code paths (run-file and repl-eval) and
  * checks the SVG output looks sensible.
  */
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 
-import { loadPyodide } from "pyodide";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
+import { expect, passed } from "./lib/check.mjs";
+import { bootPll } from "./lib/pyodide.mjs";
+import { ROOT } from "./lib/bundle.mjs";
 
 function readPy(rel) {
   return readFileSync(resolve(ROOT, rel), "utf8");
 }
 
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
-
 async function main() {
-  const indexURL = resolve(ROOT, "node_modules", "pyodide");
-  const pyodide = await loadPyodide({ indexURL });
-
-  pyodide.runPython(readPy("src/common/pyodideBootstrap.py"));
-  pyodide.runPython(readPy("src/common/imageLib.py"));
-  pyodide.runPython(readPy("src/common/tableLib.py"));
-  // Reactors are here for the end-of-run note about one that is never
-  // started, which is a run-level thing rather than a universe one.
-  pyodide.runPython(readPy("src/common/reactorLib.py"));
-
-  // Re-derive PYODIDE_INSTALL_PY rather than parsing the TS file.
-  pyodide.runPython(`
-import sys as _sys, types as _types
-_pll_module = _types.ModuleType("pll")
-for _group, _exports in (
-    ("image", PLL_IMAGE_EXPORTS),
-    ("table", PLL_TABLE_EXPORTS),
-    ("reactor", PLL_REACTOR_EXPORTS),
-):
-    _m = _types.ModuleType("pll." + _group)
-    for _name in _exports:
-        setattr(_m, _name, globals()[_name])
-        _pll_initial_globals[_name] = globals()[_name]
-    setattr(_pll_module, _group, _m)
-    _sys.modules["pll." + _group] = _m
-_sys.modules["pll"] = _pll_module
-del _name, _m, _group, _exports
-`);
+  const pyodide = await bootPll();
 
   const callRunFile = pyodide.globals.get("_pll_run_file");
   const callReplEval = pyodide.globals.get("_pll_repl_eval");
@@ -313,7 +276,6 @@ del _name, _m, _group, _exports
     );
     console.log(`    ${result.error_type}: ${result.error_message}`);
   }
-
 
   console.log("\n[14] load_image reads a picture and it composes like any other");
   {
@@ -658,7 +620,7 @@ del _name, _m, _group, _exports
   callRunFile.destroy?.();
   callReplEval.destroy?.();
 
-  if (!ok) {
+  if (!passed()) {
     console.log("\nFAILED");
     process.exit(1);
   }

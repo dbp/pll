@@ -29,19 +29,16 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 import { chromium } from "playwright";
 import { openFile } from "./webbench.mjs";
+import { expect, fail, passed } from "./lib/check.mjs";
+import { ROOT } from "./lib/bundle.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
 const PORT = process.env.VSCODE_WEB_PORT || "3020";
 const DATA_PORT = process.env.PLL_DATA_PORT || "8234";
 
 const panel = (p) => p.frameLocator("iframe.webview").frameLocator("iframe#active-frame");
-let ok = true;
-const expect = (c, m) => { if (!c) { console.error("  FAIL: " + m); ok = false; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function requireFreePort(port, what) {
@@ -103,6 +100,12 @@ writeFileSync(
     "",
   ].join("\n"),
 );
+writeFileSync(join(work, "exits.py"), 'import os\nprint("before", 1)\nos._exit(0)\nprint("after", 1)\n');
+writeFileSync(join(work, "fatal.py"), "import posix\nposix.abort()\n");
+writeFileSync(join(work, "again.py"), 'print("again", 1 + 1)\n');
+// Its own file: one that already ran still shows that output, which a wait
+// for the new run's line would find before the new run has started.
+writeFileSync(join(work, "renewed.py"), 'print("renewed", 2 + 2)\n');
 writeFileSync(
   join(work, "remote.py"),
   [
@@ -218,7 +221,7 @@ try {
     expect(got.csv === "['city', 'temp'] {'city': 'Providence, RI', 'temp': '52'}",
       `csv columns: ${got.csv}`);
     expect(got.missing === "True", `a missing file says so plainly: ${got.missing}`);
-    if (ok) console.log(`    png ${png.byteLength} bytes intact, svg sized, csv as text`);
+    if (passed()) console.log(`    png ${png.byteLength} bytes intact, svg sized, csv as text`);
   }
 
   console.log("\n[2] the same two over http, where a browser decodes the bytes");
@@ -230,13 +233,37 @@ try {
       `a fetched png must survive the browser's decoding. Panel said:\n${got.__all__}`);
     expect(got.csv === "['city', 'temp'] {'city': 'Providence, RI', 'temp': '52'}",
       `csv over http: ${got.csv}`);
-    if (ok) console.log(`    png ${png.byteLength} bytes intact over http, csv parsed`);
+    if (passed()) console.log(`    png ${png.byteLength} bytes intact over http, csv parsed`);
+  }
+
+  console.log("\n[3] os._exit ends the program, and Python carries on");
+  {
+    const exited = await runFile("exits.py", /^before/);
+    expect(exited.before === "1" && exited.after === undefined, `it ends there: ${exited.__all__}`);
+    const again = await runFile("again.py", /^again/);
+    expect(again.again === "2", `the next file runs: ${again.__all__}`);
+    if (passed()) console.log("    ended at os._exit; the next file ran");
+  }
+
+  console.log("\n[4] a Python that can no longer run is replaced, and every file says so");
+  {
+    const fatal = await runFile("fatal.py", /Python stopped completely/);
+    expect(!/Internal error/.test(fatal.__all__), `said plainly: ${fatal.__all__}`);
+    // A file that ran before is told too, or its next prompt line would
+    // fail with a NameError and no reason.
+    await openFile(page, "local.py");
+    await sleep(800);
+    const other = await panel(page).locator("#stream").innerText();
+    expect(/Python stopped completely/.test(other), `local.py is told: ${other.slice(-300)}`);
+    const renewed = await runFile("renewed.py", /^renewed/);
+    expect(renewed.renewed === "4", `a new Python runs the next file: ${renewed.__all__}`);
+    if (passed()) console.log("    replaced; local.py told; the next file ran");
   }
 } catch (err) {
   console.error(err);
-  ok = false;
+  fail(String(err));
 }
 
-console.log(ok ? "\nsmoke-web-load: ok" : "\nsmoke-web-load: FAILED");
+console.log(passed() ? "\nsmoke-web-load: ok" : "\nsmoke-web-load: FAILED");
 await shutDown();
-process.exit(ok ? 0 : 1);
+process.exit(passed() ? 0 : 1);

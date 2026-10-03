@@ -7,21 +7,10 @@
  * per-file sessions, the multi-line prompt buffer, static-check gating,
  * stream line batching, the `input()` handshake, and sibling-file syncing.
  */
-import { build } from "esbuild";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolve } from "node:path";
+import { expect, passed } from "./lib/check.mjs";
+import { importSource } from "./lib/bundle.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "..");
-
-let ok = true;
-function expect(cond, msg) {
-  if (!cond) {
-    console.error(`  FAIL: ${msg}`);
-    ok = false;
-  }
-}
 /** Let the session's internal promise chain settle. */
 const settle = () => new Promise((r) => setTimeout(r, 5));
 
@@ -58,6 +47,7 @@ class Uri {
 export const files = new Map();
 export const written = new Map();
 let activeEditorListener = null;
+let closeListener = null;
 
 export const FileType = { File: 1, Directory: 2 };
 export const UIKind = { Desktop: 1, Web: 2 };
@@ -105,7 +95,9 @@ export const window = {
   },
   visibleTextEditors: [],
   createTextEditorDecorationType: () => ({ dispose() {} }),
-  showTextDocument: async () => undefined,
+  showTextDocument: async (uri, options) => {
+    opened.push({ uri: uri.toString(), selection: options?.selection });
+  },
   showSaveDialog: async () => undefined,
   showInformationMessage: async () => undefined,
   showWarningMessage: async () => undefined,
@@ -116,6 +108,10 @@ export const window = {
 
 export const workspace = {
   textDocuments: [],
+  onDidCloseTextDocument(cb) {
+    closeListener = cb;
+    return { dispose() { closeListener = null; } };
+  },
   getConfiguration: () => ({ get: () => undefined, update: async () => undefined }),
   fs: {
     async readDirectory(folder) {
@@ -145,9 +141,25 @@ export const languages = {
     set() {}, delete() {}, dispose() {},
   }),
 };
-export const commands = { executeCommand: async () => undefined };
+/** Registered commands, so a test can run the one a user would. */
+export const registeredCommands = new Map();
+export const commands = {
+  executeCommand: async () => undefined,
+  registerCommand: (id, fn) => {
+    registeredCommands.set(id, fn);
+    return { dispose() {} };
+  },
+};
 export const env = { clipboard: { readText: async () => "", writeText: async () => undefined } };
 export const extensions = { getExtension: () => undefined };
+
+/** Every \`showTextDocument\`, in order. */
+export const opened = [];
+
+/** Test hook: VS Code closed \`document\`. */
+export function __closeDocument(document) {
+  if (closeListener) closeListener(document);
+}
 
 /** Test hook: pretend the user focused a different editor. */
 export function __setActiveEditor(editor) {
@@ -157,32 +169,17 @@ export function __setActiveEditor(editor) {
 `;
 
 async function load() {
-  const tmp = mkdtempSync(join(ROOT, ".smoke-"));
-  writeFileSync(join(tmp, "vscode.mjs"), VSCODE_STUB);
-  writeFileSync(
-    join(tmp, "entry.mjs"),
-    `
-export { ReplSession, STOP_TIMEOUT_MS, MAX_STREAM_LINES_PER_RUN } from "../src/common/replSession";
-export * as vscodeStub from "./vscode.mjs";
-`,
-  );
-  await build({
-    entryPoints: [join(tmp, "entry.mjs")],
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    outfile: join(tmp, "out.mjs"),
-    loader: { ".py": "text" },
-    alias: { vscode: join(tmp, "vscode.mjs") },
-    absWorkingDir: ROOT,
-  });
-  const mod = await import(pathToFileURL(join(tmp, "out.mjs")).href);
-  rmSync(tmp, { recursive: true, force: true });
+  const mod = await importSource(`
+export { ReplSession, STOP_TIMEOUT_MS, MAX_STREAM_LINES_PER_RUN } from "./src/common/replSession";
+export { PythonLostError } from "./src/common/pythonLost";
+export { registerCommands } from "./src/common/commands";
+export * as vscodeStub from "vscode";
+`, { vscodeStub: VSCODE_STUB });
   return mod;
 }
 
-const { ReplSession, STOP_TIMEOUT_MS, MAX_STREAM_LINES_PER_RUN, vscodeStub } = await load();
-const { Uri, __setActiveEditor, files, written } = vscodeStub;
+const { ReplSession, STOP_TIMEOUT_MS, MAX_STREAM_LINES_PER_RUN, PythonLostError, vscodeStub, registerCommands } = await load();
+const { Uri, __setActiveEditor, __closeDocument, files, written } = vscodeStub;
 
 /* ---------------------------------------------------------------- */
 /* Recorders                                                        */
@@ -197,7 +194,6 @@ function makeView() {
     title: "",
     awaitingInput: false,
     inputPrefix: "",
-    registered: [],
     reactorPatches: [],
     focusedInput: 0,
     handlers: null,
@@ -205,7 +201,14 @@ function makeView() {
       view.handlers = h;
     },
     reveal: async () => undefined,
+    empty: false,
+    showEmpty() {
+      view.empty = true;
+      view.title = "";
+      view.entries = [];
+    },
     showSession(state) {
+      view.empty = false;
       view.title = state.title;
       view.entries = [...state.entries];
       view.prompt = state.prompt;
@@ -243,9 +246,6 @@ function makeView() {
     focusInput() {
       view.focusedInput += 1;
     },
-    registerFile(name, uri) {
-      view.registered.push([name, uri.toString()]);
-    },
   };
   return view;
 }
@@ -275,6 +275,7 @@ function makeDiagnostics() {
 function makeRuntime(script = {}) {
   const calls = [];
   let stdinHandler = null;
+  let lostHandler = null;
   const runtime = {
     calls,
     get stdinHandler() {
@@ -290,9 +291,9 @@ function makeRuntime(script = {}) {
       calls.push(["examplarBuild", sources]);
       return { ok: true };
     },
-    async reactorStep(reactorId, event) {
+    async reactorStep(reactorId, event, output) {
       calls.push(["reactorStep", reactorId, event]);
-      return script.reactorStep?.(reactorId, JSON.parse(event)) ?? { ok: true };
+      return script.reactorStep?.(reactorId, JSON.parse(event), output) ?? { ok: true };
     },
     async reactorSeek(reactorId, index) {
       calls.push(["reactorSeek", reactorId, index]);
@@ -300,6 +301,9 @@ function makeRuntime(script = {}) {
     },
     async reactorDispose(reactorId) {
       calls.push(["reactorDispose", reactorId]);
+    },
+    async endSession(sessionKey) {
+      calls.push(["endSession", sessionKey]);
     },
     interrupt() {
       calls.push(["interrupt"]);
@@ -309,6 +313,9 @@ function makeRuntime(script = {}) {
     async initialize() {
       calls.push(["initialize"]);
       if (script.initFails) throw new Error("pyodide unavailable");
+      if (script.initFailsOnce && calls.filter((c) => c[0] === "initialize").length === 1) {
+        throw new Error("pyodide unavailable");
+      }
     },
     async runFile(request, onEvent) {
       calls.push(["runFile", request.code, request.sessionKey]);
@@ -380,6 +387,13 @@ function makeRuntime(script = {}) {
     setStdinHandler(handler) {
       stdinHandler = handler;
     },
+    setPythonLostHandler(handler) {
+      lostHandler = handler;
+    },
+    /** Python stops completely, as the real runtime reports it. */
+    lose() {
+      lostHandler?.();
+    },
     dispose() {},
   };
   return runtime;
@@ -399,7 +413,6 @@ function makeDoc(name, code = "") {
   };
 }
 
-/** Build a session manager with recorders, focused on `doc`. */
 /**
  * Fake universe transport. Tests drive it through the returned record:
  * `sockets` is every connection attempt, each with the handlers the session
@@ -422,6 +435,7 @@ function makeUniverse() {
   return { sockets, connectUniverse };
 }
 
+/** Build a session manager with recorders, focused on `doc`. */
 async function harness(script = {}, doc = makeDoc("hello.py")) {
   __setActiveEditor(doc ? { document: doc } : undefined);
   const runtime = makeRuntime(script);
@@ -1195,6 +1209,7 @@ console.log("\n[27] runaway output is capped so the panel stays usable");
     (e) => e.kind === "banner" && /Output stopped after/.test(e.text),
   );
   expect(notices.length === 1, `expected exactly one truncation notice, got ${notices.length}`);
+  expect(/press Stop/.test(notices[0]?.text ?? ""), `a program is ended with Stop: ${notices[0]?.text}`);
   console.log(`    rendered ${printed} of ${MAX_STREAM_LINES_PER_RUN + 1000} lines, one notice`);
   repl.dispose();
 }
@@ -2426,7 +2441,294 @@ console.log("\n[58] files that could not be mounted are not written back");
   repl.dispose();
 }
 
-console.log(`\nsmoke-repl-session: ${ok ? "ok" : "FAILED"}`);
-if (!ok) {
+console.log("\n[59] what a reactor's handler prints is shown, like the program's output");
+{
+  const { repl, view, doc } = await harness(
+    countingReactor({
+      script: {
+        reactorStep: (_id, _event, output) => {
+          output?.onEvent({ kind: "stdout", text: "tick\n" });
+          return { ok: true, frame: { data: "<svg/>", width: 1, height: 1 }, index: 1, length: 2, at_end: true, stopped: true, value_repr: "1", messages: [] };
+        },
+      },
+    }),
+  );
+  await repl.runFile("animate(...)", "hello.py", doc);
+  await new Promise((r) => setTimeout(r, 100));
+  expect(texts(view, "stdout").includes("tick"), `the print is in the panel: ${JSON.stringify(texts(view, "stdout"))}`);
+  repl.dispose();
+}
+
+console.log("\n[60] PLL: Clear Interactions clears the session, not just the panel");
+{
+  // It cleared only the view: the session kept its entries, so they came
+  // back the next time it was shown, and a reactor ticked on with no card.
+  const { repl, view, runtime, doc, diagnostics } = await harness(countingReactor());
+  await repl.runFile("animate(...)", "hello.py", doc);
+  await settle();
+  registerCommands({ subscriptions: [] }, { repl, view });
+  await vscodeStub.registeredCommands.get("pll.clearInteractions")();
+  await settle();
+  expect(view.entries.length === 0, `the panel is empty: ${view.entries.length}`);
+  expect(runtime.calls.some((c) => c[0] === "reactorDispose"), "the reactor is disposed");
+  const ticks = runtime.calls.filter((c) => c[0] === "reactorStep").length;
+  await new Promise((r) => setTimeout(r, 150));
+  expect(
+    runtime.calls.filter((c) => c[0] === "reactorStep").length === ticks,
+    "and its clock has stopped",
+  );
+  // Away to another file and back: the session has nothing to bring back.
+  __setActiveEditor({ document: makeDoc("other.py") });
+  await settle();
+  __setActiveEditor({ document: doc });
+  await settle();
+  expect(view.entries.length === 0, `nothing comes back: ${kinds(view).join(",")}`);
+  repl.dispose();
+}
+
+console.log("\n[61] a location opens the session's own file, at the column it names");
+{
+  // Two folders, each with a main.py. Locations were looked up by bare file
+  // name in a map every run wrote to, so the last one run always won - and
+  // the column, already 0-based, was shifted one further left.
+  const one = { ...makeDoc("main.py", "print(x)\n"), uri: Uri.file("/work/hw1/main.py") };
+  const two = { ...makeDoc("main.py", "print(y)\n"), uri: Uri.file("/work/hw2/main.py") };
+  const { repl, view } = await harness({ events: () => [{ kind: "done" }] }, one);
+  await repl.runFile("print(x)\n", "main.py", one);
+  __setActiveEditor({ document: two });
+  await settle();
+  await repl.runFile("print(y)\n", "main.py", two);
+  __setActiveEditor({ document: one });
+  await settle();
+  vscodeStub.opened.length = 0;
+  view.handlers.onOpenLocation("main.py", 1, 6);
+  await settle();
+  const [open] = vscodeStub.opened;
+  expect(open?.uri === one.uri.toString(), `hw1's main.py, the one showing: ${open?.uri}`);
+  expect(
+    open?.selection?.start.line === 0 && open?.selection?.start.character === 6,
+    `line 1, column 6 as given: ${JSON.stringify(open?.selection?.start)}`,
+  );
+  // A frame in a module beside it - an imported helper - opens that file.
+  view.handlers.onOpenLocation("helper.py", 3, null);
+  await settle();
+  expect(vscodeStub.opened[1]?.uri === Uri.file("/work/hw1/helper.py").toString(), `the helper beside it: ${vscodeStub.opened[1]?.uri}`);
+  repl.dispose();
+
+  // An untitled buffer has no folder, so its own name is the only thing a
+  // location in it can mean.
+  const untitled = makeDoc("Untitled-1", "print(z)\n");
+  untitled.uri = new Uri("untitled", "/Untitled-1");
+  const scratch = await harness({ events: () => [{ kind: "done" }] }, untitled);
+  await scratch.repl.runFile("print(z)\n", "Untitled-1", untitled);
+  vscodeStub.opened.length = 0;
+  scratch.view.handlers.onOpenLocation("Untitled-1", 1, 6);
+  await settle();
+  expect(vscodeStub.opened[0]?.uri === untitled.uri.toString(), `the untitled buffer itself: ${vscodeStub.opened[0]?.uri}`);
+  scratch.repl.dispose();
+}
+
+console.log("\n[62] once input() is answered, the session is running again");
+{
+  const gate = makeGate();
+  const doc = makeDoc("ask.py", 'input("Name: ")\nwhile True: pass\n');
+  const { repl, view, runtime } = await harness(
+    {
+      events: () => [
+        async () => {
+          await runtime.stdinHandler();
+        },
+        async () => {
+          await gate.promise;
+        },
+        { kind: "done" },
+      ],
+    },
+    doc,
+  );
+  const run = repl.runFile('input("Name: ")\n', "ask.py", doc);
+  await settle();
+  view.handlers.onSubmit("Ada");
+  await settle();
+  expect(view.status === "Running...", `the panel says so: ${view.status}`);
+  // Away and back: what is shown comes from the session's own status.
+  __setActiveEditor({ document: makeDoc("elsewhere.py") });
+  await settle();
+  __setActiveEditor({ document: doc });
+  await settle();
+  expect(view.status === "Running...", `and so does the session: ${view.status}`);
+  gate.open();
+  await run;
+  repl.dispose();
+}
+
+console.log("\n[63] a failed start is tried again by the next run");
+{
+  const doc = makeDoc("retry.py", "print(1)\n");
+  // The session starts Python as soon as it exists; that warm-up fails.
+  const { repl, view, runtime } = await harness({ initFailsOnce: true, events: () => [{ kind: "done" }] }, doc);
+  await settle();
+  await repl.runFile("print(1)\n", "retry.py", doc);
+  await settle();
+  const starts = runtime.calls.filter((c) => c[0] === "initialize").length;
+  expect(starts === 2, `the run tries again rather than reporting the warm-up's failure: ${starts} starts`);
+  expect(runtime.calls.some((c) => c[0] === "runFile"), "and then runs");
+  expect(!view.entries.some((e) => e.kind === "rawError"), "with nothing said about the old failure");
+  repl.dispose();
+}
+
+console.log("\n[64] a webview that reloads is replayed the session, from the session");
+{
+  // The view kept its own copy of everything shown, only to replay it on
+  // reload. The session already had it.
+  const doc = makeDoc("reload.py", 'print("hi")\n');
+  const { repl, view } = await harness(
+    { events: () => [{ kind: "stdout", text: "hi\n" }, { kind: "done" }] },
+    doc,
+  );
+  await repl.runFile('print("hi")\n', "reload.py", doc);
+  await settle();
+  view.showSession({ title: "", entries: [], prompt: "primary", busy: false });
+  expect(view.handlers.onViewReady() === true, "a session is showing");
+  expect(texts(view, "stdout").join("|") === "hi", `its output is back: ${JSON.stringify(texts(view, "stdout"))}`);
+  expect(view.title === "reload.py [raw]", `and its title: ${view.title}`);
+  repl.dispose();
+
+  // With no Python file open there is nothing to show.
+  const none = await harness({}, null);
+  expect(none.view.handlers.onViewReady() === false, "no session, so the view shows its empty state");
+  none.repl.dispose();
+}
+
+console.log("\n[65] closing a file ends its session, once its run is over");
+{
+  const { release, script } = gatedHarnessScript();
+  const doc = makeDoc("closing.py", "x = 1\n");
+  const key = doc.uri.toString();
+  const { repl, runtime, view } = await harness(script, doc);
+  const ended = () => runtime.calls.filter((c) => c[0] === "endSession").map((c) => c[1]);
+
+  // Closed while its run is going: the run finishes first.
+  const run = repl.runFile("x = 1\n", "closing.py", doc);
+  await settle();
+  __closeDocument(doc);
+  await settle();
+  expect(ended().length === 0, "not while the file's run is still going");
+  release();
+  await run;
+  await settle();
+  expect(ended().join() === key, `then Python forgets its names: ${JSON.stringify(ended())}`);
+  expect(view.empty, "and the panel, which was showing it, is empty");
+
+  // Opening it again starts afresh.
+  __setActiveEditor({ document: doc });
+  expect(!view.empty && view.entries.length === 0, `a new session: ${JSON.stringify(view.entries)}`);
+  expect(view.title === "closing.py", `with no level yet: ${view.title}`);
+
+  // Closed and reopened at once, as a change of language mode does: kept.
+  vscodeStub.workspace.textDocuments.push(doc);
+  __closeDocument(doc);
+  await settle();
+  expect(ended().length === 1, "a file that is still open keeps its session");
+  vscodeStub.workspace.textDocuments.length = 0;
+
+  // A file never shown in the panel has no session to end.
+  __closeDocument(makeDoc("never.py"));
+  await settle();
+  expect(ended().length === 1, "nothing to end for a file with no session");
+  repl.dispose();
+}
+
+console.log("\n[66] an unsaved edit to a data file is what the program reads");
+{
+  files.clear();
+  files.set("file:/work/cars.csv", "name,mpg\nvw,29\n");
+  // Open in an editor, changed and not saved.
+  vscodeStub.workspace.textDocuments.push(makeDoc("cars.csv", "name,mpg\nvw,31\n"));
+  let mounted = [];
+  const doc = makeDoc("reads.py", "print(1)\n");
+  const { repl } = await harness(
+    { events: () => [{ kind: "done" }], mountWorkspaceFiles: (sent) => { mounted = sent; } },
+    doc,
+  );
+  await repl.runFile("print(1)\n", "reads.py", doc);
+  await settle();
+  const cars = mounted.find((f) => f.name === "cars.csv");
+  expect(cars?.contents === "name,mpg\nvw,31\n", `the editor's text, not the disk's: ${JSON.stringify(cars?.contents)}`);
+  vscodeStub.workspace.textDocuments.length = 0;
+  files.clear();
+  repl.dispose();
+}
+
+console.log("\n[67] a reactor that floods the panel is pointed at Pause, not Stop");
+{
+  // Its handlers print after the run is over, so Stop has nothing to stop.
+  const flood = "tick\n".repeat(MAX_STREAM_LINES_PER_RUN + 10);
+  const { repl, view, doc } = await harness(
+    countingReactor({
+      script: {
+        reactorStep: (_id, _event, output) => {
+          output?.onEvent({ kind: "stdout", text: flood });
+          return { ok: true, frame: { data: "<svg/>", width: 1, height: 1 }, index: 1, length: 2, at_end: true, stopped: false, value_repr: "1", messages: [] };
+        },
+      },
+    }),
+  );
+  await repl.runFile("animate(...)", "hello.py", doc);
+  await new Promise((r) => setTimeout(r, 100));
+  const notice = view.entries.find((e) => e.kind === "banner" && /Output stopped after/.test(e.text));
+  expect(/press Pause/.test(notice?.text ?? "") && !/Stop/.test(notice?.text ?? ""),
+    `the reactor is paused, not stopped: ${notice?.text}`);
+  repl.dispose();
+}
+
+console.log("\n[68] when Python stops completely, every file that ran is told");
+{
+  let runtime = null;
+  let loseNext = false;
+  const script = {
+    events: (kind) =>
+      kind !== "runFile"
+        ? []
+        : loseNext
+          ? [async () => { loseNext = false; runtime.lose(); throw new PythonLostError(); }]
+          : [{ kind: "stdout", text: "ran\n" }, { kind: "done" }],
+  };
+  const one = makeDoc("one.py", "x = 1\n");
+  const two = makeDoc("two.py", "y = 2\n");
+  const never = makeDoc("never.py", "");
+  const harnessed = await harness(script, one);
+  runtime = harnessed.runtime;
+  const { repl, view } = harnessed;
+  await repl.runFile("y = 2\n", "two.py", two);
+  await repl.runFile("x = 1\n", "one.py", one);
+  __setActiveEditor({ document: never });
+  __setActiveEditor({ document: one });
+  await settle();
+  loseNext = true;
+  const callsBefore = runtime.calls.length;
+  await repl.runFile("x = 1\n", "one.py", one);
+  await settle();
+  // Its files went with it; asking for them would start a new Python.
+  expect(!runtime.calls.slice(callsBefore).some((c) => c[0] === "collectWorkspaceFiles"),
+    `nothing is copied back: ${runtime.calls.slice(callsBefore).map((c) => c[0]).join(",")}`);
+  const lost = (entries) => entries.filter((e) => e.kind === "banner" && /Python stopped completely/.test(e.text));
+  expect(lost(view.entries).length === 1, `the file that was running says so once: ${kinds(view).join(",")}`);
+  expect(!view.entries.some((e) => /Internal error/.test(e.text ?? "")), "and not as an internal error");
+  expect(!view.busy, "and is idle");
+  __setActiveEditor({ document: two });
+  expect(lost(view.entries).length === 1, `so does the file that was not: ${kinds(view).join(",")}`);
+  __setActiveEditor({ document: never });
+  expect(lost(view.entries).length === 0, "a file that never ran has nothing to lose");
+  // And the next run is an ordinary one.
+  __setActiveEditor({ document: one });
+  await repl.runFile("x = 1\n", "one.py", one);
+  await settle();
+  expect(texts(view, "stdout").includes("ran"), `the next run runs: ${JSON.stringify(texts(view, "stdout"))}`);
+  repl.dispose();
+}
+
+console.log(`\nsmoke-repl-session: ${passed() ? "ok" : "FAILED"}`);
+if (!passed()) {
   process.exit(1);
 }
