@@ -1,5 +1,5 @@
 import type { Level } from "../../level";
-import type { RawStaticFindingOf } from "../../wire";
+import type { StaticFindingOf } from "../../fromPython";
 import { staticFindingFor, type AnalysisFinding } from "../types";
 
 /**
@@ -12,15 +12,15 @@ import { staticFindingFor, type AnalysisFinding } from "../types";
  * near the actual fix, which is to rename one of them.
  */
 export function explainDuplicateDefinition(
-  raw: RawStaticFindingOf<"duplicate-definition">,
+  raw: StaticFindingOf<"duplicate-definition">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  const name = raw.name_token ?? "this name";
-  const kind = raw.definition_kind === "class" ? "classes" : "functions";
-  const first = raw.first_line_number;
+  const name = raw.nameToken ?? "this name";
+  const kind = raw.definitionKind === "class" ? "classes" : "functions";
+  const first = raw.firstLineNumber;
   const where =
-    typeof first === "number" && first > 0 ? ` (lines ${first} and ${raw.line_number})` : "";
+    typeof first === "number" && first > 0 ? ` (lines ${first} and ${raw.lineNumber})` : "";
   return staticFindingFor(raw, level, fileName, {
     headline: `There are two ${kind} named \`${name}\`${where}.`,
     howToFix: [

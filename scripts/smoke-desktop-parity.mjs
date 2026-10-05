@@ -5,8 +5,10 @@
  * `pnpm run build` so dist/desktop/pyodideWorker.js exists.
  */
 import { createServer } from "node:http";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, passed } from "./lib/check.mjs";
-import { importSource } from "./lib/bundle.mjs";
+import { importSource, ROOT } from "./lib/bundle.mjs";
 import { INDEX_URL } from "./lib/pyodide.mjs";
 import { startWorker, talk } from "./lib/worker.mjs";
 
@@ -242,11 +244,49 @@ async function main() {
         () => null,
         (err) => err.reply,
       );
-      expect(fatal?.finished === true, `a fatal error is marked finished: ${JSON.stringify(fatal)}`);
-      console.log(`    os._exit and os.abort end the program; posix.abort -> finished=${fatal?.finished}`);
+      expect(fatal?.kind === "finished", `a fatal error is marked finished: ${JSON.stringify(fatal)}`);
+      console.log(`    os._exit and os.abort end the program; posix.abort -> ${fatal?.kind}`);
     }
   } finally {
     await worker.terminate();
+  }
+
+  console.log("\n[8] a Node worker that crashes is reported once, as Python lost");
+  {
+    const { DesktopPyodideRuntime, PythonLostError } = await importSource(`
+export { DesktopPyodideRuntime } from "./src/desktop/pyodideRuntime";
+export { PythonLostError } from "./src/common/runtimeErrors";
+`);
+    // A worker that starts, and then throws outside any request.
+    const dir = mkdtempSync(join(ROOT, ".smoke-crash-"));
+    const script = join(dir, "worker.cjs");
+    writeFileSync(script, [
+      'const { parentPort } = require("node:worker_threads");',
+      "parentPort.on('message', (msg) => {",
+      "  if (msg.type === 'init') parentPort.postMessage({ id: msg.id, type: 'ready' });",
+      "  else setTimeout(() => { throw new Error('worker crashed'); }, 0);",
+      "});",
+    ].join("\n"));
+    const runtime = new DesktopPyodideRuntime({
+      indexUrlCandidates: [INDEX_URL],
+      workerPath: script,
+      missingAssetsHint: "no assets",
+    });
+    let told = 0;
+    runtime.setPythonLostHandler(() => (told += 1));
+    const quiet = console.error;
+    console.error = () => {};
+    let failure = null;
+    try {
+      await runtime.initialize();
+      await runtime.replEval({ code: "1", sessionKey: "s" }, () => {}).catch((err) => (failure = err));
+    } finally {
+      console.error = quiet;
+      runtime.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(failure instanceof PythonLostError, `the request fails as Python lost, not with the crash: ${failure}`);
+    expect(told === 1, `and that is said once: ${told}`);
   }
 
   console.log(`\nsmoke-desktop-parity: ${passed() ? "ok" : "FAILED"}`);

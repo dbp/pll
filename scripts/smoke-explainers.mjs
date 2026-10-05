@@ -14,7 +14,10 @@ const mod = await importSource(`
 import { parseLevel, levelHeaderProblem } from "./src/common/level";
 import { levelHeaderFinding } from "./src/common/analyzers/levelHeaderFinding";
 import { explainSyntaxError } from "./src/common/errors/syntaxExplainer";
-import { enrichStaticFindings } from "./src/common/analyzers/static/registry";
+import { enrichStaticFindings as explainFindings } from "./src/common/analyzers/static/registry";
+import { staticFindingsFrom } from "./src/common/fromPython";
+/** Findings as Python sends them, through the runtime's translation. */
+const enrichStaticFindings = (raw, level, fileName) => explainFindings(staticFindingsFrom(raw), level, fileName);
 import { formatFriendlyError } from "./src/common/errorFormatter";
 import { findRuntimeFinding } from "./src/common/analyzers/registry";
 import { LIBRARY_SIGNATURES } from "./src/common/errors/libraryFacts";

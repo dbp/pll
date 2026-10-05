@@ -1,10 +1,9 @@
 import { serializeFinding } from "./analyzers/findingLocation";
 import { findRuntimeFinding } from "./analyzers/registry";
 import { errorText } from "./errorText";
-import { pythonErrorFrom } from "./errors/pythonError";
 import type { Entry, ReactorPatch } from "./interactionsView";
 import type { Level } from "./level";
-import type { ReactorStepResult } from "./wire";
+import type { ReactorStep } from "./fromPython";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 import {
   unavailableSocket,
@@ -13,7 +12,7 @@ import {
   type UniverseSocket,
   type UniverseStatus,
 } from "./universeClient";
-import { PythonLostError } from "./pythonLost";
+import { PythonLostError } from "./runtimeErrors";
 
 /** The program a run is running: what its errors are explained against. */
 export interface ProgramInfo {
@@ -240,21 +239,19 @@ export class ReactorController<Owner> {
     }
   }
 
-  private apply(driver: ReactorDriver<Owner>, result: ReactorStepResult): void {
-    if (result.gone) {
+  private apply(driver: ReactorDriver<Owner>, result: ReactorStep): void {
+    if (result.kind === "gone") {
       this.dispose(driver.id, { inPythonToo: false });
       return;
     }
-    if (!result.ok) {
-      // A handler raised. Stop the clock and show it the same way any other
-      // runtime error is shown, so the student sees where it happened.
+    if (result.kind === "raised") {
+      // Stop the clock and show it the same way any other runtime error is
+      // shown, so the student sees where it happened.
       this.pause(driver);
-      // Python always names the error; the fallback only satisfies the type.
-      const error = pythonErrorFrom(result) ?? pythonErrorFrom({ error_type: "Error" })!;
       const { source, fileName, level } = driver.program;
       this.host.append(driver.owner, {
         kind: "finding",
-        finding: serializeFinding(findRuntimeFinding(source, fileName, level, error)),
+        finding: serializeFinding(findRuntimeFinding(source, fileName, level, result.error)),
       });
       return;
     }
@@ -262,18 +259,17 @@ export class ReactorController<Owner> {
       frame: result.frame,
       index: result.index,
       length: result.length,
-      atEnd: result.at_end,
+      atEnd: result.atEnd,
       stopped: result.stopped,
-      valueRepr: result.value_repr,
+      valueRepr: result.valueRepr,
     });
-    if (result.messages && result.messages.length > 0) {
+    if (result.messages.length > 0) {
       this.send(driver, result.messages);
     }
     // Whether the frame on screen is a stopped one - not whether the
     // reactor ever stopped. Going back from the stopped frame is going back
-    // to one that can go on, and Play has to be able to: a sticky flag left
-    // Play enabled and doing nothing, while the step buttons still worked.
-    driver.stopped = !!result.stopped;
+    // to one that can go on, and Play has to be able to.
+    driver.stopped = result.stopped;
     if (driver.stopped) {
       this.pause(driver);
     }

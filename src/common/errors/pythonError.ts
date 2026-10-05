@@ -7,8 +7,6 @@
  * it could learn from them; the host only explains.
  */
 
-import type { WireError, WireFrame } from "../wire";
-
 export interface ErrorFrame {
   fileName: string;
   /** 1-based. */
@@ -60,49 +58,4 @@ export function userFrames(error: PythonError): ErrorFrame[] {
 export function innermostUserFrame(error: PythonError): ErrorFrame | null {
   const frames = userFrames(error);
   return frames.length > 0 ? frames[frames.length - 1] : null;
-}
-
-/**
- * The error a result reports, or null when it reports none.
- *
- * The one place a Python dict becomes a `PythonError`, so the one place its
- * gaps are filled: a Python `None` arrives as `undefined`, which passes a
- * `!== null` test, and would reach a label as `file.py:3:NaN`.
- */
-export function pythonErrorFrom(wire: Partial<WireError> | null | undefined): PythonError | null {
-  if (!wire || !wire.error_type) {
-    return null;
-  }
-  const facts = wire.error_facts ?? {};
-  return {
-    errorType: wire.error_type,
-    message: wire.error_message ?? "",
-    traceback: wire.traceback ?? "",
-    fileName: wire.error_file ?? null,
-    lineNumber: numberOrNull(wire.line_number),
-    column: numberOrNull(wire.column),
-    nameToken: facts.name ?? null,
-    frames: (wire.error_frames ?? []).map(frameFrom),
-    facts: {
-      name: facts.name,
-      sequence: facts.sequence,
-      length: numberOrNull(facts.length) ?? undefined,
-      elementValue: facts.element_value,
-      swappedWith: facts.swapped_with,
-    },
-  };
-}
-
-function frameFrom(frame: WireFrame): ErrorFrame {
-  return {
-    fileName: frame.file,
-    line: frame.line,
-    column: numberOrNull(frame.column),
-    functionName: frame.function ?? null,
-    user: frame.user === true,
-  };
-}
-
-function numberOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

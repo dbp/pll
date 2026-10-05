@@ -8,7 +8,9 @@
  * propagation, live display streaming, and the stdin round-trip.
  */
 import { expect, passed } from "./lib/check.mjs";
-import { importSource } from "./lib/bundle.mjs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { importSource, ROOT } from "./lib/bundle.mjs";
 
 /** Let the runtime's internal `await initialize()` hops settle. */
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -29,11 +31,12 @@ export { WorkerPythonRuntime } from "./src/common/workerRuntime";
 export { createWorkerHost } from "./src/common/workerHost";
 export { onceSuccessful } from "./src/common/onceSuccessful";
 export * as stdin from "./src/common/stdinBuffer";
+export { StoppedError } from "./src/common/runtimeErrors";
 `);
   return mod;
 }
 
-const { WorkerPythonRuntime, createWorkerHost, onceSuccessful, stdin } = await load();
+const { WorkerPythonRuntime, createWorkerHost, onceSuccessful, stdin, StoppedError } = await load();
 
 /**
  * A runtime whose "worker" is a function the test controls. `respond` is
@@ -99,6 +102,25 @@ const RESULT = {
   displays: [],
 };
 
+console.log("\n[0] Python's result shapes are read in one place");
+{
+  // `wire.ts` describes what Python sends; past the protocol, only
+  // `fromPython.ts` reads it, and everything else uses the host's types.
+  const ALLOWED = new Set(["src/common/fromPython.ts", "src/common/workerHost.ts", "src/common/workerProtocol.ts"]);
+  const readers = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) walk(rel);
+      else if (rel.endsWith(".ts") && /from "(\.\.?\/)+(common\/)?wire"/.test(readFileSync(join(ROOT, rel), "utf8"))) readers.push(rel);
+    }
+  };
+  walk("src");
+  const strays = readers.filter((rel) => !ALLOWED.has(rel));
+  expect(strays.length === 0, `only the protocol and fromPython import wire.ts: ${strays.join(", ")}`);
+  expect(readers.includes("src/common/fromPython.ts"), `the check sees the imports at all: ${readers.join(", ")}`);
+}
+
 console.log("\n[1] init sends the index URL and a stdin buffer");
 {
   const h = makeRuntime(autoInit());
@@ -141,7 +163,7 @@ console.log("\n[3] an error reply rejects with the worker's message");
 {
   const h = makeRuntime(
     autoInit((msg, hs) => {
-      hs.onMessage({ id: msg.id, type: "error", message: "boom in Python" });
+      hs.onMessage({ id: msg.id, type: "error", message: "boom in Python", kind: "failed" });
     }),
   );
   await h.runtime.initialize();
@@ -172,9 +194,10 @@ console.log("\n[5] live displays stream during runFile, and only during a run");
   const h = makeRuntime(
     autoInit((msg, hs) => {
       if (msg.type === "runFile") {
-        hs.onMessage({ type: "display", payload: { type: "stdout", text: "Name: " } });
+        hs.onMessage({ type: "display", requestId: msg.id, payload: { type: "stdout", text: "Name: " } });
         hs.onMessage({
           type: "display",
+          requestId: msg.id,
           payload: { type: "image", data: "<svg/>", width: 2, height: 3 },
         });
         hs.onMessage({
@@ -188,7 +211,7 @@ console.log("\n[5] live displays stream during runFile, and only during a run");
   await h.runtime.initialize();
 
   // Displays arriving outside a run have nowhere to go; must not throw.
-  h.reply({ type: "display", payload: { type: "stdout", text: "ignored" } });
+  h.reply({ type: "display", requestId: 999, payload: { type: "stdout", text: "ignored" } });
 
   const events = [];
   await h.runtime.runFile(
@@ -207,7 +230,8 @@ console.log("\n[5] live displays stream during runFile, and only during a run");
 
   // After the run the sink is detached again.
   const before = events.length;
-  h.reply({ type: "display", payload: { type: "stdout", text: "late" } });
+  const runId = h.sent.find((m) => m.type === "runFile").id;
+  h.reply({ type: "display", requestId: runId, payload: { type: "stdout", text: "late" } });
   expect(events.length === before, "displays after the run should be dropped");
 }
 
@@ -218,8 +242,12 @@ console.log("\n[5b] a reactor step streams its handlers' output too");
   const h = makeRuntime(
     autoInit((msg, hs) => {
       if (msg.type === "reactorStep") {
-        hs.onMessage({ type: "display", payload: { type: "stdout", text: "tick 0\n" } });
-        hs.onMessage({ id: msg.id, type: "reactorFrame", result: { ok: true, index: 1 } });
+        hs.onMessage({ type: "display", requestId: msg.id, payload: { type: "stdout", text: "tick 0\n" } });
+        hs.onMessage({
+          id: msg.id,
+          type: "reactorFrame",
+          result: { ok: true, index: 1, length: 2, frame: { data: "<svg/>", width: 1, height: 1 } },
+        });
       }
     }),
   );
@@ -229,14 +257,43 @@ console.log("\n[5b] a reactor step streams its handlers' output too");
     onEvent: (e) => events.push(e),
     fileName: "rx.py",
   });
-  expect(reply.ok === true && reply.index === 1, "the frame still comes back");
+  expect(reply.kind === "frame" && reply.index === 1, `the frame still comes back: ${JSON.stringify(reply)}`);
   expect(
     events.map((e) => `${e.kind}:${e.text}`).join("|") === "stdout:tick 0\n",
     `the print is delivered: ${JSON.stringify(events)}`,
   );
   const before = events.length;
-  h.reply({ type: "display", payload: { type: "stdout", text: "late" } });
+  const stepId = h.sent.find((m) => m.type === "reactorStep").id;
+  h.reply({ type: "display", requestId: stepId, payload: { type: "stdout", text: "late" } });
   expect(events.length === before, "and nothing after the step is");
+}
+
+console.log("\n[5c] output goes to the request it belongs to");
+{
+  // Two requests in flight: a run's output must not reach a reactor's sink.
+  let stepId = null;
+  const h = makeRuntime(
+    autoInit((msg, hs) => {
+      if (msg.type === "reactorStep") stepId = msg.id;
+      if (msg.type === "runFile") {
+        hs.onMessage({ type: "display", requestId: msg.id, payload: { type: "stdout", text: "run\n" } });
+        hs.onMessage({ id: msg.id, type: "result", result: RESULT });
+        hs.onMessage({
+          id: stepId,
+          type: "reactorFrame",
+          result: { ok: true, index: 1, length: 2, frame: { data: "<svg/>", width: 1, height: 1 } },
+        });
+      }
+    }),
+  );
+  await h.runtime.initialize();
+  const stepEvents = [];
+  const step = h.runtime.reactorStep("r1", '{"kind":"tick"}', { onEvent: (e) => stepEvents.push(e), fileName: "rx.py" });
+  const runEvents = [];
+  await h.runtime.runFile({ code: "x", fileName: "a.py", sessionKey: "s" }, (e) => runEvents.push(e));
+  await step;
+  expect(runEvents.some((e) => e.kind === "stdout" && e.text === "run\n"), "the run gets its output");
+  expect(stepEvents.length === 0, `the step does not: ${JSON.stringify(stepEvents)}`);
 }
 
 console.log("\n[6] a failed run becomes an error event, then done");
@@ -372,7 +429,7 @@ console.log("\n[11] a failed start is tried again, in a fresh worker");
   const h = makeRuntime((msg, hs) => {
     if (msg.type !== "init") return;
     attempts += 1;
-    if (attempts === 1) hs.onMessage({ id: msg.id, type: "error", message: "no wasm" });
+    if (attempts === 1) hs.onMessage({ id: msg.id, type: "error", message: "no wasm", kind: "failed" });
     else hs.onMessage({ id: msg.id, type: "ready" });
   });
   await rejects(h.runtime.initialize(), /no wasm/, "the first start fails");
@@ -413,6 +470,57 @@ console.log("\n[12] the worker tries pytest again after a failed load");
   );
 }
 
+console.log("\n[12b] the worker answers one request at a time, with typed errors and null for None");
+{
+  // A fake interpreter: `_pll_repl_check` gives a dict with a None in it,
+  // `_pll_has_tests` raises KeyboardInterrupt, `_pll_repl_eval` an ordinary error.
+  let releaseLoad;
+  const loading = new Promise((resolve) => (releaseLoad = resolve));
+  const pythonError = (type) => Object.assign(new Error(`${type}: raised`), { type });
+  const fn = (name) => {
+    const call = (...args) => {
+      if (name === "_pll_repl_check") {
+        return { toJs: () => ({ status: "invalid", error_type: "SyntaxError", lineno: undefined }), destroy() {} };
+      }
+      if (name === "_pll_has_tests") throw pythonError("KeyboardInterrupt");
+      if (name === "_pll_repl_eval") throw pythonError("ValueError");
+      return undefined;
+    };
+    call.destroy = () => {};
+    return call;
+  };
+  const instance = {
+    runPython() {},
+    setStdin() {},
+    setInterruptBuffer() {},
+    loadPackagesFromImports: () => loading,
+    loadPackage: async () => undefined,
+    globals: { get: (name) => fn(name), set() {} },
+    FS: new Proxy({}, { get: () => () => ({ isDir: () => true, mode: 0 }) }),
+  };
+  const posted = [];
+  const handle = createWorkerHost({
+    post: (msg) => posted.push(msg),
+    loadPyodide: async () => instance,
+    stdinUnavailableMessage: "no stdin",
+  });
+  await handle({ id: 1, type: "init", indexUrl: "/x/" });
+  const load = handle({ id: 2, type: "loadPackages", code: "import numpy" });
+  const check = handle({ id: 3, type: "checkSyntax", code: "x = (" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(!posted.some((m) => m.id === 3), "the check waits for the load before it");
+  releaseLoad();
+  await Promise.all([load, check]);
+  const ids = posted.filter((m) => m.id !== undefined).map((m) => m.id);
+  expect(ids.join(",") === "1,2,3", `answered in order: ${ids.join(",")}`);
+  const syntax = posted.find((m) => m.id === 3);
+  expect(syntax.result.lineno === null, `a None arrives as null: ${JSON.stringify(syntax.result)}`);
+  await handle({ id: 4, type: "hasTests", code: "" });
+  await handle({ id: 5, type: "replEval", code: "", sessionKey: "s" });
+  const kinds = posted.filter((m) => m.type === "error").map((m) => `${m.id}:${m.kind}`);
+  expect(kinds.join(",") === "4:interrupted,5:failed", `each error says what kind it is: ${kinds.join(",")}`);
+}
+
 console.log("\n[13] a worker that dies is replaced by the next request");
 {
   // Kept, every later request would be posted to a worker that is no
@@ -451,7 +559,7 @@ console.log("\n[13b] so is a worker whose Python can no longer run");
       inits += 1;
       hs.onMessage({ id: msg.id, type: "ready" });
     } else if (msg.type === "replEval" && inits === 1) {
-      hs.onMessage({ id: msg.id, type: "error", message: "Pyodide already fatally failed and can no longer be used.", finished: true });
+      hs.onMessage({ id: msg.id, type: "error", message: "Pyodide already fatally failed and can no longer be used.", kind: "finished" });
     } else if (msg.type === "replEval") {
       hs.onMessage({ id: msg.id, type: "result", result: { ...RESULT, result_repr: "2" } });
     }
@@ -468,11 +576,16 @@ console.log("\n[13b] so is a worker whose Python can no longer run");
   expect(inits === 2 && events.some((e) => e.kind === "result" && e.repr === "2"), `and a new one answers: ${inits} inits`);
   // An ordinary failure is not that.
   const ordinary = makeRuntime(autoInit((msg, hs) => {
-    if (msg.type === "replEval") hs.onMessage({ id: msg.id, type: "error", message: "boom" });
+    if (msg.type === "replEval") hs.onMessage({ id: msg.id, type: "error", message: "boom", kind: "failed" });
+    if (msg.type === "examplarRun") hs.onMessage({ id: msg.id, type: "error", message: "KeyboardInterrupt", kind: "interrupted" });
   }));
   await ordinary.runtime.initialize();
   await rejects(ordinary.runtime.replEval({ code: "1", sessionKey: "s" }, () => {}), /^boom$/, "an ordinary error is passed on");
   expect(!ordinary.terminated, "and the worker kept");
+  // A Stop is told apart by its type, not its text.
+  let stopped = null;
+  await ordinary.runtime.examplarRun("t", "{}").catch((err) => (stopped = err));
+  expect(stopped instanceof StoppedError, `a Stop arrives as a StoppedError: ${stopped}`);
 }
 
 console.log("\n[14] ending a session never starts Python just to do it");

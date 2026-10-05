@@ -1,5 +1,5 @@
 import { LEVEL_INTERMEDIATE, levelRefusesReassignment, type Level } from "../../level";
-import type { RawStaticFindingOf } from "../../wire";
+import type { StaticFindingOf } from "../../fromPython";
 import { staticFindingFor, type AnalysisFinding } from "../types";
 
 /**
@@ -11,12 +11,12 @@ import { staticFindingFor, type AnalysisFinding } from "../types";
  * can mention it in the explanation.
  */
 export function explainReassignment(
-  raw: RawStaticFindingOf<"reassignment">,
+  raw: StaticFindingOf<"reassignment">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  const name = raw.name_token ?? "this name";
-  const firstLine = raw.first_line_number ?? null;
+  const name = raw.nameToken ?? "this name";
+  const firstLine = raw.firstLineNumber ?? null;
   // Line 0 is a preexisting session binding (REPL after Run File), not a
   // line in the snippet / file.
   const firstLineHint =
@@ -44,7 +44,7 @@ export function explainReassignment(
               ` or a small helper function that returns the new value instead.`,
             // Inside a function this is exactly what `intermediate` exists
             // for, and a student has no way to know that from here.
-            ...(raw.scope_kind === "function" && !levelRefusesReassignment(LEVEL_INTERMEDIATE, "function")
+            ...(raw.scopeKind === "function" && !levelRefusesReassignment(LEVEL_INTERMEDIATE, "function")
               ? [
                   "`#level intermediate` allows changing a variable inside a" +
                     " function, which is what a running total needs.",

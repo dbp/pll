@@ -1,5 +1,5 @@
 import type { Level } from "../../level";
-import type { RawStaticFinding, RawStaticFindingOf } from "../../wire";
+import type { StaticFinding, StaticFindingOf } from "../../fromPython";
 import { staticFindingFor, type AnalysisFinding } from "../types";
 import {
   explainShadowing,
@@ -24,10 +24,10 @@ import { explainDuplicateDefinition } from "./duplicateDefinitionExplainer";
 
 /**
  * One explainer for every kind of finding, each given only its own kind -
- * so a new kind in `RawStaticFinding` does not compile until it has one.
+ * so a new kind in `StaticFinding` does not compile until it has one.
  */
 const explainers: {
-  [Id in RawStaticFinding["id"]]: (raw: RawStaticFindingOf<Id>, level: Level, fileName: string) => AnalysisFinding;
+  [Id in StaticFinding["id"]]: (raw: StaticFindingOf<Id>, level: Level, fileName: string) => AnalysisFinding;
 } = {
   shadowing: explainShadowing,
   "shadowing-builtin": explainShadowingBuiltin,
@@ -53,7 +53,7 @@ const explainers: {
  * other - said as that, rather than dropped.
  */
 function fallbackExplainer(
-  raw: RawStaticFinding,
+  raw: StaticFinding,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -64,35 +64,19 @@ function fallbackExplainer(
 }
 
 /**
- * Convert raw Python-side static findings into beginner-friendly
- * AnalysisFinding objects, ready for the diagnostics + REPL renderer.
+ * Explain the static checks' findings: beginner-friendly AnalysisFindings,
+ * ready for the diagnostics and the interactions view.
  */
 export function enrichStaticFindings(
-  rawFindings: ReadonlyArray<RawStaticFinding>,
+  rawFindings: ReadonlyArray<StaticFinding>,
   level: Level,
   fileName: string,
 ): AnalysisFinding[] {
   return rawFindings.map((raw) => {
     const explainer =
-      (explainers as Record<string, (raw: RawStaticFinding, level: Level, fileName: string) => AnalysisFinding>)[
+      (explainers as Record<string, (raw: StaticFinding, level: Level, fileName: string) => AnalysisFinding>)[
         raw.id
       ] ?? fallbackExplainer;
-    return explainer(withPositions(raw), level, fileName);
+    return explainer(raw, level, fileName);
   });
-}
-
-/**
- * The finding with its positions as numbers or null. A Python `None`
- * arrives as `undefined`, which passes a `!== null` test and would reach a
- * label as `file.py:3:NaN`.
- */
-function withPositions(raw: RawStaticFinding): RawStaticFinding {
-  const position = (value: unknown) =>
-    typeof value === "number" && Number.isFinite(value) ? value : null;
-  return {
-    ...raw,
-    line_number: position(raw.line_number),
-    column: position(raw.column),
-    name_token: raw.name_token ?? null,
-  };
 }

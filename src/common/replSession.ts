@@ -16,7 +16,7 @@ import type { ExecutionEvent, PythonRuntime } from "./types";
 import type { UniverseConnect } from "./universeClient";
 import { collectSiblingFiles, folderUri, writeBackSiblingFiles } from "./workspaceFiles";
 import { errorText } from "./errorText";
-import { PythonLostError } from "./pythonLost";
+import { PythonLostError } from "./runtimeErrors";
 
 /**
  * How long to wait after a Stop before telling the student it did not work.

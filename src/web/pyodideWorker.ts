@@ -9,8 +9,8 @@ declare const self: DedicatedWorkerGlobalScope & {
 const handle = createWorkerHost({
   post: (msg) => self.postMessage(msg),
   stdinUnavailableMessage:
-    "input() needs cross-origin isolation (SharedArrayBuffer). " +
-    "Use `pnpm run test-web` or a vscode.dev session that sets COI.",
+    "input() does not work in this browser tab, which is not cross-origin isolated. " +
+    "It works in VS Code on a computer, and in a vscode.dev page opened with cross-origin isolation.",
   async loadPyodide(indexUrl) {
     const normalized = indexUrl.endsWith("/") ? indexUrl : indexUrl + "/";
     self.importScripts(normalized + "pyodide.js");

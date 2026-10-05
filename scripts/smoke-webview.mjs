@@ -32,13 +32,14 @@ const {
   buildExamplarEntries,
   findRuntimeFinding,
   pythonErrorFrom,
+  examplarOutcomeFrom,
   serializeFinding,
 } = await importSource(
   `
 export { InteractionsView } from "./src/common/interactionsView";
 export { buildExamplarEntries } from "./src/common/examplarPhase";
 export { findRuntimeFinding } from "./src/common/analyzers/registry";
-export { pythonErrorFrom } from "./src/common/errors/pythonError";
+export { examplarOutcomeFrom, pythonErrorFrom } from "./src/common/fromPython";
 export { serializeFinding } from "./src/common/analyzers/findingLocation";
 `,
   { vscodeStub: VSCODE_STUB },
@@ -85,7 +86,7 @@ const testReport = {
 // so it must not reach the card.
 const examplar = buildExamplarEntries(
   { url: "https://example.test/hw.json", json: "", cached: false },
-  {
+  examplarOutcomeFrom({
     ok: true,
     provides: ["add", "double"],
     attribution: { test_add_one: ["add"], test_double: ["double"] },
@@ -104,7 +105,7 @@ const examplar = buildExamplarEntries(
       { id: "2", targets: "add", loaded: true, tests: { test_add_one: { outcome: "pass", message: null } } },
     ],
     chaffs_skipped: ["double"],
-  },
+  }),
 );
 const session = {
   title: "t.py [beginner]",

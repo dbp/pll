@@ -2,9 +2,9 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type {
   ExamplarBundle,
-  ExamplarImplResult,
-  ExamplarRunResult,
-} from "../common/wire";
+  ExamplarImpl,
+  ExamplarOutcome,
+} from "../common/fromPython";
 import type { PythonRuntime } from "../common/types";
 import { EXIT } from "./run";
 import type { CliView } from "./view";
@@ -205,7 +205,7 @@ export async function runExamplar(
 }
 
 /** True if any test failed or errored against this implementation. */
-function caught(impl: ExamplarImplResult): boolean {
+function caught(impl: ExamplarImpl): boolean {
   return !impl.loaded || Object.values(impl.tests).some((t) => t.outcome !== "pass");
 }
 
@@ -238,7 +238,7 @@ async function verify(
     view.note("could not load pytest; assertion messages will be terse.");
   }
 
-  const result: ExamplarRunResult = await runtime.examplarRun(
+  const result: ExamplarOutcome = await runtime.examplarRun(
     testSource,
     JSON.stringify(bundle),
   );
@@ -258,7 +258,7 @@ async function verify(
     bad += 1;
     view.problem(`  BAD   wheat ${wheat.id}: your own tests do not all pass on it`);
     if (!wheat.loaded) {
-      view.problem(`          ${wheat.error_type}: ${wheat.error_message}`);
+      view.problem(`          ${wheat.errorType}: ${wheat.errorMessage}`);
     }
     for (const [name, t] of failures) {
       view.problem(`          ${name}: ${(t.message ?? t.outcome).split("\n")[0]}`);
@@ -280,7 +280,7 @@ async function verify(
     view.problem(`  BAD   ${where}: no test catches it - it would never count`);
   }
   const attributed = Object.values(result.attribution ?? {});
-  for (const name of result.chaffs_skipped ?? []) {
+  for (const name of result.chaffsSkipped ?? []) {
     if (attributed.some((names) => names.includes(name))) {
       // Already counted as the wheat failure that caused it; this line only
       // explains why its chaffs went unmentioned.

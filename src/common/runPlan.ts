@@ -9,7 +9,7 @@ import { needsPackages } from "./packages";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 import type { WorkspaceFile } from "./workspaceFilePolicy";
 import { errorText } from "./errorText";
-import { PythonLostError } from "./pythonLost";
+import { PythonLostError, StoppedError } from "./runtimeErrors";
 
 /**
  * The steps of a run, the same for every host. A file run is: the `#level`
@@ -142,7 +142,9 @@ export async function runFilePlan(
     if (withTests) {
       sayWhyTestsStopped(host, tally);
     }
-    return host.stopRequested() ? "stopped" : "ran";
+    // Stopped only if the Stop ended something: one that arrives as the
+    // last test finishes stops nothing.
+    return tally.testsStopped || (tally.raised && host.stopRequested()) ? "stopped" : "ran";
   });
   return tally.summary(outcome);
 }
@@ -227,8 +229,8 @@ function sayWhyTestsStopped(host: RunHost, tally: Tally): void {
 
 /**
  * The level's static checks. Warnings are shown and the run goes on; an
- * error stops it. A checker that fails does not - unless it failed because
- * Stop interrupted it, which is the Stop, not a broken checker.
+ * error stops it. A checker that fails does not - unless what ended it was
+ * a Stop, which is said as the Stop, not as a broken checker.
  *
  * `sessionKey` is for prompt input, which is checked against the names the
  * session already has; a file is checked on its own.
@@ -256,7 +258,8 @@ async function staticChecks(
     });
     findings = enrichStaticFindings(raw, level, fileName);
   } catch (err) {
-    if (stopped(host, input ? STOPPED.input : STOPPED.beforeStart)) {
+    if (err instanceof StoppedError) {
+      host.say(input ? STOPPED.input : STOPPED.beforeStart, "problem");
       return "stopped";
     }
     host.say(`Static analysis failed (${errorText(err)}). Running anyway.`, "note");
@@ -296,7 +299,8 @@ async function withFiles(
     });
   } catch (err) {
     lost = err instanceof PythonLostError;
-    if (stopped(host, STOPPED.thrown)) {
+    if (err instanceof StoppedError) {
+      host.say(STOPPED.thrown, "problem");
       return "stopped";
     }
     throw err;
@@ -316,7 +320,7 @@ async function loadPackages(runtime: PythonRuntime, host: RunHost, code: string)
     await runtime.ensurePackages(code);
   } catch (err) {
     // A load that Stop interrupted is the Stop, which the next check says.
-    if (!host.stopRequested()) {
+    if (!(err instanceof StoppedError)) {
       host.say(`Could not load libraries (${errorText(err)}). Continuing; imports may fail.`, "note");
     }
   }
@@ -362,7 +366,7 @@ async function testsToRun(runtime: PythonRuntime, host: RunHost, code: string): 
       return false;
     }
   } catch (err) {
-    if (!host.stopRequested()) {
+    if (!(err instanceof StoppedError)) {
       host.say(`Could not check for tests (${errorText(err)}). Skipping them.`, "note");
     }
     return false;
@@ -372,7 +376,7 @@ async function testsToRun(runtime: PythonRuntime, host: RunHost, code: string): 
     await runtime.ensurePytest();
     return true;
   } catch (err) {
-    if (!host.stopRequested()) {
+    if (!(err instanceof StoppedError)) {
       host.say(`Could not load pytest (${errorText(err)}). Skipping tests.`, "note");
     }
     return false;

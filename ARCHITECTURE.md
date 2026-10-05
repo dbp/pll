@@ -66,7 +66,8 @@ src/
     ├── packages.ts                Which packages a program needs, from its text
     ├── wire.ts                    The shapes of what the Python side returns
     ├── pythonVendor.ts            Bundled typeguard / typing_extensions wheels
-    ├── deliverResult.ts           Translates Python results to ExecutionEvents
+    ├── fromPython.ts              Every Python result into the host's types
+    ├── runtimeErrors.ts           PythonLostError, StoppedError
     ├── bootstrap/                 Real Python, one file per concern, loaded in order:
     │   ├── typeChecking.py        the level's checks; typeguard set up
     │   ├── errorInfo.py           an exception described for the host
@@ -143,6 +144,29 @@ looks like it contains tests, rewrites asserts, collects `test_*` /
 `Test*` in the file, and calls each test function. Users can still
 `import pytest` (for example `pytest.approx`) because the package is
 loaded into that interpreter.
+
+## The worker protocol
+
+`workerProtocol.ts` defines the messages; `workerRuntime.ts` (host) and
+`workerHost.ts` (worker) are its two ends.
+
+- **One request at a time.** The worker queues requests and starts each
+  only when the last has replied, including ones that await (loading
+  Pyodide or a package), so no Python runs while a package is half
+  installed.
+- **The reply each request gets** is named once, in `REPLY_TO`: the worker's
+  handler for a request is typed to return it, and the runtime waits for it.
+- **An error says what kind it is**: `interrupted` (a Stop ended it, raised
+  as `StoppedError`), `finished` (Python can no longer run, raised as
+  `PythonLostError`, and a new Python is started next time), or `failed`.
+- **Output during a request** (`display`) carries that request's id, and
+  goes to the place that request asked for it to go.
+- **Python's results are read in one place.** `wire.ts` describes what
+  Python sends, snake_case; the worker's `callPython` turns every `None`
+  into `null`, and `fromPython.ts` - the only other module that reads those
+  shapes - turns them into the host's own types, in camelCase. A run's
+  result becomes a stream of `ExecutionEvent`s; the static checks' findings,
+  an Examplar run and a reactor step each become one value.
 
 ## Language levels
 
@@ -574,7 +598,7 @@ it discards all of their globals.
 A Python that is *already* gone is another matter, since there is nothing
 left to discard. If the Node worker exits, or the interpreter in any worker
 can no longer run (Pyodide refuses every call after a fatal error, and the
-worker marks such a reply `finished`), the runtime fails the request in
+worker gives such an error the kind `finished`), the runtime fails the request in
 flight with `PythonLostError`, ends that worker, and starts a new one for
 the next request; every file that has run says that its names are gone.
 `os._exit()` and `os.abort()`, which would end the interpreter, are

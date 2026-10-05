@@ -1,10 +1,15 @@
-import { deliverDisplay, deliverRunResult } from "./deliverResult";
-import type {
-  ExamplarBuildResult,
-  ExamplarRunResult,
-  RawStaticFinding,
-  ReactorStepResult,
-} from "./wire";
+import {
+  deliverDisplay,
+  deliverRunResult,
+  examplarOutcomeFrom,
+  reactorStepFrom,
+  replCheckFrom,
+  staticFindingsFrom,
+  type ExamplarBuildResult,
+  type ExamplarOutcome,
+  type ReactorStep,
+  type StaticFinding,
+} from "./fromPython";
 import { requestInterrupt, tryCreateInterruptBuffer } from "./interruptBuffer";
 import { tryCreateStdinBuffer, writeStdinLine } from "./stdinBuffer";
 import type {
@@ -15,8 +20,14 @@ import type {
   RunFileRequest,
   StaticAnalyzeRequest,
 } from "./types";
-import type { WorkerInbound, WorkerOutbound } from "./workerProtocol";
-import { PythonLostError } from "./pythonLost";
+import {
+  REPLY_TO,
+  type ReplyFor,
+  type WorkerInbound,
+  type WorkerOutbound,
+  type WorkerReply,
+} from "./workerProtocol";
+import { PythonLostError, StoppedError } from "./runtimeErrors";
 import type { WorkspaceFile } from "./workspaceFilePolicy";
 
 /** Why a request could not be sent: there is no Python to send it to. */
@@ -30,6 +41,7 @@ export interface WorkerHandle {
 
 export interface WorkerHandlers {
   onMessage(msg: WorkerOutbound): void;
+  /** The worker raised outside a request, and lives on: a browser `Worker`'s `error`. */
   onError(err: Error): void;
   /**
    * The worker has gone - crashed or was ended. Only a Node worker can say:
@@ -39,15 +51,19 @@ export interface WorkerHandlers {
 }
 
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
-/** A request as callers write it; `send` adds the correlation id. */
+/** A request as callers write it; `request` adds the correlation id. */
 type Request = DistributiveOmit<WorkerInbound, "id">;
-/** Replies that answer a specific request (as opposed to `display` / `stdinRequest`). */
-type Reply = Extract<WorkerOutbound, { id: number }>;
-type ReplyOf<T extends Reply["type"]> = Extract<Reply, { type: T }>;
+
+/** Where a request's live output goes, while it runs. */
+interface LiveOutput {
+  onEvent: ExecutionEventHandler;
+  fileName: string;
+}
 
 interface Pending {
-  resolve: (reply: Reply) => void;
+  resolve: (reply: WorkerReply) => void;
   reject: (err: Error) => void;
+  live: LiveOutput | null;
 }
 
 /**
@@ -69,8 +85,6 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
   private stdinHandler: (() => Promise<string | null>) | null = null;
   private packageNoteHandler: ((text: string, failed: boolean) => void) | null = null;
   private pythonLostHandler: (() => void) | null = null;
-  /** Event sink for the in-flight run or reactor step, so live displays can stream. */
-  private live: { onEvent: ExecutionEventHandler; fileName: string } | null = null;
 
   /** Start the worker and wire it to the given handlers. */
   protected abstract spawn(handlers: WorkerHandlers): WorkerHandle;
@@ -102,125 +116,94 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     this.worker = worker;
     this.stdinBuffer = tryCreateStdinBuffer();
     this.interruptBuffer = tryCreateInterruptBuffer();
-    await this.request(
-      {
-        type: "init",
-        indexUrl,
-        ...(this.stdinBuffer ? { stdinBuffer: this.stdinBuffer } : {}),
-        ...(this.interruptBuffer ? { interruptBuffer: this.interruptBuffer } : {}),
-      },
-      "ready",
-    );
+    await this.request({
+      type: "init",
+      indexUrl,
+      ...(this.stdinBuffer ? { stdinBuffer: this.stdinBuffer } : {}),
+      ...(this.interruptBuffer ? { interruptBuffer: this.interruptBuffer } : {}),
+    });
   }
 
   async runFile(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void> {
     await this.initialize();
-    this.live = { onEvent, fileName: request.fileName };
-    try {
-      const { result } = await this.request({ type: "runFile", ...request }, "result");
-      deliverRunResult(result, onEvent, request.fileName);
-    } finally {
-      this.live = null;
-    }
+    const live = { onEvent, fileName: request.fileName };
+    const { result } = await this.request({ type: "runFile", ...request }, live);
+    deliverRunResult(result, onEvent, request.fileName);
   }
 
   async replEval(request: ReplEvalRequest, onEvent: ExecutionEventHandler): Promise<void> {
     await this.initialize();
-    const { result } = await this.request({ type: "replEval", ...request }, "result");
+    const { result } = await this.request({ type: "replEval", ...request });
     deliverRunResult(result, onEvent, "<repl>");
   }
 
   async checkReplComplete(code: string): Promise<ReplCheckResult> {
     await this.initialize();
-    const { result } = await this.request({ type: "checkSyntax", code }, "syntax");
-    return {
-      status: result.status,
-      errorType: result.error_type,
-      message: result.message,
-      lineNumber: result.lineno,
-      offset: result.offset,
-    };
+    const { result } = await this.request({ type: "checkSyntax", code });
+    return replCheckFrom(result);
   }
 
   async hasTests(code: string): Promise<boolean> {
     await this.initialize();
-    const { result } = await this.request({ type: "hasTests", code }, "hasTests");
+    const { result } = await this.request({ type: "hasTests", code });
     return result;
   }
 
   async ensurePackages(code: string): Promise<void> {
     await this.initialize();
-    await this.request({ type: "loadPackages", code }, "packagesReady");
+    await this.request({ type: "loadPackages", code });
   }
 
   async ensurePytest(): Promise<void> {
     await this.initialize();
-    await this.request({ type: "loadPytest" }, "pytestReady");
+    await this.request({ type: "loadPytest" });
   }
 
-  async staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]> {
+  async staticAnalyze(request: StaticAnalyzeRequest): Promise<StaticFinding[]> {
     await this.initialize();
-    const { result } = await this.request({ type: "staticAnalyze", ...request }, "static");
-    return result ?? [];
+    const { result } = await this.request({ type: "staticAnalyze", ...request });
+    return staticFindingsFrom(result);
   }
 
   async mountWorkspaceFiles(files: WorkspaceFile[]): Promise<void> {
     await this.initialize();
-    await this.request({ type: "mountWorkspace", files }, "workspaceReady");
+    await this.request({ type: "mountWorkspace", files });
   }
 
   async collectWorkspaceFiles(): Promise<WorkspaceFile[]> {
     await this.initialize();
-    const { files } = await this.request({ type: "collectWorkspace" }, "workspaceFiles");
+    const { files } = await this.request({ type: "collectWorkspace" });
     return files;
   }
 
   async examplarBuild(sources: string): Promise<ExamplarBuildResult> {
     await this.initialize();
-    const { result } = await this.request({ type: "examplarBuild", sources }, "examplarBuilt");
+    const { result } = await this.request({ type: "examplarBuild", sources });
     return result;
   }
 
-  async examplarRun(testSource: string, bundle: string): Promise<ExamplarRunResult> {
+  async examplarRun(testSource: string, bundle: string): Promise<ExamplarOutcome> {
     await this.initialize();
-    const { result } = await this.request(
-      { type: "examplarRun", testSource, bundle },
-      "examplarRan",
-    );
-    return result;
+    const { result } = await this.request({ type: "examplarRun", testSource, bundle });
+    return examplarOutcomeFrom(result);
   }
 
-  async reactorStep(
-    reactorId: string,
-    event: string,
-    output?: { onEvent: ExecutionEventHandler; fileName: string },
-  ): Promise<ReactorStepResult> {
+  async reactorStep(reactorId: string, event: string, output?: LiveOutput): Promise<ReactorStep> {
     await this.initialize();
-    // The worker streams a step's output live, as it does a file run's.
-    this.live = output ?? null;
-    try {
-      const { result } = await this.request(
-        { type: "reactorStep", reactorId, event },
-        "reactorFrame",
-      );
-      return result;
-    } finally {
-      this.live = null;
-    }
+    // A handler's output streams live, as a file run's does.
+    const { result } = await this.request({ type: "reactorStep", reactorId, event }, output);
+    return reactorStepFrom(result);
   }
 
-  async reactorSeek(reactorId: string, index: number): Promise<ReactorStepResult> {
+  async reactorSeek(reactorId: string, index: number): Promise<ReactorStep> {
     await this.initialize();
-    const { result } = await this.request(
-      { type: "reactorSeek", reactorId, index },
-      "reactorFrame",
-    );
-    return result;
+    const { result } = await this.request({ type: "reactorSeek", reactorId, index });
+    return reactorStepFrom(result);
   }
 
   async reactorDispose(reactorId: string): Promise<void> {
     await this.initialize();
-    await this.request({ type: "reactorDispose", reactorId }, "reactorDisposed");
+    await this.request({ type: "reactorDispose", reactorId });
   }
 
   async endSession(sessionKey: string): Promise<void> {
@@ -228,7 +211,7 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     // started now would only be started to do nothing.
     if (!this.initPromise) return;
     await this.initialize();
-    await this.request({ type: "endSession", sessionKey }, "sessionEnded");
+    await this.request({ type: "endSession", sessionKey });
   }
 
   interrupt(): boolean {
@@ -266,35 +249,40 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     this.initPromise = null;
     this.stdinBuffer = null;
     this.interruptBuffer = null;
-    this.live = null;
     this.rejectAllPending(new Error("Runtime disposed"));
   }
 
-  /** Send `msg` and resolve with the reply, asserting it is of type `expected`. */
-  private async request<T extends Reply["type"]>(
-    msg: Request,
-    expected: T,
-  ): Promise<ReplyOf<T>> {
+  /**
+   * Send `msg` and resolve with its reply - the one `REPLY_TO` names for it.
+   * `live` is where its output goes while it runs, for a request that
+   * streams it.
+   */
+  private async request<M extends Request>(
+    msg: M,
+    live: LiveOutput | null = null,
+  ): Promise<ReplyFor<M["type"]>> {
     const worker = this.worker;
     if (!worker) {
       // Started, and gone again before this was sent.
       throw new Error(NOT_RUNNING);
     }
     const id = this.nextId++;
-    const reply = await new Promise<Reply>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+    const reply = await new Promise<WorkerReply>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject, live });
       worker.post({ id, ...msg } as WorkerInbound);
     });
+    const expected = REPLY_TO[msg.type];
     if (reply.type !== expected) {
       throw new Error(`Pyodide worker replied "${reply.type}", expected "${expected}"`);
     }
-    return reply as ReplyOf<T>;
+    return reply as ReplyFor<M["type"]>;
   }
 
   private handleMessage(msg: WorkerOutbound, worker: WorkerHandle): void {
     if (msg.type === "display") {
-      if (this.live) {
-        deliverDisplay(msg.payload, this.live.onEvent, this.live.fileName);
+      const live = this.pending.get(msg.requestId)?.live;
+      if (live) {
+        deliverDisplay(msg.payload, live.onEvent, live.fileName);
       }
       return;
     }
@@ -308,7 +296,7 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
       else console.error(msg.text);
       return;
     }
-    if (msg.type === "error" && msg.finished) {
+    if (msg.type === "error" && msg.kind === "finished") {
       this.pythonLost(worker);
       return;
     }
@@ -318,7 +306,7 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     }
     this.pending.delete(msg.id);
     if (msg.type === "error") {
-      pending.reject(new Error(msg.message));
+      pending.reject(msg.kind === "interrupted" ? new StoppedError(msg.message) : new Error(msg.message));
     } else {
       pending.resolve(msg);
     }
@@ -340,7 +328,6 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     this.rejectAllPending(new PythonLostError());
     this.worker = null;
     this.initPromise = null;
-    this.live = null;
     worker.terminate();
     this.pythonLostHandler?.();
   }

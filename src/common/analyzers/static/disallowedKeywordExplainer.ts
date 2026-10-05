@@ -1,5 +1,5 @@
 import type { Level } from "../../level";
-import type { RawStaticFindingOf } from "../../wire";
+import type { StaticFindingOf } from "../../fromPython";
 import { staticFindingFor, type AnalysisFinding } from "../types";
 
 /**
@@ -10,7 +10,7 @@ import { staticFindingFor, type AnalysisFinding } from "../types";
  * to keep beginners from running into.
  */
 export function explainDisallowedKeyword(
-  raw: RawStaticFindingOf<"disallowed-keyword">,
+  raw: StaticFindingOf<"disallowed-keyword">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {

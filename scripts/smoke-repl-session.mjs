@@ -171,14 +171,26 @@ export function __setActiveEditor(editor) {
 async function load() {
   const mod = await importSource(`
 export { ReplSession, STOP_TIMEOUT_MS, MAX_STREAM_LINES_PER_RUN } from "./src/common/replSession";
-export { PythonLostError } from "./src/common/pythonLost";
+export { PythonLostError, StoppedError } from "./src/common/runtimeErrors";
+export { examplarOutcomeFrom, reactorStepFrom, staticFindingsFrom } from "./src/common/fromPython";
 export { registerCommands } from "./src/common/commands";
 export * as vscodeStub from "vscode";
 `, { vscodeStub: VSCODE_STUB });
   return mod;
 }
 
-const { ReplSession, STOP_TIMEOUT_MS, MAX_STREAM_LINES_PER_RUN, PythonLostError, vscodeStub, registerCommands } = await load();
+const {
+  ReplSession,
+  STOP_TIMEOUT_MS,
+  MAX_STREAM_LINES_PER_RUN,
+  PythonLostError,
+  StoppedError,
+  examplarOutcomeFrom,
+  reactorStepFrom,
+  staticFindingsFrom,
+  vscodeStub,
+  registerCommands,
+} = await load();
 const { Uri, __setActiveEditor, __closeDocument, files, written } = vscodeStub;
 
 /* ---------------------------------------------------------------- */
@@ -273,7 +285,13 @@ function makeDiagnostics() {
  * that method, for a test that has to hold one step of a run open.
  * `script.runTests` emits a run's test report: as in Python, the tests run
  * inside `runFile`, after the program, and only if it did not raise.
+ *
+ * Results are scripted as Python returns them and translated the way the
+ * real runtime translates them, through `fromPython`.
  */
+/** A reactor step that worked, as Python reports one. */
+const FRAME = { ok: true, frame: { data: "<svg/>", width: 1, height: 1 }, index: 0, length: 1 };
+
 function makeRuntime(script = {}) {
   const calls = [];
   let stdinHandler = null;
@@ -285,9 +303,11 @@ function makeRuntime(script = {}) {
     },
     async examplarRun(testSource, bundle) {
       calls.push(["examplarRun", testSource, bundle]);
-      if (script.examplarRun) return script.examplarRun(testSource, bundle);
       if (script.examplarThrows) throw new Error("boom");
-      return script.examplarResult ?? { ok: true, provides: [], wheats: [], chaffs: [] };
+      const raw = script.examplarRun
+        ? await script.examplarRun(testSource, bundle)
+        : (script.examplarResult ?? { ok: true, provides: [], wheats: [], chaffs: [] });
+      return examplarOutcomeFrom(raw);
     },
     async examplarBuild(sources) {
       calls.push(["examplarBuild", sources]);
@@ -295,11 +315,11 @@ function makeRuntime(script = {}) {
     },
     async reactorStep(reactorId, event, output) {
       calls.push(["reactorStep", reactorId, event]);
-      return script.reactorStep?.(reactorId, JSON.parse(event), output) ?? { ok: true };
+      return reactorStepFrom(script.reactorStep?.(reactorId, JSON.parse(event), output) ?? FRAME);
     },
     async reactorSeek(reactorId, index) {
       calls.push(["reactorSeek", reactorId, index]);
-      return script.reactorSeek?.(reactorId, index) ?? { ok: true };
+      return reactorStepFrom(script.reactorSeek?.(reactorId, index) ?? FRAME);
     },
     async reactorDispose(reactorId) {
       calls.push(["reactorDispose", reactorId]);
@@ -386,8 +406,9 @@ function makeRuntime(script = {}) {
     },
     async staticAnalyze(request) {
       calls.push(["staticAnalyze", request.fileName, request.level, request.sessionKey]);
-      if (script.staticAnalyze) return script.staticAnalyze(request);
-      return script.findings ?? [];
+      return staticFindingsFrom(
+        script.staticAnalyze ? await script.staticAnalyze(request) : (script.findings ?? []),
+      );
     },
     async mountWorkspaceFiles(files) {
       calls.push(["mountWorkspaceFiles", files.map((f) => f.name).join("|")]);
@@ -2056,7 +2077,7 @@ console.log("\n[49] a Stop while pytest loads means no program, and so no tests"
       events: () => [{ kind: "done" }],
       ensurePytest: async () => {
         await broken.promise;
-        throw new Error("Traceback (most recent call last):\nKeyboardInterrupt");
+        throw new StoppedError("Traceback (most recent call last):\nKeyboardInterrupt");
       },
     },
     doc,
@@ -2087,7 +2108,7 @@ console.log("\n[50] a Stop during the Examplar check: no tests, no program, no f
       // As the worker reports a Stop in the student's tests: a traceback.
       examplarRun: async () => {
         await gate.promise;
-        throw new Error("Traceback (most recent call last):\nKeyboardInterrupt");
+        throw new StoppedError("Traceback (most recent call last):\nKeyboardInterrupt");
       },
     }),
   );
@@ -2168,7 +2189,7 @@ console.log("\n[51] a Stop before the program starts: nothing runs, and nothing 
       events: () => [{ kind: "done" }],
       staticAnalyze: async () => {
         await checking.promise;
-        throw new Error("Traceback (most recent call last):\nKeyboardInterrupt");
+        throw new StoppedError("Traceback (most recent call last):\nKeyboardInterrupt");
       },
     },
     checkedDoc,
@@ -2200,7 +2221,7 @@ console.log("\n[51] a Stop before the program starts: nothing runs, and nothing 
       events: () => [{ kind: "done" }],
       ensurePackages: async () => {
         await loading.promise;
-        throw new Error("Traceback (most recent call last):\nKeyboardInterrupt");
+        throw new StoppedError("Traceback (most recent call last):\nKeyboardInterrupt");
       },
     },
     importsDoc,
@@ -2232,7 +2253,7 @@ console.log("\n[52] a run that fails because of a Stop is not an internal error"
         ? [
             async () => {
               await gate.promise;
-              throw new Error("Traceback (most recent call last):\nKeyboardInterrupt");
+              throw new StoppedError("Traceback (most recent call last):\nKeyboardInterrupt");
             },
           ]
         : [{ kind: "done" }],
@@ -2777,6 +2798,22 @@ console.log("\n[70] the Examplar check is not run if the student's files cannot 
   expect(/were not run: your files could not be set aside first \(busy\)/.test(card?.problem ?? ""),
     `the card says why: ${card?.problem}`);
   expect(called(runtime, "runFile"), "the program still runs");
+  repl.dispose();
+}
+
+console.log("\n[71] a reactor Python no longer has is dropped quietly");
+{
+  // Its session was reset under it: there is nothing to show, and nothing
+  // wrong with the student's program.
+  const { repl, view, runtime, doc } = await harness(
+    countingReactor({ script: { reactorStep: () => ({ ok: false, gone: true }) } }),
+  );
+  await repl.runFile("animate(...)", "hello.py", doc);
+  await new Promise((r) => setTimeout(r, 150));
+  const ticks = runtime.calls.filter((c) => c[0] === "reactorStep").length;
+  await new Promise((r) => setTimeout(r, 150));
+  expect(runtime.calls.filter((c) => c[0] === "reactorStep").length === ticks, `its clock stops: ${ticks} steps`);
+  expect(!view.entries.some((e) => e.kind === "finding"), `no error is shown: ${kinds(view).join(",")}`);
   repl.dispose();
 }
 

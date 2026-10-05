@@ -116,6 +116,11 @@
 - **The Examplar check is not run if your files cannot be set aside first.**
   The known implementations run without access to the student's files; if
   emptying the work directory failed, they ran with the files there.
+- **A Python worker that crashes is reported once**, as Python having
+  stopped, rather than also as an "Internal error" with the crash's own
+  message (desktop and command line).
+- **The web version's message when `input()` cannot work** is for
+  students: it no longer tells them to run `pnpm run test-web`.
 - **An empty `pll.pyodideIndexUrl` means the default** in the web version,
   rather than a Python that cannot start. The setting's description no
   longer asks for a trailing slash, which was never needed, and says it

@@ -1,6 +1,6 @@
 import type { Level } from "../level";
 import type { PythonError } from "../errors/pythonError";
-import type { RawStaticFinding } from "../wire";
+import type { StaticFinding } from "../fromPython";
 
 export interface AnalysisFinding {
   /** Short id like "name-error" or "shadowing". */
@@ -72,18 +72,18 @@ export function runtimeFindingFor(
  * are the raw finding's own.
  */
 export function staticFindingFor(
-  raw: RawStaticFinding,
+  raw: StaticFinding,
   level: Level,
   fileName: string,
   fields: Pick<AnalysisFinding, "headline" | "howToFix"> & Partial<AnalysisFinding>,
 ): AnalysisFinding {
   return {
     id: raw.id,
-    errorType: raw.error_type,
+    errorType: raw.errorType,
     fileName,
-    lineNumber: raw.line_number,
+    lineNumber: raw.lineNumber,
     column: raw.column,
-    nameToken: raw.name_token,
+    nameToken: raw.nameToken,
     severity: "error",
     origin: "static",
     level,

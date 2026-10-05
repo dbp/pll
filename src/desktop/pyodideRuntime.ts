@@ -44,9 +44,10 @@ export class DesktopPyodideRuntime extends WorkerPythonRuntime {
   protected spawn(handlers: WorkerHandlers): WorkerHandle {
     const worker = new Worker(this.paths.workerPath);
     worker.on("message", (msg: WorkerOutbound) => handlers.onMessage(msg));
-    worker.on("error", (err) =>
-      handlers.onError(err instanceof Error ? err : new Error(String(err))),
-    );
+    // A Node worker that throws is ended, and `exit` follows: that is what
+    // fails its requests, once, as Python lost. The error itself goes to
+    // the log.
+    worker.on("error", (err) => console.error("Pyodide worker failed:", err));
     worker.on("exit", () => handlers.onExit?.());
     return {
       post: (msg) => worker.postMessage(msg),

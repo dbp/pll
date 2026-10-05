@@ -19,8 +19,7 @@ import { startWorker, talk } from "./lib/worker.mjs";
 async function loadAnalyzer() {
   const mod = await importSource(`
 export { findRuntimeFinding } from "./src/common/analyzers/registry";
-export { pythonErrorFrom } from "./src/common/errors/pythonError";
-export { deliverRunResult } from "./src/common/deliverResult";
+export { deliverRunResult, pythonErrorFrom } from "./src/common/fromPython";
 export { explainTestReport } from "./src/common/analyzers/runtimeFinding";
 `);
   return mod;

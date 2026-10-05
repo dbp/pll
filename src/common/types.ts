@@ -3,11 +3,11 @@ import type { PythonError } from "./errors/pythonError";
 import type { Level } from "./level";
 import type {
   ExamplarBuildResult,
-  ExamplarRunResult,
-  RawStaticFinding,
+  ExamplarOutcome,
   ReactorFrame,
-  ReactorStepResult,
-} from "./wire";
+  ReactorStep,
+  StaticFinding,
+} from "./fromPython";
 import type { WorkspaceFile } from "./workspaceFilePolicy";
 
 export interface ExecutionStdoutChunk {
@@ -197,7 +197,7 @@ export interface PythonRuntime {
    * for `advanced` (no checks) or when the file doesn't parse (let runtime
    * surface SyntaxErrors).
    */
-  staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]>;
+  staticAnalyze(request: StaticAnalyzeRequest): Promise<StaticFinding[]>;
   /**
    * Copy sibling workspace files into Pyodide's work directory so
    * `open("data.csv")` / `pd.read_csv("data.csv")` see them. Replaces any
@@ -217,7 +217,7 @@ export interface PythonRuntime {
    */
   examplarBuild(sources: string): Promise<ExamplarBuildResult>;
   /** Run a student's tests against every implementation in a bundle. */
-  examplarRun(testSource: string, bundle: string): Promise<ExamplarRunResult>;
+  examplarRun(testSource: string, bundle: string): Promise<ExamplarOutcome>;
   /**
    * Apply one event to a running reactor and get the frame it produced.
    * `event` is the JSON of `{kind, ...}`; see `Reactor.react`.
@@ -230,9 +230,9 @@ export interface PythonRuntime {
     reactorId: string,
     event: string,
     output?: { onEvent: ExecutionEventHandler; fileName: string },
-  ): Promise<ReactorStepResult>;
+  ): Promise<ReactorStep>;
   /** Show an earlier or later recorded frame, applying no event. */
-  reactorSeek(reactorId: string, index: number): Promise<ReactorStepResult>;
+  reactorSeek(reactorId: string, index: number): Promise<ReactorStep>;
   /** Forget a reactor, so its recorded states can be collected. */
   reactorDispose(reactorId: string): Promise<void>;
   /** Forget a session and the names its runs defined. */

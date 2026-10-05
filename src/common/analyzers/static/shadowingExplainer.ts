@@ -1,5 +1,5 @@
 import type { Level } from "../../level";
-import type { RawStaticFindingOf } from "../../wire";
+import type { StaticFindingOf } from "../../fromPython";
 import { staticFindingFor, type AnalysisFinding } from "../types";
 
 /** Friendly noun for the kind of scope the outer binding lives in. */
@@ -24,13 +24,13 @@ function outerScopeNoun(kind: string | null | undefined): string {
  * scope" finding from the Python static analyzer.
  */
 export function explainShadowing(
-  raw: RawStaticFindingOf<"shadowing">,
+  raw: StaticFindingOf<"shadowing">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  const name = raw.name_token ?? "this name";
-  const outerLine = raw.outer_line_number ?? null;
-  const outerNoun = outerScopeNoun(raw.outer_scope_kind);
+  const name = raw.nameToken ?? "this name";
+  const outerLine = raw.outerLineNumber ?? null;
+  const outerNoun = outerScopeNoun(raw.outerScopeKind);
   const knownOuterLine = outerLine !== null && outerLine > 0;
   const outerHint = knownOuterLine
     ? ` (first defined on line ${outerLine}, in ${outerNoun})`
@@ -51,11 +51,11 @@ export function explainShadowing(
  * Build an AnalysisFinding for "name shadows a built-in" (e.g. `list = ...`).
  */
 export function explainShadowingBuiltin(
-  raw: RawStaticFindingOf<"shadowing-builtin">,
+  raw: StaticFindingOf<"shadowing-builtin">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  const name = raw.name_token ?? "this name";
+  const name = raw.nameToken ?? "this name";
   const headline = `\`${name}\` is the name of a Python built-in.`;
 
   return staticFindingFor(raw, level, fileName, {
@@ -88,11 +88,11 @@ function libraryNoun(library: string | null | undefined): string {
  * `table` (table library), or `animate` (reactor library).
  */
 export function explainShadowingLibrary(
-  raw: RawStaticFindingOf<"shadowing-library">,
+  raw: StaticFindingOf<"shadowing-library">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  const name = raw.name_token ?? "this name";
+  const name = raw.nameToken ?? "this name";
   const noun = libraryNoun(raw.library);
   const headline = `\`${name}\` is already defined by ${noun}.`;
 

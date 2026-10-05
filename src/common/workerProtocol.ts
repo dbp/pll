@@ -2,20 +2,13 @@ import type {
   DisplayData,
   ExamplarBuildResult,
   ExamplarRunResult,
+  RawReplCheck,
   RawStaticFinding,
   ReactorStepResult,
   RunResult,
 } from "./wire";
 import type { Level } from "./level";
 import type { WorkspaceFile } from "./workspaceFilePolicy";
-
-export interface RawReplCheck {
-  status: "complete" | "incomplete" | "invalid";
-  error_type?: string;
-  message?: string;
-  lineno?: number;
-  offset?: number;
-}
 
 export type WorkerInbound =
   | {
@@ -77,9 +70,49 @@ export type WorkerOutbound =
   | { id: number; type: "sessionEnded" }
   | { id: number; type: "examplarBuilt"; result: ExamplarBuildResult }
   | { id: number; type: "examplarRan"; result: ExamplarRunResult }
-  /** `finished`: the interpreter can no longer run anything, in this worker. */
-  | { id: number; type: "error"; message: string; finished?: boolean }
-  | { type: "display"; payload: DisplayData }
+  | { id: number; type: "error"; message: string; kind: WorkerErrorKind }
+  /** Output as the program produces it, for the request that is running. */
+  | { type: "display"; requestId: number; payload: DisplayData }
   /** Pyodide saying what it is loading - or, `failed`, what went wrong. */
   | { type: "packageNote"; text: string; failed: boolean }
   | { type: "stdinRequest" };
+
+/**
+ * Why a request failed. `interrupted`: a Stop ended it. `finished`: the
+ * interpreter can no longer run anything, in this worker. `failed`:
+ * anything else.
+ */
+export type WorkerErrorKind = "failed" | "interrupted" | "finished";
+
+/** The replies that answer a request, as opposed to output and notes. */
+export type WorkerReply = Extract<WorkerOutbound, { id: number }>;
+
+/**
+ * The reply each request is answered with when it succeeds. Both ends are
+ * typed from it: the worker's handler for a request returns this reply, and
+ * the runtime waits for it.
+ */
+export const REPLY_TO = {
+  init: "ready",
+  runFile: "result",
+  replEval: "result",
+  checkSyntax: "syntax",
+  loadPackages: "packagesReady",
+  hasTests: "hasTests",
+  loadPytest: "pytestReady",
+  staticAnalyze: "static",
+  mountWorkspace: "workspaceReady",
+  collectWorkspace: "workspaceFiles",
+  reactorStep: "reactorFrame",
+  reactorSeek: "reactorFrame",
+  reactorDispose: "reactorDisposed",
+  endSession: "sessionEnded",
+  examplarBuild: "examplarBuilt",
+  examplarRun: "examplarRan",
+} as const satisfies Record<WorkerInbound["type"], WorkerReply["type"]>;
+
+/** The reply to a request of type `T`. */
+export type ReplyFor<T extends WorkerInbound["type"]> = Extract<
+  WorkerReply,
+  { type: (typeof REPLY_TO)[T] }
+>;

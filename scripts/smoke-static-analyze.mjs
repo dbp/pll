@@ -16,7 +16,10 @@ import { expect, passed } from "./lib/check.mjs";
 import { importSource } from "./lib/bundle.mjs";
 
 const { enrichStaticFindings, LEVEL_NAMES } = await importSource(`
-export { enrichStaticFindings } from "./src/common/analyzers/static/registry";
+import { enrichStaticFindings as explainFindings } from "./src/common/analyzers/static/registry";
+import { staticFindingsFrom } from "./src/common/fromPython";
+/** Findings as Python sends them, through the runtime's translation. */
+export const enrichStaticFindings = (raw, level, fileName) => explainFindings(staticFindingsFrom(raw), level, fileName);
 export { LEVEL_NAMES } from "./src/common/level";
 `);
 import { ROOT } from "./lib/bundle.mjs";

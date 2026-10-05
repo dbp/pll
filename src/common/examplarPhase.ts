@@ -1,7 +1,8 @@
 import { loadBundle, parseExamplarDirective, type BundleStore } from "./examplarSource";
-import type { ExamplarRunResult } from "./wire";
+import type { ExamplarOutcome } from "./fromPython";
 import type { PythonRuntime } from "./types";
 import { errorText } from "./errorText";
+import { StoppedError } from "./runtimeErrors";
 
 /**
  * The Examplar step of a run, and the cards it produces: the student's tests
@@ -135,7 +136,7 @@ export async function runExamplarStep(
   try {
     await runtime.mountWorkspaceFiles([]);
   } catch (err) {
-    if (!host.stopRequested()) {
+    if (!(err instanceof StoppedError)) {
       host.examplarCard(
         failedCard(
           bundle,
@@ -158,14 +159,12 @@ export async function runExamplarStep(
   if (host.stopRequested()) {
     return false;
   }
-  let result: ExamplarRunResult;
+  let result: ExamplarOutcome;
   try {
     result = await runtime.examplarRun(code, bundle.json);
   } catch (err) {
-    // Stopped, which surfaces from the worker as a Python traceback. The
-    // card would show that as the reason the check failed; the run plan
-    // says what actually happened.
-    if (!host.stopRequested()) {
+    // A Stop is not a reason the check failed; the run plan says it.
+    if (!(err instanceof StoppedError)) {
       host.examplarCard(failedCard(bundle, errorText(err)));
     }
     return false;
@@ -174,7 +173,7 @@ export async function runExamplarStep(
     host.examplarCard(entry);
   }
   const provides = result.provides ?? [];
-  const defines = result.wheats?.[0]?.student_defines ?? [];
+  const defines = result.wheats?.[0]?.studentDefines ?? [];
   return provides.length > 0 && provides.every((name) => defines.includes(name));
 }
 
@@ -230,7 +229,7 @@ function failedCard(bundle: Bundle, problem: string): ExamplarFailedEntry {
  * implementation contributes only its id, because its failure messages
  * describe the bug it plants.
  */
-export function buildExamplarEntries(bundle: Bundle, result: ExamplarRunResult): ExamplarEntry[] {
+export function buildExamplarEntries(bundle: Bundle, result: ExamplarOutcome): ExamplarEntry[] {
   if (!result.ok) {
     return [failedCard(bundle, result.error ?? "the known implementations could not be run")];
   }
@@ -243,7 +242,7 @@ export function buildExamplarEntries(bundle: Bundle, result: ExamplarRunResult):
       failedCard(
         bundle,
         `a known correct implementation could not be loaded ` +
-          `(${unloadable.error_type}: ${unloadable.error_message}). ` +
+          `(${unloadable.errorType}: ${unloadable.errorMessage}). ` +
           `The bundle may need rebuilding.`,
       ),
     ];
@@ -274,7 +273,7 @@ export function buildExamplarEntries(bundle: Bundle, result: ExamplarRunResult):
 
   const attribution = result.attribution ?? {};
   const chaffs = result.chaffs ?? [];
-  const skipped = new Set(result.chaffs_skipped ?? []);
+  const skipped = new Set(result.chaffsSkipped ?? []);
   return (result.provides ?? []).map((name) => {
     const tests = Object.entries(attribution)
       .filter(([, names]) => names.includes(name))

@@ -1,9 +1,9 @@
 /**
- * The shapes of what the Python side returns: results of a run, a test
- * phase, a reactor step, an Examplar run, and the static checks. Python
- * builds them as dicts; they arrive as plain objects, in snake_case, and
- * `deliverResult.ts` (with `pythonErrorFrom`) turns them into the host's
- * events.
+ * The shapes of what the Python side returns: results of a run and its
+ * tests, a reactor step, an Examplar run, and the static checks. Python
+ * builds them as dicts; they arrive as plain objects, in snake_case, with
+ * every `None` as `null`. Only the protocol and `fromPython.ts`, which turns
+ * them into the host's own types, read these.
  */
 /**
  * An exception as `_pll_error_info` describes it. Every result that can
@@ -36,6 +36,15 @@ export interface WireFacts {
   length?: number;
   element_value?: string;
   swapped_with?: string;
+}
+
+/** Whether a prompt line is complete yet, as `_pll_repl_check` says. */
+export interface RawReplCheck {
+  status: "complete" | "incomplete" | "invalid";
+  error_type?: string | null;
+  message?: string | null;
+  lineno?: number | null;
+  offset?: number | null;
 }
 
 export interface RunResult extends WireError {

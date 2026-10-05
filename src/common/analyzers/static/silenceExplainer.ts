@@ -1,5 +1,5 @@
 import type { Level } from "../../level";
-import type { RawStaticFindingOf, SilenceFindingId } from "../../wire";
+import type { StaticFindingOf, SilenceFindingId } from "../../fromPython";
 import { staticFindingFor, type AnalysisFinding } from "../types";
 
 /**
@@ -48,7 +48,7 @@ const FUNCTION_NOT_TYPE = new Set(["table", "reactor"]);
 
 /** `pen_cost(0, "huskies") == 1` - a test written without `assert`. */
 export function explainUnusedComparison(
-  raw: RawStaticFindingOf<SilenceFindingId>,
+  raw: StaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -65,7 +65,7 @@ export function explainUnusedComparison(
 
 /** `ac.balance + amt` on a line of its own. */
 export function explainUnusedValue(
-  raw: RawStaticFindingOf<SilenceFindingId>,
+  raw: StaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -92,7 +92,7 @@ export function explainUnusedValue(
 
 /** `assert(x, 1)` - a tuple, which is always true. */
 export function explainAssertTuple(
-  raw: RawStaticFindingOf<SilenceFindingId>,
+  raw: StaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
@@ -107,11 +107,11 @@ export function explainAssertTuple(
 
 /** `movies["rating"].mean` - the method, not its result. */
 export function explainMethodNotCalled(
-  raw: RawStaticFindingOf<SilenceFindingId>,
+  raw: StaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  const method = raw.name_token ?? "the method";
+  const method = raw.nameToken ?? "the method";
   return staticFindingFor(raw, level, fileName, {
     headline: `\`${method}\` is named here but never called.`,
     howToFix: [
@@ -124,11 +124,11 @@ export function explainMethodNotCalled(
 
 /** `t: table` - the function that makes tables, not the type. */
 export function explainAnnotationNotAType(
-  raw: RawStaticFindingOf<SilenceFindingId>,
+  raw: StaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  const written = raw.name_token ?? "";
+  const written = raw.nameToken ?? "";
   const type = TYPE_FOR[written] ?? null;
   const headline = FUNCTION_NOT_TYPE.has(written)
     ? `\`${written}\` is the function that makes a ${written}; the type is \`${type}\`.`
@@ -153,11 +153,11 @@ export function explainAnnotationNotAType(
 
 /** A function with an `assert` that nothing ever runs. */
 export function explainTestNotNamed(
-  raw: RawStaticFindingOf<"test-not-named">,
+  raw: StaticFindingOf<"test-not-named">,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  const name = raw.name_token ?? "this function";
+  const name = raw.nameToken ?? "this function";
   return staticFindingFor(raw, level, fileName, {
     headline: `\`${name}\` has an \`assert\` in it, but nothing ever runs it.`,
     howToFix: [
@@ -170,11 +170,11 @@ export function explainTestNotNamed(
 
 /** `year` on a line of its own in a dataclass body. */
 export function explainFieldNoType(
-  raw: RawStaticFindingOf<SilenceFindingId>,
+  raw: StaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  const name = raw.name_token ?? "this field";
+  const name = raw.nameToken ?? "this field";
   return staticFindingFor(raw, level, fileName, {
     headline: `The field \`${name}\` has no type, so it is not a field at all.`,
     howToFix: [
@@ -188,12 +188,12 @@ export function explainFieldNoType(
 
 /** `year = int` where `year: int` was meant. */
 export function explainFieldAssignedType(
-  raw: RawStaticFindingOf<SilenceFindingId>,
+  raw: StaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  const name = raw.name_token ?? "this field";
-  const type = raw.written_type ?? "int";
+  const name = raw.nameToken ?? "this field";
+  const type = raw.writtenType ?? "int";
   return staticFindingFor(raw, level, fileName, {
     headline: `\`${name} = ${type}\` sets \`${name}\` to the type itself; did you mean \`${name}: ${type}\`?`,
     howToFix: [
@@ -205,11 +205,11 @@ export function explainFieldAssignedType(
 
 /** A class with annotated fields and no `@dataclass`. */
 export function explainClassNeedsDataclass(
-  raw: RawStaticFindingOf<SilenceFindingId>,
+  raw: StaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  const name = raw.name_token ?? "this class";
+  const name = raw.nameToken ?? "this class";
   return staticFindingFor(raw, level, fileName, {
     headline: `\`${name}\` lists fields but has no \`@dataclass\`, so \`${name}(...)\` takes no arguments.`,
     howToFix: [
@@ -221,11 +221,11 @@ export function explainClassNeedsDataclass(
 
 /** `if a == Boa:` - a value is never equal to the class it was made from. */
 export function explainComparedWithClass(
-  raw: RawStaticFindingOf<SilenceFindingId>,
+  raw: StaticFindingOf<SilenceFindingId>,
   level: Level,
   fileName: string,
 ): AnalysisFinding {
-  const name = raw.name_token ?? "a class";
+  const name = raw.nameToken ?? "a class";
   return staticFindingFor(raw, level, fileName, {
     headline: `\`${name}\` is a class, so comparing a value with it is always False.`,
     howToFix: [

@@ -6,13 +6,14 @@ import type {
   DisplayData,
   ExamplarBuildResult,
   ExamplarRunResult,
+  RawReplCheck,
   RawStaticFinding,
   ReactorStepResult,
   RunResult,
 } from "./wire";
 import { clearInterrupt } from "./interruptBuffer";
 import { waitForStdinLine } from "./stdinBuffer";
-import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "./workerProtocol";
+import type { ReplyFor, WorkerErrorKind, WorkerInbound, WorkerOutbound } from "./workerProtocol";
 import { errorText } from "./errorText";
 import { DEFAULT_LEVEL } from "./level";
 import { onceSuccessful } from "./onceSuccessful";
@@ -46,6 +47,28 @@ export interface WorkerHostAdapter {
 }
 
 /**
+ * A converted Python value with every `None` as `null`. `toJs` makes a
+ * `None` `undefined`, which the wire types do not admit; this is the one
+ * place it is turned back.
+ */
+function nullForNone(value: unknown): unknown {
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map(nullForNone);
+  if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, nullForNone(inner)]));
+  }
+  return value;
+}
+
+/** Why a request failed, for the runtime to act on rather than read. */
+function errorKind(err: unknown): WorkerErrorKind {
+  if (interpreterFinished(err)) return "finished";
+  // Pyodide's `PythonError` names the Python exception it carries.
+  if ((err as { type?: unknown } | null)?.type === "KeyboardInterrupt") return "interrupted";
+  return "failed";
+}
+
+/**
  * Whether `err` says the interpreter is finished. After a fatal error -
  * or after something ends the process it thinks it is running in -
  * Pyodide replaces its whole API with functions that throw this, so no
@@ -58,9 +81,8 @@ function interpreterFinished(err: unknown): boolean {
   );
 }
 
-/** A request's reply, before its id is put on it. */
-type Reply = WithoutId<WorkerOutbound>;
-type WithoutId<Message> = Message extends { id: number } ? Omit<Message, "id"> : never;
+/** The reply to a request of type `T`, before its id is put on it. */
+type Reply<T extends WorkerInbound["type"]> = Omit<ReplyFor<T>, "id">;
 
 /**
  * How long live stdout/stderr may be buffered before it is posted. Small
@@ -88,6 +110,8 @@ export function createWorkerHost(
   /** Buffered live stream text, waiting to be posted as one message. */
   let livePending: { type: "stdout" | "stderr"; text: string } | null = null;
   let liveLastPost = 0;
+  /** The request whose output is being streamed. */
+  let liveRequest = 0;
 
   /**
    * Where Pyodide's package-loading messages go: to the host, which decides
@@ -107,7 +131,7 @@ export function createWorkerHost(
     const payload = livePending;
     livePending = null;
     liveLastPost = Date.now();
-    adapter.post({ type: "display", payload });
+    adapter.post({ type: "display", requestId: liveRequest, payload });
   }
 
   /**
@@ -142,7 +166,7 @@ export function createWorkerHost(
       return;
     }
     flushLive();
-    adapter.post({ type: "display", payload });
+    adapter.post({ type: "display", requestId: liveRequest, payload });
   }
 
   function readStdin(): string | null {
@@ -184,17 +208,23 @@ export function createWorkerHost(
 
   const ensurePytest = onceSuccessful(() => ready().loadPackage("pytest", packageProgress));
 
-  /** Call a Python global, converting the returned dict/list to plain JS. */
+  /**
+   * Call a Python global, and give back what it returns as plain JS - a dict
+   * or list converted, a `None` as `null`.
+   */
   function callPython<T>(name: string, args: unknown[]): T {
     const fn = ready().globals.get(name);
     try {
-      const proxy = fn(...args);
+      const value = fn(...args);
+      if (typeof value?.toJs !== "function") {
+        return nullForNone(value) as T;
+      }
       try {
-        return proxy.toJs({ dict_converter: Object.fromEntries }) as T;
+        return nullForNone(value.toJs({ dict_converter: Object.fromEntries })) as T;
       } finally {
         // Both proxies are freed even if `toJs` throws: a PyProxy is a
         // handle to a live Python object, so dropping one leaks it.
-        proxy.destroy?.();
+        value.destroy?.();
       }
     } finally {
       fn.destroy?.();
@@ -222,7 +252,8 @@ export function createWorkerHost(
    * host as it happens, so an `input()` prompt shows up before the program
    * blocks. Only enabled around a file run, where blocking is possible.
    */
-  function withLiveEmit<T>(run: () => T): T {
+  function withLiveEmit<T>(requestId: number, run: () => T): T {
+    liveRequest = requestId;
     ready().globals.set("_pll_live_emit", emitDisplay);
     livePending = null;
     // Zero, not `Date.now()`, so a run's first output is posted immediately.
@@ -244,7 +275,7 @@ export function createWorkerHost(
   const requests: {
     [Type in WorkerInbound["type"]]: (
       data: Extract<WorkerInbound, { type: Type }>,
-    ) => Reply | Promise<Reply>;
+    ) => Reply<Type> | Promise<Reply<Type>>;
   } = {
     async init(data) {
       stdinBuffer = data.stdinBuffer ?? null;
@@ -254,7 +285,7 @@ export function createWorkerHost(
       return { type: "ready" };
     },
     runFile(data) {
-      const result = withLiveEmit(() =>
+      const result = withLiveEmit(data.id, () =>
         callPython<RunResult>("_pll_run_file", [
           data.code,
           data.fileName,
@@ -280,13 +311,7 @@ export function createWorkerHost(
       return { type: "syntax", result };
     },
     hasTests(data) {
-      // Returns a bare bool, so there is no proxy to convert.
-      const fn = ready().globals.get("_pll_has_tests");
-      try {
-        return { type: "hasTests", result: Boolean(fn(data.code)) };
-      } finally {
-        fn.destroy?.();
-      }
+      return { type: "hasTests", result: callPython<boolean>("_pll_has_tests", [data.code]) };
     },
     async loadPackages(data) {
       await ready().loadPackagesFromImports(data.code, packageProgress);
@@ -316,7 +341,7 @@ export function createWorkerHost(
       return { type: "static", result };
     },
     reactorStep(data) {
-      const result = withLiveEmit(() =>
+      const result = withLiveEmit(data.id, () =>
         callPython<ReactorStepResult>("_pll_reactor_step", [
           data.reactorId,
           data.event,
@@ -332,21 +357,11 @@ export function createWorkerHost(
       return { type: "reactorFrame", result };
     },
     reactorDispose(data) {
-      const fn = ready().globals.get("_pll_reactor_dispose");
-      try {
-        fn(data.reactorId);
-      } finally {
-        fn.destroy?.();
-      }
+      callPython("_pll_reactor_dispose", [data.reactorId]);
       return { type: "reactorDisposed" };
     },
     endSession(data) {
-      const fn = ready().globals.get("_pll_end_session");
-      try {
-        fn(data.sessionKey);
-      } finally {
-        fn.destroy?.();
-      }
+      callPython("_pll_end_session", [data.sessionKey]);
       return { type: "sessionEnded" };
     },
     examplarBuild(data) {
@@ -372,20 +387,26 @@ export function createWorkerHost(
     },
   };
 
-  return async function handle(data: WorkerInbound): Promise<void> {
+  async function handleOne(data: WorkerInbound): Promise<void> {
     if (data.type !== "init") {
       dropPendingInterrupt();
     }
     try {
-      const request = requests[data.type] as (data: WorkerInbound) => Reply | Promise<Reply>;
-      adapter.post({ id: data.id, ...(await request(data)) });
+      const request = requests[data.type] as (
+        data: WorkerInbound,
+      ) => Reply<WorkerInbound["type"]> | Promise<Reply<WorkerInbound["type"]>>;
+      adapter.post({ id: data.id, ...(await request(data)) } as WorkerOutbound);
     } catch (err) {
-      adapter.post({
-        id: data.id,
-        type: "error",
-        message: errorText(err),
-        ...(interpreterFinished(err) ? { finished: true } : {}),
-      });
+      adapter.post({ id: data.id, type: "error", message: errorText(err), kind: errorKind(err) });
     }
+  }
+
+  // One request at a time, in the order they arrive: a handler that awaits
+  // - loading Pyodide or a package - finishes before the next one starts,
+  // so no Python runs while a package is half installed.
+  let queue: Promise<void> = Promise.resolve();
+  return function handle(data: WorkerInbound): Promise<void> {
+    queue = queue.then(() => handleOne(data));
+    return queue;
   };
 }
