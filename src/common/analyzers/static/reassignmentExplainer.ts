@@ -1,4 +1,4 @@
-import { levelRefusesReassignment, type Level } from "../../level";
+import { LEVEL_INTERMEDIATE, levelRefusesReassignment, type Level } from "../../level";
 import type { RawStaticFindingOf } from "../../wire";
 import { staticFindingFor, type AnalysisFinding } from "../types";
 
@@ -44,7 +44,7 @@ export function explainReassignment(
               ` or a small helper function that returns the new value instead.`,
             // Inside a function this is exactly what `intermediate` exists
             // for, and a student has no way to know that from here.
-            ...(raw.scope_kind === "function" && !levelRefusesReassignment("intermediate", "function")
+            ...(raw.scope_kind === "function" && !levelRefusesReassignment(LEVEL_INTERMEDIATE, "function")
               ? [
                   "`#level intermediate` allows changing a variable inside a" +
                     " function, which is what a running total needs.",

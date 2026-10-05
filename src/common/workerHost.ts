@@ -14,6 +14,7 @@ import { clearInterrupt } from "./interruptBuffer";
 import { waitForStdinLine } from "./stdinBuffer";
 import type { RawReplCheck, WorkerInbound, WorkerOutbound } from "./workerProtocol";
 import { errorText } from "./errorText";
+import { DEFAULT_LEVEL } from "./level";
 import { onceSuccessful } from "./onceSuccessful";
 
 export interface PackageLoadOptions {
@@ -258,7 +259,7 @@ export function createWorkerHost(
           data.code,
           data.fileName,
           data.sessionKey,
-          data.level ?? "raw",
+          data.level ?? DEFAULT_LEVEL,
           data.withTests ?? false,
         ]),
       );
@@ -270,7 +271,7 @@ export function createWorkerHost(
       const result = callPython<RunResult>("_pll_repl_eval", [
         data.code,
         data.sessionKey,
-        data.level ?? "raw",
+        data.level ?? DEFAULT_LEVEL,
       ]);
       return { type: "result", result };
     },

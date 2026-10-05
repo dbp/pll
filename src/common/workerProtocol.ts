@@ -6,6 +6,7 @@ import type {
   ReactorStepResult,
   RunResult,
 } from "./wire";
+import type { Level } from "./level";
 import type { WorkspaceFile } from "./workspaceFilePolicy";
 
 export interface RawReplCheck {
@@ -31,7 +32,7 @@ export type WorkerInbound =
       fileName: string;
       sessionKey: string;
       /** Language level; the only input deciding what gets checked. */
-      level?: string;
+      level?: Level;
       /** Run the file's tests once it finishes; pytest must be loaded. */
       withTests?: boolean;
     }
@@ -40,13 +41,13 @@ export type WorkerInbound =
       type: "replEval";
       code: string;
       sessionKey: string;
-      level?: string;
+      level?: Level;
     }
   | { id: number; type: "checkSyntax"; code: string }
   | { id: number; type: "loadPackages"; code: string }
   | { id: number; type: "hasTests"; code: string }
   | { id: number; type: "loadPytest" }
-  | { id: number; type: "staticAnalyze"; code: string; level: string; fileName: string; sessionKey?: string }
+  | { id: number; type: "staticAnalyze"; code: string; level: Level; fileName: string; sessionKey?: string }
   | { id: number; type: "mountWorkspace"; files: WorkspaceFile[] }
   | { id: number; type: "collectWorkspace" }
   /** Apply one event (tick / key / mouse / receive) to a running reactor. */

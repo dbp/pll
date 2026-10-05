@@ -3,6 +3,16 @@
 
 import sys as _sys
 
+# The language levels, as the host sends them: `LEVEL_NAMES` in level.ts
+# names the same four.
+_PLL_LEVEL_RAW = "raw"
+_PLL_LEVEL_BEGINNER = "beginner"
+_PLL_LEVEL_INTERMEDIATE = "intermediate"
+_PLL_LEVEL_ADVANCED = "advanced"
+
+#: The two that teach: static checks, and no bool where a number is annotated.
+_PLL_TEACHING_LEVELS = (_PLL_LEVEL_BEGINNER, _PLL_LEVEL_INTERMEDIATE)
+
 # Vendored pure-Python wheels (typeguard + typing_extensions) that the
 # worker writes into MEMFS before calling `_pll_enable_type_checking`.
 # Must match PLL_VENDOR_DIR in pythonVendor.ts.
@@ -64,8 +74,8 @@ def _pll_apply_level(level):
     reject a bool where a number is annotated. Must agree with level.ts.
     """
     global _PLL_STRICT_NUMBERS, _PLL_TYPE_CHECK
-    _PLL_TYPE_CHECK = level != "raw"
-    _PLL_STRICT_NUMBERS = level in ("beginner", "intermediate")
+    _PLL_TYPE_CHECK = level != _PLL_LEVEL_RAW
+    _PLL_STRICT_NUMBERS = level in _PLL_TEACHING_LEVELS
 
 
 def _pll_enable_type_checking():

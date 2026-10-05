@@ -690,7 +690,7 @@ def _pll_static_analyze(code, level, filename, session_key=None):
     as existing module-level bindings. That way a `#level beginner` prompt cannot
     reassign a name the file (or an earlier prompt line) already defined.
     """
-    if level not in ("beginner", "intermediate"):
+    if level not in _PLL_TEACHING_LEVELS:
         return []
     try:
         tree = _ast.parse(code, filename=filename)
@@ -715,9 +715,9 @@ def _pll_static_analyze(code, level, filename, session_key=None):
     # total += x`) work. Mirrored by `levelRefusesReassignment` in level.ts,
     # which the explanations use to offer only fixes the level accepts.
     def reassignment_active(scope_kind):
-        if level == "beginner":
+        if level == _PLL_LEVEL_BEGINNER:
             return True
-        if level == "intermediate":
+        if level == _PLL_LEVEL_INTERMEDIATE:
             return scope_kind == "module"
         return False
 

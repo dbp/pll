@@ -181,7 +181,7 @@ def _pll_stoppable(stopped):
 
 
 @_pll_stoppable(_pll_stopped_run)
-def _pll_run_file(code, filename, session_key, level="raw", run_tests=False):
+def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=False):
     """Run a file as its program, and then - if asked, and if it finished -
     its own `test_*` functions, against the names the program defined.
 
@@ -246,7 +246,7 @@ def _pll_run_file(code, filename, session_key, level="raw", run_tests=False):
 # -----------------------------------------------------------------------------
 
 @_pll_stoppable(_pll_stopped_run)
-def _pll_repl_eval(code, session_key, level="raw"):
+def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
     stdout = _PllStream("stdout")
     stderr = _PllStream("stderr")
     result = _pll_run_result()

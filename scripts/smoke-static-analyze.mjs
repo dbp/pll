@@ -15,9 +15,10 @@ import { bootPll } from "./lib/pyodide.mjs";
 import { expect, passed } from "./lib/check.mjs";
 import { importSource } from "./lib/bundle.mjs";
 
-const { enrichStaticFindings } = await importSource(
-  'export { enrichStaticFindings } from "./src/common/analyzers/static/registry";',
-);
+const { enrichStaticFindings, LEVEL_NAMES } = await importSource(`
+export { enrichStaticFindings } from "./src/common/analyzers/static/registry";
+export { LEVEL_NAMES } from "./src/common/level";
+`);
 import { ROOT } from "./lib/bundle.mjs";
 
 function readPy(rel) {
@@ -780,6 +781,16 @@ _g = _pll_get_session("smoke-lib")
     }
     evaluate.destroy?.();
     console.log(`    ${suggested.join(" ")}`);
+  }
+
+  console.log("\n[21] Python names the same levels as the host");
+  {
+    const python = pyodide
+      .runPython("[_PLL_LEVEL_RAW, _PLL_LEVEL_BEGINNER, _PLL_LEVEL_INTERMEDIATE, _PLL_LEVEL_ADVANCED]")
+      .toJs();
+    expect(python.join() === LEVEL_NAMES.join(), `level.ts ${LEVEL_NAMES.join()} vs Python ${python.join()}`);
+    const teaching = pyodide.runPython("list(_PLL_TEACHING_LEVELS)").toJs();
+    expect(teaching.join() === "beginner,intermediate", `the teaching levels: ${teaching.join()}`);
   }
 
   fn.destroy?.();

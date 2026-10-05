@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { Level } from "./level";
+import { isLevel, type Level } from "./level";
 
 /**
  * Seed newly created `.py` files with a `#level` header.
@@ -22,15 +22,7 @@ function configuredLevel(): NewFileLevel {
   const value = vscode.workspace
     .getConfiguration("pll")
     .get<string>("newFileLevel", "none");
-  switch (value) {
-    case "raw":
-    case "beginner":
-    case "intermediate":
-    case "advanced":
-      return value;
-    default:
-      return "none";
-  }
+  return isLevel(value) ? value : "none";
 }
 
 /** The exact text written into a new file. */

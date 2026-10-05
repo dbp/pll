@@ -20,20 +20,26 @@ import { editDistance } from "./editDistance";
  * what is checked - there is no separate setting that can disagree with it.
  */
 
-export type Level = "raw" | "beginner" | "intermediate" | "advanced";
+export const LEVEL_RAW = "raw";
+export const LEVEL_BEGINNER = "beginner";
+export const LEVEL_INTERMEDIATE = "intermediate";
+export const LEVEL_ADVANCED = "advanced";
 
-export const DEFAULT_LEVEL: Level = "raw";
+/** Every level, in order of strictness relaxing. Python names the same four (`typeChecking.py`). */
+export const LEVEL_NAMES = [LEVEL_RAW, LEVEL_BEGINNER, LEVEL_INTERMEDIATE, LEVEL_ADVANCED] as const;
+
+export type Level = (typeof LEVEL_NAMES)[number];
+
+export const DEFAULT_LEVEL: Level = LEVEL_RAW;
+
+/** Whether `name` is a level, exactly as written. */
+export function isLevel(name: string): name is Level {
+  return (LEVEL_NAMES as ReadonlyArray<string>).includes(name);
+}
 
 // Case-sensitive, and exactly one spelling: `#level beginner`. Anything
 // else falls back to the default rather than guessing at intent.
 const HEADER_RE = /^#\s*level\s+([a-z]+)\s*$/;
-
-const LEVEL_NAMES: ReadonlyArray<Level> = [
-  "raw",
-  "beginner",
-  "intermediate",
-  "advanced",
-];
 
 /**
  * Parse the level header from the start of a Python source file.
@@ -54,10 +60,7 @@ export function parseLevel(source: string): Level {
       return DEFAULT_LEVEL;
     }
     const name = match[1];
-    for (const level of LEVEL_NAMES) {
-      if (name === level) return level;
-    }
-    return DEFAULT_LEVEL;
+    return isLevel(name) ? name : DEFAULT_LEVEL;
   }
   return DEFAULT_LEVEL;
 }
@@ -258,7 +261,7 @@ function closestLevel(named: string): Level | null {
  * Python's own rule.
  */
 export function levelRejectsBoolAsNumber(level: Level): boolean {
-  return level === "beginner" || level === "intermediate";
+  return level === LEVEL_BEGINNER || level === LEVEL_INTERMEDIATE;
 }
 
 /**
@@ -269,10 +272,10 @@ export function levelRejectsBoolAsNumber(level: Level): boolean {
  * this; the explanations ask it so they only offer fixes the level accepts.
  */
 export function levelRefusesReassignment(level: Level, scope: "module" | "function"): boolean {
-  return level === "beginner" || (level === "intermediate" && scope === "module");
+  return level === LEVEL_BEGINNER || (level === LEVEL_INTERMEDIATE && scope === "module");
 }
 
 /** Whether this level runs any static analyzer checks at all. */
 export function levelHasStaticChecks(level: Level): boolean {
-  return level === "beginner" || level === "intermediate";
+  return level === LEVEL_BEGINNER || level === LEVEL_INTERMEDIATE;
 }
