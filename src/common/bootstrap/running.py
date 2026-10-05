@@ -197,7 +197,8 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
     # exploration since then.
     _pll_apply_level(level)
     _pll_protect_import_path()
-    user_globals = _pll_reset_session(session_key)
+    user_globals = _pll_reset_session(session_key, level)
+    main = _pll_session_module(session_key)
     _pll_displays.clear()
     _pll_reset_notes()
     del _pll_compile_warnings[:]
@@ -217,7 +218,7 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
 
     finished = False
     try:
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with _pll_as_main(main), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             exec(compiled, user_globals)
             # Only once the program has finished: building a reactor and
             # starting it further down is perfectly ordinary.
@@ -237,7 +238,8 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
     # A program that raised, stopped or exited did not get to the end, and
     # neither do its tests: the host says they were not run, and why.
     if run_tests and finished:
-        result["tests"] = _pll_run_collected_tests(user_globals, tests_at, code)
+        with _pll_as_main(main):
+            result["tests"] = _pll_run_collected_tests(user_globals, tests_at, code)
     return result
 
 
@@ -254,6 +256,8 @@ def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
     _pll_apply_level(level)
     _pll_protect_import_path()
     user_globals = _pll_get_session(session_key)
+    user_globals["__pll_level__"] = level
+    main = _pll_session_module(session_key)
     filename = "<repl>"
     del _pll_compile_warnings[:]
     try:
@@ -268,7 +272,7 @@ def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
         tree.body = tree.body[:-1]
 
     try:
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with _pll_as_main(main), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             if tree.body:
                 with _pll_recording_compile_warnings():
                     compiled_stmts = compile(tree, filename, "exec")

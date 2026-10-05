@@ -337,10 +337,33 @@ export class ReplSession implements vscode.Disposable {
 
   private setActive(key: string): void {
     if (this.activeKey === key) return;
+    const previous = this.activeSession();
+    if (previous) {
+      this.reactors.suspendAllFor(previous);
+    }
     this.activeKey = key;
     const session = this.sessions.get(key);
     if (!session) return;
     this.deps.view.showSession(this.displayStateOf(session));
+    this.resumeReactors(session);
+  }
+
+  /**
+   * Play again the reactors that were playing when `session`'s file was
+   * left - with its own files mounted first, for a handler that opens one:
+   * another file's run may have mounted that file's. Queued, so the mount
+   * comes before the first tick.
+   */
+  private resumeReactors(session: Session): void {
+    if (!this.reactors.hasAny(session)) return;
+    void this.enqueue(async () => {
+      try {
+        await this.deps.runtime.mountWorkspaceFiles(await collectSiblingFiles(session.documentUri));
+      } catch {
+        /* the reactor still runs; a file it opens may be missing */
+      }
+    });
+    this.reactors.resumeAllFor(session);
   }
 
   /** Everything the view needs to show `session` from scratch. */

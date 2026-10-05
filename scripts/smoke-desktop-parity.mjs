@@ -220,6 +220,72 @@ async function main() {
       expect((await read("stays")).result.result_repr === "42", "another session's are untouched");
       console.log(`    after ending: ${after.error_type}`);
     }
+    console.log("\n[9] a file's code runs as its own __main__, and at its own level");
+    {
+      const run = (code, sessionKey, level) =>
+        session.send({ type: "runFile", code, fileName: `${sessionKey}.py`, sessionKey, level }).then((r) => r.result);
+      // A beginner file's reactor, checked at beginner after another file
+      // ran at advanced.
+      const before = session.displays.length;
+      await run([
+        "def tick(n: int) -> int:",
+        "    return n > 100",
+        "def draw(n: int) -> Image:",
+        '    return circle(5, "solid", "red")',
+        "r = reactor(init=0, on_tick=tick, to_draw=draw)",
+        "r.interact()",
+      ].join("\n"), "lvA", "beginner");
+      const id = session.displays.slice(before).find((d) => d.type === "reactor")?.id;
+      const tick = async () =>
+        (await session.send({ type: "reactorStep", reactorId: id, event: '{"kind":"tick"}' })).result.error_type;
+      expect((await tick()) === "TypeCheckError", "a bool is not an int at beginner");
+      await run("x = 1\n", "lvB", "advanced");
+      expect((await tick()) === "TypeCheckError", "nor after another file ran at advanced");
+      const advanced = await run("def f(n: int) -> int:\n    return n\nprint(f(True))\n", "lvC", "advanced");
+      expect(advanced.stdout === "True\n", `at advanced it is: ${advanced.error_type}`);
+
+      // What looks a class's module up finds the student's names.
+      const own = await run([
+        "from dataclasses import dataclass",
+        "import sys, typing, __main__",
+        "@dataclass",
+        "class Node:",
+        "    value: int",
+        '    rest: "Node | None"',
+        "print(typing.get_type_hints(Node)['rest'])",
+        "print(__main__.Node is Node, sys.modules['__main__'].__dict__ is globals())",
+        "print(any(n.startswith('_pll_run') for n in vars(__main__)))",
+      ].join("\n"), "mainA", "raw");
+      expect(own.stdout === "__main__.Node | None\nTrue True\nFalse\n", `the student's own module: ${JSON.stringify(own.stdout)} ${own.error_type}`);
+      // A prompt line, and a reactor's handler, run as it too.
+      const prompt = (await session.send({ type: "replEval", code: "import __main__\n__main__.Node is Node", sessionKey: "mainA", level: "raw" })).result;
+      expect(prompt.result_repr === "True", `a prompt line runs as the file's __main__: ${prompt.result_repr} ${prompt.error_type}`);
+      const mark = session.displays.length;
+      await run([
+        "import sys",
+        "def tick(n):",
+        "    # Looked up as the handler runs, not bound by the program's run.",
+        '    return n + (1 if getattr(sys.modules["__main__"], "tick", None) is tick else 100)',
+        "def draw(n):",
+        '    return circle(5, "solid", "red")',
+        "reactor(init=0, on_tick=tick, to_draw=draw).interact()",
+      ].join("\n"), "mainC", "raw");
+      const rid = session.displays.slice(mark).find((d) => d.type === "reactor")?.id;
+      const stepped = (await session.send({ type: "reactorStep", reactorId: rid, event: '{"kind":"tick"}' })).result;
+      expect(stepped.value_repr === "1", `a handler runs as its file's __main__: ${stepped.value_repr} ${stepped.error_type}`);
+
+      // A name typing cannot resolve: the error is at the student's line,
+      // not at line 1 of the string typing evaluated.
+      const missing = await run(
+        'import typing\nclass N:\n    x: "Missing"\nprint(typing.get_type_hints(N))\n',
+        "mainB",
+        "raw",
+      );
+      const users = (missing.error_frames ?? []).filter((f) => f.user).map((f) => `${f.file}:${f.line}`);
+      expect(missing.error_type === "NameError" && users.join() === "mainB.py:4",
+        `only the student's own frame is theirs: ${missing.error_type} ${users.join()}`);
+      console.log("    its level, its __main__, and only its own frames");
+    }
     console.log("\n[7] os._exit ends the program, not Python; a fatal error says Python is finished");
     {
       const run = (code, sessionKey = "exits") =>

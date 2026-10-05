@@ -628,9 +628,10 @@ def _pll_session_bound_names(session_key):
     skipped unless the user rebound them, so prompt analysis matches file
     analysis for the same snippet.
     """
-    g = _pll_sessions.get(session_key)
-    if not g:
+    module = _pll_sessions.get(session_key)
+    if module is None:
         return []
+    g = module.__dict__
     names = []
     for n in g:
         if n.startswith("_") or n in ("__builtins__", "__name__", "__doc__"):

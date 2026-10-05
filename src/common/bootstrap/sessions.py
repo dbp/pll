@@ -13,8 +13,10 @@
 # during a file run and collected otherwise, so it arrives in the order the
 # program produced it.
 
+import contextlib
 import json as _pll_json
 import sys as _sys
+import types as _pll_types
 
 # Must match PLL_WORK_DIR in memfsWorkspace.ts. Sibling files are mounted
 # here and it is cwd, so open("cars.csv") works. It must not sit first on
@@ -41,8 +43,9 @@ def _pll_protect_import_path():
         if isinstance(filename, str) and filename.startswith(prefix):
             _sys.modules.pop(name, None)
 
-# Per-session globals dicts, keyed by session_key (e.g. document URI).
-# Created lazily; initialized from `_pll_initial_globals`.
+# Per-session modules, keyed by session_key (e.g. document URI): a session's
+# globals are its module's `__dict__`. Created lazily; initialized from
+# `_pll_initial_globals`.
 _pll_sessions = {}
 
 # The "template" globals used to seed each new session and to reset a
@@ -185,17 +188,40 @@ def _pll_show_top_level(value):
 _pll_initial_globals["_pll_show_top_level"] = _pll_show_top_level
 
 
-def _pll_get_session(session_key):
-    """Get-or-create the globals dict for `session_key`.
+def _pll_session_module(session_key):
+    """Get-or-create the module for `session_key`.
 
-    Newly-created sessions start as a copy of `_pll_initial_globals`
-    (so all baseline names like the image primitives are present).
+    A new session starts with `_pll_initial_globals`, so all baseline names
+    like the image primitives are present.
     """
-    g = _pll_sessions.get(session_key)
-    if g is None:
-        g = dict(_pll_initial_globals)
-        _pll_sessions[session_key] = g
-    return g
+    module = _pll_sessions.get(session_key)
+    if module is None:
+        module = _pll_types.ModuleType("__main__")
+        module.__dict__.update(_pll_initial_globals)
+        _pll_sessions[session_key] = module
+    return module
+
+
+def _pll_get_session(session_key):
+    """The globals of `session_key`'s module."""
+    return _pll_session_module(session_key).__dict__
+
+
+@contextlib.contextmanager
+def _pll_as_main(module):
+    """Make `module` `__main__` while the student's code runs in it.
+
+    A file runs as `__main__`, and whatever looks a class's module up -
+    `typing.get_type_hints`, a dataclass's string annotations, `pickle`,
+    `import __main__` - looks in `sys.modules`. Otherwise it finds PLL's
+    own namespace, not the student's.
+    """
+    previous = _sys.modules.get("__main__")
+    _sys.modules["__main__"] = module
+    try:
+        yield
+    finally:
+        _sys.modules["__main__"] = previous
 
 
 def _pll_end_session(session_key):
@@ -203,14 +229,16 @@ def _pll_end_session(session_key):
     _pll_sessions.pop(session_key, None)
 
 
-def _pll_reset_session(session_key):
+def _pll_reset_session(session_key, level):
     """Reset the globals for `session_key` to the baseline template.
 
     Mutates the existing dict in place (`clear` + `update`) so any cached
     reference to it (e.g. from `_pll_show_top_level`'s closure or from
-    Pyodide's `globals.get(...)`) remains valid.
+    Pyodide's `globals.get(...)`) remains valid. `__pll_level__` records the
+    file's level, for the checks made while its code runs, whenever that is.
     """
     g = _pll_get_session(session_key)
     g.clear()
     g.update(_pll_initial_globals)
+    g["__pll_level__"] = level
     return g

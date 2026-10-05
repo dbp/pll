@@ -15,6 +15,7 @@
 
 import contextlib as _rx_contextlib
 import json as _rx_json
+import sys as _rx_sys
 
 _PLL_DEFAULT_TICK_RATE = 1.0 / 28.0
 
@@ -339,10 +340,12 @@ class _PllRunning:
     discards the frames after it, exactly like an editor's undo history.
     """
 
-    __slots__ = ("frames", "cursor", "dropped")
+    __slots__ = ("frames", "cursor", "dropped", "main")
 
     def __init__(self, reactor_value):
         self.frames = [(reactor_value, None)]
+        # The module the program ran as, which its handlers run as too.
+        self.main = _rx_sys.modules["__main__"]
         self.cursor = 0
         # Frames aged out of the front, so the card can still number them.
         self.dropped = 0
@@ -445,7 +448,11 @@ def _pll_reactor_step(rid, event_json):
     stderr = _PllStream("stderr")
     try:
         event = _rx_json.loads(event_json)
-        with _rx_contextlib.redirect_stdout(stdout), _rx_contextlib.redirect_stderr(stderr):
+        with (
+            _pll_as_main(running.main),
+            _rx_contextlib.redirect_stdout(stdout),
+            _rx_contextlib.redirect_stderr(stderr),
+        ):
             computed = running.step(event)
             view = _pll_reactor_view(rid, running)
         outgoing = []
@@ -475,8 +482,9 @@ def _pll_reactor_seek(rid, index):
     if running is None:
         return {"ok": False, "gone": True}
     try:
-        running.seek(int(index) - running.dropped)
-        return _pll_reactor_view(rid, running)
+        with _pll_as_main(running.main):
+            running.seek(int(index) - running.dropped)
+            return _pll_reactor_view(rid, running)
     except BaseException as e:
         return _pll_reactor_failure(e)
 

@@ -8,8 +8,16 @@ import linecache as _pll_linecache
 import ast as _ast
 import re as _pll_src_re
 
-def _pll_is_vendor_frame(filename):
-    return isinstance(filename, str) and filename.startswith(_PLL_VENDOR_DIR)
+#: The checkers PLL gives typeguard for numbers, in place of its own.
+_PLL_CHECKERS = ("_pll_check_int", "_pll_check_float")
+
+
+def _pll_is_vendor_frame(filename, name=None):
+    """Whether a frame is the type checker's: vendored typeguard, or one of
+    the checkers PLL gives it, which do typeguard's job."""
+    if not isinstance(filename, str):
+        return False
+    return filename.startswith(_PLL_VENDOR_DIR) or (filename == "<exec>" and name in _PLL_CHECKERS)
 
 
 #: An element failure on an argument: `item 0 of argument "lst" (list) ...`
@@ -38,8 +46,7 @@ def _pll_student_frames(exc):
     frames = []
     tb = exc.__traceback__
     while tb is not None:
-        filename = tb.tb_frame.f_code.co_filename
-        if not _pll_is_vendor_frame(filename) and filename != "<exec>":
+        if _pll_is_students(tb.tb_frame.f_code.co_filename):
             frames.append((tb.tb_frame, tb.tb_lineno))
         tb = tb.tb_next
     return frames
@@ -113,7 +120,7 @@ def _pll_format_exception(exc):
     """
     try:
         frames = _tb_mod.extract_tb(exc.__traceback__)
-        kept = [f for f in frames if not _pll_is_vendor_frame(f.filename)]
+        kept = [f for f in frames if not _pll_is_vendor_frame(f.filename, f.name)]
         if len(kept) == len(frames):
             return "".join(_tb_mod.format_exception(type(exc), exc, exc.__traceback__))
         parts = ["Traceback (most recent call last):\n"]
@@ -124,10 +131,22 @@ def _pll_format_exception(exc):
         return "".join(_tb_mod.format_exception(type(exc), exc, exc.__traceback__))
 
 
-#: Frames that are not the student's: PLL's own bootstrap and libraries
-#: (`<exec>`), the vendored type checker, the standard library, installed
-#: packages, and pytest.
-_PLL_NOT_STUDENT = ("<exec>", _PLL_VENDOR_DIR, "site-packages", "/lib/python", "_pytest", "pluggy")
+#: Files that are not the student's: the vendored type checker, the
+#: standard library, installed packages, and pytest.
+_PLL_NOT_STUDENT = (_PLL_VENDOR_DIR, "site-packages", "/lib/python", "_pytest", "pluggy")
+
+
+def _pll_is_students(filename):
+    """Whether a frame in `filename` runs the student's code: one of their
+    files, or a prompt line (`<repl>`). Any other `<...>` is code no file
+    holds - PLL's own (`<exec>`), or code Python made from a string
+    (`<string>`, as `typing` and `dataclasses` do, and `<frozen ...>`).
+    """
+    if filename == "<repl>":
+        return True
+    if filename.startswith("<"):
+        return False
+    return not any(token in filename for token in _PLL_NOT_STUDENT)
 
 #: How Python words a name used before it has a value.
 _PLL_UNBOUND_RE = _pll_src_re.compile(r"cannot access (?:free|local) variable '(\w+)'")
@@ -188,7 +207,7 @@ def _pll_error_info(exc, code=""):
     """Everything the host needs to report `exc`, as data.
 
     The one place an exception becomes a result, for a file run, a prompt
-    line, the test phase, a test and a reactor alike. The host reads these
+    line, a test and a reactor alike. The host reads these
     fields rather than the traceback text: `traceback` is kept only to show
     when nothing better can be said.
 
@@ -201,7 +220,9 @@ def _pll_error_info(exc, code=""):
     _pll_enrich_type_check(exc)
     _pll_enrich_index_error(exc, code)
     summaries = [
-        s for s in _tb_mod.extract_tb(exc.__traceback__) if not _pll_is_vendor_frame(s.filename)
+        s
+        for s in _tb_mod.extract_tb(exc.__traceback__)
+        if not _pll_is_vendor_frame(s.filename, s.name)
     ][-_PLL_MAX_FRAMES:]
     frames = [
         {
@@ -209,7 +230,7 @@ def _pll_error_info(exc, code=""):
             "line": s.lineno,
             "column": _pll_frame_column(s),
             "function": None if s.name == "<module>" else s.name,
-            "user": not any(token in s.filename for token in _PLL_NOT_STUDENT),
+            "user": _pll_is_students(s.filename),
         }
         for s in summaries
     ]

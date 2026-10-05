@@ -42,6 +42,7 @@ import imageLibSource from "./imageLib.py";
 import tableLibSource from "./tableLib.py";
 import reactorLibSource from "./reactorLib.py";
 import examplarLibSource from "./examplarLib.py";
+import installSource from "./install.py";
 
 /**
  * The bootstrap, one file per concern. They share one set of globals, so a
@@ -73,41 +74,5 @@ export const PLL_EXAMPLAR_LIB_PY = examplarLibSource;
  */
 export const PYODIDE_HTTP_PATCH_PY = "import pyodide_http as _pll_ph; _pll_ph.patch_all()";
 
-/**
- * Final installation step: register `pll.image` and `pll.table` as
- * importable modules and inject their public names into the per-session
- * globals template (`_pll_initial_globals`) so beginners can use
- * `circle(...)` / `table(...)` with no import in every file's session.
- */
-export const PYODIDE_INSTALL_PY = `
-import sys as _sys, types as _types
-
-_pll_module = _types.ModuleType("pll")
-_pll_image_module = _types.ModuleType("pll.image")
-_pll_table_module = _types.ModuleType("pll.table")
-_pll_reactor_module = _types.ModuleType("pll.reactor")
-for _name in PLL_IMAGE_EXPORTS:
-    setattr(_pll_image_module, _name, globals()[_name])
-for _name in PLL_TABLE_EXPORTS:
-    setattr(_pll_table_module, _name, globals()[_name])
-for _name in PLL_REACTOR_EXPORTS:
-    setattr(_pll_reactor_module, _name, globals()[_name])
-_pll_module.image = _pll_image_module
-_pll_module.table = _pll_table_module
-_pll_module.reactor = _pll_reactor_module
-_sys.modules["pll"] = _pll_module
-_sys.modules["pll.image"] = _pll_image_module
-_sys.modules["pll.table"] = _pll_table_module
-_sys.modules["pll.reactor"] = _pll_reactor_module
-
-# Add image + table library names to the per-session globals template.
-# Each new session is initialized as a copy of this template, so every
-# file's Run File / REPL prompt sees these names without explicit imports.
-for _name in PLL_IMAGE_EXPORTS:
-    _pll_initial_globals[_name] = globals()[_name]
-for _name in PLL_TABLE_EXPORTS:
-    _pll_initial_globals[_name] = globals()[_name]
-for _name in PLL_REACTOR_EXPORTS:
-    _pll_initial_globals[_name] = globals()[_name]
-del _name
-`;
+/** The install step, run after the libraries (`install.py`). */
+export const PYODIDE_INSTALL_PY = installSource;

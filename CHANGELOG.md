@@ -44,6 +44,9 @@
   as `python` would: `sys.exit(3)` exits 3 (and `os._exit(5)` 5), where
   every program that ended itself used to exit 0. A status other than 0
   outranks a failed test's 3, which is still listed.
+- **A file's reactors pause while another file is shown**, and play again
+  when it is shown again, rather than ticking out of sight. One a student
+  paused stays paused.
 - **Closing a file ends its session**: its output in the panel, its
   reactors, and the names its runs defined, which were kept until the
   window closed - for every file opened in it. Opening the file again
@@ -116,6 +119,18 @@
 - **The Examplar check is not run if your files cannot be set aside first.**
   The known implementations run without access to the student's files; if
   emptying the work directory failed, they ran with the files there.
+- **A file's code is checked at its own level, whenever it runs.** A
+  reactor's handlers were checked at the level of whichever file ran last,
+  so running another file at `advanced` let a beginner file's `on_tick`
+  return `True` for an `int`.
+- **`typing.get_type_hints`, a dataclass's string annotations and `pickle`
+  find the student's own classes.** They look the program up as `__main__`,
+  which was PLL's own namespace: `get_type_hints` on a dataclass with
+  `rest: "Node | None"` raised NameError. `import __main__` now gives the
+  student's own module, too, rather than PLL's internals.
+- **An error raised in code Python made from a string** (`typing`'s
+  evaluation of an annotation, a dataclass's generated `__init__`) is placed
+  at the student's line, not at "line 1" of their file.
 - **A Python worker that crashes is reported once**, as Python having
   stopped, rather than also as an "Internal error" with the crash's own
   message (desktop and command line).

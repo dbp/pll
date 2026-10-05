@@ -2817,6 +2817,39 @@ console.log("\n[71] a reactor Python no longer has is dropped quietly");
   repl.dispose();
 }
 
+console.log("\n[72] a file's reactor pauses while another file is shown, and resumes after");
+{
+  const { repl, view, runtime, doc } = await harness(countingReactor());
+  await repl.runFile("animate(...)", "hello.py", doc);
+  const steps = () => runtime.calls.filter((c) => c[0] === "reactorStep").length;
+  await new Promise((r) => setTimeout(r, 150));
+  expect(steps() > 0, "it ticks while its file is shown");
+
+  __setActiveEditor({ document: makeDoc("other.py") });
+  await settle();
+  const away = steps();
+  await new Promise((r) => setTimeout(r, 150));
+  expect(steps() === away, `nothing ticks out of sight: ${steps() - away} steps`);
+
+  const before = runtime.calls.length;
+  __setActiveEditor({ document: doc });
+  await new Promise((r) => setTimeout(r, 150));
+  const after = runtime.calls.slice(before).map((c) => c[0]);
+  expect(after[0] === "mountWorkspaceFiles", `its own files are mounted first: ${after.slice(0, 3).join(",")}`);
+  expect(after.includes("reactorStep"), "and it ticks again");
+  const card = view.entries.find((e) => e.kind === "reactor");
+  expect(card?.playing === true, "its card plays again");
+
+  // One the student paused stays paused.
+  view.handlers.onReactorControl(card.id, "pause");
+  __setActiveEditor({ document: makeDoc("other.py") });
+  __setActiveEditor({ document: doc });
+  const paused = steps();
+  await new Promise((r) => setTimeout(r, 150));
+  expect(steps() === paused, "a reactor paused by hand is not resumed");
+  repl.dispose();
+}
+
 console.log(`\nsmoke-repl-session: ${passed() ? "ok" : "FAILED"}`);
 if (!passed()) {
   process.exit(1);

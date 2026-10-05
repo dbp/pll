@@ -66,6 +66,8 @@ interface ReactorDriver<Owner> {
   tickRate: number;
   ticking: boolean;
   playing: boolean;
+  /** Paused because its file is not the one on screen; plays again when it is. */
+  suspended: boolean;
   stopped: boolean;
   timer: ReturnType<typeof setInterval> | null;
   inFlight: boolean;
@@ -96,6 +98,7 @@ export class ReactorController<Owner> {
       tickRate: Math.max(0.01, event.tickRate),
       ticking: event.ticking,
       playing: false,
+      suspended: false,
       stopped: event.stopped,
       timer: null,
       inFlight: false,
@@ -148,6 +151,37 @@ export class ReactorController<Owner> {
       if (driver.owner === owner && driver.playing) return true;
     }
     return false;
+  }
+
+  /** Whether `owner` has any reactor. */
+  hasAny(owner: Owner): boolean {
+    for (const driver of this.reactors.values()) {
+      if (driver.owner === owner) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Pause `owner`'s playing reactors while its file is not the one on
+   * screen, so nothing ticks out of sight; `resumeAllFor` plays them again.
+   */
+  suspendAllFor(owner: Owner): void {
+    for (const driver of this.reactors.values()) {
+      if (driver.owner === owner && driver.playing) {
+        this.pause(driver);
+        driver.suspended = true;
+      }
+    }
+  }
+
+  /** Play again the reactors `suspendAllFor` paused, and only those. */
+  resumeAllFor(owner: Owner): void {
+    for (const driver of this.reactors.values()) {
+      if (driver.owner === owner && driver.suspended) {
+        driver.suspended = false;
+        this.play(driver);
+      }
+    }
   }
 
   /** Stop and forget every reactor `owner` has, and tell Python to as well. */

@@ -168,6 +168,17 @@ loaded into that interpreter.
   result becomes a stream of `ExecutionEvent`s; the static checks' findings,
   an Examplar run and a reactor step each become one value.
 
+## Sessions
+
+Each Python file gets a session: a module whose `__dict__` holds the names
+its runs and prompt lines define, separate from every other file's and
+from PLL's own namespace. While a file's code runs - its program, its
+tests, a prompt line, a reactor's handler - its module is `__main__` in
+`sys.modules` (`_pll_as_main`), so whatever looks a class's module up finds
+the student's names: `typing.get_type_hints`, a dataclass's string
+annotations, `pickle`, `import __main__`. Its namespace also records its
+level (`__pll_level__`), which the type checks read as they happen.
+
 ## Language levels
 
 Four levels, parsed from a `#level <name>` comment on the first non-blank
@@ -248,7 +259,7 @@ SVG - byte-identical.
 
 Adding a combinator means three edits: the `_Foo(Image)` class, the public
 wrapper, and the name in `PLL_IMAGE_EXPORTS` (that list is what injects it
-into student globals with no import, via `PYODIDE_INSTALL_PY`).
+into student globals with no import, via the install step, `install.py`).
 
 ## Third-party packages
 
@@ -351,12 +362,14 @@ mypy and typeguard follow it, so `count: int = True` is normally accepted;
 at the teaching levels that is a hole worth closing, since a student who
 annotates `int` and passes `True` has almost always made a mistake. It is
 implemented as a `checker_lookup_functions` entry (typeguard's public hook)
-that replaces the `int` and `float` checkers, gated on a module flag that
-`_pll_apply_level` sets per run from the level the host passes in — so
-`#level advanced` keeps Python's own rule, and the lookup is consulted on every
-check rather than registered and unregistered. The replacements raise
-typeguard's exact wording, so the host-side explainer needs no special
-case; it only adds a note saying this is PLL's rule and not Python's.
+that replaces the `int` and `float` checkers. Each check reads the level
+from the namespace of the code being checked (typeguard's `memo.globals`),
+where a run records it as `__pll_level__` - so code is checked at its own
+file's level whenever it runs, a reactor's handler included, and `#level
+advanced` keeps Python's own rule. The replacements raise typeguard's exact
+wording, and their frames are dropped like typeguard's own, so the
+host-side explainer needs no special case; it only adds a note saying this
+is PLL's rule and not Python's.
 
 Two adjustments to typeguard's defaults:
 
@@ -430,6 +443,12 @@ Two details in the driver:
   same values, not a recomputation that could drift if a handler is not
   deterministic. A new event at a rewound cursor discards the frames after
   it, like an editor's undo history.
+
+A file's reactors play only while that file is the one on screen. Switching
+to another Python file pauses the ones that were playing (`suspendAllFor`),
+so nothing ticks out of sight, and switching back mounts the file's own
+files again - another file's run may have mounted its own - and plays them
+again. A reactor a student paused stays paused.
 
 A top-level `big_bang(...)` would otherwise print the returned reactor's
 repr underneath its own card, so `interact()` marks the value it returns and
