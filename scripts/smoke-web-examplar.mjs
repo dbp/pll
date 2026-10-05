@@ -308,8 +308,8 @@ async function runAndCards(name, timeout = 150_000) {
     expect(/Against buggy implementations: caught all 1\./.test(text),
       `${fn}: expected full coverage, got ${JSON.stringify(text)}`);
   }
-  // The provenance is a tooltip now, not a badge: a 304 means the bundle is
-  // current rather than stale, so it was not worth a line of its own.
+  // The provenance is a tooltip, not a badge: a 304 means the bundle is
+  // current rather than stale, so it is not worth a line of its own.
   expect((await cards.card("shout").locator(".exSource").getAttribute("title")) ===
     `http://localhost:${BUNDLE_PORT}/hw.json`, "the first run is a fresh fetch");
 
@@ -415,7 +415,7 @@ async function runAndCards(name, timeout = 150_000) {
   expect(/Against buggy implementations: waiting until all your tests of total pass\./.test(total),
     `coverage must wait, got ${JSON.stringify(total)}`);
   // But only for *that* function. This is what the per-function split buys:
-  // a broken test of `total` used to withhold `shout`'s coverage too.
+  // a broken test of `total` does not withhold `shout`'s coverage.
   expect(/Against buggy implementations: caught all 1\./.test(shout),
     `shout must be scored regardless, got ${JSON.stringify(shout)}`);
   console.log("11 it holds up its own function's coverage, and only its own");

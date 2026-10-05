@@ -20,22 +20,22 @@ async function loadAnalyzer() {
   const mod = await importSource(`
 export { findRuntimeFinding } from "./src/common/analyzers/registry";
 export { pythonErrorFrom } from "./src/common/errors/pythonError";
-export { deliverTestResult } from "./src/common/deliverResult";
+export { deliverRunResult } from "./src/common/deliverResult";
 export { explainTestReport } from "./src/common/analyzers/runtimeFinding";
 `);
   return mod;
 }
 
 async function main() {
-  const { findRuntimeFinding, pythonErrorFrom, deliverTestResult, explainTestReport } = await loadAnalyzer();
+  const { findRuntimeFinding, pythonErrorFrom, deliverRunResult, explainTestReport } = await loadAnalyzer();
 
   /**
-   * A test phase's report as both hosts show it: translated, then each
-   * error explained. `shown` is what a view prints for a test.
+   * A run's test report as both hosts show it: translated, then each error
+   * explained. `shown` is what a view prints for a test.
    */
   const reportOf = (result, fileName, level, code) => {
     let report = null;
-    deliverTestResult(result, (event) => {
+    deliverRunResult(result, (event) => {
       if (event.kind === "testReport") report = explainTestReport(event, code, fileName, level);
     }, fileName);
     return report;
@@ -63,6 +63,8 @@ async function main() {
   try {
     console.log("\n[1] init (writes the vendored wheels, enables typeguard)");
     await send({ type: "init", indexUrl: INDEX_URL });
+    // For the runs with tests, whose asserts pytest rewrites.
+    await send({ type: "loadPytest" });
     console.log("    ready");
 
     console.log("\n[2] annotations that hold: program runs normally");
@@ -215,16 +217,18 @@ async function main() {
         "",
       ].join("\n");
       const reply = await send({
-        type: "runTests",
+        type: "runFile",
+        withTests: true,
         code,
         fileName: "tests.py",
+        sessionKey: "tc-tests-11",
         level: "advanced",
       });
-      const r = reply.result;
+      expect(reply.result.ok === true, `assert rewriting + instrumentation should coexist: ${reply.result.error_message}`);
+      const r = reply.result.tests ?? {};
       console.log(`    passed=${r.passed} failed=${r.failed} errors=${r.errors}`);
       const names = (r.tests || []).map((t) => `${t.name}:${t.outcome}`);
       console.log(`    ${names.join(" ")}`);
-      expect(r.internal_error !== true, "assert rewriting + instrumentation should coexist");
       expect(r.passed === 1, "the good test should pass, got " + r.passed);
       expect(
         r.failed + r.errors === 1,
@@ -241,12 +245,14 @@ async function main() {
     {
       const code = "def double(n: int) -> int:\n    return n * 3\n\ndef test_double():\n    assert double(4) == 8\n";
       const reply = await send({
-        type: "runTests",
+        type: "runFile",
+        withTests: true,
         code,
         fileName: "tests.py",
+        sessionKey: "tc-tests-12",
         level: "advanced",
       });
-      const r = reply.result;
+      const r = reply.result.tests ?? {};
       const t = (r.tests || [])[0];
       console.log(`    ${t && t.name}: ${t && t.outcome} / ${t && (t.message || "").split("\n")[0]}`);
       expect(r.failed === 1, "the assert should fail, got failed=" + r.failed);
@@ -430,11 +436,11 @@ async function main() {
     }
     console.log("\n[16] recursive data: forward references, and checked fields");
     {
-      // `rest: "NumList"` is the shape of every recursive data definition,
-      // and it used to take the whole test phase down with
-      // `AttributeError: 'NoneType' object has no attribute '__dict__'` -
+      // `rest: "NumList"` is the shape of every recursive data definition.
       // `dataclasses` resolves a string annotation through
-      // `sys.modules[cls.__module__]`, and nothing was registered there.
+      // `sys.modules[cls.__module__]`, so the module a file runs as has to
+      // be registered there, or this fails with `AttributeError: 'NoneType'
+      // object has no attribute '__dict__'`.
       const recursive = [
         "from dataclasses import dataclass",
         "from typing import Optional",
@@ -460,17 +466,15 @@ async function main() {
       expect(ran.stdout.trim() === "3", `expected 3, got ${JSON.stringify(ran.stdout)}`);
 
       const tested = await send({
-        type: "runTests",
+        type: "runFile",
+        withTests: true,
         code: recursive,
         fileName: "rec.py",
         sessionKey: "tc-rec",
         level: "beginner",
       }).then((r) => r.result);
-      expect(
-        tested.internal_error !== true,
-        `the test phase must not crash: ${tested.error_type}: ${tested.error_message}`,
-      );
-      expect(tested.passed === 1, `expected 1 passing test, got ${tested.passed}`);
+      expect(tested.ok === true, `the run with tests must not crash: ${tested.error_type}: ${tested.error_message}`);
+      expect(tested.tests?.passed === 1, `expected 1 passing test, got ${tested.tests?.passed}`);
       console.log("    a recursive dataclass runs and tests cleanly");
 
       // `@dataclass` writes `__init__` after typeguard has instrumented the
@@ -524,7 +528,8 @@ async function main() {
         '    assert shout("hi") == "HI!"',
       ].join("\n");
       const result = await send({
-        type: "runTests",
+        type: "runFile",
+        withTests: true,
         code,
         fileName: "tw.py",
         sessionKey: "tc-tw",
@@ -533,7 +538,7 @@ async function main() {
       // The *worker* result still carries typeguard's own text; the
       // rewriting happens where the result becomes events, so that both the
       // editor's card and the command line get it. Check it there.
-      const raw = (result.tests ?? [])[0];
+      const raw = (result.tests?.tests ?? [])[0];
       expect(raw !== undefined, "a test case should be reported");
       expect(
         (raw.message ?? "").includes("is not an instance of"),
@@ -555,8 +560,8 @@ async function main() {
         (test.message ?? "").includes("returns `None` on this line"),
         `a written-out \`return None\` is said as much, got ${test.message}`,
       );
-      // The report used to say "this function" while the editor named it;
-      // pytest prints the frames, so the name is there to be read.
+      // The function is named, not "this function": pytest prints the
+      // frames, so the name is there to be read.
       expect(
         (test.message ?? "").includes("`shout`"),
         `the report should name the function, got ${test.message}`,
@@ -743,7 +748,8 @@ async function main() {
       // in the student's arithmetic, and nothing in the failure said so.
       const code = "def test_close():\n    total = 1.1 * 3\n    assert total == 3.3\n";
       const result = await send({
-        type: "runTests",
+        type: "runFile",
+        withTests: true,
         code,
         fileName: "fl.py",
         sessionKey: "tc-fl",
@@ -759,7 +765,8 @@ async function main() {
       // A test that fails for a real reason gets no such note.
       const wrong = "def test_wrong():\n    total = 1.0 * 3\n    assert total == 4.0\n";
       const other = await send({
-        type: "runTests",
+        type: "runFile",
+        withTests: true,
         code: wrong,
         fileName: "fw.py",
         sessionKey: "tc-fw",
@@ -772,11 +779,12 @@ async function main() {
 
     console.log("\n[21] errors raised inside a test are translated too");
     {
-      // Only a type-annotation failure used to be translated in the test
-      // report; every other error arrived in Python's own words.
+      // Every error in a test is translated, not only a type-annotation
+      // failure.
       const reportFor = async (code, key) => {
         const result = await send({
-          type: "runTests",
+          type: "runFile",
+        withTests: true,
           code,
           fileName: "te.py",
           sessionKey: key,
@@ -811,11 +819,12 @@ async function main() {
       expect(/^assert 3 == 4/.test(plain), `a failed assert is left as it is: ${plain}`);
 
       // Through the same analyzers as a run error: a name error is explained
-      // too (it used to arrive in Python's words), and a finding says where.
+      // too, and a finding says where.
       const named = await reportFor("def test_x():\n    assert totl == 1\n", "te-4");
       expect(/Python doesn't know what `totl` means/.test(named), `a NameError inside a test: ${named}`);
       const located = await send({
-        type: "runTests",
+        type: "runFile",
+        withTests: true,
         code: 'def shout(words):\n    return words + "!"\n\n\ndef test_shout():\n    assert shout(["hi"]) == ["HI"]\n',
         fileName: "te.py",
         sessionKey: "te-5",
@@ -826,7 +835,8 @@ async function main() {
       expect(located?.tests?.[0]?.error === undefined, "and the report keeps the finding, not the exception");
       const paramWhere = (
         await send({
-          type: "runTests",
+          type: "runFile",
+        withTests: true,
           code: "def test_pen_cost(n):\n    assert n\n",
           fileName: "te.py",
           sessionKey: "te-6",

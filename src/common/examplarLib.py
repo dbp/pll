@@ -305,9 +305,8 @@ def _pll_examplar_compile_tests(test_source, filename):
         from _pytest.assertion.rewrite import rewrite_asserts
 
         rewrite_asserts(tree, test_source.encode("utf-8"), module_path=filename)
-        # Same trap as `_pll_run_tests`: do not call `fix_missing_locations`,
-        # which copies parent positions onto pytest's injected nodes and
-        # produces ranges Python 3.12+ rejects.
+        # Not `fix_missing_locations`, which copies parent positions onto
+        # pytest's injected nodes and produces ranges Python 3.12+ rejects.
         _pll_fix_ast_ranges(tree)
     except Exception:
         # Rewriting can leave the tree half-modified, so start again from the
@@ -368,8 +367,8 @@ def _pll_examplar_run_one(test_pieces, code_blob, provided=(), only=None):
     try:
         exec(_ex_marshal.loads(_ex_b64.b64decode(code_blob)), namespace)
     except KeyboardInterrupt:
-        # A Stop, not a broken implementation: reported as one, it read
-        # "the bundle may need rebuilding".
+        # A Stop, not a broken implementation, which the card would report
+        # as "the bundle may need rebuilding".
         raise
     except BaseException as e:
         return {

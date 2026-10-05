@@ -8,11 +8,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * Open a file from the explorer, scrolling to it first.
  *
  * The explorer list is **virtualised**: only the rows in view exist in the
- * DOM at all. `samples/` outgrew one screen, and `universe.py` fell off the
- * end - so `test-web:universe` started timing out on a locator for a row
- * that was never going to be rendered, with nothing to say it was a layout
- * problem rather than a broken feature. Scrolling until the row appears
- * makes these tests independent of how many samples there happen to be.
+ * DOM at all, so a file below the fold has no row to find, and a locator
+ * for it times out with nothing to say it is a layout problem rather than a
+ * broken feature. Scrolling until the row appears makes these tests
+ * independent of how many samples there happen to be.
  */
 export async function openFile(page, name, { timeout = 30_000 } = {}) {
   const row = page.locator(".monaco-list-row", { hasText: name }).first();

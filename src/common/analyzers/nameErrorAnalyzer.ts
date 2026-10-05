@@ -5,7 +5,7 @@ import { runtimeFindingFor, type AnalysisFinding, type RuntimeAnalyzer, type Run
 /**
  * `UnboundLocalError` is a subclass of `NameError` and the same mistake to
  * a student - a name used before it has a value - but it arrives under its
- * own type, so it was falling through to a bare traceback.
+ * own type, so it is named here.
  */
 const HANDLED = ["NameError", "UnboundLocalError"];
 

@@ -83,8 +83,8 @@ export function enrichStaticFindings(
 
 /**
  * The finding with its positions as numbers or null. A Python `None`
- * arrives as `undefined`, which passes a `!== null` test and used to reach
- * a label as `file.py:3:NaN`.
+ * arrives as `undefined`, which passes a `!== null` test and would reach a
+ * label as `file.py:3:NaN`.
  */
 function withPositions(raw: RawStaticFinding): RawStaticFinding {
   const position = (value: unknown) =>

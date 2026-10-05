@@ -1064,6 +1064,7 @@ stderr:
   How to fix:
     - Without them, `Boa` is a new name that matches anything, so no `case` after it can ever run.
     - With them, `case Boa():` matches only a `Boa`; put one name inside for each field.
+  The tests were not run, because of the error above.
 
 === syntax-warning-unrun (exit 0)
 stdout:
@@ -1824,6 +1825,7 @@ stderr:
   student.py [raw]
   ZeroDivisionError: division by zero.
     at student.py:1
+  The tests were not run, because of the error above.
 
 === test-and-program-error (exit 1)
 stderr:
@@ -1835,6 +1837,7 @@ stderr:
     - Check the spelling of `undefined_name` (Python is case-sensitive).
     - Make sure `undefined_name` is defined before this line runs.
     - If `undefined_name` should be text, put it in quotes: `"undefined_name"`.
+  The tests were not run, because of the error above.
 
 === test-skip (exit 0)
 stderr:

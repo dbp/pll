@@ -5,7 +5,6 @@ import type {
   RawStaticFinding,
   ReactorStepResult,
   RunResult,
-  TestRunResult,
 } from "./wire";
 import type { WorkspaceFile } from "./workspaceFilePolicy";
 
@@ -33,6 +32,8 @@ export type WorkerInbound =
       sessionKey: string;
       /** Language level; the only input deciding what gets checked. */
       level?: string;
+      /** Run the file's tests once it finishes; pytest must be loaded. */
+      withTests?: boolean;
     }
   | {
       id: number;
@@ -45,13 +46,6 @@ export type WorkerInbound =
   | { id: number; type: "loadPackages"; code: string }
   | { id: number; type: "hasTests"; code: string }
   | { id: number; type: "loadPytest" }
-  | {
-      id: number;
-      type: "runTests";
-      code: string;
-      fileName: string;
-      level?: string;
-    }
   | { id: number; type: "staticAnalyze"; code: string; level: string; fileName: string; sessionKey?: string }
   | { id: number; type: "mountWorkspace"; files: WorkspaceFile[] }
   | { id: number; type: "collectWorkspace" }
@@ -74,7 +68,6 @@ export type WorkerOutbound =
   | { id: number; type: "hasTests"; result: boolean }
   | { id: number; type: "packagesReady" }
   | { id: number; type: "pytestReady" }
-  | { id: number; type: "testResult"; result: TestRunResult }
   | { id: number; type: "static"; result: RawStaticFinding[] }
   | { id: number; type: "workspaceReady" }
   | { id: number; type: "workspaceFiles"; files: WorkspaceFile[] }

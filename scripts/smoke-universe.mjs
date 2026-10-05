@@ -3,7 +3,7 @@
  * The universe *client*, against a real WebSocket server.
  *
  * One implementation serves both hosts: `WebSocket` is a global in browser
- * workers and in Node from v22, which `engines.vscode` now requires.
+ * workers and in Node from v22, which `engines.vscode` requires.
  *
  * Students write worlds, not servers, so PLL only ever dials out - which is
  * what makes this feasible in a browser at all. The server here is

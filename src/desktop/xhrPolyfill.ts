@@ -17,8 +17,7 @@ import { syncHttpRequest } from "./syncHttp";
  * `TextDecoder("latin1")` cannot do this: every `latin1` label in the
  * Encoding Standard is an alias for **windows-1252**, which maps 0x80-0x9f
  * to code points above 255 (0x89 becomes U+2030). That is lossless for
- * text, which is why it went unnoticed, but it destroys binary - a PNG
- * fetched through here used to arrive with its signature mangled.
+ * text but destroys binary: a PNG's signature would arrive mangled.
  */
 function decodeByteString(bytes: Uint8Array): string {
   // Chunked: `String.fromCharCode(...bytes)` spreads into the argument list

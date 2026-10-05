@@ -4,7 +4,7 @@ import { enrichStaticFindings } from "./analyzers/static/registry";
 import type { AnalysisFinding } from "./analyzers/types";
 import { runExamplarStep, type ExamplarEntry } from "./examplarPhase";
 import type { BundleStore } from "./examplarSource";
-import { levelHasStaticChecks, type Level } from "./level";
+import { levelHasStaticChecks, parseLevel, type Level } from "./level";
 import { needsPackages } from "./packages";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 import type { WorkspaceFile } from "./workspaceFilePolicy";
@@ -12,15 +12,10 @@ import { errorText } from "./errorText";
 import { PythonLostError } from "./pythonLost";
 
 /**
- * The steps of a run, written once for every host.
- *
- * A file run is: the `#level` line, the level's static checks, libraries,
- * the files next to the program, the Examplar check, the file's own tests,
- * the program, and writing back the files it changed. The editor and the
- * command line used to each write this out, and every change had to be made
- * twice - which is how they came to word the same failure differently, and
- * to disagree about whether a top-level error in a file with tests was
- * reported once or twice. A host now says only how to show things.
+ * The steps of a run, the same for every host. A file run is: the `#level`
+ * line, the level's static checks, libraries, the Examplar check, the files
+ * next to the program, the program - followed by its own tests - and
+ * writing back the files it changed. A host says only how to show things.
  *
  * Stop (Ctrl+C) is checked between the steps. A Stop lands in whichever
  * step is running, but what was asked for is that nothing more runs; and one
@@ -28,6 +23,8 @@ import { PythonLostError } from "./pythonLost";
  * next check is the only thing that will notice it.
  */
 export interface RunHost {
+  /** The file's level, from its `#level` line. Said first, and only for a file run. */
+  level(level: Level): void;
   /** Findings from the `#level` line or the static checks; replaces any shown before. */
   staticFindings(findings: AnalysisFinding[]): void;
   /** A runtime error, already explained. */
@@ -57,8 +54,7 @@ export interface FilePlan {
   code: string;
   fileName: string;
   sessionKey: string;
-  level: Level;
-  /** Run the file's `test_*` functions before it. */
+  /** Run the file's `test_*` functions after it. */
   runTests: boolean;
   /** Where fetched Examplar bundles are cached, for a file with `#examplar`. */
   bundles: BundleStore;
@@ -67,81 +63,88 @@ export interface FilePlan {
 export interface InputPlan {
   code: string;
   sessionKey: string;
+  /** The level of the file's last run, which a prompt line is checked at. */
   level: Level;
 }
 
-/** How a run ended: checks refused it, Stop ended it, or it ran. */
-export type RunOutcome = "blocked" | "stopped" | "ran";
+/** How a run ended, and what the student's code did in it. */
+export interface RunSummary {
+  /** Checks refused it, Stop ended it, or it ran. */
+  outcome: "blocked" | "stopped" | "ran";
+  /** The program, or the input, raised. */
+  raised: boolean;
+  /** Tests that failed or raised. */
+  testFailures: number;
+  /** The status the program ended itself with (`sys.exit(3)`), or null. */
+  exitCode: number | null;
+}
 
-const STOPPED_BEFORE_START = "Stopped before the program started. Nothing was run.";
-const STOPPED_BEFORE_INPUT = "Stopped. Your input was not run.";
-const STOPPED_BEFORE_TESTS = "Stopped before the tests started. The tests and the program were not run.";
-const STOPPED_DURING_TESTS = "Stopped during the tests. The rest of the tests and the program were not run.";
-const STOPPED_AFTER_TESTS = "Stopped after the tests. The program was not run.";
-const STOPPED_BEFORE_PROGRAM = "Stopped before the program started.";
-const STOPPED_CHECKING_TESTS =
-  "Stopped while checking your tests. Your own tests and the program were not run.";
+type Outcome = RunSummary["outcome"];
+
+/** What a Stop ended, said where the run notices it. */
+const STOPPED = {
+  beforeStart: "Stopped before the program started. Nothing was run.",
+  checking: "Stopped while checking your tests. Your own tests and the program were not run.",
+  afterChecking: "Stopped before the program started.",
+  input: "Stopped. Your input was not run.",
+  program: "Stopped. The tests were not run.",
+  tests: "Stopped during the tests. The rest of the tests were not run.",
+  thrown: "Stopped.",
+} as const;
 
 /** Run a whole file. */
 export async function runFilePlan(
   runtime: PythonRuntime,
   host: RunHost,
   plan: FilePlan,
-): Promise<RunOutcome> {
-  const { code, fileName, sessionKey, level } = plan;
+): Promise<RunSummary> {
+  const { code, fileName, sessionKey } = plan;
+  const level = parseLevel(code);
+  host.level(level);
+  const tally = new Tally();
   // Checked at every level: a broken `#level` line means the file asked
   // for checks and got none, so the level it fell back to is the symptom.
   const header = levelHeaderFinding(code, fileName, level);
   if (header !== null) {
     host.staticFindings([header]);
-    return "blocked";
+    return tally.summary("blocked");
   }
   const checked = await staticChecks(runtime, host, code, fileName, level, null);
-  if (checked !== "ran") {
-    return checked;
+  if (checked !== "passed") {
+    return tally.summary(checked);
   }
-  return withFiles(runtime, host, code, fileName, STOPPED_BEFORE_START, async () => {
-    const onEvent = programEvents(host, code, fileName, level);
-    let ownCodeIsComplete = true;
+  const outcome = await withFiles(runtime, host, fileName, async (mountFiles) => {
+    await loadPackages(runtime, host, code);
+    if (stopped(host, STOPPED.beforeStart)) {
+      return "stopped";
+    }
+    // Before the files are mounted: the known implementations run without
+    // access to the student's files.
     const complete = await runExamplarStep(runtime, plan.bundles, host, code);
-    if (complete !== null) {
-      ownCodeIsComplete = complete;
-      // The check ran with the files unmounted; put them back before
-      // anything of the student's runs.
-      await mount(runtime, host);
-      if (stopped(host, STOPPED_CHECKING_TESTS)) {
-        return "stopped";
-      }
+    if (complete !== null && stopped(host, STOPPED.checking)) {
+      return "stopped";
     }
-    if (plan.runTests && ownCodeIsComplete && (await hasTestsToRun(runtime, host, code))) {
-      if (stopped(host, STOPPED_BEFORE_TESTS)) {
-        return "stopped";
-      }
-      host.status("Running tests...");
-      let testsStopped = false;
-      await runtime.runTests({ code, fileName, sessionKey, level }, (event) => {
-        // An error here is the file failing to load while the tests were
-        // looked for. The program is about to raise it again, and that is
-        // the report that matters: it is the student's program, not PLL
-        // looking for tests.
-        if (event.kind === "error") return;
-        if (event.kind === "testReport" && event.stopped) testsStopped = true;
-        onEvent(event);
-      });
-      // A Stop pressed as the last test finished arrives after them all.
-      if (stopped(host, testsStopped ? STOPPED_DURING_TESTS : STOPPED_AFTER_TESTS)) {
-        return "stopped";
-      }
-    }
-    // Pressed while the file was checked for tests, and there were none.
-    if (stopped(host, STOPPED_BEFORE_PROGRAM)) {
+    const beforeProgram = complete === null ? STOPPED.beforeStart : STOPPED.afterChecking;
+    await mountFiles();
+    // With an Examplar check, the file's own tests run only once the file
+    // defines everything the check provides: against missing functions every
+    // test would report a NameError under a perfectly good verdict.
+    const withTests =
+      plan.runTests && complete !== false && (await testsToRun(runtime, host, code));
+    if (stopped(host, beforeProgram)) {
       return "stopped";
     }
     host.status("Running...");
-    const program = () => runtime.runFile({ code, fileName, sessionKey, level }, onEvent);
+    const onEvent = tally.counting(programEvents(host, code, fileName, level));
+    const program = () =>
+      runtime.runFile({ code, fileName, sessionKey, level, withTests }, onEvent);
     await (host.aroundProgram ? host.aroundProgram(program) : program());
-    return "ran";
+    if (withTests) {
+      sayWhyTestsStopped(host, tally);
+    }
+    return host.stopRequested() ? "stopped" : "ran";
   });
+  return tally.summary(outcome);
 }
 
 /** Run what was typed at the prompt. */
@@ -149,17 +152,77 @@ export async function runInputPlan(
   runtime: PythonRuntime,
   host: RunHost,
   plan: InputPlan,
-): Promise<RunOutcome> {
+): Promise<RunSummary> {
   const { code, sessionKey, level } = plan;
   const fileName = "<repl>";
+  const tally = new Tally();
   const checked = await staticChecks(runtime, host, code, fileName, level, sessionKey);
-  if (checked !== "ran") {
-    return checked;
+  if (checked !== "passed") {
+    return tally.summary(checked);
   }
-  return withFiles(runtime, host, code, fileName, STOPPED_BEFORE_INPUT, async () => {
-    await runtime.replEval({ code, sessionKey, level }, programEvents(host, code, fileName, level));
+  const outcome = await withFiles(runtime, host, fileName, async (mountFiles) => {
+    await loadPackages(runtime, host, code);
+    await mountFiles();
+    if (stopped(host, STOPPED.input)) {
+      return "stopped";
+    }
+    const onEvent = tally.counting(programEvents(host, code, fileName, level));
+    await runtime.replEval({ code, sessionKey, level }, onEvent);
     return "ran";
   });
+  return tally.summary(outcome);
+}
+
+/** What the student's code did, counted from its events as they pass. */
+class Tally {
+  raised = false;
+  testFailures = 0;
+  exitCode: number | null = null;
+  testsRan = false;
+  testsStopped = false;
+
+  counting(onEvent: (event: ExecutionEvent) => void): (event: ExecutionEvent) => void {
+    return (event) => {
+      if (event.kind === "error") {
+        this.raised = true;
+      } else if (event.kind === "testReport") {
+        this.testsRan = true;
+        this.testsStopped = event.stopped === true;
+        this.testFailures += event.failed + event.errors;
+      } else if (event.kind === "done" && event.exitCode !== undefined) {
+        this.exitCode = event.exitCode;
+      }
+      onEvent(event);
+    };
+  }
+
+  summary(outcome: Outcome): RunSummary {
+    return {
+      outcome,
+      raised: this.raised,
+      testFailures: this.testFailures,
+      exitCode: this.exitCode,
+    };
+  }
+}
+
+/**
+ * Tests run only once the program has finished, so a program that did not
+ * finish leaves them unrun - which is said, and why, rather than left to be
+ * noticed as a missing report.
+ */
+function sayWhyTestsStopped(host: RunHost, tally: Tally): void {
+  if (tally.testsRan) {
+    if (tally.testsStopped) host.say(STOPPED.tests, "problem");
+    return;
+  }
+  if (host.stopRequested()) {
+    host.say(STOPPED.program, "problem");
+  } else if (tally.exitCode !== null) {
+    host.say("The tests were not run: the program ended itself first, with `sys.exit()`.", "problem");
+  } else if (tally.raised) {
+    host.say("The tests were not run, because of the error above.", "problem");
+  }
 }
 
 /**
@@ -177,9 +240,9 @@ async function staticChecks(
   fileName: string,
   level: Level,
   sessionKey: string | null,
-): Promise<RunOutcome> {
+): Promise<"passed" | "blocked" | "stopped"> {
   if (!levelHasStaticChecks(level)) {
-    return "ran";
+    return "passed";
   }
   const input = sessionKey !== null;
   host.status("Checking...");
@@ -193,17 +256,17 @@ async function staticChecks(
     });
     findings = enrichStaticFindings(raw, level, fileName);
   } catch (err) {
-    if (stopped(host, input ? STOPPED_BEFORE_INPUT : STOPPED_BEFORE_START)) {
+    if (stopped(host, input ? STOPPED.input : STOPPED.beforeStart)) {
       return "stopped";
     }
     host.say(`Static analysis failed (${errorText(err)}). Running anyway.`, "note");
-    return "ran";
+    return "passed";
   }
   // Called with none too, so a host can clear what the last run found.
   host.staticFindings(findings);
   const errors = findings.filter((finding) => finding.severity === "error").length;
   if (errors === 0) {
-    return "ran";
+    return "passed";
   }
   host.say(
     `Static analysis found ${errors} problem${errors === 1 ? "" : "s"}. ` +
@@ -214,37 +277,30 @@ async function staticChecks(
 }
 
 /**
- * Libraries and the files next to the program, then `run`, then the files
- * it changed written back. A Stop pressed while they load ends it before
- * `run` starts; an error `run` throws because of a Stop is reported as the
- * Stop. Any other error is the host's to report.
+ * `run`, given a way to mount the files next to the program, and then the
+ * files it changed written back - if they were mounted, and Python is still
+ * there to ask. An error `run` throws because of a Stop is reported as the
+ * Stop; any other error is the host's to report.
  */
 async function withFiles(
   runtime: PythonRuntime,
   host: RunHost,
-  code: string,
   fileName: string,
-  stoppedBeforeStart: string,
-  run: () => Promise<RunOutcome>,
-): Promise<RunOutcome> {
+  run: (mountFiles: () => Promise<void>) => Promise<Outcome>,
+): Promise<Outcome> {
   let mounted = false;
   let lost = false;
   try {
-    await loadPackages(runtime, host, code);
-    mounted = await mount(runtime, host);
-    if (stopped(host, stoppedBeforeStart)) {
-      return "stopped";
-    }
-    return await run();
+    return await run(async () => {
+      mounted = await mount(runtime, host);
+    });
   } catch (err) {
     lost = err instanceof PythonLostError;
-    if (stopped(host, "Stopped.")) {
+    if (stopped(host, STOPPED.thrown)) {
       return "stopped";
     }
     throw err;
   } finally {
-    // A Python that stopped took its files with it: there is nothing to
-    // copy back, and asking would start a new Python only to find that out.
     if (mounted && !lost) {
       await writeBack(runtime, host, fileName);
     }
@@ -259,11 +315,9 @@ async function loadPackages(runtime: PythonRuntime, host: RunHost, code: string)
   try {
     await runtime.ensurePackages(code);
   } catch (err) {
-    const message = errorText(err);
-    // A SyntaxError here just means the file does not parse; the run itself
-    // reports that properly. Nor is a load that Stop interrupted a failure.
-    if (!/syntaxerror|invalid syntax/i.test(message) && !host.stopRequested()) {
-      host.say(`Could not load libraries (${message}). Continuing; imports may fail.`, "note");
+    // A load that Stop interrupted is the Stop, which the next check says.
+    if (!host.stopRequested()) {
+      host.say(`Could not load libraries (${errorText(err)}). Continuing; imports may fail.`, "note");
     }
   }
 }
@@ -302,7 +356,7 @@ async function writeBack(runtime: PythonRuntime, host: RunHost, fileName: string
  * True if the file has `test_*` functions *and* pytest loaded. Neither
  * failing stops the run: the file just runs without its tests.
  */
-async function hasTestsToRun(runtime: PythonRuntime, host: RunHost, code: string): Promise<boolean> {
+async function testsToRun(runtime: PythonRuntime, host: RunHost, code: string): Promise<boolean> {
   try {
     if (!(await runtime.hasTests(code))) {
       return false;
@@ -351,4 +405,3 @@ function stopped(host: RunHost, text: string): boolean {
   host.say(text, "problem");
   return true;
 }
-

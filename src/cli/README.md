@@ -41,11 +41,11 @@ same way everywhere, which is the point of putting it in the file.
 
 ## Tests
 
-`test_*` functions in the same file run before the file does, as they do in
-the editor:
+`test_*` functions in the same file run once the program finishes, against
+what it defined, as they do in the editor:
 
 ```bash
-pll hw.py            # tests, then the program
+pll hw.py            # the program, then its tests
 pll hw.py --no-tests # just the program
 ```
 

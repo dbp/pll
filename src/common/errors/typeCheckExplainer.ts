@@ -50,13 +50,10 @@ export interface ParsedTypeCheckError {
 }
 
 /**
- * Module prefixes that are PLL's own bookkeeping, not something a student
- * wrote. A file runs as `__main__`, so its classes arrive as `__main__.Dog`;
- * `__pll_test__` is the module the test phase runs a file in, and without
- * this a class the student named `Account` was reported as
- * `__pll_test__.Account`.
+ * The module prefix a student did not write: a file - and its tests - run
+ * as `__main__`, so its classes arrive as `__main__.Dog`.
  */
-const INTERNAL_MODULES = ["__main__.", "__pll_test__."];
+const MAIN_PREFIX = "__main__.";
 
 /**
  * Names PLL's own classes report as, where the course calls them something
@@ -69,12 +66,9 @@ const COURSE_NAME_FOR: Record<string, string> = { Row: "dict" };
 
 function cleanTypeName(type: string): string {
   // Replaced anywhere, not just at the start: typeguard reports a class
-  // object as `class __pll_test__.ITunesSong`, so the prefix sits in the
-  // middle of the name it prints.
-  let cleaned = type;
-  for (const prefix of INTERNAL_MODULES) {
-    cleaned = cleaned.split(prefix).join("");
-  }
+  // object as `class __main__.ITunesSong`, so the prefix sits in the middle
+  // of the name it prints.
+  const cleaned = type.split(MAIN_PREFIX).join("");
   return COURSE_NAME_FOR[cleaned] ?? cleaned;
 }
 

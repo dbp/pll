@@ -155,15 +155,15 @@ expect(findings[2].headline.includes("first assigned on line 5"), "reassignment 
 expect(findings[2].howToFix.length >= 2, "reassignment offers at least 2 fixes");
 expect(
   findings[2].howToFix.every((fix) => !/comprehension/i.test(fix)),
-  "reassignment fixes no longer mention comprehensions",
+  "reassignment fixes do not mention comprehensions",
 );
 expect(
   findings[2].howToFix.every((fix) => !/#expert/i.test(fix)),
-  "reassignment fixes no longer suggest switching to #expert",
+  "reassignment fixes do not suggest switching to #expert",
 );
 expect(
   findings[2].howToFix.every((fix) => !/#level advanced/i.test(fix)),
-  "reassignment fixes no longer suggest switching to advanced",
+  "reassignment fixes do not suggest switching to advanced",
 );
 
 console.log("[shadowing-library explainer]");
@@ -368,9 +368,9 @@ console.log("[name errors: a name with no value is named, not called `this name`
     mod.findRuntimeFinding(source, "lab.py", "beginner", error);
 
   // The Lab 10 shape: an inner function reads a name the enclosing function
-  // assigns later. Only `name 'x' is not defined` was matched before, so the
-  // name was unknown and the report read "Python doesn't know what `this
-  // name` means" - four times over, in a file where `title` is right there.
+  // assigns later. The name is recovered from this wording too, not only
+  // from `name 'x' is not defined`, or the report would read "Python doesn't
+  // know what `this name` means", in a file where `title` is right there.
   const free = finding(
     pyErrorLine(
       "NameError: cannot access free variable 'title' where it is not associated with a value",
@@ -428,8 +428,8 @@ console.log("[name errors: a name with no value is named, not called `this name`
 console.log("[a #level line that names nothing valid is an error, not silence]");
 {
   // Absence stays silent, so ordinary Python runs as ordinary Python. But a
-  // line that *asked* for a level and did not get one used to run at raw
-  // with every expected check gone and nothing said.
+  // line that *asked* for a level and did not get one would otherwise run
+  // at raw with every expected check gone and nothing said.
   // Returns `{ message, line, howToFix }` or null, so the finding can blame
   // the line the header is actually on.
   const problem = (header) => mod.levelHeaderProblem(`${header}\nx = 1\n`)?.message ?? null;
@@ -576,7 +576,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     finding(pyErrorLine(errorLine, [["<exec>", 560, "run"], ["lab.py", line, fn]]), source);
 
   /** Nothing a student never typed should ever reach them. */
-  const INTERNALS = [/__init__/, /types\.UnionType/, /__pll_test__/, /_Rectangle/, /NoneType/];
+  const INTERNALS = [/__init__/, /types\.UnionType/, /__main__/, /_Rectangle/, /NoneType/];
   const noInternals = (f, label) => {
     const text = `${f.headline} ${f.howToFix.join(" ")}`;
     for (const pattern of INTERNALS) {
@@ -893,8 +893,8 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
   expect(pandas.lineNumber === 4, `blamed at the student's line, got ${pandas.lineNumber}`);
 
   // A student file *named* `pandas.py` is not pandas. `samples/pandas.py`
-  // is a real file in this repo, and a plain dict `KeyError` in it was
-  // being reported as a missing DataFrame column.
+  // is a real file in this repo, and a plain dict `KeyError` in it is not a
+  // missing DataFrame column.
   const notPandas = finding(
     pyErrorLine("KeyError: 'bob'", [["pandas.py", 2]]),
     'ages = {"alice": 30}\nprint(ages["bob"])\n',
@@ -907,7 +907,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
   // -- a class passed where one of its instances was wanted --------------
   const classItself = finding(
     pyErrorLine(
-      'TypeCheckError: argument "s" (class __pll_test__.ITunesSong) is not an instance of __pll_test__.ITunesSong',
+      'TypeCheckError: argument "s" (class __main__.ITunesSong) is not an instance of __main__.ITunesSong',
       [["lab.py", 12], ["lab.py", 11, "title"]],
     ),
     song + "\n\ndef title(s: ITunesSong) -> str:\n    return s.name\n\n\nprint(title(ITunesSong))\n",
@@ -1357,8 +1357,8 @@ console.log("[second review: advice that has to come from the program in hand]")
   const raised = (source, line, errorLine, level = "raw") =>
     finding(pyErrorLine(errorLine, [["<exec>", 560, "run"], ["lab.py", line]]), source, level);
 
-  // The comparison hint used to show `int("999")` and `str(1000)`, and to
-  // mention CSV columns, whatever the program compared.
+  // The comparison hint fits what the program compared: no fixed
+  // `int("999")` / `str(1000)` example, and CSV columns only with a table.
   const noTable = raised(
     'n = 5\nif n < "apple":\n    print("x")\n',
     2,
@@ -1705,7 +1705,7 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
   // mut-local-not-field: the line reads the field it meant to change.
   const field = finding(
     pyErrorLine(
-      "TypeCheckError: value assigned to ac (int) is not an instance of __pll_test__.Account",
+      "TypeCheckError: value assigned to ac (int) is not an instance of __main__.Account",
       [["student.py", 14], ["student.py", 3, "deposit"]],
     ),
     "def deposit(ac: Account, amt: float) -> None:\n    x = 1\n    ac = ac.balance + amt\n",
@@ -1723,7 +1723,7 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
   // `ITunesSong`" said the same name twice for opposite things.
   const cls = finding(
     pyErrorLine(
-      'TypeCheckError: argument "s" (class __pll_test__.ITunesSong) is not an instance of __pll_test__.ITunesSong',
+      'TypeCheckError: argument "s" (class __main__.ITunesSong) is not an instance of __main__.ITunesSong',
       [["student.py", 8], ["student.py", 5, "song_age"]],
     ),
     "class ITunesSong:\n    pass\n\n\ndef song_age(s: ITunesSong) -> int:\n    return 1\n\n\nsong_age(ITunesSong)\n",
@@ -1747,7 +1747,7 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
     `a capital, and the handler named: ${JSON.stringify(state.howToFix)}`,
   );
   // dc-field-no-annotation: this is reported before the program runs, so
-  // the NameError it used to lead to is never shown - and must not be
+  // the NameError it would lead to is never shown - and must not be
   // referred to.
   const noType = mod.enrichStaticFindings(
     [

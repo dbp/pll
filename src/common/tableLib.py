@@ -452,7 +452,7 @@ class Table:
             verdict = predicate(row)
             if not isinstance(verdict, bool):
                 # A number is truthy, so a predicate that returns the value
-                # it meant to compare used to keep every row in silence.
+                # it meant to compare would keep every row in silence.
                 raise TypeError(
                     "the function given to filter has to return True or "
                     "False, but %s returned %s for the %s row. Did you mean "
@@ -516,7 +516,7 @@ class Table:
 
     def select_columns(self, names):
         """Keep only the columns in `names`, in that order."""
-        # One string is iterable, so `select_columns("name")` used to come
+        # One string is iterable, so `select_columns("name")` would come
         # apart into letters and complain about a column called 'n'.
         if isinstance(names, str):
             raise TypeError(
@@ -532,7 +532,7 @@ class Table:
     def order_by(self, name, ascending=True):
         """Sort rows by `name` (ascending by default)."""
         self._require_column(name)
-        # `ascending="False"` is a non-empty string, so it used to sort
+        # `ascending="False"` is a non-empty string, so it would sort
         # ascending without a word.
         if not isinstance(ascending, bool):
             raise TypeError(
@@ -812,8 +812,8 @@ class Table:
     def __repr__(self):
         """A readable rendering, because this is what a failed test prints.
 
-        The old summary (`<Table 3 rows x 2 columns: name, mpg>`) is the
-        same for any two tables of the same shape, which is exactly the
+        The rows, not a summary like `<Table 3 rows x 2 columns: name, mpg>`,
+        which is the same for any two tables of the same shape - exactly the
         case `assert t == expected` fails in. Rows are truncated so a big
         table cannot flood a message.
         """

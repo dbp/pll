@@ -127,7 +127,8 @@ def _pll_no_error():
 def _pll_run_result():
     """A file run's or prompt line's result, before anything has happened.
 
-    `exit_code` is set only when the program ended itself, with `sys.exit`.
+    `exit_code` is set only when the program ended itself, with `sys.exit`;
+    `tests` only when its tests were asked for and it finished, so they ran.
     """
     result = {
         "ok": False,
@@ -136,24 +137,7 @@ def _pll_run_result():
         "result_repr": None,
         "displays": [],
         "exit_code": None,
-    }
-    result.update(_pll_no_error())
-    return result
-
-
-def _pll_tests_result():
-    """A test phase's result, before anything has happened."""
-    result = {
-        "ok": False,
-        "internal_error": False,
-        "passed": 0,
-        "failed": 0,
-        "skipped": 0,
-        "errors": 0,
-        "tests": [],
-        "stdout": "",
-        "stderr": "",
-        "displays": [],
+        "tests": None,
     }
     result.update(_pll_no_error())
     return result
@@ -171,13 +155,6 @@ def _pll_stopped_run():
     """A run's result when Stop landed before any of the student's code ran."""
     result = _pll_run_result()
     result.update(error_type="KeyboardInterrupt", error_message="")
-    return result
-
-
-def _pll_stopped_tests():
-    """A test phase's result when Stop landed before the file was loaded."""
-    result = _pll_tests_result()
-    result.update(stopped=True, stopped_in=None)
     return result
 
 
@@ -204,7 +181,14 @@ def _pll_stoppable(stopped):
 
 
 @_pll_stoppable(_pll_stopped_run)
-def _pll_run_file(code, filename, session_key, level="raw"):
+def _pll_run_file(code, filename, session_key, level="raw", run_tests=False):
+    """Run a file as its program, and then - if asked, and if it finished -
+    its own `test_*` functions, against the names the program defined.
+
+    The file is executed once: the tests run in the program's namespace,
+    after its top-level code. `run_tests` needs pytest loaded, for its
+    assertion rewriting.
+    """
     stdout = _PllStream("stdout")
     stderr = _PllStream("stderr")
     result = _pll_run_result()
@@ -219,14 +203,19 @@ def _pll_run_file(code, filename, session_key, level="raw"):
     del _pll_compile_warnings[:]
     try:
         tree = _pll_parse_and_instrument(code, filename)
+        # Where each test is, read before anything is added to the tree.
+        tests_at = _pll_test_locations(tree) if run_tests else None
         _PllTopLevelExprWrapper().visit(tree)
         _ast.fix_missing_locations(tree)
+        if run_tests:
+            _pll_rewrite_asserts(tree, code, filename)
         with _pll_recording_compile_warnings():
             compiled = compile(tree, filename, "exec")
     except SyntaxError as e:
         result.update(_pll_error_info(e, code))
         return _pll_with_output(result, stdout, stderr)
 
+    finished = False
     try:
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             exec(compiled, user_globals)
@@ -234,6 +223,7 @@ def _pll_run_file(code, filename, session_key, level="raw"):
             # starting it further down is perfectly ordinary.
             stderr.write(_pll_run_notes())
         result["ok"] = True
+        finished = True
     except SystemExit as e:
         result["ok"] = True
         result["exit_code"] = _pll_exit_status(e, stderr)
@@ -244,6 +234,10 @@ def _pll_run_file(code, filename, session_key, level="raw"):
         # left out, and one about a line that never ran can be said.
         _pll_say_compile_warnings(stderr, result["error_message"], code)
         _pll_with_output(result, stdout, stderr)
+    # A program that raised, stopped or exited did not get to the end, and
+    # neither do its tests: the host says they were not run, and why.
+    if run_tests and finished:
+        result["tests"] = _pll_run_collected_tests(user_globals, tests_at, code)
     return result
 
 

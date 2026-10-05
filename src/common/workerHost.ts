@@ -9,7 +9,6 @@ import type {
   RawStaticFinding,
   ReactorStepResult,
   RunResult,
-  TestRunResult,
 } from "./wire";
 import { clearInterrupt } from "./interruptBuffer";
 import { waitForStdinLine } from "./stdinBuffer";
@@ -91,11 +90,9 @@ export function createWorkerHost(
 
   /**
    * Where Pyodide's package-loading messages go: to the host, which decides
-   * whether to show them. Left out, Pyodide logs to `console.log`, which in
-   * Node is **stdout** - and the command line promises that only the
-   * program's own output appears there. Printed here instead, on stderr,
-   * `pll -q` still showed "Loading atomicwrites, attrs, ...", since only the
-   * host knows it was asked to be quiet.
+   * whether to show them - only it knows whether it was asked to be quiet.
+   * Left out, Pyodide logs to `console.log`, which in Node is **stdout**,
+   * where the command line promises only the program's own output appears.
    */
   const packageProgress: PackageLoadOptions = {
     messageCallback: (text: string) => adapter.post({ type: "packageNote", text, failed: false }),
@@ -262,6 +259,7 @@ export function createWorkerHost(
           data.fileName,
           data.sessionKey,
           data.level ?? "raw",
+          data.withTests ?? false,
         ]),
       );
       // Already streamed live; returning them again would duplicate.
@@ -305,15 +303,6 @@ export function createWorkerHost(
     async loadPytest() {
       await ensurePytest();
       return { type: "pytestReady" };
-    },
-    async runTests(data) {
-      await ensurePytest();
-      const result = callPython<TestRunResult>("_pll_run_tests", [
-        data.code,
-        data.fileName,
-        data.level ?? "raw",
-      ]);
-      return { type: "testResult", result };
     },
     staticAnalyze(data) {
       const result =

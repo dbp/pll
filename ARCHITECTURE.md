@@ -130,6 +130,13 @@ analyzed with `sessionKey` so names already bound in the session count
 as preexisting module bindings. Those findings stay in the interactions
 view; they are not mapped onto the `.py` file.
 
+A file is executed once. When it has tests, `_pll_run_file` compiles it
+with pytest's assertion rewriting and, if the program finishes, runs the
+tests against the program's own namespace - so they see what it defined,
+and its top-level code (output, `input()`, files written) happens once,
+before them. A program that raises, is stopped or calls `sys.exit()`
+leaves its tests unrun, and the run plan says why.
+
 File tests do **not** call `pytest.main()` (unsafe to invoke repeatedly
 in one Pyodide interpreter). PLL loads the pytest package when a file
 looks like it contains tests, rewrites asserts, collects `test_*` /
@@ -259,8 +266,8 @@ does not.
 ## From an exception to a finding
 
 Python describes an exception as data; the host only explains it. Every
-place that reports one - a file run, a prompt line, the test phase loading
-the file, a single test, a reactor handler - goes through
+place that reports one - a file run, a prompt line, a single test, a
+reactor handler - goes through
 `_pll_error_info`, which sends:
 
 - the type, and the message **as Python's traceback shows it** (so a
@@ -541,12 +548,12 @@ what makes that safe: a Stop meant for the request itself is put back.
 
 ### A Stop ends the whole run
 
-A file run is several steps - libraries and files load, the Examplar
-check, the file's own tests, then the program - and a Stop lands in
-whichever is running. What the student asked for is that nothing more
-runs. `_pll_run_tests` treats `KeyboardInterrupt` as the end of the test
-phase: the tests that finished keep their results, the one running is
-marked `stopped`, and the rest are not run. `runPlan.ts` checks the host's
+A file run is several steps - libraries load, the Examplar check, the
+files next to the program are mounted, then the program and its own tests -
+and a Stop lands in whichever is running. What the student asked for is
+that nothing more runs. A Stop in the program ends it before its tests; one
+in the tests ends them: the tests that finished keep their results, the one
+running is marked `stopped`, and the rest are not run. `runPlan.ts` checks the host's
 `stopRequested()` between the steps and ends the run with a banner saying
 what was not run. The same checks catch a Stop
 pressed while something loads, which reaches no running Python at all and
@@ -1112,18 +1119,20 @@ worth saying out loud - an unreachable server and a fallback to an older copy
 
 ### The phase in a run
 
-The run plan runs the Examplar step (`examplarPhase.ts`) once libraries and
-files are loaded, in the editor and on the command line alike. It fetches the bundle (so a fetch failure is reported once) and runs
-the phase; the plan then mounts the files again:
+The run plan runs the Examplar step (`examplarPhase.ts`) once libraries are
+loaded and before the student's files are mounted, in the editor and on the
+command line alike. It fetches the bundle (so a fetch failure is reported
+once) and runs the phase; the plan then mounts the files:
 
 ```
-static checks -> files -> [ fetch -> unmount -> examplarRun ] -> remount -> own tests -> the program
+static checks -> libraries -> [ fetch -> empty the work dir -> examplarRun ] -> files -> the program -> own tests
 ```
 
-The workspace is **unmounted** for the phase (`mountWorkspaceFiles([])`).
-A bundle is code from a URL; a course is trusted, but there is no reason for
-it to be able to read - or rewrite - a student's data files while it runs.
-The siblings go back before anything of the student's runs.
+The work directory is **empty** for the phase. A bundle is code from a
+URL; a course is trusted, but there is no reason for it to be able to read -
+or rewrite - a student's data files while it runs. The step empties the
+directory itself (`mountWorkspaceFiles([])`), since it can still hold the
+last run's files, and does not run the bundle if that fails.
 
 That unmount has a student-visible cost, and three decisions pay for it:
 
@@ -1153,7 +1162,7 @@ That unmount has a student-visible cost, and three decisions pay for it:
 
 `runExamplarStep` returns whether the student defines every name the bundle
 provides (`student_defines`, recorded before the overlay). That gates only
-the *other* test phase: running a file's `test_*` against the code in that
+the file's own tests: running a file's `test_*` against the code in that
 same file needs that code to exist, or every test reports a `NameError`
 under a perfectly good verdict. Nothing is said about its absence, because
 writing tests before any implementation is the point rather than a mistake.

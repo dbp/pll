@@ -150,8 +150,7 @@ console.log(`8 countdown: ${JSON.stringify(await down.innerText())}`);
 expect(/stopped/.test(await down.innerText()), "stop_when should stop the reactor");
 
 // --- and after going back from where it stopped, Play plays again ---
-// It used to stay "stopped" for good: Play was enabled and did nothing,
-// while the step buttons still moved it.
+// Play, not only the step buttons, moves it on again.
 const countdown = cards.nth(2);
 const end = frameOf(await down.innerText());
 await countdown.getByTitle("One frame back").click();

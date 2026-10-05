@@ -438,9 +438,9 @@ def _pll_reactor_step(rid, event_json):
     running = _pll_reactors.get(rid)
     if running is None:
         return {"ok": False, "gone": True}
-    # What the handlers print goes where the program's own output goes. Not
-    # redirected, it went to the worker's console, and a student debugging
-    # `on_tick` with `print` saw nothing at all.
+    # What the handlers print goes where the program's own output goes, not
+    # to the worker's console, where a student debugging `on_tick` with
+    # `print` would see nothing at all.
     stdout = _PllStream("stdout")
     stderr = _PllStream("stderr")
     try:

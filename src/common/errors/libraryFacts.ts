@@ -3,9 +3,7 @@
  * call one of the student's, what each passes it, which frames are the
  * reactor's, and every function's parameters.
  *
- * In one place because each fact was needed by more than one explanation,
- * and was written out in each - three copies of "the functions that call
- * yours", two of what they pass.
+ * In one place because each fact is needed by more than one explanation.
  */
 
 /**

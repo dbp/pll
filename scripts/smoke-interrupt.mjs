@@ -14,8 +14,8 @@ import { INDEX_URL } from "./lib/pyodide.mjs";
 import { startWorker, talk } from "./lib/worker.mjs";
 
 // The real module, bundled, so this test uses the same layout and the same
-// retrying Stop as the hosts - a hand-written copy is how the test used to
-// bypass the code it was meant to cover.
+// retrying Stop as the hosts, rather than a copy that could pass while the
+// code it covers is broken.
 const {
   INTERRUPT_SAB_BYTES,
   INTERRUPT_SIGINT,
@@ -228,11 +228,10 @@ async function main() {
 
     console.log("\n[6] a Stop overwritten by Pyodide's own check is re-asserted");
     // Pyodide's check reads the signal and then writes 0 over it, as two
-    // steps, so a Stop stored between them was erased and the program ran
-    // on - about one Stop in twenty to forty in a freshly started worker,
-    // which is why this test used to fail now and then. The race is too
-    // rare to hit on purpose, so do exactly what the check does instead:
-    // store the Stop, then wipe it. Only the retry can bring it back.
+    // steps, so a Stop stored between them is erased - about one Stop in
+    // twenty to forty in a freshly started worker. The race is too rare to
+    // hit on purpose, so do exactly what the check does instead: store the
+    // Stop, then wipe it. Only the retry can bring it back.
     const ATTEMPTS = 5;
     let lost = 0;
     for (let i = 0; i < ATTEMPTS; i++) {
@@ -333,11 +332,10 @@ async function main() {
     );
     console.log("    the repeat was consumed; the next press stopped it");
 
-    console.log("\n[9] a Stop during the tests ends the test phase");
+    console.log("\n[9] a Stop during the tests ends them");
     {
-      // Recording the Stop as one test's error and carrying on ran every
-      // remaining test - each of which could loop as well - and then the
-      // program, after the student had asked for it all to stop.
+      // A Stop ends the tests, rather than counting as one test's error:
+      // every test after it could loop as well.
       await session.send({ type: "loadPytest" });
       const code = [
         "def double(n):",
@@ -357,54 +355,54 @@ async function main() {
         "    assert double(3) == 6",
       ].join("\n");
       const tests = session.send({
-        type: "runTests",
+        type: "runFile",
+        withTests: true,
         code,
         fileName: "tests.py",
         sessionKey: "s1",
         level: "raw",
       });
       // Test output is not streamed, so there is nothing to wait for: give
-      // the phase time to reach the loop. The retry delivers the Stop
+      // the run time to reach the loop. The retry delivers the Stop
       // whenever Python next runs, so the exact moment does not matter.
       await sleep(1500);
       stop(tests);
-      const { result } = await withDeadline(tests, INTERRUPT_DEADLINE_MS, "stopped test phase");
-      expect(result.stopped === true, `the phase should be marked stopped: ${JSON.stringify(result.stopped)}`);
+      const { result: ran } = await withDeadline(tests, INTERRUPT_DEADLINE_MS, "stopped tests");
+      expect(ran.ok === true, `the program itself finished: ${ran.error_type}`);
+      const result = ran.tests ?? {};
+      expect(result.stopped === true, `the tests should be marked stopped: ${JSON.stringify(result.stopped)}`);
       expect(result.stopped_in === "test_forever", `stopped in the looping test: ${result.stopped_in}`);
-      expect(!result.internal_error, "a Stop is not PLL failing");
       const names = (result.tests ?? []).map((t) => `${t.name}:${t.outcome}`);
       expect(
         names.join(",") === "test_double:passed,test_forever:stopped",
         `the test before it kept its result, and the one after never ran: ${names.join(",")}`,
       );
       expect(result.errors === 0 && result.failed === 0, "a Stop is counted as neither a failure nor an error");
-      expect(result.ok === false, "a stopped phase is not ok");
       console.log(`    ${names.join(", ")}; test_after not run`);
 
-      // Stopped while the file's own top-level code ran, before any test.
-      const loading = session.send({
-        type: "runTests",
+      // Stopped in the program's own top-level code: the tests never start.
+      const looping = session.send({
+        type: "runFile",
+        withTests: true,
         code: "while True:\n    pass\n\n\ndef test_never():\n    assert True\n",
         fileName: "top.py",
         sessionKey: "s1",
         level: "raw",
       });
       await sleep(500);
-      stop(loading);
-      const top = await withDeadline(loading, INTERRUPT_DEADLINE_MS, "stopped while loading");
-      expect(top.result.stopped === true, "stopped while loading the file");
-      // Python's None arrives as `undefined`; the host normalises it to null.
-      expect(top.result.stopped_in == null, `no test was running: ${top.result.stopped_in}`);
-      expect(!top.result.internal_error, "and that is not an internal error either");
-      console.log("    and while the file itself was loading, before any test");
+      stop(looping);
+      const top = await withDeadline(looping, INTERRUPT_DEADLINE_MS, "stopped program");
+      expect(top.result.error_type === "KeyboardInterrupt", `the program was stopped: ${top.result.error_type}`);
+      expect(top.result.tests == null, `and no test ran: ${JSON.stringify(top.result.tests)}`);
+      console.log("    and in the program itself, before any test");
     }
 
     console.log("\n[10] a Stop nobody took does not reach the next run's checks");
     {
       // Pressed while files loaded, so no Python was running to take it and
       // the run ended at the editor's next check. The next run starts with
-      // its static checks, not the program, and they used to be the ones to
-      // raise it: "Static analysis failed: KeyboardInterrupt".
+      // its static checks, not the program, so they are what would raise
+      // it: "Static analysis failed: KeyboardInterrupt".
       for (const request of [
         { type: "staticAnalyze", code: POLLS, level: "beginner", fileName: "a.py", sessionKey: null },
         { type: "hasTests", code: `${POLLS}def test_a():\n    pass\n` },
@@ -422,13 +420,13 @@ async function main() {
     {
       // Long enough to prepare that the retry lands while PLL is still
       // parsing and instrumenting it, outside the `except` that reports a
-      // Stop in the student's code. It used to escape from there as an
-      // error, which the hosts showed as "Internal error: KeyboardInterrupt".
+      // Stop in the student's code - from where it could escape as an
+      // error, shown as "Internal error: KeyboardInterrupt".
       const big =
         Array.from({ length: 4000 }, (_, i) => `def f${i}(n):\n    return n + ${i}\n`).join("\n") +
         "\ndef test_a():\n    assert f1(1) == 2\n";
-      for (const type of ["runTests", "runFile", "replEval"]) {
-        const run = session.send({ type, code: big, fileName: "big.py", sessionKey: "s1", level: "raw" });
+      for (const [type, withTests] of [["runFile", true], ["runFile", false], ["replEval", false]]) {
+        const run = session.send({ type, withTests, code: big, fileName: "big.py", sessionKey: "s1", level: "raw" });
         stop(run);
         let failure = null;
         const reply = await withDeadline(run, INTERRUPT_DEADLINE_MS, `early stop of ${type}`).catch(
@@ -439,18 +437,19 @@ async function main() {
         );
         expect(failure === null, `${type} should report the Stop, not fail: ${failure}`);
         if (reply === null) continue;
-        const stoppedAs =
-          type === "runTests" ? reply.result.stopped === true : reply.result.error_type === "KeyboardInterrupt";
-        expect(stoppedAs, `${type} should say it was stopped: ${JSON.stringify(reply.result).slice(0, 200)}`);
+        expect(
+          reply.result.error_type === "KeyboardInterrupt",
+          `${type} should say it was stopped: ${JSON.stringify(reply.result).slice(0, 200)}`,
+        );
       }
-      console.log("    tests, a program and a prompt line each came back stopped");
+      console.log("    a program with tests, one without, and a prompt line each came back stopped");
     }
 
     console.log("\n[12] one Stop ends an Examplar check, however many implementations it has");
     {
       // The check runs the student's tests once per implementation. A Stop
-      // used to be recorded as one test's error, and the next implementation
-      // ran the same looping test again - one press per implementation.
+      // recorded as one test's error would let the next implementation run
+      // the same looping test again - one press per implementation.
       const built = await session.send({
         type: "examplarBuild",
         sources: JSON.stringify({

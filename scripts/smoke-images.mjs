@@ -348,8 +348,8 @@ async function main() {
 
   console.log("\n[16] a non-colour or a misspelled mode is refused, not drawn");
   {
-    // SVG ignores a paint value it cannot parse, so these used to draw an
-    // invisible shape and say nothing.
+    // SVG ignores a paint value it cannot parse, so drawn, these would be
+    // an invisible shape and no word said.
     for (const [code, needle] of [
       ['rectangle(30, 40, "solid", 50)', "`color` (the 4th argument) is the number 50, which is not a color"],
       ['rectangle(30, 40, "solid", "50")', 'the string "50", which is not a color'],
@@ -418,8 +418,8 @@ async function main() {
     expect(got[2] === "6 80 70", `hexagon: ${got[2]}`);
     expect(got[3] === "8 97 97", `octagon: ${got[3]}`);
 
-    // 80.00000000000001 from the cosines used to ceil to 81, leaving a
-    // blank column down one side of every such shape.
+    // 80.00000000000001 from the cosines must not ceil to 81, which would
+    // leave a blank column down one side of every such shape.
     const zero = py(callRunFile, [
       [
         "print(image_width(empty_image), image_height(empty_image))",

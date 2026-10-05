@@ -8,10 +8,10 @@ import {
   type ReactorPatch,
   type SessionDisplayState,
 } from "./interactionsView";
-import { DEFAULT_LEVEL, parseLevel, type Level } from "./level";
+import { DEFAULT_LEVEL, type Level } from "./level";
 import type { BundleStore } from "./examplarSource";
 import { ReactorController, type ProgramInfo, type ReactorEvent } from "./reactorController";
-import { runFilePlan, runInputPlan, type RunHost, type RunOutcome } from "./runPlan";
+import { runFilePlan, runInputPlan, type RunHost, type RunSummary } from "./runPlan";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 import type { UniverseConnect } from "./universeClient";
 import { collectSiblingFiles, folderUri, writeBackSiblingFiles } from "./workspaceFiles";
@@ -209,9 +209,9 @@ export class ReplSession implements vscode.Disposable {
 
   /**
    * Clear the visible session - its entries and its reactors' clocks, not
-   * just the panel. The panel's Clear button and **PLL: Clear Interactions**
-   * both come here; the command used to clear only the view, so the entries
-   * came back with the session and a reactor ticked on with no card.
+   * just the panel, or the entries would come back with the session and a
+   * reactor tick on with no card. The panel's Clear button and **PLL: Clear
+   * Interactions** both come here.
    */
   clearActiveSession(): void {
     this.handleClearRequested();
@@ -673,14 +673,6 @@ export class ReplSession implements vscode.Disposable {
 
     this.deps.diagnostics.clear(document.uri);
 
-    const level = parseLevel(code);
-    // Record the level *before* running so the header reflects it even if
-    // the run aborts due to static-analysis errors.
-    session.lastLevel = level;
-    if (this.isActive(session)) {
-      this.deps.view.setTitle(this.titleFor(session));
-    }
-
     if (!this.initialized && !(await this.ensureInitialized())) {
       this.reportInitFailure(session);
       this.flushStreams(session);
@@ -689,13 +681,13 @@ export class ReplSession implements vscode.Disposable {
     }
     // Re-post the status: until init finished it read "Loading Python...".
     this.setSessionBusy(session, true, "Starting...");
-    const program = { source: code, fileName, level };
+    // The level is the plan's to read; `level` below hears it.
+    const program = { source: code, fileName, level: DEFAULT_LEVEL };
     await this.runWithSession(session, program, document, (host) =>
       runFilePlan(this.deps.runtime, host, {
         code,
         fileName,
         sessionKey: session.key,
-        level,
         runTests: true,
         bundles: this.deps.bundleStore,
       }),
@@ -711,7 +703,7 @@ export class ReplSession implements vscode.Disposable {
     session: Session,
     program: ProgramInfo,
     document: vscode.TextDocument | undefined,
-    plan: (host: RunHost) => Promise<RunOutcome>,
+    plan: (host: RunHost) => Promise<RunSummary>,
   ): Promise<void> {
     try {
       await plan(this.hostFor(session, program, document));
@@ -733,12 +725,22 @@ export class ReplSession implements vscode.Disposable {
     document: vscode.TextDocument | undefined,
   ): RunHost {
     const runSeq = session.runSeq;
+    let shown = program;
     const entry = (item: Entry) => {
       // Anything that is its own entry lands after the output before it.
       this.flushStreams(session);
       this.appendToSession(session, item);
     };
     return {
+      level: (level) => {
+        // Recorded first, so the header and the prompt line's level reflect
+        // it even when the checks stop the run.
+        shown = { ...shown, level };
+        session.lastLevel = level;
+        if (this.isActive(session)) {
+          this.deps.view.setTitle(this.titleFor(session));
+        }
+      },
       staticFindings: (findings) => {
         if (document) {
           // Also clears stale diagnostics when there are no findings.
@@ -754,7 +756,7 @@ export class ReplSession implements vscode.Disposable {
           this.deps.diagnostics.setFinding(document.uri, document, finding);
         }
       },
-      event: (event) => this.handleEvent(session, event, program),
+      event: (event) => this.handleEvent(session, event, shown),
       say: (text) => entry({ kind: "banner", text }),
       status: (text) => this.setSessionBusy(session, true, text),
       stopRequested: () => session.stopRequestedSeq === runSeq,
@@ -809,9 +811,8 @@ export class ReplSession implements vscode.Disposable {
     if (this.isActive(pending.session)) {
       this.deps.view.setAwaitingInput(false);
     }
-    // Through the session, not just the view: the session's own status said
-    // "Waiting for input..." for the rest of the run, and showed it again
-    // whenever its file was switched back to.
+    // Through the session, not just the view, or the session's own status
+    // would still say "Waiting for input..." when its file is shown again.
     this.setSessionBusy(pending.session, true, "Running...");
     pending.resolve(line);
   }

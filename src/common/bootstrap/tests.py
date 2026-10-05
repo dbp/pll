@@ -1,12 +1,12 @@
 # Tests: the file's own `test_*` functions and `Test*` classes, collected
-# the way pytest collects them and run one at a time - not `pytest.main()`,
-# which cannot safely be called repeatedly in one interpreter.
+# the way pytest collects them from the namespace the program made, and run
+# one at a time once it has finished - not `pytest.main()`, which cannot
+# safely be called repeatedly in one interpreter. pytest is used only to
+# rewrite assertions (`_pll_rewrite_asserts`, applied by `_pll_run_file`).
 
 import traceback as _tb_mod
 import ast as _ast
 import contextlib
-import sys as _sys
-import types as _pll_types
 import re as _pll_src_re
 
 def _pll_has_tests(code):
@@ -171,9 +171,8 @@ def _pll_call_test(fn, code=""):
             fn()
         return ("passed", None, buf.getvalue().strip() or None, None)
     except KeyboardInterrupt:
-        # A Stop, not something this test did wrong. Recording it as an
-        # error and moving on ran every remaining test - and then the
-        # program - after the student had asked for it all to stop.
+        # A Stop, not something this test did wrong: it ends the tests, so
+        # it is not recorded as this one's error and passed over.
         raise
     except AssertionError as e:
         tb_text = "".join(_tb_mod.format_exception(type(e), e, e.__traceback__))
@@ -227,115 +226,46 @@ def _pll_iter_tests(ns):
             yield name + "::" + meth_name, _bound
 
 
-def _pll_syntax_result(result, error):
-    """Fill in `result` for a syntax error, wherever it was noticed.
-
-    Parsing and compiling both raise `SyntaxError`, and a student cannot
-    tell the two apart - nor should they have to.
+def _pll_rewrite_asserts(tree, code, filename):
+    """Rewrite `tree`'s asserts the way pytest does, so a failure says
+    `assert 4 == 5` rather than nothing. In place; if it fails, the file
+    still runs, with plain `AssertionError`s.
     """
-    result["internal_error"] = True
-    result.update(_pll_error_info(error))
-    return result
-
-
-@_pll_stoppable(_pll_stopped_tests)
-def _pll_run_tests(code, filename, level="raw"):
-    """Run same-file tests (`test_*` / `Test*`) in an isolated namespace.
-
-    Uses pytest only to rewrite assertions so failures show `assert 4 == 5`
-    instead of an empty AssertionError. Does **not** call `pytest.main()`,
-    which is not safe to invoke repeatedly in one Pyodide interpreter.
-    """
-    display_name = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] or "user_script.py"
-    stdout = _PllStream("stdout")
-    stderr = _PllStream("stderr")
-    result = _pll_tests_result()
-    _pll_displays.clear()
-    _pll_apply_level(level)
-    _pll_protect_import_path()
-
-    try:
-        tree = _pll_parse_and_instrument(code, display_name)
-    except SyntaxError as e:
-        return _pll_syntax_result(result, e)
-
-    locs = _pll_test_locations(tree)
     try:
         from _pytest.assertion.rewrite import rewrite_asserts
-        rewrite_asserts(tree, code.encode("utf-8"), module_path=display_name)
-        # Do not call ast.fix_missing_locations here: it copies parent
+
+        rewrite_asserts(tree, code.encode("utf-8"), module_path=filename)
+        # Do not call ast.fix_missing_locations after this: it copies parent
         # positions onto pytest's injected nodes and yields ranges that
         # Python 3.12+ rejects (`end_lineno` < `lineno`).
         _pll_fix_ast_ranges(tree)
     except Exception:
-        # Assert rewriting failed. It mutates the tree as it goes, so what
-        # is compiled below is whatever it managed; a failure then shows an
-        # empty AssertionError, which is worse than nothing but still runs.
+        # It mutates the tree as it goes, so what is compiled is whatever it
+        # managed; a failure then shows an empty AssertionError, which is
+        # worse than nothing but still runs.
         pass
 
-    # Some code parses and does not compile. `case Boa:` is the one that
-    # matters here - "name capture 'Boa' makes remaining patterns
-    # unreachable" - and this is where it surfaces. Before, it escaped
-    # `_pll_run_tests` altogether (the old `except` re-ran the same
-    # `compile`, raising from inside the handler), the CLI exited 64 with a
-    # doubled traceback, and the file never ran at all.
-    try:
-        # Recorded and dropped: the run that follows compiles the same file
-        # and says its warnings once, which is once more than enough.
-        with _pll_recording_compile_warnings():
-            compiled = compile(tree, display_name, "exec")
-    except SyntaxError as e:
-        return _pll_syntax_result(result, e)
-    finally:
-        del _pll_compile_warnings[:]
 
-    # The tests run inside a real module, registered under the name their
-    # classes will report as `__module__`.
-    #
-    # `dataclasses` resolves a *string* annotation - `rest: "NumList"`, the
-    # shape of every recursive data definition - by looking that module up:
-    # `sys.modules.get(cls.__module__).__dict__`. With nothing registered
-    # that is `None.__dict__`, and the whole test phase died with
-    # `AttributeError: 'NoneType' object has no attribute '__dict__'`.
-    #
-    # The module's own `__dict__` is used as the globals, rather than a copy
-    # of them, so a forward reference resolves to the student's class as
-    # soon as they define it.
-    module = _pll_types.ModuleType("__pll_test__")
-    ns = module.__dict__
-    ns.update(_pll_initial_globals)
-    ns["__name__"] = "__pll_test__"
-    ns["__file__"] = display_name
-    _sys.modules["__pll_test__"] = module
+def _pll_tests_result():
+    """The tests' part of a run's result, before any has run."""
+    return {"passed": 0, "failed": 0, "skipped": 0, "errors": 0, "tests": []}
 
-    try:
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            exec(compiled, ns)
-    except KeyboardInterrupt:
-        # Stopped in the file's own top-level code, before any test ran.
-        result["stopped"] = True
-        result["stopped_in"] = None
-        return _pll_with_output(result, stdout, stderr)
-    except BaseException as e:
-        result["internal_error"] = True
-        result.update(_pll_error_info(e, code))
-        return _pll_with_output(result, stdout, stderr)
 
-    rows = []
-    passed = failed = errors = skipped = 0
+def _pll_run_collected_tests(ns, locs, code):
+    """Run the `test_*` functions and `Test*` classes the program defined.
+
+    `ns` is the program's own namespace, so the tests see exactly what it
+    made. A Stop ends them: the tests that finished keep their results, the
+    one running is marked as where it stopped, and the rest are not run.
+    """
+    result = _pll_tests_result()
+    rows = result["tests"]
     current = None
     try:
         for name, fn in _pll_iter_tests(ns):
             current = name
             outcome, message, cap, error = _pll_call_test(fn, code)
-            if outcome == "passed":
-                passed += 1
-            elif outcome == "failed":
-                failed += 1
-            elif outcome == "skipped":
-                skipped += 1
-            else:
-                errors += 1
+            result[{"passed": "passed", "failed": "failed", "skipped": "skipped"}.get(outcome, "errors")] += 1
             rows.append({
                 "name": name,
                 "outcome": outcome,
@@ -346,9 +276,6 @@ def _pll_run_tests(code, filename, level="raw"):
                 "error": error,
             })
     except KeyboardInterrupt:
-        # A Stop ends the whole phase. The tests that finished keep their
-        # results; the one running is marked as where it stopped; the rest
-        # are not run, and the host does not go on to run the program.
         result["stopped"] = True
         result["stopped_in"] = current
         if current is not None:
@@ -360,11 +287,4 @@ def _pll_run_tests(code, filename, level="raw"):
                 "stdout": None,
                 "error": None,
             })
-
-    result["passed"] = passed
-    result["failed"] = failed
-    result["skipped"] = skipped
-    result["errors"] = errors
-    result["tests"] = rows
-    result["ok"] = failed == 0 and errors == 0 and not result.get("stopped")
-    return _pll_with_output(result, stdout, stderr)
+    return result

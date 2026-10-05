@@ -1,6 +1,6 @@
 import { pythonErrorFrom } from "./errors/pythonError";
 import type { DisplayData, RunResult, TestCaseData, TestRunResult } from "./wire";
-import type { ExecutionEventHandler, TestCaseResult } from "./types";
+import type { ExecutionEvent, ExecutionEventHandler, TestCaseResult } from "./types";
 
 /**
  * Translate the Python-side result dict into the host-side stream of
@@ -23,6 +23,7 @@ import type { ExecutionEventHandler, TestCaseResult } from "./types";
  * After draining `displays` we emit, in order:
  *   - `result_repr` (the value of the last REPL expression, if any)
  *   - `error` (if the run raised)
+ *   - `testReport` (if its tests ran, which they do after the program)
  *   - `done`
  */
 export function deliverRunResult(
@@ -41,6 +42,9 @@ export function deliverRunResult(
   const error = result.ok ? null : pythonErrorFrom(result);
   if (error !== null) {
     onEvent({ kind: "error", error, fileName });
+  }
+  if (result.tests) {
+    onEvent(testReportFrom(result.tests, fileName));
   }
   const exitCode = result.exit_code;
   onEvent(typeof exitCode === "number" ? { kind: "done", exitCode } : { kind: "done" });
@@ -115,37 +119,19 @@ function adaptTestCase(row: TestCaseData): TestCaseResult {
   };
 }
 
-/**
- * Translate a `_pll_run_tests` result into events. Failed tests are
- * reported as a `testReport` card, not as a runtime `error` — the file
- * still runs afterwards. Internal pytest/load failures do emit `error`.
- */
-export function deliverTestResult(
+/** The report of a file's tests: a card, never a runtime `error`. */
+function testReportFrom(
   result: TestRunResult,
-  onEvent: ExecutionEventHandler,
   fileName: string,
-): void {
-  const error = result.internal_error ? pythonErrorFrom(result) : null;
-  if (error !== null) {
-    onEvent({ kind: "error", error, fileName });
-    onEvent({ kind: "done" });
-    return;
-  }
-  const tests = Array.isArray(result.tests)
-    ? result.tests.map(adaptTestCase)
-    : [];
-  onEvent({
+): Extract<ExecutionEvent, { kind: "testReport" }> {
+  return {
     kind: "testReport",
     fileName,
     passed: result.passed ?? 0,
     failed: result.failed ?? 0,
     skipped: result.skipped ?? 0,
     errors: result.errors ?? 0,
-    tests,
-    // Carried on the report itself, so both hosts learn the phase was
-    // stopped from the event they already handle - and the CLI, which
-    // drops the test phase's `error` events, cannot miss it.
+    tests: Array.isArray(result.tests) ? result.tests.map(adaptTestCase) : [],
     ...(result.stopped ? { stopped: true, stoppedIn: result.stopped_in ?? null } : {}),
-  });
-  onEvent({ kind: "done" });
+  };
 }

@@ -67,7 +67,7 @@ export function innermostUserFrame(error: PythonError): ErrorFrame | null {
  *
  * The one place a Python dict becomes a `PythonError`, so the one place its
  * gaps are filled: a Python `None` arrives as `undefined`, which passes a
- * `!== null` test, and used to reach a label as `file.py:3:NaN`.
+ * `!== null` test, and would reach a label as `file.py:3:NaN`.
  */
 export function pythonErrorFrom(wire: Partial<WireError> | null | undefined): PythonError | null {
   if (!wire || !wire.error_type) {

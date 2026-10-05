@@ -98,11 +98,11 @@ export interface ExecutionTestReportChunk {
   errors: number;
   tests: TestCaseResult[];
   /**
-   * A Stop ended the test phase. The tests listed ran (the last, if any,
-   * with outcome "stopped"); the rest did not, and neither did the program.
+   * A Stop ended the tests. The tests listed ran (the last, if any, with
+   * outcome "stopped"); the rest did not.
    */
   stopped?: boolean;
-  /** The test that was running when it stopped, or null while loading the file. */
+  /** The test that was running when it stopped, or null if none had started. */
   stoppedIn?: string | null;
 }
 
@@ -144,6 +144,11 @@ export interface RunFileRequest {
    * `raw` (nothing checked).
    */
   level?: Level;
+  /**
+   * Run the file's own tests once the program finishes, against the names
+   * it defined; their report follows its output. pytest must be loaded.
+   */
+  withTests?: boolean;
 }
 
 export interface ReplEvalRequest {
@@ -185,8 +190,6 @@ export interface PythonRuntime {
   hasTests(code: string): Promise<boolean>;
   /** Load the pytest package (no-op if already loaded). Needs network the first time. */
   ensurePytest(): Promise<void>;
-  /** Run pytest against `request.code` as `pytest <fileName>`. Isolated from the REPL session. */
-  runTests(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void>;
   /** Decide whether `code` is a complete REPL input (codeop.compile_command). */
   checkReplComplete(code: string): Promise<ReplCheckResult>;
   /**

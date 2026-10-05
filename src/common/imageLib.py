@@ -92,11 +92,10 @@ def _pll_contract(who):
 def _pll_check_image(value, who, index):
     """One argument of a combining function.
 
-    Checked when the function is called. Before this, `beside(a, "austria")`
-    was built happily and only failed later, inside the rendering code,
-    with "'str' object has no attribute 'width'" - naming neither `beside`
-    nor which argument was wrong, and after the broken picture had already
-    been displayed.
+    Checked when the function is called, so `beside(a, "austria")` fails
+    there, naming `beside` and the argument, rather than later inside the
+    rendering code - after the broken picture has been displayed - with
+    "'str' object has no attribute 'width'".
     """
     if isinstance(value, Image):
         return value
@@ -256,8 +255,8 @@ def _pll_unknown_colour(who, color):
 def _pll_check_mode(mode, who):
     """`solid` or `outline`, and nothing else.
 
-    Same silence as a bad colour: anything unrecognised used to fall
-    through to solid, so a misspelled "outilne" quietly filled the shape.
+    Anything else is an error, as a bad colour is: falling through to solid
+    would quietly fill the shape for a misspelled "outilne".
     """
     if mode not in _PLL_MODES:
         raise ValueError(

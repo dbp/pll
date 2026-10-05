@@ -348,7 +348,7 @@ async function main() {
   {
     // The caret's index in a traceback counts the indent Python adds when
     // it echoes the line, and Python strips the original indent first - so
-    // the column was wrong on every line, by different amounts.
+    // a column read from it is wrong on every line, by different amounts.
     const flat = fixture("flat.py", "print(y)");
     const r1 = await run([flat]);
     expect(/flat\.py:1:7\b/.test(r1.stderr), `print(y) blames column 7: ${r1.stderr}`);
@@ -406,10 +406,8 @@ async function main() {
 
   console.log("\n[17] code that parses but does not compile, in a file with tests");
   {
-    // `case Boa:` parses and fails at compile time. The old handler re-ran
-    // the same `compile` from inside its own `except`, so the failure
-    // escaped the test phase: exit 64, a doubled traceback prefixed
-    // `pll:`, and the file never ran.
+    // `case Boa:` parses and fails at compile time: reported as the
+    // program's syntax error, not as `pll` failing (exit 64).
     const file = fixture(
       "capture.py",
       "#level beginner",
@@ -512,9 +510,8 @@ async function main() {
 
   console.log("\n[19] Ctrl+C during the tests ends the run there");
   {
-    // It used to stop the looping test, run the rest, and then the program
-    // - which often loops as well, so it took a second Ctrl+C, and that one
-    // kills pll rather than stopping it.
+    // One Ctrl+C is enough: the looping test is stopped and the rest are
+    // not run. (A second one kills pll rather than stopping it.)
     const file = fixture(
       "loops.py",
       "def test_ok():",
@@ -540,10 +537,10 @@ async function main() {
     expect(/STOPPED test_forever \(line 5\)/.test(r.stderr), `the looping test is marked: ${r.stderr}`);
     expect(!/test_after/.test(r.stderr), `the test after it must not run: ${r.stderr}`);
     expect(
-      /Stopped during the tests\. The rest of the tests and the program were not run\./.test(r.stderr),
+      /Stopped during the tests\. The rest of the tests were not run\./.test(r.stderr),
       `it should say what did not run: ${r.stderr}`,
     );
-    expect(!/the program/.test(r.stdout), `the program must not run: ${JSON.stringify(r.stdout)}`);
+    expect(r.stdout === "the program\n", `the program ran first, once: ${JSON.stringify(r.stdout)}`);
     expect(!/giving up/.test(r.stderr), `one Ctrl+C should be enough: ${r.stderr}`);
     console.log(`    exit=${r.code}; ${r.stderr.trim().split("\n").at(-1)}`);
   }
@@ -591,8 +588,10 @@ async function main() {
       [["import sys", "sys.exit(256)"], 0],
       [["import os", "os._exit(5)"], 5],
       [["import os", "os.abort()"], 134],
-      // A failure the program reports outranks the tests'.
-      [["def test_a():", "    assert 1 == 2", "", "import sys", "sys.exit(4)"], 4],
+      // Its tests are not run once it has ended itself, and it says so.
+      [["def test_a():", "    assert 1 == 2", "", "import sys", "sys.exit(4)"], 4, /tests were not run: the program ended itself first/],
+      [["def test_a():", "    assert 1 == 2", "", "import sys", "sys.exit(0)"], 0, /tests were not run/],
+      [["def test_a():", "    assert 1 == 2"], 3],
       [['print("finished")'], 0],
     ];
     const seen = [];

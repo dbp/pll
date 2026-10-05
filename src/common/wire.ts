@@ -47,6 +47,8 @@ export interface RunResult extends WireError {
   displays: DisplayData[];
   /** The status the program ended itself with (`sys.exit(3)`), if it did. */
   exit_code?: number | null;
+  /** Its tests, when they were asked for and the program finished. */
+  tests?: TestRunResult | null;
 }
 
 export type DisplayData =
@@ -228,20 +230,16 @@ export interface TestCaseData {
   error: WireError | null;
 }
 
-export interface TestRunResult extends WireError {
-  ok: boolean;
-  internal_error: boolean;
+/** How a file's tests went, run after its program finished. */
+export interface TestRunResult {
   passed: number;
   failed: number;
   skipped: number;
   errors: number;
   tests: TestCaseData[];
-  stdout: string;
-  stderr: string;
-  displays: DisplayData[];
-  /** A Stop ended the phase: the remaining tests, and the program, did not run. */
+  /** A Stop ended them: the remaining tests did not run. */
   stopped?: boolean;
-  /** The test running when it stopped, or null if the file was still loading. */
+  /** The test running when it stopped, or null if none had started. */
   stopped_in?: string | null;
 }
 
@@ -261,7 +259,7 @@ interface InScope {
   scope_kind: string;
 }
 
-/** The mistakes that used to run in silence: a value thrown away, and the like. */
+/** The mistakes that would otherwise run in silence: a value thrown away, and the like. */
 export type SilenceFindingId =
   | "unused-comparison"
   | "unused-value"

@@ -22,11 +22,10 @@
  *
  * The host calls these entry points, each returning JSON-friendly data:
  *
- *   _pll_run_file(code, filename, session_key, level)       running.py
+ *   _pll_run_file(code, filename, session_key, level, run_tests)  running.py
  *   _pll_repl_eval(code, session_key, level)                running.py
  *   _pll_repl_check(source)                                 running.py
  *   _pll_has_tests(code)                                    tests.py
- *   _pll_run_tests(code, filename, level)                   tests.py
  *   _pll_static_analyze(code, level, filename, session_key) staticAnalysis.py
  */
 

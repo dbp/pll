@@ -213,8 +213,8 @@ console.log("\n[5] live displays stream during runFile, and only during a run");
 
 console.log("\n[5b] a reactor step streams its handlers' output too");
 {
-  // A handler's `print` used to reach nobody: the runtime only listened for
-  // live output during a file run.
+  // Live output is listened for during a reactor step, not only during a
+  // file run, or a handler's `print` would reach nobody.
   const h = makeRuntime(
     autoInit((msg, hs) => {
       if (msg.type === "reactorStep") {
@@ -415,8 +415,8 @@ console.log("\n[12] the worker tries pytest again after a failed load");
 
 console.log("\n[13] a worker that dies is replaced by the next request");
 {
-  // It was kept: the run in flight failed, and every later request was
-  // posted to a worker that was no longer there, and waited forever.
+  // Kept, every later request would be posted to a worker that is no
+  // longer there, and wait forever.
   let inits = 0;
   const h = makeRuntime((msg, hs) => {
     if (msg.type === "init") {

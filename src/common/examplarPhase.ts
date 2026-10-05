@@ -114,10 +114,12 @@ export interface ExamplarHost {
  * verdict. Nothing is said about its absence, because early on absence is
  * the normal state.
  *
- * The workspace is **unmounted** while the implementations run. A bundle
+ * The implementations run with **no files** in the work directory. A bundle
  * is code fetched from a URL, and although a course is trusted there is no
  * reason for it to be able to read - or rewrite - the student's data files.
- * `mountWorkspaceFiles([])` is the unmount; the caller mounts them again.
+ * The run plan mounts them only after this step, and the directory is
+ * emptied here first (`mountWorkspaceFiles([])`), since it can still hold
+ * the last run's; if that fails, the check is not run.
  */
 export async function runExamplarStep(
   runtime: PythonRuntime,
@@ -132,8 +134,16 @@ export async function runExamplarStep(
   host.status("Checking your tests...");
   try {
     await runtime.mountWorkspaceFiles([]);
-  } catch {
-    /* nothing mounted is the state we wanted anyway */
+  } catch (err) {
+    if (!host.stopRequested()) {
+      host.examplarCard(
+        failedCard(
+          bundle,
+          `the known implementations were not run: your files could not be set aside first (${errorText(err)})`,
+        ),
+      );
+    }
+    return false;
   }
   // Not for the messages - the card deliberately shows none - but because
   // a student's own tests may `import pytest` for `pytest.approx`, which

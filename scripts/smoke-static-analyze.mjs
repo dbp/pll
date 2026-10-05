@@ -451,8 +451,8 @@ _g = _pll_get_session("smoke-lib")
   );
   {
     // `id: int` in a dataclass declares a field. `id` everywhere else still
-    // finds the built-in, so there is nothing shadowed - but it was being
-    // reported, telling students to rename a perfectly good field.
+    // finds the built-in, so there is nothing shadowed, and a finding would
+    // tell students to rename a perfectly good field.
     const fields = analyze(
       [
         "from dataclasses import dataclass",
@@ -597,7 +597,7 @@ _g = _pll_get_session("smoke-lib")
     console.log("    none of them at #level raw");
   }
 
-  console.log("\n[18] advice that used to point the wrong way");
+  console.log("\n[18] advice that points the right way");
   {
     // A duplicated `def` is not a reassigned variable: the Reassignment
     // advice is about accumulators and running totals, and the fix here is
@@ -707,9 +707,9 @@ _g = _pll_get_session("smoke-lib")
 
   console.log("\n[19] each finding carries what its explanation reads, and nothing false");
   {
-    // `scope_kind` only from the checks that walk scopes, which know it: it
-    // used to be a constant on the others, "function" even for a `global`
-    // at the top of a file.
+    // `scope_kind` only from the checks that walk scopes, which know it; a
+    // constant on the others would say "function" even for a `global` at
+    // the top of a file.
     const IN_SCOPE = new Set([
       "shadowing", "shadowing-builtin", "shadowing-library", "reassignment", "duplicate-definition",
     ]);

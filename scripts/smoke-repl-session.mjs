@@ -269,8 +269,10 @@ function makeDiagnostics() {
 /**
  * Scriptable runtime. `script.events(kind, request)` returns the events a
  * run should emit; `script.findings` is what staticAnalyze returns. A
- * function under a method's own name (`script.runTests`, say) replaces that
- * method, for a test that has to hold one step of a run open.
+ * function under a method's own name (`script.ensurePytest`, say) replaces
+ * that method, for a test that has to hold one step of a run open.
+ * `script.runTests` emits a run's test report: as in Python, the tests run
+ * inside `runFile`, after the program, and only if it did not raise.
  */
 function makeRuntime(script = {}) {
   const calls = [];
@@ -319,10 +321,35 @@ function makeRuntime(script = {}) {
     },
     async runFile(request, onEvent) {
       calls.push(["runFile", request.code, request.sessionKey]);
+      let raised = false;
+      let tested = false;
+      // Recorded as a call of its own, so a test can ask whether they ran.
+      const tests = async () => {
+        tested = true;
+        if (!request.withTests || raised) return;
+        calls.push(["runTests", request.fileName]);
+        const report = (event) => event.kind !== "done" && onEvent(event);
+        if (script.runTests) return script.runTests(request, report);
+        report({
+          kind: "testReport",
+          fileName: request.fileName,
+          passed: 1,
+          failed: 0,
+          skipped: 0,
+          errors: 0,
+          tests: [{ name: "test_ok", outcome: "passed", lineNumber: 2, message: null, stdout: null }],
+        });
+      };
       for (const event of (script.events?.("runFile", request) ?? [])) {
-        if (typeof event === "function") await event(onEvent);
-        else onEvent(event);
+        if (typeof event === "function") {
+          await event(onEvent);
+          continue;
+        }
+        if (event.kind === "error") raised = true;
+        if (event.kind === "done") await tests();
+        onEvent(event);
       }
+      if (!tested) await tests();
     },
     async replEval(request, onEvent) {
       calls.push(["replEval", request.code, request.sessionKey]);
@@ -351,20 +378,6 @@ function makeRuntime(script = {}) {
       calls.push(["ensurePytest"]);
       if (script.ensurePytest) return script.ensurePytest();
       if (script.pytestFails) throw new Error("no pytest wheel");
-    },
-    async runTests(request, onEvent) {
-      calls.push(["runTests", request.fileName]);
-      if (script.runTests) return script.runTests(request, onEvent);
-      onEvent({
-        kind: "testReport",
-        fileName: request.fileName,
-        passed: 1,
-        failed: 0,
-        skipped: 0,
-        errors: 0,
-        tests: [{ name: "test_ok", outcome: "passed", lineNumber: 2, message: null, stdout: null }],
-      });
-      onEvent({ kind: "done" });
     },
     async ensurePackages(code) {
       calls.push(["ensurePackages", code]);
@@ -739,13 +752,11 @@ console.log("\n[8] a runtime NameError becomes a friendly finding");
 
 console.log("\n[9] an error with no analyzer of its own is still a finding");
 {
-  // It used to fall through to the raw traceback, which in PLL means
-  // frames from PLL's own machinery (`File "<exec>", line 560, in table`)
-  // and, for pandas, dozens of lines from inside pandas. The message a
-  // student needs is the last line; a traceback through the implementation
-  // only buries it.
-  // Deliberately an error no analyzer claims: every rewording task adds
-  // rules, and this test is about what happens to whatever is left over.
+  // A raw traceback in PLL means frames from PLL's own machinery (`File
+  // "<exec>", line 560, in table`) and, for pandas, dozens of lines from
+  // inside pandas, burying the last line - the message a student needs.
+  // Deliberately an error no analyzer claims: this test is about what
+  // happens to whatever no rule rewords.
   const code = "x = 1\nprint(x / 0)\n";
   const doc = makeDoc("boom.py", code);
   const { repl, view } = await harness(
@@ -787,7 +798,7 @@ console.log("\n[9] an error with no analyzer of its own is still a finding");
   repl.dispose();
 }
 
-console.log("\n[10] tests run before the file, and their report is shown");
+console.log("\n[10] tests run after the program, in the same run, and their report is shown");
 {
   const code = "def add(a, b):\n    return a + b\n\ndef test_add():\n    assert add(1, 2) == 3\n";
   const doc = makeDoc("tests.py", code);
@@ -796,7 +807,7 @@ console.log("\n[10] tests run before the file, and their report is shown");
   await settle();
   const order = runtime.calls.map((c) => c[0]).filter((c) => c === "runTests" || c === "runFile");
   console.log(`    order: ${order.join(" -> ")}`);
-  expect(order.join(",") === "runTests,runFile", "tests should run before the file");
+  expect(order.join(",") === "runFile,runTests", `the file runs once, and its tests after: ${order.join(",")}`);
   expect(
     runtime.calls.some((c) => c[0] === "ensurePytest"),
     "pytest should be loaded when the file has tests",
@@ -1548,8 +1559,8 @@ console.log("\n[37] the workspace is unmounted while the known implementations r
   console.log(`    ${seq.join(" -> ")}`);
   const at = seq.indexOf("examplarRun");
   expect(at > 0, `examplarRun should have happened, got ${seq.join(",")}`);
-  expect(seq[at - 1] === "mount(-)", `the mount before it must be empty, got ${seq[at - 1]}`);
-  expect(seq[at + 1] === "mount(data.csv)", `siblings must be restored after, got ${seq[at + 1]}`);
+  expect(seq.slice(0, at).every((m) => m === "mount(-)"), `nothing is mounted before it: ${seq.join(",")}`);
+  expect(seq[at + 1] === "mount(data.csv)", `the files are mounted after it: ${seq[at + 1]}`);
   files.clear();
   repl.dispose();
 }
@@ -1933,10 +1944,8 @@ const stoppedReport = (fileName) => ({
   ],
 });
 
-console.log("\n[47] a Stop during the tests ends the run, so the program does not start");
+console.log("\n[47] a Stop during the tests ends them");
 {
-  // The bug: the Stop ended the looping test, the remaining tests ran, and
-  // then the program ran - after the student had asked for it all to stop.
   const gate = makeGate();
   let stopTests = true;
   const doc = makeDoc("loops.py", LOOPING_TESTS);
@@ -1958,22 +1967,20 @@ console.log("\n[47] a Stop during the tests ends the run, so the program does no
   );
   const run = repl.runFile(LOOPING_TESTS, "loops.py", doc);
   await settle();
-  expect(view.status === "Running tests...", `the tests should be running, status ${view.status}`);
+  expect(called(runtime, "runTests"), `the tests should be running: ${view.status}`);
   view.handlers.onInterrupt();
   await settle();
   expect(called(runtime, "interrupt"), "the Stop should reach the runtime");
   gate.open();
   await run;
   await settle();
-  expect(!called(runtime, "runFile"), "the program must not run after a stopped test phase");
   const report = view.entries.find((e) => e.kind === "testReport");
   expect(
     report?.stopped === true && report?.stoppedIn === "test_forever",
     `the report should say where it stopped: ${JSON.stringify(report)}`,
   );
   expect(
-    bannerTexts(view).join("|") ===
-      "Stopped during the tests. The rest of the tests and the program were not run.",
+    bannerTexts(view).join("|") === "Stopped during the tests. The rest of the tests were not run.",
     `one banner, saying what did not run: ${JSON.stringify(bannerTexts(view))}`,
   );
   expect(view.busy === false, "and the session is free again");
@@ -1983,12 +1990,12 @@ console.log("\n[47] a Stop during the tests ends the run, so the program does no
   stopTests = false;
   await repl.runFile(LOOPING_TESTS, "loops.py", doc);
   await settle();
-  expect(called(runtime, "runFile"), "the next run should go on to the program");
+  expect(runtime.calls.filter((c) => c[0] === "runTests").length === 2, "the next run runs its tests");
   expect(bannerTexts(view).length === 0, `and say nothing about stopping: ${JSON.stringify(bannerTexts(view))}`);
   repl.dispose();
 }
 
-console.log("\n[48] a Stop as the last test finishes still keeps the program from starting");
+console.log("\n[48] a Stop that arrives as the last test finishes stops nothing");
 {
   const gate = makeGate();
   const doc = makeDoc("loops.py", LOOPING_TESTS);
@@ -2011,17 +2018,13 @@ console.log("\n[48] a Stop as the last test finishes still keeps the program fro
   gate.open();
   await run;
   await settle();
-  expect(!called(runtime, "runFile"), "the program must not run");
-  // Not "during the tests": every one of them ran, and the card says so.
-  expect(
-    bannerTexts(view).join("|") === "Stopped after the tests. The program was not run.",
-    `banners: ${JSON.stringify(bannerTexts(view))}`,
-  );
-  console.log(`    ${bannerTexts(view)[0]}`);
+  // Every test ran, and the card says so: there was nothing left to stop.
+  expect(bannerTexts(view).length === 0, `banners: ${JSON.stringify(bannerTexts(view))}`);
+  expect(view.entries.some((e) => e.kind === "testReport" && e.passed === 2), "the report is shown");
   repl.dispose();
 }
 
-console.log("\n[49] a Stop while pytest loads means no tests and no program");
+console.log("\n[49] a Stop while pytest loads means no program, and so no tests");
 {
   // Loading pytest takes seconds the first time, and runs nothing of the
   // student's, so a Stop then reaches no running Python at all.
@@ -2038,11 +2041,9 @@ console.log("\n[49] a Stop while pytest loads means no tests and no program");
   gate.open();
   await run;
   await settle();
-  expect(!called(runtime, "runTests"), "the tests must not start");
-  expect(!called(runtime, "runFile"), "nor the program");
+  expect(!called(runtime, "runFile"), "the program must not start");
   expect(
-    bannerTexts(view).join("|") ===
-      "Stopped before the tests started. The tests and the program were not run.",
+    bannerTexts(view).join("|") === "Stopped before the program started. Nothing was run.",
     `banners: ${JSON.stringify(bannerTexts(view))}`,
   );
   console.log(`    ${bannerTexts(view)[0]}`);
@@ -2069,7 +2070,7 @@ console.log("\n[49] a Stop while pytest loads means no tests and no program");
   expect(!called(second.runtime, "runFile"), "the program must not run");
   expect(complaints(second.view).length === 0, `a Stop is not a failure: ${JSON.stringify(complaints(second.view))}`);
   expect(
-    bannerTexts(second.view).join("|") === "Stopped before the program started.",
+    bannerTexts(second.view).join("|") === "Stopped before the program started. Nothing was run.",
     `banners: ${JSON.stringify(bannerTexts(second.view))}`,
   );
   console.log(`    and when the Stop broke the load: ${bannerTexts(second.view)[0]}`);
@@ -2107,10 +2108,10 @@ console.log("\n[50] a Stop during the Examplar check: no tests, no program, no f
       "Stopped while checking your tests. Your own tests and the program were not run.",
     `banners: ${JSON.stringify(bannerTexts(view))}`,
   );
-  // The check unmounts the student's files, and they must come back even
-  // though the run ends here.
-  const mounts = runtime.calls.filter((c) => c[0] === "mountWorkspaceFiles");
-  expect(mounts.length >= 3, `the workspace should be mounted again after the check: ${JSON.stringify(mounts)}`);
+  // The student's files are mounted only after the check, which this run
+  // never reached.
+  const mounts = runtime.calls.filter((c) => c[0] === "mountWorkspaceFiles").map((c) => c[1]);
+  expect(mounts.join("|") === "", `only the emptying before the check: ${JSON.stringify(mounts)}`);
   console.log(`    ${bannerTexts(view).at(-1)}`);
 
   // Pressed while pytest loaded for the check: the check does not start.
@@ -2297,8 +2298,8 @@ console.log("\n[54] after going back, Play plays again - even once stop_when has
 
 console.log("\n[55] an error in a reactor's handler is a finding, like any other");
 {
-  // It used to be shown as Python's raw traceback, through PLL's own
-  // frames - the one runtime error that never got PLL's wording.
+  // Explained like any other runtime error, not shown as Python's raw
+  // traceback through PLL's own frames.
   const code = "def tick(n: int) -> int:\n    return n + undefined_step\n\nanimate(draw)\n";
   const doc = makeDoc("anim.py", code);
   const { repl, view } = await harness(
@@ -2387,11 +2388,8 @@ console.log("\n[56] a test's error is explained in the card, as the run's would 
   repl.dispose();
 }
 
-console.log("\n[57] a top-level error in a file with tests is reported once");
+console.log("\n[57] a top-level error in a file with tests: the error, and why the tests did not run");
 {
-  // The test phase loads the file to find its tests, so it meets the error
-  // first; the program then raises it again. The editor showed both, while
-  // the command line - which had its own copy of the run - showed one.
   const code = "x = 1 / 0\n\ndef test_a():\n    assert True\n";
   const doc = makeDoc("top.py", code);
   const failure = errorEvent({
@@ -2404,10 +2402,6 @@ console.log("\n[57] a top-level error in a file with tests is reported once");
   const { repl, view } = await harness(
     {
       events: (kind) => (kind === "runFile" ? [failure, { kind: "done" }] : [{ kind: "done" }]),
-      runTests: async (_request, onEvent) => {
-        onEvent(failure);
-        onEvent({ kind: "done" });
-      },
     },
     doc,
   );
@@ -2415,6 +2409,11 @@ console.log("\n[57] a top-level error in a file with tests is reported once");
   await settle();
   const findings = view.entries.filter((e) => e.kind === "finding");
   expect(findings.length === 1, `one finding, from the program: ${findings.length}`);
+  expect(!view.entries.some((e) => e.kind === "testReport"), "no tests ran");
+  expect(
+    bannerTexts(view).join("|") === "The tests were not run, because of the error above.",
+    `and it says so: ${JSON.stringify(bannerTexts(view))}`,
+  );
   console.log(`    ${findings.length} finding: ${findings[0]?.finding.headline}`);
   repl.dispose();
 }
@@ -2461,8 +2460,9 @@ console.log("\n[59] what a reactor's handler prints is shown, like the program's
 
 console.log("\n[60] PLL: Clear Interactions clears the session, not just the panel");
 {
-  // It cleared only the view: the session kept its entries, so they came
-  // back the next time it was shown, and a reactor ticked on with no card.
+  // Clearing only the view would leave the session its entries, which
+  // would come back the next time it is shown, and a reactor ticking with
+  // no card.
   const { repl, view, runtime, doc, diagnostics } = await harness(countingReactor());
   await repl.runFile("animate(...)", "hello.py", doc);
   await settle();
@@ -2725,6 +2725,58 @@ console.log("\n[68] when Python stops completely, every file that ran is told");
   await repl.runFile("x = 1\n", "one.py", one);
   await settle();
   expect(texts(view, "stdout").includes("ran"), `the next run runs: ${JSON.stringify(texts(view, "stdout"))}`);
+  repl.dispose();
+}
+
+console.log("\n[69] a Stop during the program says its tests were not run");
+{
+  const gate = makeGate();
+  const doc = makeDoc("loops.py", LOOPING_TESTS);
+  const { repl, view, runtime } = await harness(
+    {
+      events: (kind) =>
+        kind === "runFile"
+          ? [
+              async () => gate.promise,
+              errorEvent({ type: "KeyboardInterrupt", message: "", file: "loops.py", line: 1, frames: [["loops.py", 1]] }),
+              { kind: "done" },
+            ]
+          : [],
+    },
+    doc,
+  );
+  const run = repl.runFile(LOOPING_TESTS, "loops.py", doc);
+  await settle();
+  view.handlers.onInterrupt();
+  gate.open();
+  await run;
+  await settle();
+  expect(!called(runtime, "runTests"), "no test runs after a stopped program");
+  expect(
+    bannerTexts(view).at(-1) === "Stopped. The tests were not run.",
+    `banners: ${JSON.stringify(bannerTexts(view))}`,
+  );
+  repl.dispose();
+}
+
+console.log("\n[70] the Examplar check is not run if the student's files cannot be set aside");
+{
+  let clears = 0;
+  const { repl, view, runtime, doc } = await harness(
+    withBundle({
+      examplarResult: examplarReply(),
+      mountWorkspaceFiles: async (sent) => {
+        if (sent.length === 0 && (clears += 1) === 1) throw new Error("busy");
+      },
+    }),
+  );
+  await repl.runFile(EX_SRC, "hw.py", doc);
+  await settle();
+  expect(!called(runtime, "examplarRun"), "the known implementations never run beside the files");
+  const card = view.entries.find((e) => e.kind === "examplar" && e.card === "failed");
+  expect(/were not run: your files could not be set aside first \(busy\)/.test(card?.problem ?? ""),
+    `the card says why: ${card?.problem}`);
+  expect(called(runtime, "runFile"), "the program still runs");
   repl.dispose();
 }
 

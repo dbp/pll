@@ -1,4 +1,4 @@
-import { deliverDisplay, deliverRunResult, deliverTestResult } from "./deliverResult";
+import { deliverDisplay, deliverRunResult } from "./deliverResult";
 import type {
   ExamplarBuildResult,
   ExamplarRunResult,
@@ -158,20 +158,6 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     await this.request({ type: "loadPytest" }, "pytestReady");
   }
 
-  async runTests(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void> {
-    await this.initialize();
-    const { result } = await this.request(
-      {
-        type: "runTests",
-        code: request.code,
-        fileName: request.fileName,
-        level: request.level,
-      },
-      "testResult",
-    );
-    deliverTestResult(result, onEvent, request.fileName);
-  }
-
   async staticAnalyze(request: StaticAnalyzeRequest): Promise<RawStaticFinding[]> {
     await this.initialize();
     const { result } = await this.request({ type: "staticAnalyze", ...request }, "static");
@@ -317,8 +303,7 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
       return;
     }
     if (msg.type === "packageNote") {
-      // With no one to say it to, the host's own log - where the worker
-      // used to print it - rather than nowhere.
+      // With no one to say it to, the host's own log rather than nowhere.
       if (this.packageNoteHandler) this.packageNoteHandler(msg.text, msg.failed);
       else console.error(msg.text);
       return;

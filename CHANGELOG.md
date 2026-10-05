@@ -5,8 +5,8 @@
 ### Added
 - **The command line runs the Examplar check.** A file with an `#examplar`
   line gets the same cards on `pll hw.py` as in the editor - the same lines,
-  naming tests and buggy implementations by name and id only - before its
-  own tests and the program. Bundles are cached on disk, so an offline run
+  naming tests and buggy implementations by name and id only - before the
+  program and its own tests. Bundles are cached on disk, so an offline run
   still gets its verdict, and the verdict does not change the exit code.
 
 - **The command line takes options in the usual forms**: `--save-images=out`,
@@ -14,6 +14,14 @@
   build` takes `--out` as well as `-o`.
 
 ### Changed
+- **A file runs once, and its tests run after it.** The tests see what the
+  program defined, and their card comes after what it printed. Before, the
+  file was run once to find its tests and again as the program, so
+  everything at the top of the file happened twice, the first time unseen:
+  `input()` read a line meant for the program (on the command line) or
+  failed so that the tests silently did not run (in the editor), and a file
+  opened for appending got two lines. A program that raises, is stopped or
+  calls `sys.exit()` now leaves its tests unrun, and PLL says so.
 - **An error a test raised reads like any other error.** It goes through the
   same explanations as an error the program raises, so a `NameError` inside
   a test gets PLL's wording too, where before only a few kinds did. The test card and the command line show it the way a
@@ -105,6 +113,9 @@
   a package that fails to load.
 - **A dict's key is quoted the way its value is** in a type message: `the
   value for key "a" is the string "1"`, not `key 'a'`.
+- **The Examplar check is not run if your files cannot be set aside first.**
+  The known implementations run without access to the student's files; if
+  emptying the work directory failed, they ran with the files there.
 - **An empty `pll.pyodideIndexUrl` means the default** in the web version,
   rather than a Python that cannot start. The setting's description no
   longer asks for a trailing slash, which was never needed, and says it

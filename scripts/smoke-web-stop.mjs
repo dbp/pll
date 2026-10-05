@@ -8,10 +8,10 @@
  *   5. The program ends with KeyboardInterrupt
  *
  * This is the only test that covers the click itself. The mechanism is
- * proved by `smoke-interrupt`, but the bug this guards against was not the
- * mechanism: a loop that prints used to flood the extension host with live
- * output faster than it could drain, so the Stop was never processed. That
- * failure only shows up with a real webview and a real extension host.
+ * proved by `smoke-interrupt`; what this guards against is a loop that
+ * prints flooding the extension host with live output faster than it can
+ * drain, so that the Stop is never processed - which only shows up with a
+ * real webview and a real extension host.
  *
  *   node scripts/smoke-web-stop.mjs                          # starts a server
  *   VSCODE_WEB_URL=http://localhost:3000 node scripts/...    # reuse a server

@@ -971,9 +971,9 @@ const conditionNotFunction: Rule = {
 /**
  * `'<' not supported between instances of 'str' and 'int'`
  *
- * The advice has to come from the types in hand. A fixed example
- * (`int("999")`, `str(1000)`) was shown whatever the program compared, and
- * the line about CSV columns appeared in files with no table in them.
+ * The advice has to come from the types in hand: a fixed example such as
+ * `int("999")` would fit only some of the comparisons it is shown for, and
+ * the line about CSV columns only belongs where there is a table.
  */
 const comparisonMismatch: Rule = {
   types: ["TypeError"],
@@ -1031,8 +1031,8 @@ function readsData(source: string): boolean {
  *
  * Where the text came from decides what to say about it. A CSV's blank
  * cell, `input()` with nothing typed, and a word typed for a number are
- * different mistakes, and the bullet about CSV cells used to appear in
- * programs that only read `input()`.
+ * different mistakes, so the bullet about CSV cells is only for a program
+ * that reads a CSV.
  */
 const badIntLiteral: Rule = {
   types: ["ValueError"],
@@ -1320,7 +1320,7 @@ const pandasKeyError: Rule = {
   explain: (_m, ctx, message) => {
     // A frame inside the installed library, not merely the word "pandas":
     // `samples/pandas.py` is a real file in this repo, and a plain dict
-    // `KeyError` in it was being reported as a missing DataFrame column.
+    // `KeyError` in it is not a missing DataFrame column.
     const insidePandas = ctx.frames.some((frame) =>
       /[/\\]pandas[/\\]core[/\\]|site-packages[/\\]pandas/.test(frame.fileName),
     );

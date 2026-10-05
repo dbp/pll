@@ -34,9 +34,7 @@ export interface PyProxy {
  * install step, type checking and the work directory, in that order.
  *
  * The worker starts this way, and so do the tests that drive Python
- * directly - each of which used to load the files in an order of its own,
- * with its own copy of the install step, so what they tested could differ
- * from what a student's program runs in.
+ * directly, so what they test is what a student's program runs in.
  */
 export function installPll(
   instance: PyodideCore,

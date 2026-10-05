@@ -112,8 +112,8 @@ async function readWheats(dir: string): Promise<Record<string, string>> {
  *
  * The directory *is* the statement of which function a chaff breaks, and a
  * student's report is per function, so a loose `.py` directly under
- * `chaffs/` has nowhere to go. That was the layout before, so say what
- * changed rather than just that the folder is empty.
+ * `chaffs/` has nowhere to go - and the error says where it does go,
+ * rather than just that the folder is empty.
  */
 async function readChaffs(dir: string): Promise<Record<string, Record<string, string>>> {
   const folder = path.join(dir, "chaffs");

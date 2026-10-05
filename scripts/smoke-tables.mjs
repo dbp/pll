@@ -388,8 +388,8 @@ table(["i"], [[i] for i in range(500)])
     // Conversion is one explicit step.
     expect(lines[3] === "[29.0, 33.0, 18.0]", `transform_column: ${lines[3]}`);
     expect(lines[4].startsWith("26.66"), `mean after converting: ${lines[4]}`);
-    // And charting text says what to do about it, since this is now the
-    // normal way to meet that error.
+    // And charting text says what to do about it, since loading a CSV is
+    // the usual way to meet that error.
     expect(lines[5] === "hint: True", `the error should suggest the fix: ${lines[5]}`);
     expect(lines[6] === "True", "a table equals one loaded from the same file");
     expect(lines[7] === "False", "and not a different table");
@@ -438,8 +438,7 @@ table(["i"], [[i] for i in range(500)])
     ].join("\n");
 
     for (const [label, code, kind, needle] of [
-      // Building a table. "Row 1" used to mean the second row, and the row
-      // itself was never shown.
+      // Building a table: the row is counted from 1st, not from 0, and shown.
       [
         "short row",
         'table(["month", "riders"], [["Jan", 1121], ["Feb"]])',
@@ -452,7 +451,7 @@ table(["i"], [[i] for i in range(500)])
         "ValueError",
         'the 1st row, ["Jan", 1121, 9], has 3 values',
       ],
-      // One string is iterable, so these used to come apart into letters.
+      // One string is iterable, so these must not come apart into letters.
       [
         "column names as one string",
         'table("month, riders", [["Jan", 1121]])',
@@ -503,7 +502,7 @@ table(["i"], [[i] for i in range(500)])
         "TypeError",
         "no brackets after it - `int`, not `int()`",
       ],
-      // Options that used to be ignored.
+      // Options given the wrong kind of value are refused, not ignored.
       [
         "ascending as a string",
         `${T}t.order_by("riders", ascending="False")`,

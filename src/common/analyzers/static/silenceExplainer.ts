@@ -179,8 +179,8 @@ export function explainFieldNoType(
     headline: `The field \`${name}\` has no type, so it is not a field at all.`,
     howToFix: [
       `Every field of a dataclass needs a type: \`${name}: int\`, \`${name}: str\`, and so on.`,
-      // The NameError this used to lead to is no longer reached - this is
-      // reported before the program runs - so it is not mentioned.
+      // Not the NameError it would lead to: this is reported before the
+      // program runs, so that error is never reached.
       `On a line of its own, \`${name}\` only uses the name; it does not declare anything.`,
     ],
   });

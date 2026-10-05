@@ -28,12 +28,6 @@ export interface ViewOptions {
 const ESC = String.fromCharCode(27);
 
 export class CliView {
-  /** True once the program raised, so the exit code can reflect it. */
-  public sawError = false;
-  /** Failing + erroring tests across all reports. */
-  public testFailures = 0;
-  /** What the program ended itself with (`sys.exit(n)`), if it did. */
-  public exitCode: number | null = null;
   private imageCount = 0;
 
   constructor(private readonly opts: ViewOptions) {}
@@ -84,7 +78,6 @@ export class CliView {
 
   /** A friendly finding for a runtime error, in place of the traceback. */
   runtimeFinding(finding: AnalysisFinding): void {
-    this.sawError = true;
     const lines = formatFriendlyError(finding);
     this.problem(this.red(lines[0]));
     for (const line of lines.slice(1)) {
@@ -126,13 +119,11 @@ export class CliView {
         this.testReport(event);
         break;
       case "error":
-        // `runFile` turns every error into a finding before it gets here;
-        // this is only for a caller that does not.
-        this.sawError = true;
+        // A run explains every error first, through `runtimeFinding`; this
+        // shows one that reached the view unexplained.
         this.problem(this.red(`${event.error.errorType}: ${event.error.message}`));
         break;
       case "done":
-        if (event.exitCode !== undefined) this.exitCode = event.exitCode;
         break;
     }
   }
@@ -178,7 +169,6 @@ export class CliView {
 
   private testReport(event: Extract<ExecutionEvent, { kind: "testReport" }>): void {
     const bad = event.failed + event.errors;
-    this.testFailures += bad;
     const summary =
       `${event.passed} passed` +
       (event.failed ? `, ${event.failed} failed` : "") +

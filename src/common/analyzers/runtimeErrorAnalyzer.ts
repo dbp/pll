@@ -6,18 +6,12 @@ import { runtimeFindingFor, type AnalysisFinding, type RuntimeAnalyzerInput } fr
 /**
  * The last resort: turn *any* runtime error into a finding.
  *
- * Before this, only the errors with their own analyzer became findings and
- * everything else was shown as Python's raw traceback - which in PLL means
- * frames from PLL's own machinery (`File "<exec>", line 560, in table`,
- * `in _require_column`) and, for pandas, dozens of lines from inside
- * pandas. The message a student needed was usually the last line, already
- * perfectly clear (`No column named 'rider' (have: month, riders)`), just
- * buried under the implementation.
- *
- * So this says nothing new. It locates the error in the student's own code
- * and puts the message where they will read it. Analyzers that know an
- * error well run first and still win; tasks after this one give individual
- * messages better wording.
+ * It says nothing new. It locates the error in the student's own code and
+ * puts Python's message where they will read it, rather than leaving it at
+ * the end of a traceback through PLL's machinery (`File "<exec>", line
+ * 560, in table`) or dozens of lines of pandas - the message a student
+ * needs is usually already clear (`No column named 'rider' (have: month,
+ * riders)`). Analyzers that know an error well run first and win.
  */
 export function analyzeRuntimeError(input: RuntimeAnalyzerInput): AnalysisFinding {
   const { error, fileName } = input;

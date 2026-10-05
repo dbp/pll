@@ -4,8 +4,8 @@
 
 /**
  * Plain-language words for the types a beginner course uses, without an
- * article. One table for every explanation: there were two, and each had
- * types the other did not.
+ * article. The one table every explanation uses, so no two of them can name
+ * a type differently.
  */
 const TYPE_WORDS: Record<string, string> = {
   int: "whole number",

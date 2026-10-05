@@ -68,8 +68,7 @@ program stops with a `KeyboardInterrupt`, and anything it printed first is
 kept.
 
 Stop works the same way while your tests run. The test that was running is
-marked as stopped, and nothing after it runs - not the rest of the tests,
-and not the program.
+marked as stopped, and the rest of the tests do not run.
 
 This works for ordinary Python code. If your program is stuck inside a
 library (a very long `pandas` operation, for example), or if it catches
@@ -167,10 +166,12 @@ def test_add():
     assert add(2, 3) == 5
 ```
 
-When you click **PLL: Run Python File**, PLL runs the tests first and
-shows a pass/fail card in the interactions panel. If a test fails, you
-can click it to jump to that test. After the tests, PLL still runs the
-rest of the file so you can use your functions at the prompt.
+When you click **PLL: Run Python File**, PLL runs your file, and then its
+tests, and shows a pass/fail card in the interactions panel after what the
+program printed. The tests see everything the file defined. If a test
+fails, you can click it to jump to that test. If the program stops with an
+error, or ends itself with `sys.exit()`, the tests are not run, and PLL
+says so.
 
 You do not need a separate test file, and you do not need to run
 `pytest` in a terminal.
