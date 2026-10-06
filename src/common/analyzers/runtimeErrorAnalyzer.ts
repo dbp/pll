@@ -28,8 +28,6 @@ export function analyzeRuntimeError(input: RuntimeAnalyzerInput): AnalysisFindin
     // inventing one would be worse than the message itself.
     howToFix: [],
     lineNumber: row ?? place.lineNumber,
-    // No caret unless Python placed the error itself: the frame that raised
-    // is usually inside a library.
     column: error.frames.length === 0 ? place.column : null,
   });
 }

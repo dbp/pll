@@ -8,6 +8,7 @@ import linecache as _pll_linecache
 import ast as _ast
 import re as _pll_src_re
 import inspect as _pll_inspect
+import weakref as _pll_weakref
 
 #: The checkers PLL gives typeguard for numbers, in place of its own.
 _PLL_CHECKERS = ("_pll_check_int", "_pll_check_float")
@@ -110,18 +111,41 @@ def _pll_student_frames(exc):
     return frames
 
 
-def _pll_source_line(filename, lineno, run):
-    """Line `lineno` of `filename`, as it ran.
+#: The input each prompt line's code was compiled from. Every prompt line
+#: is `<repl>`, so the name cannot say which one a frame is in: a function
+#: defined at an earlier prompt line runs code from that line's input.
+_pll_prompt_sources = _pll_weakref.WeakKeyDictionary()
 
-    `run` is `(filename, code)` for what was run: its code is read from
-    there, since a prompt line is in no file and a run file need not be on
-    disk. Any other file is read from disk.
+
+def _pll_remember_prompt_source(code, source):
+    """Record `source` for `code` and every function compiled inside it."""
+    _pll_prompt_sources[code] = source
+    for const in code.co_consts:
+        if isinstance(const, type(code)):
+            _pll_remember_prompt_source(const, source)
+
+
+def _pll_source_of(code, run):
+    """The source `code` was compiled from, as it ran.
+
+    A prompt line's own input; the run's code for the file that was run -
+    `run` is `(filename, code)`, and the file need not be on disk; and any
+    other file as it is on disk.
     """
+    prompt = _pll_prompt_sources.get(code)
+    if prompt is not None:
+        return prompt
+    filename = code.co_filename
     if run is not None and filename == run[0]:
-        lines = run[1].split("\n")
-        return lines[lineno - 1] if 0 < lineno <= len(lines) else ""
+        return run[1]
     _pll_linecache.checkcache(filename)
-    return _pll_linecache.getline(filename, lineno).rstrip("\n")
+    return "".join(_pll_linecache.getlines(filename))
+
+
+def _pll_source_line(code, lineno, run):
+    """Line `lineno` of the source `code` was compiled from."""
+    lines = _pll_source_of(code, run).split("\n")
+    return lines[lineno - 1].rstrip("\r") if 0 < lineno <= len(lines) else ""
 
 
 def _pll_enrich_index_error(exc, run):
@@ -138,7 +162,7 @@ def _pll_enrich_index_error(exc, run):
     if not frames:
         return
     frame, lineno = frames[-1]
-    text = _pll_source_line(frame.f_code.co_filename, lineno, run)
+    text = _pll_source_line(frame.f_code, lineno, run)
     for name in _pll_src_re.findall(r"([A-Za-z_]\w*)\s*\[", text):
         value = frame.f_locals.get(name, frame.f_globals.get(name))
         if isinstance(value, (list, tuple, str)):
@@ -251,12 +275,12 @@ def _pll_parameters(code):
     return list(code.co_varnames[:count])
 
 
-def _pll_frame_text(summary, run):
+def _pll_frame_text(summary, code, run):
     """The student's line a frame is at, as written, or None."""
-    return _pll_source_line(summary.filename, summary.lineno, run) or None
+    return _pll_source_line(code, summary.lineno, run) or None
 
 
-def _pll_frame_column(summary, run):
+def _pll_frame_column(summary, code, run):
     """The 0-based column `summary`'s frame failed at, or None.
 
     None where Python's own traceback draws no caret: when it has no source
@@ -264,7 +288,7 @@ def _pll_frame_column(summary, run):
     """
     if summary.colno is None or summary.end_colno is None:
         return None
-    text = _pll_source_line(summary.filename, summary.lineno, run)
+    text = _pll_source_line(code, summary.lineno, run)
     if not text:
         return None
     # Python counts these in UTF-8 bytes; a column counts characters.
@@ -312,7 +336,7 @@ def _pll_error_info(exc, run=None):
     when nothing better can be said.
 
     `run` is `(filename, code)` for what was run, which the lines of its
-    frames are read from (see `_pll_source_line`).
+    frames are read from (see `_pll_source_of`).
 
     - `error_frames`: outermost first, each `{file, line, column, function,
       user, text, parameters}`, where `user` says whether the frame runs the
@@ -337,12 +361,12 @@ def _pll_error_info(exc, run=None):
         frames.append({
             "file": _pll_shown_file(s.filename),
             "line": s.lineno,
-            "column": _pll_frame_column(s, run),
+            "column": _pll_frame_column(s, code, run),
             "function": None if s.name == "<module>" else s.name,
             "user": user,
             # The line itself, so the host never reads it out of the wrong
             # file: a frame can be in any of the student's files.
-            "text": _pll_frame_text(s, run) if user else None,
+            "text": _pll_frame_text(s, code, run) if user else None,
             "parameters": _pll_parameters(code) if user else None,
         })
     facts = dict(getattr(exc, "_pll_facts", None) or {})

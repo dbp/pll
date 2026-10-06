@@ -8,13 +8,13 @@ stderr:
 stderr:
   student.py [raw]
   ZeroDivisionError: division by zero.
-    at student.py:2
+    at student.py:2:12
 
 === key-error-dict (exit 1)
 stderr:
   student.py [raw]
   KeyError: 'b'
-    at student.py:2
+    at student.py:2:7
 
 === key-error-sentence (exit 1)
 stderr:
@@ -38,7 +38,7 @@ stderr:
 stderr:
   student.py [beginner]
   TypeError: `filter` needs a function, but this gives it a condition.
-    at student.py:3
+    at student.py:3:16
   
   How to fix:
     - `filter` calls a function on each row and keeps the rows where it returns `True`, so the condition belongs inside a function. Here it was worked out first - which is what the error is about.
@@ -49,7 +49,7 @@ stderr:
 stderr:
   student.py [beginner]
   TypeError: `add_column` needs a function, but this gives it a condition.
-    at student.py:3
+    at student.py:3:28
   
   How to fix:
     - `add_column` calls a function on each row and puts what it returns in the new column, so the condition belongs inside a function. Here it was worked out first - which is what the error is about.
@@ -60,7 +60,7 @@ stderr:
 stderr:
   student.py [beginner]
   TypeError: `filter` calls `below_1k` for you, so it needs the function itself.
-    at student.py:6
+    at student.py:6:16
   
   How to fix:
     - Leave the brackets off: `filter(below_1k)`.
@@ -70,7 +70,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `ITunesSong` lists fields (`title` and `year`) but has no `@dataclass`, so it takes no arguments.
-    at student.py:5
+    at student.py:5:5
   
   How to fix:
     - Write `@dataclass` on the line above `class ITunesSong`.
@@ -80,7 +80,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `Song` needs 2 values (`title` and `year`), but got 1.
-    at student.py:8
+    at student.py:8:5
   
   How to fix:
     - Give one value for each field, in the order they are written in `class Song`.
@@ -89,7 +89,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `Song` needs 2 values (`title` and `year`), but got 3.
-    at student.py:8
+    at student.py:8:5
   
   How to fix:
     - Give one value for each field, in the order they are written in `class Song`.
@@ -98,7 +98,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `pen_cost` takes 2 arguments (`num_pens` and `message`), but got 1.
-    at student.py:4
+    at student.py:4:7
   
   How to fix:
     - Check the call on this line - one value is needed for each parameter.
@@ -107,7 +107,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `circle` takes 3 arguments (`radius`, `mode` and `color`), but got 1.
-    at student.py:1
+    at student.py:1:7
   
   How to fix:
     - Check the call on this line - one value is needed for each parameter.
@@ -116,7 +116,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `double` takes 1 argument (`n`), but got 2.
-    at student.py:4
+    at student.py:4:7
   
   How to fix:
     - Check the call on this line - there is one value too many.
@@ -125,7 +125,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `circle` takes 3 arguments (`radius`, `mode` and `color`), but got 4.
-    at student.py:1
+    at student.py:1:7
   
   How to fix:
     - Check the call on this line - there is one value too many.
@@ -140,7 +140,7 @@ stderr:
 stderr:
   student.py [raw]
   AttributeError: `Song` on its own is the class, not one made from it, so it has no `title`.
-    at student.py:9
+    at student.py:9:12
   
   How to fix:
     - `Song(...)` makes one, with a value for each field (`title` and `year`).
@@ -150,7 +150,7 @@ stderr:
 stderr:
   student.py [raw]
   AttributeError: `Song` on its own is the class, not one made from it, so it has no `title`.
-    at student.py:7
+    at student.py:7:7
   
   How to fix:
     - `Song(...)` makes one, with a value for each field (`title`).
@@ -160,7 +160,7 @@ stderr:
 stderr:
   student.py [raw]
   AttributeError: `x` is `None`, so it has no `total`.
-    at student.py:5
+    at student.py:5:7
   
   How to fix:
     - `x` was set from `deposit(...)` on line 4, which gave back `None`.
@@ -171,7 +171,7 @@ stderr:
 stderr:
   student.py [raw]
   AttributeError: `deposit(...)` gave back `None`, so it has no `total`.
-    at student.py:4
+    at student.py:4:7
   
   How to fix:
     - A function with no `return` gives back `None`.
@@ -181,7 +181,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `r` is `None`, so square brackets cannot get anything out of it.
-    at student.py:5
+    at student.py:5:7
   
   How to fix:
     - `r` was set from `first(...)` on line 4, which gave back `None`.
@@ -194,7 +194,7 @@ stdout:
 stderr:
   student.py [raw]
   TypeError: `xs` is `None`, so there is nothing to loop over.
-    at student.py:5
+    at student.py:5:10
   
   How to fix:
     - `xs` was set from `items(...)` on line 4, which gave back `None`.
@@ -205,7 +205,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `t` is `None`, so `+` cannot be used on it.
-    at student.py:5
+    at student.py:5:7
   
   How to fix:
     - `t` was set from `total(...)` on line 4, which gave back `None`.
@@ -216,7 +216,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `t` is `None`, so `+` cannot be used on it.
-    at student.py:5
+    at student.py:5:7
   
   How to fix:
     - `t` was set from `total(...)` on line 4, which gave back `None`.
@@ -227,7 +227,7 @@ stderr:
 stderr:
   student.py [raw]
   AttributeError: `acct` is `None`, so it has no `balance`.
-    at student.py:2
+    at student.py:2:12
   
   How to fix:
     - `acct` is a parameter of `balance_of`, so the call on line 4 gave it `None`.
@@ -238,7 +238,7 @@ stderr:
 stderr:
   student.py [raw]
   AttributeError: `Song` has no field `yaer` (its fields are `title` and `year`).
-    at student.py:9
+    at student.py:9:7
   
   How to fix:
     - Did you mean `year`?
@@ -247,7 +247,7 @@ stderr:
 stderr:
   student.py [raw]
   AttributeError: `NoInfo` has no fields at all, so it has no `value`.
-    at student.py:8
+    at student.py:8:7
   
   How to fix:
     - A value that might be a `NoInfo` needs a `case NoInfo():` before `.value` is used.
@@ -256,13 +256,13 @@ stderr:
 stderr:
   student.py [raw]
   AttributeError: A whole number has no `upper`.
-    at student.py:2
+    at student.py:2:7
 
 === subscript-none (exit 1)
 stderr:
   student.py [raw]
   TypeError: `first(...)` gave back `None`, so square brackets cannot get anything out of it.
-    at student.py:4
+    at student.py:4:7
   
   How to fix:
     - A function with no `return` gives back `None`.
@@ -272,7 +272,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: Square brackets do not get a field out of `Song`.
-    at student.py:9
+    at student.py:9:7
   
   How to fix:
     - Use a dot instead: `s.year` rather than `s["year"]`.
@@ -282,7 +282,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: Square brackets do not work on a whole number.
-    at student.py:2
+    at student.py:2:7
   
   How to fix:
     - Square brackets are for lists, dictionaries and table rows.
@@ -291,7 +291,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `len(xs)` is a number, and a number is not something to loop over.
-    at student.py:2
+    at student.py:2:10
   
   How to fix:
     - To visit each item, write `for item in xs:`.
@@ -303,7 +303,7 @@ stdout:
 stderr:
   student.py [raw]
   TypeError: `items(...)` gave back `None`, so there is nothing to loop over.
-    at student.py:4
+    at student.py:4:10
   
   How to fix:
     - A function with no `return` gives back `None`.
@@ -313,7 +313,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: A whole number is not something to loop over.
-    at student.py:1
+    at student.py:1:10
   
   How to fix:
     - `for` needs a list, a string, a range or something else with items in it.
@@ -322,7 +322,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: A string and a whole number cannot be added together.
-    at student.py:2
+    at student.py:2:7
   
   How to fix:
     - To join them as text, convert `n` with `str`: `"total: " + str(n)`.
@@ -333,7 +333,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: A string and a whole number cannot be added together.
-    at student.py:4
+    at student.py:4:7
   
   How to fix:
     - To join them as text, convert `add_shipping(10)` with `str`: `"Total: " + str(add_shipping(10))`.
@@ -344,7 +344,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: A string and a whole number cannot be added together.
-    at student.py:6
+    at student.py:6:7
   
   How to fix:
     - To join them as text, convert `add_shipping(pen_cost(10, "bravo"))` with `str`: `"Total: " + str(add_shipping(pen_cost(10, "bravo")))`.
@@ -354,7 +354,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `+` does not work between a whole number and a string.
-    at student.py:2
+    at student.py:2:7
   
   How to fix:
     - Convert one of them first - `int(...)` for a number, `str(...)` for text.
@@ -366,7 +366,7 @@ stdout:
 stderr:
   student.py [raw]
   TypeError: A string and a whole number cannot be added together.
-    at student.py:2
+    at student.py:2:7
   
   How to fix:
     - `age` came from `input`, which always gives back text - even when a number is typed.
@@ -376,7 +376,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: A list and a string cannot be added together.
-    at student.py:2
+    at student.py:2:6
   
   How to fix:
     - `+` joins a list to another list. To add one item, put it inside brackets: `xs + [item]`.
@@ -386,7 +386,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: A tuple and a whole number cannot be added together.
-    at student.py:2
+    at student.py:2:6
   
   How to fix:
     - `+` joins a tuple to another tuple. To add one item, put it inside a tuple: `xs + (item,)`.
@@ -395,7 +395,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `total(...)` gave back `None`, so `+` cannot be used on it.
-    at student.py:4
+    at student.py:4:7
   
   How to fix:
     - A function with no `return` gives back `None`.
@@ -405,7 +405,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `-` does not work between a string and a list.
-    at student.py:1
+    at student.py:1:7
   
   How to fix:
     - Convert one of them first - `int(...)` for a number, `str(...)` for text.
@@ -414,13 +414,13 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `*` does not work between a dictionary and a number.
-    at student.py:1
+    at student.py:1:7
 
 === compare-str-int (exit 1)
 stderr:
   student.py [raw]
   TypeError: `<` cannot compare a string with a whole number.
-    at student.py:1
+    at student.py:1:7
   
   How to fix:
     - Convert the text to a number with `int(...)`, or the number to text with `str(...)` - whichever this comparison is meant to be about.
@@ -429,17 +429,16 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `>` cannot compare a string with a whole number.
-    at student.py:2
+    at student.py:2:26
   
   How to fix:
     - Convert the text to a number with `int(...)`, or the number to text with `str(...)` - whichever this comparison is meant to be about.
-    - Every column read from a CSV is text, so a column of numbers needs `transform_column(name, int)` before it can be compared.
 
 === compare-none (exit 1)
 stderr:
   student.py [raw]
   TypeError: `>` cannot compare a `None` with a whole number.
-    at student.py:4
+    at student.py:4:7
   
   How to fix:
     - `>` only orders values of the same kind; there is no answer to this comparison.
@@ -448,7 +447,7 @@ stderr:
 stderr:
   student.py [raw]
   ValueError: `int` cannot turn "nineteen" into a whole number.
-    at student.py:1
+    at student.py:1:5
   
   How to fix:
     - `int` only reads whole numbers written in digits, like `"19"`.
@@ -460,7 +459,7 @@ stdout:
 stderr:
   student.py [raw]
   ValueError: `int` cannot turn "nineteen" into a whole number.
-    at student.py:1
+    at student.py:1:5
   
   How to fix:
     - `int` only reads whole numbers written in digits, like `"19"`.
@@ -473,7 +472,7 @@ stdout:
 stderr:
   student.py [raw]
   ValueError: `int` cannot turn an empty string into a whole number.
-    at student.py:1
+    at student.py:1:5
   
   How to fix:
     - `int` only reads whole numbers written in digits, like `"19"`.
@@ -489,7 +488,7 @@ stderr:
 stderr:
   student.py [raw]
   IndexError: `nums` has no item at that position.
-    at student.py:2
+    at student.py:2:7
   
   How to fix:
     - `nums` has 3 items, numbered 0 to 2 - positions start at 0.
@@ -498,7 +497,7 @@ stderr:
 stderr:
   student.py [raw]
   IndexError: `xs` has no item at that position.
-    at student.py:2
+    at student.py:2:12
   
   How to fix:
     - `xs` has 2 items, numbered 0 to 1 - positions start at 0.
@@ -507,7 +506,7 @@ stderr:
 stderr:
   student.py [raw]
   IndexError: `word` has no item at that position.
-    at student.py:2
+    at student.py:2:7
   
   How to fix:
     - `word` has 2 items, numbered 0 to 1 - positions start at 0.
@@ -516,7 +515,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: Brackets after `3` look like a function call, not multiplication.
-    at student.py:2
+    at student.py:2:7
   
   How to fix:
     - To multiply, write the `*`: `3 * width`, not `3(width)`.
@@ -525,7 +524,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: A whole number cannot be called like a function.
-    at student.py:2
+    at student.py:2:7
   
   How to fix:
     - Brackets after a value mean a call; check whether a `*` or a comma is missing.
@@ -534,7 +533,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: `Boa` has 2 fields (`name` and `length`), but this pattern names 3.
-    at student.py:10
+    at student.py:10:10
   
   How to fix:
     - Write one name for each field: `case Boa(name, length):`.
@@ -543,7 +542,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: A tuple cannot be called like a function.
-    at student.py:2
+    at student.py:2:5
   
   How to fix:
     - Brackets after a value mean a call; check whether a `*` or a comma is missing.
@@ -552,7 +551,7 @@ stderr:
 stderr:
   student.py [raw]
   RecursionError: `count` kept calling itself and never stopped.
-    at student.py:2
+    at student.py:2:12
   
   How to fix:
     - Each call has to work on something smaller - the rest of the list, a smaller number.
@@ -566,12 +565,8 @@ stdout:
   (1 row)
 stderr:
   student.py [raw]
-  KeyError: `add_column` makes a new table; it does not change `employees`.
+  KeyError: the table has no column "pay" (it has: name, hours).
     at student.py:3
-  
-  How to fix:
-    - Keep the result: `employees = employees.add_column(...)`.
-    - Every table method leaves the table it was called on exactly as it was, so `pay` was never added to `employees`.
 
 === discarded-add-column-beginner (exit 1)
 stdout:
@@ -581,32 +576,20 @@ stdout:
   (1 row)
 stderr:
   student.py [beginner]
-  KeyError: `add_column` makes a new table; it does not change `employees`.
+  KeyError: the table has no column "pay" (it has: name, hours).
     at student.py:4
-  
-  How to fix:
-    - Keep the result under a new name: `new_employees = employees.add_column(...)`.
-    - Every table method leaves the table it was called on exactly as it was, so `pay` was never added to `employees`.
 
 === discarded-add-column-in-fn-intermediate (exit 1)
 stderr:
   student.py [intermediate]
-  KeyError: `add_column` makes a new table; it does not change `employees`.
+  KeyError: the table has no column "pay" (it has: name, hours).
     at student.py:4
-  
-  How to fix:
-    - Keep the result: `employees = employees.add_column(...)`.
-    - Every table method leaves the table it was called on exactly as it was, so `pay` was never added to `employees`.
 
 === discarded-add-column-in-fn-beginner (exit 1)
 stderr:
   student.py [beginner]
-  KeyError: `add_column` makes a new table; it does not change `employees`.
+  KeyError: the table has no column "pay" (it has: name, hours).
     at student.py:4
-  
-  How to fix:
-    - Keep the result under a new name: `new_employees = employees.add_column(...)`.
-    - Every table method leaves the table it was called on exactly as it was, so `pay` was never added to `employees`.
 
 === uneven-columns (exit 1)
 stderr:
@@ -642,13 +625,13 @@ stderr:
 stderr:
   student.py [raw]
   ZeroDivisionError: division by zero.
-    at student.py:2
+    at student.py:2:35
 
 === error-deep-stack (exit 1)
 stderr:
   student.py [raw]
   ZeroDivisionError: division by zero.
-    at student.py:6
+    at student.py:6:12
 
 === tc-argument (exit 1)
 stderr:
@@ -1077,7 +1060,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: Brackets after `3` look like a function call, not multiplication.
-    at student.py:1
+    at student.py:1:7
   
   How to fix:
     - To multiply, write the `*`: `3 * 4`, not `3(4)`.
@@ -1086,7 +1069,7 @@ stderr:
 stderr:
   student.py [raw]
   TypeError: A comma is missing between two values in a list.
-    at student.py:2
+    at student.py:2:5
   
   How to fix:
     - `[a, b] [c, d]` with no comma reads as looking `c, d` up inside the first list.
@@ -1745,7 +1728,7 @@ stderr:
   tests: 0 passed, 1 errored
     ERROR test_add (line 4)
           TypeError: A list and a string cannot be added together.
-          at student.py:2
+          at student.py:2:12
           - `+` joins a list to another list. To add one item, put it inside brackets: `xs + [item]`.
           - Or add it in place with `xs.append(item)`, which changes `xs` and returns nothing.
 
@@ -1777,7 +1760,7 @@ stderr:
   tests: 0 passed, 1 errored
     ERROR test_third (line 4)
           IndexError: `xs` has no item at that position.
-          at student.py:2
+          at student.py:2:12
           - `xs` has 2 items, numbered 0 to 1 - positions start at 0.
 
 === test-error-key (exit 3)
@@ -1786,7 +1769,7 @@ stderr:
   tests: 0 passed, 1 errored
     ERROR test_d (line 1)
           KeyError: 'b'
-          at student.py:3
+          at student.py:3:12
 
 === test-error-recursion (exit 3)
 stderr:
@@ -1794,7 +1777,7 @@ stderr:
   tests: 0 passed, 1 errored
     ERROR test_f (line 4)
           RecursionError: `f` kept calling itself and never stopped.
-          at student.py:2
+          at student.py:2:12
           - Each call has to work on something smaller - the rest of the list, a smaller number.
           - Check that there is a case that returns without calling again, and that it is reached.
 
@@ -1824,7 +1807,7 @@ stderr:
 stderr:
   student.py [raw]
   ZeroDivisionError: division by zero.
-    at student.py:1
+    at student.py:1:5
   The tests were not run, because of the error above.
 
 === test-and-program-error (exit 1)
@@ -1965,7 +1948,7 @@ stdout:
 stderr:
   student.py [raw]
   EOFError: EOF when reading a line.
-    at student.py:2
+    at student.py:2:5
 
 === reactor-cli (exit 0)
 stderr:

@@ -18,16 +18,14 @@ export const stockMessageAnalyzer: RuntimeAnalyzer = {
   handles: stockErrorTypes(),
 
   analyze(input: RuntimeAnalyzerInput): AnalysisFinding | null {
-    const { source, error, level } = input;
+    const { error } = input;
     const explanation = explainStockMessage(error.errorType, error.message, {
-      source,
       // The line that raised, which several rules need - `for x in len(xs)`
       // is only told apart from any other `'int' object is not iterable` by
       // reading it.
       offendingLine: placeOf(input).text,
       frames: error.frames,
       facts: error.facts,
-      level,
     });
     if (explanation === null) {
       return null;

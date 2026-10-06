@@ -208,13 +208,9 @@ def _pll_definitions(exc, frame, text):
     return found
 
 
-def _pll_tree_of(filename, run):
-    """The parsed source of `filename`, as it ran, or None."""
-    if run is not None and filename == run[0]:
-        source = run[1]
-    else:
-        _pll_linecache.checkcache(filename)
-        source = "".join(_pll_linecache.getlines(filename))
+def _pll_tree_of(code, run):
+    """The parsed source `code` was compiled from, as it ran, or None."""
+    source = _pll_source_of(code, run)
     if not source:
         return None, ""
     try:
@@ -454,10 +450,9 @@ def _pll_code_facts(exc, run):
     if not frames:
         return {}
     frame, lineno = frames[-1]
-    filename = frame.f_code.co_filename
-    text = _pll_source_line(filename, lineno, run)
+    text = _pll_source_line(frame.f_code, lineno, run)
     facts = {"definitions": _pll_definitions(exc, frame, text)}
-    tree, source = _pll_tree_of(filename, run)
+    tree, source = _pll_tree_of(frame.f_code, run)
     if tree is None:
         return facts
     names = {chain.split(".")[0] for chain in _pll_line_names(text or "")}

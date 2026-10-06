@@ -263,7 +263,7 @@ def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
     try:
         tree = _pll_parse_and_instrument(code, filename)
     except SyntaxError as e:
-        result.update(_pll_error_info(e, (filename, code)))
+        result.update(_pll_error_info(e))
         return result
 
     last_expr = None
@@ -276,11 +276,13 @@ def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
             if tree.body:
                 with _pll_recording_compile_warnings():
                     compiled_stmts = compile(tree, filename, "exec")
+                _pll_remember_prompt_source(compiled_stmts, code)
                 exec(compiled_stmts, user_globals)
             if last_expr is not None:
                 expr_module = _ast.Expression(body=last_expr.value)
                 with _pll_recording_compile_warnings():
                     compiled_expr = compile(expr_module, filename, "eval")
+                _pll_remember_prompt_source(compiled_expr, code)
                 value = eval(compiled_expr, user_globals)
                 if value is not None:
                     payload = _pll_extract_display(value)
@@ -293,7 +295,7 @@ def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
         result["ok"] = True
         result["exit_code"] = _pll_exit_status(e, stderr)
     except BaseException as e:
-        result.update(_pll_error_info(e, (filename, code)))
+        result.update(_pll_error_info(e))
     finally:
         _pll_say_compile_warnings(stderr, result["error_message"], code)
         _pll_with_output(result, stdout, stderr)

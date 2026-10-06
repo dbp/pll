@@ -13,7 +13,6 @@
  * (`__init__`, `types.UnionType`, `Table.`), which is worth a rule on its
  * own: those names send a student looking for something they never wrote.
  */
-import { levelRefusesReassignment, type Level } from "../level";
 import {
   FUNCTION_TAKER_NAMES,
   FUNCTION_TAKERS,
@@ -41,21 +40,12 @@ import type { BeginnerExplanation } from "./types";
 
 /** What the host knows about where the error came from. */
 export interface StockContext {
-  source: string;
   /** The student's line that raised, when it is known. */
   offendingLine: string | null;
   /** Every frame, outermost first, for rules that care where the error came from. */
   frames: ErrorFrame[];
   /** What Python learned from those frames. */
   facts: ErrorFacts;
-  /**
-   * The level the file runs at.
-   *
-   * Some fixes are not available at every level: `beginner` and
-   * `intermediate` reject reassigning a name at module scope, so advice
-   * that says `t = t.add_column(...)` would be refused if it were taken.
-   */
-  level: Level;
 }
 
 export function explainStockMessage(
@@ -774,13 +764,12 @@ const conditionNotFunction: Rule = {
  * `'<' not supported between instances of 'str' and 'int'`
  *
  * The advice has to come from the types in hand: a fixed example such as
- * `int("999")` would fit only some of the comparisons it is shown for, and
- * the line about CSV columns only belongs where there is a table.
+ * `int("999")` would fit only some of the comparisons it is shown for.
  */
 const comparisonMismatch: Rule = {
   types: ["TypeError"],
   pattern: /^'(\S+)' not supported between instances of '([\w.]+)' and '([\w.]+)'/,
-  explain: (m, ctx) => {
+  explain: (m) => {
     const [, operator, left, right] = m;
     const howToFix: string[] = [];
     const text = left === "str" ? left : right === "str" ? right : null;
@@ -790,14 +779,6 @@ const comparisonMismatch: Rule = {
       howToFix.push(
         `Convert the text to a number with \`${number}(...)\`, or the number to text with \`str(...)\` - whichever this comparison is meant to be about.`,
       );
-      if (readsData(ctx.source)) {
-        // Only where the file reads data. Every column of a CSV is text, and
-        // that is overwhelmingly why these two types meet - but saying so in
-        // a file with no table sends the student looking for one.
-        howToFix.push(
-          `Every column read from a CSV is text, so a column of numbers needs \`transform_column(name, ${number})\` before it can be compared.`,
-        );
-      }
     } else {
       howToFix.push(
         `\`${operator}\` only orders values of the same kind; there is no answer to this comparison.`,
@@ -810,31 +791,18 @@ const comparisonMismatch: Rule = {
   },
 };
 
-/** Whether this level refuses to let a name be set twice at module scope. */
 /** `int` or `float`, when `type` is one of them. */
 function numericType(type: string): string | null {
   const name = lastSegment(type);
   return name === "int" || name === "float" ? name : null;
 }
 
-/** Whether the error happened at module scope or inside a function. */
-function scopeOf(frames: ErrorFrame[]): "module" | "function" {
-  const innermost = frames.filter((frame) => frame.user).at(-1);
-  return innermost?.functionName ? "function" : "module";
-}
-
-/** Whether this file reads data, so advice about CSV columns can apply. */
-function readsData(source: string): boolean {
-  return /\bload_table\s*\(|\bread_csv\s*\(/.test(source);
-}
-
 /**
  * `invalid literal for int() with base 10: 'nineteen'`
  *
- * Where the text came from decides what to say about it. A CSV's blank
- * cell, `input()` with nothing typed, and a word typed for a number are
- * different mistakes, so the bullet about CSV cells is only for a program
- * that reads a CSV.
+ * `input()` with nothing typed and a word typed for a number are different
+ * mistakes, and when the text came from `input` on this line, the line says
+ * so.
  */
 const badIntLiteral: Rule = {
   types: ["ValueError"],
@@ -850,12 +818,6 @@ const badIntLiteral: Rule = {
         empty
           ? "Nothing was typed: pressing Enter on its own makes `input` give back an empty string."
           : "`input` gives back exactly what was typed, as text, so a word cannot become a number.",
-      );
-    } else if (readsData(ctx.source)) {
-      howToFix.push(
-        empty
-          ? "This one is empty - a blank cell in a CSV arrives as an empty string, so check for it before converting."
-          : "A blank cell from a CSV is not a number either; check for it before converting.",
       );
     }
     return {
@@ -1052,52 +1014,6 @@ function repeatedFunction(frames: ErrorFrame[]): string | null {
   return bestCount >= 3 ? best : null;
 }
 
-/**
- * A column that a discarded `add_column` would have made.
- *
- * `add_column` returns a new table and leaves the original alone, so
- * `employees.add_column(...)` on a line of its own changes nothing. The
- * error then arrives several lines later, about a column that is missing
- * for a reason nothing on that line explains.
- *
- * Only `add_column`, and only from some *other* line. `order_by("rider")`
- * is a method whose result is often discarded too, but discarding it can
- * never be why a column is missing - and matching the failing line against
- * itself turned a plain misspelling into a lecture about mutation.
- */
-const discardedTableResult: Rule = {
-  types: ["KeyError"],
-  pattern: /has no column "([^"]+)"/,
-  explain: (m, ctx) => {
-    const name = m[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const line = new RegExp(
-      `^[ \\t]*([A-Za-z_][\\w.]*)\\.add_column[ \\t]*\\([ \\t]*["']${name}["']`,
-    );
-    const offending = (ctx.offendingLine ?? "").trim();
-    for (const candidate of ctx.source.split(/\r?\n/)) {
-      const match = line.exec(candidate);
-      // The failing line itself is not an explanation of its own failure.
-      if (match === null || candidate.trim() === offending) {
-        continue;
-      }
-      const receiver = match[1];
-      return {
-        headline: `\`add_column\` makes a new table; it does not change \`${receiver}\`.`,
-        howToFix: [
-          // `t = t.add_column(...)` is the idiomatic fix and is refused where
-          // the level lets a name be set only once, so it is only offered
-          // where it would actually work.
-          levelRefusesReassignment(ctx.level, scopeOf(ctx.frames))
-            ? `Keep the result under a new name: \`new_${receiver} = ${receiver}.add_column(...)\`.`
-            : `Keep the result: \`${receiver} = ${receiver}.add_column(...)\`.`,
-          `Every table method leaves the table it was called on exactly as it was, so \`${m[1]}\` was never added to \`${receiver}\`.`,
-        ],
-      };
-    }
-    return null;
-  },
-};
-
 /** pandas' `All arrays must be of the same length`, for a DataFrame's dict. */
 const unevenColumns: Rule = {
   types: ["ValueError"],
@@ -1168,7 +1084,6 @@ const RULES: Rule[] = [
   patternArity,
   missingComma,
   recursionDepth,
-  discardedTableResult,
   unevenColumns,
   pandasKeyError,
 ];

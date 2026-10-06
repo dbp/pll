@@ -830,7 +830,7 @@ async function main() {
         level: "raw",
       }).then((r) => reportOf(r.result, "te.py", "raw", 'def shout(words):\n    return words + "!"\n'));
       const where = located?.tests?.[0]?.finding?.location?.label;
-      expect(where === "te.py:2", `the error is placed in \`shout\`, not the test: ${where}`);
+      expect(where === "te.py:2:12", `the error is placed in \`shout\`, not the test: ${where}`);
       expect(located?.tests?.[0]?.error === undefined, "and the report keeps the finding, not the exception");
       const paramWhere = (
         await send({
@@ -1201,6 +1201,21 @@ async function main() {
       expect(
         same(looped.result.error_facts?.assigned?.x, { call: "find", line: 7 }),
         `or after it, in a loop: ${JSON.stringify(looped.result.error_facts?.assigned)}`,
+      );
+
+      // A function from an earlier prompt line is read from that line's own
+      // input, not the line that called it.
+      const prompt = (code) => send({ type: "replEval", code, sessionKey: "earlier-prompt", level: "advanced" });
+      await prompt("def get(xs):\n    return xs[5]\n");
+      await prompt("nums = [1, 2]");
+      const later = (await prompt("print(get(nums))")).result;
+      expect(
+        later.error_frames.at(-1)?.text === "    return xs[5]" && later.error_frames.at(-1)?.column === 11,
+        `its line and caret: ${JSON.stringify(later.error_frames.at(-1))}`,
+      );
+      expect(
+        later.error_facts?.sequence === "xs" && later.error_facts?.length === 2,
+        `and what is learned from it: ${JSON.stringify(later.error_facts)}`,
       );
       await send({ type: "mountWorkspace", files: [] });
       console.log("    names, frames, columns, facts and messages, each from the exception itself");

@@ -817,9 +817,10 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     "<module>",
     "ValueError: invalid literal for int() with base 10: ''",
   );
+  // Where the text came from is not guessed from the file reading a CSV.
   expect(
-    blank.howToFix.some((l) => /blank cell/.test(l) && /empty/.test(l)),
-    `a blank cell is called out: ${JSON.stringify(blank.howToFix)}`,
+    !blank.howToFix.some((l) => /CSV/.test(l)),
+    `no CSV cell guessed at: ${JSON.stringify(blank.howToFix)}`,
   );
 
   const index = raised(
@@ -1071,8 +1072,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     `and says where it goes: ${JSON.stringify(noDecorator.howToFix)}`,
   );
 
-  // A column a discarded `add_column` would have made. The error is right
-  // and arrives several lines after the line that explains it.
+  // An `add_column` elsewhere in the file is not taken to be the cause.
   const discarded = raised(
     'employees = table(["name"], [["Harley"]])\nemployees.add_column("total-wage", lambda r: 1)\nemployees.select_columns(["total-wage"])\n',
     3,
@@ -1080,12 +1080,8 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     'KeyError: \'the table has no column "total-wage" (it has: name).\'',
   );
   expect(
-    discarded.headline === "`add_column` makes a new table; it does not change `employees`.",
-    `a discarded result: ${discarded.headline}`,
-  );
-  expect(
-    discarded.howToFix.some((l) => /employees = employees\.add_column\(\.\.\.\)/.test(l)),
-    `and shows how to keep it: ${JSON.stringify(discarded.howToFix)}`,
+    /has no column "total-wage"/.test(discarded.headline) && discarded.howToFix.length === 0,
+    `PLL's own message, and no guess: ${discarded.headline} ${JSON.stringify(discarded.howToFix)}`,
   );
 
   // A column that was simply never there keeps PLL's own message.
@@ -1335,7 +1331,7 @@ console.log("[second review: advice that has to come from the program in hand]")
     );
 
   // The comparison hint fits what the program compared: no fixed
-  // `int("999")` / `str(1000)` example, and CSV columns only with a table.
+  // `int("999")` / `str(1000)` example.
   const noTable = raised(
     'n = 5\nif n < "apple":\n    print("x")\n',
     2,
@@ -1343,7 +1339,6 @@ console.log("[second review: advice that has to come from the program in hand]")
   );
   const noTableText = noTable.howToFix.join(" ");
   expect(!/999|1000/.test(noTableText), `no fixed example values: ${noTableText}`);
-  expect(!/CSV/.test(noTableText), `no CSV in a file with no table: ${noTableText}`);
   expect(/`int\(\.\.\.\)`/.test(noTableText), `the conversion is the right one: ${noTableText}`);
 
   const withTable = raised(
@@ -1351,37 +1346,11 @@ console.log("[second review: advice that has to come from the program in hand]")
     2,
     "TypeError: '<' not supported between instances of 'str' and 'int'",
   );
+  // Whether the file reads a CSV is not taken to say where the text came from.
   expect(
-    withTable.howToFix.some((l) => /column read from a CSV is text|Every column read from a CSV/.test(l)),
-    `a file that reads a CSV gets the CSV advice: ${JSON.stringify(withTable.howToFix)}`,
+    !withTable.howToFix.some((l) => /CSV/.test(l)),
+    `no CSV guessed at: ${JSON.stringify(withTable.howToFix)}`,
   );
-
-  // `t = t.add_column(...)` is refused at the levels that set a name once,
-  // so it is only offered where it would work.
-  const discardedAt = (level) =>
-    raised(
-      'employees = table(["name"], [["Harley"]])\nemployees.add_column("total-wage", lambda r: 1)\nemployees.select_columns(["total-wage"])\n',
-      3,
-      'KeyError: \'the table has no column "total-wage" (it has: name).\'',
-      level,
-    );
-  for (const level of ["beginner", "intermediate"]) {
-    const found = discardedAt(level);
-    expect(
-      !found.howToFix.some((l) => /`employees = employees\./.test(l)),
-      `${level} must not be told to reassign: ${JSON.stringify(found.howToFix)}`,
-    );
-    expect(
-      found.howToFix.some((l) => /new_employees = employees\.add_column/.test(l)),
-      `${level} is given a new name instead: ${JSON.stringify(found.howToFix)}`,
-    );
-  }
-  for (const level of ["raw", "advanced"]) {
-    expect(
-      discardedAt(level).howToFix.some((l) => /`employees = employees\.add_column/.test(l)),
-      `${level} can reassign`,
-    );
-  }
 
   // A table-row error points at the row, not at `table(`.
   const rowsSource =
@@ -1635,7 +1604,7 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
     2,
     "ValueError: invalid literal for int() with base 10: ''",
   );
-  expect(/CSV/.test(text(cell)), `a program that reads a CSV gets the CSV bullet: ${text(cell)}`);
+  expect(!/CSV/.test(text(cell)), `nor a CSV cell in one that reads a CSV: ${text(cell)}`);
 
   // no-columns: the example belongs in the sentence that introduces it.
   const noColumns = raised(

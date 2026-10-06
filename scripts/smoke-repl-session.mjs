@@ -14,6 +14,15 @@ import { importSource } from "./lib/bundle.mjs";
 /** Let the session's internal promise chain settle. */
 const settle = () => new Promise((r) => setTimeout(r, 5));
 
+/**
+ * Every bundle address here is made up, so a real request could only fail -
+ * after however long the network takes to say so. It fails at once, as it
+ * would offline, and the cached copy is used.
+ */
+globalThis.fetch = async () => {
+  throw new TypeError("fetch failed");
+};
+
 /* ---------------------------------------------------------------- */
 /* A `vscode` stub with just enough surface for the modules imported */
 /* ---------------------------------------------------------------- */
@@ -1924,7 +1933,7 @@ function makeGate() {
   return { promise, open: () => open() };
 }
 
-/** Wait for the run to reach a step, which may be past a slow fetch. */
+/** Wait for the run to reach a step. */
 async function untilStatus(view, status, ms = 10000) {
   const deadline = Date.now() + ms;
   while (view.status !== status && Date.now() < deadline) {

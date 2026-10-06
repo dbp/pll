@@ -52,7 +52,24 @@
   window closed - for every file opened in it. Opening the file again
   starts afresh. A run still going when the file closes finishes first.
 
+### Removed
+- **Two guesses about where an error came from.** A missing column is no
+  longer blamed on an `add_column` whose result was thrown away somewhere
+  else in the file, and text compared with a number, or given to `int`, is
+  no longer said to be a CSV column because the file reads a CSV. Neither
+  could tell whether it was right, and both looked only at the file that was
+  run. The table's own message is shown instead, and the advice that fits
+  any such comparison or conversion.
+
 ### Fixed
+- **An error points at the expression that failed**, as Python's own
+  traceback does: `return 10 / n` is marked from `10 / n`, not as the whole
+  line, and the command line gives the column (`at hello.py:2:12`). Only a
+  `NameError` was marked this way before. An error raised inside a library
+  still marks the student's whole line.
+- **An error in a function defined at an earlier prompt line is explained
+  from that line.** It was explained from the line that called it, so the
+  length of a list indexed past its end, say, was not found.
 - **Stop ends an Examplar check.** A Stop was recorded as the running test's
   error and the check carried on, so a test that looped needed one Stop for
   each known implementation - and the panel meanwhile suggested reloading
@@ -86,10 +103,6 @@
   `None`", that `x` was set from `deposit(...)` on line 4, which gave back
   `None` - or, for a parameter, which call passed it. The same for a `None`
   that is subscripted, looped over, or added to.
-- **The fix offered for a discarded `add_column` fits where it is.** At
-  `#level intermediate`, inside a function, it now offers `employees =
-  employees.add_column(...)` - which that level accepts there - rather than
-  a new name, which is only needed at module scope.
 - **A tab in the indentation is pointed at**, at column 1, rather than at the
   first character after it.
 - **A top-level error in a file with tests was reported twice in the
