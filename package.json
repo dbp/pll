@@ -251,6 +251,7 @@
     "test-web:universe": "pnpm run build && node scripts/smoke-web-universe.mjs",
     "test-web:examplar": "pnpm run build && node scripts/smoke-web-examplar.mjs",
     "test-web:load": "pnpm run build && node scripts/smoke-web-load.mjs",
+    "test-web:nofile": "pnpm run build && node scripts/smoke-web-nofile.mjs",
     "test-web:view": "node scripts/smoke-webview.mjs",
     "cli:pack": "pnpm run build && cd dist-cli && npm pack",
     "cli:publish": "pnpm run build && node scripts/publish-cli.mjs"

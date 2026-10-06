@@ -28,7 +28,7 @@ export function analyzeRuntimeError(input: RuntimeAnalyzerInput): AnalysisFindin
     // inventing one would be worse than the message itself.
     howToFix: [],
     lineNumber: row ?? place.lineNumber,
-    column: error.frames.length === 0 ? place.column : null,
+    column: place.column,
   });
 }
 

@@ -15,13 +15,10 @@ export function registerCommands(
   services: ExtensionServices,
 ): void {
   context.subscriptions.push(
-    // Show the integrated interactions view. `startRepl` is a back-compat
-    // alias for users who had it bound.
-    ...["pll.showInteractions", "pll.startRepl"].map((id) =>
-      vscode.commands.registerCommand(id, () =>
-        services.view.reveal({ preserveFocus: false }).catch(reportError),
-      ),
+    vscode.commands.registerCommand("pll.showInteractions", () =>
+      services.view.reveal({ preserveFocus: false }).catch(reportError),
     ),
+    vscode.commands.registerCommand("pll.startRepl", () => services.repl.showNoFileSession()),
     vscode.commands.registerCommand("pll.runActiveFile", () =>
       runActiveFile(services).catch(reportError),
     ),

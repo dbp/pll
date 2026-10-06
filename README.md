@@ -44,6 +44,19 @@ Your file stays a normal editor. Results appear in the **PLL** panel at
 the bottom of the window (near Problems and Terminal). If that panel is
 hidden, run **PLL: Show Interactions** from the Command Palette.
 
+### Before you have a file
+
+With no Python file open, the PLL panel has a session of its own, called
+**No file**: type Python at its prompt and press Enter. It is for the very
+first things you try - on vscode.dev, before you have a repository to make
+a file in. It always uses `#level beginner`. It has no folder, so it cannot
+read files next to a program (a table or picture from a URL still works),
+and a file it writes is not saved.
+
+Once you open a Python file, the panel shows that file's session instead.
+**PLL: Start REPL** switches back to the session with no file, which keeps
+what you typed in it until the window closes.
+
 ### Try things after a run
 
 The interactions panel has a prompt at the bottom. After a file has
@@ -514,7 +527,7 @@ also appears in the editor title bar when a `.py` file is open.
 | --- | --- |
 | **PLL: Run Python File** | Run tests (if any), then run the file. |
 | **PLL: Show Interactions** | Open the interactions panel. |
-| **PLL: Start REPL** | Open the interactions panel (same as Show Interactions). |
+| **PLL: Start REPL** | Show the session with no file, at `#level beginner`, whatever file is open. |
 | **PLL: Stop Program** | Stop the program that is running. |
 | **PLL: Clear Interactions** | Clear the panel. |
 

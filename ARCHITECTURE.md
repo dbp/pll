@@ -47,7 +47,8 @@ src/
     ├── workspaceFilePolicy.ts     Which sibling files to mount / write back
     ├── workspaceFiles.ts          vscode.workspace.fs snapshot + writeback
     ├── memfsWorkspace.ts          Pyodide MEMFS mount / collect helpers
-    ├── commands.ts                Run File / Show Interactions / Clear / Stop
+    ├── commands.ts                Run File / Show Interactions / Start REPL /
+    │                              Clear / Stop
     ├── editorClipboard.ts         Palette PLL: Editor Copy/Cut/Paste (no keys)
     ├── runPlan.ts                 The steps of a run, for every host
     ├── replSession.ts             Drives the interactions view: init,
@@ -181,6 +182,14 @@ tests, a prompt line, a reactor's handler - its module is `__main__` in
 the student's names: `typing.get_type_hints`, a dataclass's string
 annotations, `pickle`, `import __main__`. Its namespace also records its
 level (`__pll_level__`), which the type checks read as they happen.
+
+There is one more session, with no file (`NO_FILE_KEY` in
+`replSession.ts`): the panel shows it whenever no Python file has been
+shown, or the one it was showing closes, and **PLL: Start REPL** switches
+to it. On vscode.dev a student with no repository has no file to make, so
+this is where their first prompt lines run. It has no header to read, so
+its level is fixed at `beginner`; it has no folder, so its runs mount no
+files and save none (it says which it could not save).
 
 ## Language levels
 
@@ -821,6 +830,10 @@ platform provides one.
 roughly the tick rate, that pause / step / rewind / replay work, that an
 arrow key reaches Python, that `stop_when` stops the clock, and that the
 prompt still works while three reactors run.
+
+`pnpm run test-web:nofile` opens the workbench with no folder at all, as
+vscode.dev is before a student has a repository, and runs prompt lines in
+the session with no file - checking that they run, and at `beginner`.
 
 `pnpm run test-web:universe` starts `samples/universe_server.mjs` and runs
 `samples/universe.py` against it in the workbench, checking the card reports

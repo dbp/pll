@@ -9,6 +9,12 @@
   program and its own tests. Bundles are cached on disk, so an offline run
   still gets its verdict, and the verdict does not change the exit code.
 
+- **Python with no file open.** With no Python file open, the PLL panel
+  has a session of its own, at `#level beginner`, so a student can type
+  Python before they have a file to type it in - on vscode.dev, before they
+  have a repository. **PLL: Start REPL** switches back to it once files are
+  open. It has no folder, so a file it writes is not saved, and it says so.
+
 - **The command line takes options in the usual forms**: `--save-images=out`,
   `-qv`, and `--` before a file whose name starts with a dash. `examplar
   build` takes `--out` as well as `-o`.

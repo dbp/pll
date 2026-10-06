@@ -8,13 +8,14 @@ import {
   type ReactorPatch,
   type SessionDisplayState,
 } from "./interactionsView";
-import { DEFAULT_LEVEL, type Level } from "./level";
+import { DEFAULT_LEVEL, LEVEL_BEGINNER, type Level } from "./level";
 import type { BundleStore } from "./examplarSource";
 import { ReactorController, type ProgramInfo, type ReactorEvent } from "./reactorController";
 import { runFilePlan, runInputPlan, type RunHost, type RunSummary } from "./runPlan";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 import type { UniverseConnect } from "./universeClient";
 import { collectSiblingFiles, folderUri, writeBackSiblingFiles } from "./workspaceFiles";
+import type { WorkspaceFile } from "./workspaceFilePolicy";
 import { errorText } from "./errorText";
 import { PythonLostError } from "./runtimeErrors";
 
@@ -61,8 +62,11 @@ interface Session {
   key: string;
   /** Most recently observed display name (e.g. "hello.py"). */
   fileName: string;
-  /** URI of the underlying document, used for diagnostics + open-location. */
-  documentUri: vscode.Uri;
+  /**
+   * URI of the underlying document, used for diagnostics + open-location;
+   * null for the session with no file.
+   */
+  documentUri: vscode.Uri | null;
   entries: Entry[];
   /** Partial stream output, flushed to entries a line at a time. */
   streams: { stdout: string; stderr: string };
@@ -73,10 +77,11 @@ interface Session {
   continuationLines: string[];
   continuing: boolean;
   /**
-   * Language level of the most recent Run File on this session. `null`
-   * until the file has been run at least once. We surface this in the
-   * header (e.g. `hello.py [beginner]`) so it's easy to tell which rule
-   * set is currently in effect after a run.
+   * Language level of the most recent Run File on this session - always
+   * `beginner` for the session with no file. `null` until the file has been
+   * run at least once. We surface this in the header (e.g. `hello.py
+   * [beginner]`) so it's easy to tell which rule set is currently in effect
+   * after a run.
    */
   lastLevel: Level | null;
   /**
@@ -101,13 +106,22 @@ interface Session {
 }
 
 /**
+ * The session with no file, for prompt lines typed before there is a file to
+ * type them in - on the web, before there is a repository to make one in.
+ * Its key is no document's URI.
+ */
+const NO_FILE_KEY = "pll:no-file";
+const NO_FILE_TITLE = "No file";
+
+/**
  * Routes user input + run-file events to the correct per-file session and
  * keeps the interactions view showing whichever session corresponds to the
- * active Python editor. Owns the single Pyodide exec chain.
+ * active Python editor - or, with none, the session with no file. Owns the
+ * single Pyodide exec chain.
  */
 export class ReplSession implements vscode.Disposable {
   private readonly sessions = new Map<string, Session>();
-  /** Currently-shown session key, or null if no Python file has been active. */
+  /** Currently-shown session key, or null before the first is shown. */
   private activeKey: string | null = null;
 
   /**
@@ -177,6 +191,9 @@ export class ReplSession implements vscode.Disposable {
     // Pick up the editor that's already active at activation time (the
     // common case when the extension activates via `onLanguage:python`).
     this.handleActiveEditorChange(vscode.window.activeTextEditor);
+    if (this.activeKey === null) {
+      this.setActive(this.noFileSession().key);
+    }
     this.closeWatcher = vscode.workspace.onDidCloseTextDocument((document) =>
       this.handleDocumentClosed(document),
     );
@@ -198,6 +215,12 @@ export class ReplSession implements vscode.Disposable {
     this.setActive(session.key);
     this.cancelStdin();
     return this.enqueue(() => this.executeFile(session, code, fileName, document));
+  }
+
+  /** Show the session with no file, whatever file is open. */
+  showNoFileSession(): void {
+    this.setActive(this.noFileSession().key);
+    void this.deps.view.reveal({ preserveFocus: false });
   }
 
   /**
@@ -304,7 +327,9 @@ export class ReplSession implements vscode.Disposable {
         kind: "banner",
         text:
           "Python stopped completely, so the next run starts a new one. " +
-          "Everything this file defined is gone; run it again to define it.",
+          (session.documentUri === null
+            ? "Everything defined here is gone."
+            : "Everything this file defined is gone; run it again to define it."),
       });
     }
   }
@@ -331,7 +356,7 @@ export class ReplSession implements vscode.Disposable {
       this.stopPending.delete(key);
       if (this.activeKey === key) {
         this.activeKey = null;
-        this.deps.view.showEmpty();
+        this.setActive(this.noFileSession().key);
       }
       await this.deps.runtime.endSession(key).catch(() => undefined);
     });
@@ -360,7 +385,7 @@ export class ReplSession implements vscode.Disposable {
     if (!this.reactors.hasAny(session)) return;
     void this.enqueue(async () => {
       try {
-        await this.deps.runtime.mountWorkspaceFiles(await collectSiblingFiles(session.documentUri));
+        await this.deps.runtime.mountWorkspaceFiles(await this.filesBeside(session));
       } catch {
         /* the reactor still runs; a file it opens may be missing */
       }
@@ -384,29 +409,39 @@ export class ReplSession implements vscode.Disposable {
   /* -------- Session bookkeeping -------- */
 
   private getOrCreateSession(uri: vscode.Uri, fileName: string): Session {
-    const key = uri.toString();
-    let session = this.sessions.get(key);
-    if (!session) {
-      session = {
-        key,
-        fileName,
-        documentUri: uri,
-        entries: [],
-        streams: { stdout: "", stderr: "" },
-        prompt: "primary",
-        busy: false,
-        continuationLines: [],
-        continuing: false,
-        lastLevel: null,
-        runSeq: 0,
-        stopRequestedSeq: -1,
-        streamLines: 0,
-        streamTruncated: false,
-        otherDiagnosed: [],
-      };
-      this.sessions.set(key, session);
-    }
+    return this.sessions.get(uri.toString()) ?? this.addSession(uri.toString(), fileName, uri, null);
+  }
+
+  /** The session with no file, made the first time it is wanted. */
+  private noFileSession(): Session {
+    return this.sessions.get(NO_FILE_KEY) ?? this.addSession(NO_FILE_KEY, NO_FILE_TITLE, null, LEVEL_BEGINNER);
+  }
+
+  private addSession(key: string, fileName: string, uri: vscode.Uri | null, level: Level | null): Session {
+    const session: Session = {
+      key,
+      fileName,
+      documentUri: uri,
+      entries: [],
+      streams: { stdout: "", stderr: "" },
+      prompt: "primary",
+      busy: false,
+      continuationLines: [],
+      continuing: false,
+      lastLevel: level,
+      runSeq: 0,
+      stopRequestedSeq: -1,
+      streamLines: 0,
+      streamTruncated: false,
+      otherDiagnosed: [],
+    };
+    this.sessions.set(key, session);
     return session;
+  }
+
+  /** The files a run of `session` sees: those beside its file, and none without one. */
+  private filesBeside(session: Session): Promise<WorkspaceFile[]> {
+    return session.documentUri === null ? Promise.resolve([]) : collectSiblingFiles(session.documentUri);
   }
 
   /** The string we display as the view's header for `session`. */
@@ -571,7 +606,7 @@ export class ReplSession implements vscode.Disposable {
    */
   private async openLocation(fileName: string, line: number, column: number | null): Promise<void> {
     const session = this.activeSession();
-    if (!session) return;
+    if (!session || session.documentUri === null) return;
     const folder = folderUri(session.documentUri);
     const uri =
       fileName === session.fileName
@@ -798,8 +833,17 @@ export class ReplSession implements vscode.Disposable {
       say: (text) => entry({ kind: "banner", text }),
       status: (text) => this.setSessionBusy(session, true, text),
       stopRequested: () => session.stopRequestedSeq === runSeq,
-      siblingFiles: () => collectSiblingFiles(session.documentUri),
-      writeBack: (files) => writeBackSiblingFiles(session.documentUri, files),
+      siblingFiles: () => this.filesBeside(session),
+      writeBack: async (files) => {
+        if (session.documentUri !== null) {
+          return writeBackSiblingFiles(session.documentUri, files);
+        }
+        entry({
+          kind: "banner",
+          text: `Not saved: ${files.map((f) => f.name).join(", ")}. With no file open, there is no folder to save it in.`,
+        });
+        return [];
+      },
       examplarCard: (card) => entry(card),
       aroundProgram: async (run) => {
         this.stdinSession = session;

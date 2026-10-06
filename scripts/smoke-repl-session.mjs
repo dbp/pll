@@ -381,7 +381,7 @@ function makeRuntime(script = {}) {
       if (!tested) await tests();
     },
     async replEval(request, onEvent) {
-      calls.push(["replEval", request.code, request.sessionKey]);
+      calls.push(["replEval", request.code, request.sessionKey, request.level]);
       for (const event of (script.events?.("replEval", request) ?? [])) {
         if (typeof event === "function") await event(onEvent);
         else onEvent(event);
@@ -2627,9 +2627,10 @@ console.log("\n[64] a webview that reloads is replayed the session, from the ses
   expect(view.title === "reload.py [raw]", `and its title: ${view.title}`);
   repl.dispose();
 
-  // With no Python file open there is nothing to show.
+  // With no Python file open, the session with no file.
   const none = await harness({}, null);
-  expect(none.view.handlers.onViewReady() === false, "no session, so the view shows its empty state");
+  expect(none.view.handlers.onViewReady() === true, "a session is showing");
+  expect(none.view.title === "No file [beginner]", `the one with no file: ${none.view.title}`);
   none.repl.dispose();
 }
 
@@ -2651,11 +2652,11 @@ console.log("\n[65] closing a file ends its session, once its run is over");
   await run;
   await settle();
   expect(ended().join() === key, `then Python forgets its names: ${JSON.stringify(ended())}`);
-  expect(view.empty, "and the panel, which was showing it, is empty");
+  expect(view.title === "No file [beginner]", `and the panel, which was showing it, shows the session with no file: ${view.title}`);
 
   // Opening it again starts afresh.
   __setActiveEditor({ document: doc });
-  expect(!view.empty && view.entries.length === 0, `a new session: ${JSON.stringify(view.entries)}`);
+  expect(view.entries.length === 0, `a new session: ${JSON.stringify(view.entries)}`);
   expect(view.title === "closing.py", `with no level yet: ${view.title}`);
 
   // Closed and reopened at once, as a change of language mode does: kept.
@@ -2889,6 +2890,43 @@ console.log("\n[73] a finding in another of the student's files is put on that f
   await settle();
   const cleared = diagnostics.calls.filter((c) => c[0] === "clear").map((c) => c[1]);
   expect(cleared.includes("file:/work/helper.py"), `the next run clears it: ${cleared.join()}`);
+  repl.dispose();
+}
+
+console.log("\n[74] prompt lines with no file open: a session of their own, at beginner");
+{
+  const evaluated = (runtime) => runtime.calls.filter((c) => c[0] === "replEval");
+  const { repl, view, runtime } = await harness(
+    { changedFiles: [{ name: "out.txt", contents: "hi\n" }], events: () => [{ kind: "done" }] },
+    null,
+  );
+  expect(view.title === "No file [beginner]", `shown with no file open: ${view.title}`);
+  view.handlers.onSubmit("x = 1");
+  await settle();
+  const [first] = evaluated(runtime);
+  expect(first?.[2] === "pll:no-file" && first?.[3] === "beginner", `run at beginner, in its own session: ${JSON.stringify(first)}`);
+  const mounts = runtime.calls.filter((c) => c[0] === "mountWorkspaceFiles").map((c) => c[1]);
+  expect(mounts.length > 0 && mounts.every((m) => m === ""), `with no files around it: ${JSON.stringify(mounts)}`);
+  expect(
+    bannerTexts(view).some((t) => t === "Not saved: out.txt. With no file open, there is no folder to save it in."),
+    `a file it writes is said not to be saved: ${JSON.stringify(bannerTexts(view))}`,
+  );
+  expect(![...written.keys()].some((uri) => uri.endsWith("/out.txt")), `and is not written anywhere: ${[...written.keys()]}`);
+
+  // A file takes over the panel; Start REPL brings the session back, as it was.
+  const doc = makeDoc("later.py", "y = 2\n");
+  __setActiveEditor({ document: doc });
+  expect(view.title === "later.py", `the file's session: ${view.title}`);
+  repl.showNoFileSession();
+  expect(view.title === "No file [beginner]", `back to the one with no file: ${view.title}`);
+  expect(view.entries.some((e) => e.kind === "echo" && e.code === "x = 1"), "with what was typed in it");
+
+  // If Python stops completely, there is no file to run again.
+  runtime.lose();
+  expect(
+    bannerTexts(view).some((t) => /Everything defined here is gone\.$/.test(t)),
+    `said without a file: ${JSON.stringify(bannerTexts(view))}`,
+  );
   repl.dispose();
 }
 
