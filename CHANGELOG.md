@@ -134,6 +134,18 @@
 - **A Python worker that crashes is reported once**, as Python having
   stopped, rather than also as an "Internal error" with the crash's own
   message (desktop and command line).
+- **An error in another of your files is shown in that file.** A
+  `NameError` on line 2 of `helper.py`, called from `main.py`, was reported
+  at line 2 of `main.py` - often a blank line - and a syntax error in an
+  imported file was explained from the file that imported it. The editor
+  now marks the file the error is in, and the command line names it.
+- **What a message names is looked up wherever it was defined.** A call to
+  `shapes.area(3)`, with `area` in `shapes.py`, gets the same "`area` takes
+  2 arguments (`w` and `h`), but got 1" as one in the file that ran; a
+  class's fields, a union's members and a method's parameters are found the
+  same way, and a method of a class of yours (`Dog.bark()`) gets its total
+  too. The length of a list that is out of range is read from the file the
+  error is in.
 - **The web version's message when `input()` cannot work** is for
   students: it no longer tells them to run `pnpm run test-web`.
 - **An empty `pll.pyodideIndexUrl` means the default** in the web version,

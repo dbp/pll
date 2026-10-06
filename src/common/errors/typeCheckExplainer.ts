@@ -1,19 +1,12 @@
 import { levelRejectsBoolAsNumber, type Level } from "../level";
 import { FUNCTION_TAKERS } from "./libraryFacts";
 import { typeWords } from "./wording";
-import type { ErrorFacts } from "./pythonError";
-import {
-  annotationOf,
-  assignedFromVoidMethod,
-  functionBody,
-  trailingMatch,
-  unionMembersOf,
-} from "./sourceFacts";
+import type { ErrorFacts, TypeCheck } from "./pythonError";
 import type { BeginnerExplanation } from "./types";
 
 /**
- * Rewrites typeguard's `TypeCheckError` messages into beginner-facing
- * explanations.
+ * Rewrites typeguard's `TypeCheckError`s into beginner-facing explanations,
+ * from the parts Python read the message into (`ErrorFacts.check`).
  *
  * typeguard's own wording is accurate but assumes vocabulary a first-term
  * student does not have ("is not an instance of", "did not match any
@@ -32,22 +25,6 @@ import type { BeginnerExplanation } from "./types";
  *     int: is not an instance of int
  *     NoneType: is not an instance of NoneType
  */
-
-export interface ParsedTypeCheckError {
-  /** What the annotation was attached to. */
-  kind: "argument" | "return" | "variable" | "field" | "unknown";
-  /** Parameter or variable name, when the message names one. */
-  name: string | null;
-  /** Set when the failure is about something *inside* a collection. */
-  element: string | null;
-  /** Type the offending value actually had, as typeguard reported it. */
-  actual: string | null;
-  /** Type(s) the annotation asked for. */
-  expected: string[];
-  /** For "field": the class whose field it is, and the value it got. */
-  owner?: string;
-  value?: string;
-}
 
 /**
  * The module prefix a student did not write: a file - and its tests - run
@@ -151,8 +128,6 @@ function conversionFor(expected: string[], actual: string | null): string | null
   return null;
 }
 
-const ELEMENT_RE = /^(item \d+|key .+|value of key .+|\[.+\]) of (.+)$/;
-
 /** How to describe "all the things inside" for the failing element kind. */
 function membersPhrase(element: string): string {
   if (element.startsWith("the value for key")) return "every value in";
@@ -181,90 +156,13 @@ function plainKey(key: string): string {
   return simple ? `"${simple[1]}"` : key;
 }
 
-/** Parse a typeguard message. `kind` is "unknown" if the shape is unfamiliar. */
-export function parseTypeCheckMessage(message: string): ParsedTypeCheckError {
-  const unknown: ParsedTypeCheckError = {
-    kind: "unknown",
-    name: null,
-    element: null,
-    actual: null,
-    expected: [],
-  };
-  const lines = message.split(/\r?\n/);
-  const first = lines[0].trim();
+/** A check whose wording Python did not recognise. */
+const UNFAMILIAR: TypeCheck = { kind: "unknown", name: null, element: null, actual: null, expected: [] };
 
-  // A dataclass field, which PLL words itself: typeguard is asked to check
-  // one, so its own message calls it an assignment, and nobody assigned
-  // anything. The value is in the message because only Python had it.
-  const field = /^field '(\w+)' of '([\w.]+)' got (.+) \(([\w.]+)\), not (.+)$/.exec(first);
-  if (field !== null) {
-    return {
-      kind: "field",
-      name: field[1],
-      element: null,
-      actual: field[4],
-      expected: [field[5]],
-      owner: field[2],
-      value: field[3],
-    };
-  }
-
-  // Split "<subject> (<actual>) <predicate>" at the predicate.
-  let expected: string[] = [];
-  let subject: string | null = null;
-  const unionAt = first.indexOf(" did not match any element in the union:");
-  if (unionAt >= 0) {
-    subject = first.slice(0, unionAt);
-    for (const raw of lines.slice(1)) {
-      const m = raw.match(/^\s*([A-Za-z_][A-Za-z0-9_.\[\], ]*):/);
-      if (m) expected.push(m[1].trim());
-    }
-  } else {
-    const predicates: Array<[RegExp, (m: RegExpMatchArray) => string[]]> = [
-      [/^(.*) is not an instance of (.+)$/, (m) => [m[2]]],
-      [/^(.*) is neither float or int$/, () => ["float"]],
-      [/^(.*) is not None$/, () => ["None"]],
-      [/^(.*) is not a ([A-Za-z_][A-Za-z0-9_]*)$/, (m) => [m[2]]],
-    ];
-    for (const [re, pick] of predicates) {
-      const m = first.match(re);
-      if (m) {
-        subject = m[1];
-        expected = pick(m);
-        break;
-      }
-    }
-  }
-  if (subject === null) return unknown;
-
-  // Peel the trailing "(actualtype)" off the subject.
-  let actual: string | null = null;
-  const withActual = subject.match(/^(.*) \(([^()]*)\)$/);
-  if (withActual) {
-    subject = withActual[1];
-    actual = withActual[2];
-  }
-
-  // An element prefix ("item 2 of ...") sits in front of the real subject.
-  let element: string | null = null;
-  const elementMatch = subject.match(ELEMENT_RE);
-  if (elementMatch) {
-    element = describeElement(elementMatch[1]);
-    subject = elementMatch[2];
-  }
-
-  if (subject === "the return value") {
-    return { kind: "return", name: null, element, actual, expected };
-  }
-  const argument = subject.match(/^argument "(.+)"$/);
-  if (argument) {
-    return { kind: "argument", name: argument[1], element, actual, expected };
-  }
-  const assigned = subject.match(/^value assigned to (.+)$/);
-  if (assigned) {
-    return { kind: "variable", name: assigned[1], element, actual, expected };
-  }
-  return { ...unknown, element, actual, expected };
+/** The check Python read, with its element in the words a student is shown. */
+function described(check: TypeCheck | undefined): TypeCheck {
+  if (check === undefined) return UNFAMILIAR;
+  return { ...check, element: check.element === null ? null : describeElement(check.element) };
 }
 
 /**
@@ -274,8 +172,6 @@ export function parseTypeCheckMessage(message: string): ParsedTypeCheckError {
  * general advice, which is correct but says less.
  */
 export interface ReturnContext {
-  /** The whole file. */
-  source: string;
   /** The student's line that the check fired on, or null. */
   line: string | null;
   /**
@@ -286,45 +182,39 @@ export interface ReturnContext {
    * passed for `r` on this line" - and on that line nothing was passed.
    */
   calledBy?: string | null;
-  /** What Python learned from the frames: the failing element, a swapped field. */
+  /**
+   * What Python learned: the check, the failing element, a swapped field,
+   * how a function that returned `None` is built.
+   */
   facts?: ErrorFacts;
 }
 
 /**
- * The members of the union being matched that have no `case`.
- *
- * Empty unless everything lines up: the subject is a plain parameter, that
- * parameter is annotated, and the annotation is a union written in this
- * file. Naming the wrong variant would be worse than naming none.
+ * The methods that change a value in place and give back `None`, so that
+ * `result = result.append(w)` leaves `result` as `None` - and the error
+ * then appears at the `return` two lines later with nothing to connect them.
  */
-function uncoveredVariants(
-  source: string,
-  functionName: string | null,
-  match: { subject: string; patterns: string[] },
-): string[] {
-  if (functionName === null || !/^[A-Za-z_]\w*$/.test(match.subject)) {
-    return [];
+const RETURNS_NONE = [
+  "append",
+  "extend",
+  "insert",
+  "remove",
+  "sort",
+  "reverse",
+  "clear",
+  "add",
+  "discard",
+  "update",
+];
+
+/** The in-place method `name` was last set from, and the line. */
+function setFromVoidMethod(facts: ErrorFacts | undefined, name: string): { method: string; line: number } | null {
+  const assigned = facts?.assigned?.[name];
+  if (assigned === undefined || !assigned.call.includes(".")) {
+    return null;
   }
-  const annotation = annotationOf(source, functionName, match.subject);
-  if (annotation === null) {
-    return [];
-  }
-  const members = unionMembersOf(source, annotation);
-  if (members === null) {
-    return [];
-  }
-  const covered = new Set(
-    match.patterns
-      .map((pattern) => /^([A-Za-z_]\w*)/.exec(pattern))
-      .filter((named): named is RegExpExecArray => named !== null)
-      .map((named) => named[1]),
-  );
-  // A wildcard `case _:` or a bare name catches everything, so nothing is
-  // uncovered and the real cause is elsewhere.
-  if (match.patterns.some((pattern) => /^_?$/.test(pattern.trim()))) {
-    return [];
-  }
-  return members.filter((member) => !covered.has(member));
+  const method = assigned.call.slice(assigned.call.lastIndexOf(".") + 1);
+  return RETURNS_NONE.includes(method) ? { method, line: assigned.line } : null;
 }
 
 /**
@@ -338,12 +228,7 @@ function uncoveredVariants(
  *   - a `match` fitted no case, so nothing happened and the function
  *     then ran off its end.
  */
-function noneReturn(
-  owner: string,
-  wanted: string,
-  functionName: string | null,
-  context: ReturnContext | undefined,
-): BeginnerExplanation {
+function noneReturn(owner: string, wanted: string, context: ReturnContext | undefined): BeginnerExplanation {
   const annotate = `Or annotate the return type as \`None\` if ${owner} is not meant to return anything.`;
 
   const returned =
@@ -351,7 +236,7 @@ function noneReturn(
   if (returned !== null && context !== undefined) {
     const expression = returned[1];
     const name = /^[A-Za-z_]\w*$/.test(expression) ? expression : null;
-    const void_ = name !== null ? assignedFromVoidMethod(context.source, name) : null;
+    const void_ = name !== null ? setFromVoidMethod(context.facts, name) : null;
     if (void_ !== null) {
       return {
         headline:
@@ -383,25 +268,23 @@ function noneReturn(
 
   // No `return` ran at all. If the function ends in a `match`, no case
   // fitting is overwhelmingly the reason.
-  const match = functionName !== null && context !== undefined
-    ? trailingMatch(context.source, functionName)
-    : null;
-  if (match !== null && match.atEndOfFunction && context !== undefined) {
+  const match = context?.facts?.returnedNone?.match ?? null;
+  if (match !== null) {
     const howToFix: string[] = [];
-    // When the thing being matched is a union written in this file, the
-    // variants with no `case` can be named outright.
-    const missing = uncoveredVariants(context.source, functionName, match);
+    // When what is matched is annotated with a union, the variants with no
+    // `case` can be named outright.
+    const missing = match.uncovered;
     if (missing.length > 0) {
       howToFix.push(
         `There is no \`case\` for ${missing.map((name) => `\`${name}\``).join(" or ")}.`,
       );
     } else {
       howToFix.push(`Every possible value of \`${match.subject}\` needs a \`case\`.`);
-      if (match.hasListPattern && !match.patterns.some((pattern) => pattern.trim() === "[]")) {
+      if (match.hasList && !match.patterns.some((pattern) => pattern.trim() === "[]")) {
         howToFix.push("The empty list, `case []:`, is the one most often left out.");
       }
     }
-    for (const pattern of match.fixedLengthPatterns) {
+    for (const pattern of match.fixedLength) {
       const parts = pattern.slice(1, -1).split(",").map((part) => part.trim());
       howToFix.push(
         `\`case ${pattern}:\` matches a list of exactly ${parts.length} items; ` +
@@ -420,7 +303,7 @@ function noneReturn(
   // A branch that ends in `print` is the single commonest version of this,
   // and it shows the right answer on screen - so the function looks fine.
   // Once found it is the cause, so the general advice is left out.
-  const printed = printEndingABranch(context?.source, functionName);
+  const printed = context?.facts?.returnedNone?.printed ?? null;
   if (printed !== null) {
     return {
       headline: `${owner} should return ${wanted}, but it finished without returning a value.`,
@@ -445,51 +328,12 @@ function noneReturn(
 }
 
 /**
- * A `print` that is the last statement of its branch, when there is one.
- *
- * Not "prints and never returns": `add_shipping` returns in two branches
- * and prints in the third, and it is the third that ran. A `print`
- * followed by a `return` in the same block is just output, and is left
- * alone.
- */
-function printEndingABranch(
-  source: string | undefined,
-  functionName: string | null,
-): { line: number; expression: string | null } | null {
-  if (source === undefined || functionName === null) {
-    return null;
-  }
-  const body = functionBody(source, functionName);
-  if (body === null) {
-    return null;
-  }
-  for (let i = 0; i < body.length; i++) {
-    const call = /^\s*print\s*\((.*)\)\s*(?:#.*)?$/.exec(body[i].text);
-    if (call === null) {
-      continue;
-    }
-    // The next line at this depth or shallower: a dedent, or nothing at
-    // all, means the print is where this branch ends.
-    const next = body.slice(i + 1).find((entry) => entry.indent <= body[i].indent);
-    if (next !== undefined && next.indent === body[i].indent) {
-      continue;
-    }
-    // One plain argument can be returned as it is; `print("x", y)` or a
-    // `sep=` cannot, so those get the question without a guess.
-    const argument = call[1].trim();
-    const single = argument.length > 0 && !/,(?![^()[\]{}]*[)\]}])/.test(argument);
-    return { line: body[i].line, expression: single ? argument : null };
-  }
-  return null;
-}
-
-/**
- * What every kind of explanation is built from: the parsed message, and the
- * phrases worked out from it once.
+ * What every kind of explanation is built from: the check, and the phrases
+ * worked out from it once.
  */
 interface TypeCheckCase {
   message: string;
-  parsed: ParsedTypeCheckError;
+  parsed: TypeCheck;
   functionName: string | null;
   level: Level | undefined;
   context: ReturnContext | undefined;
@@ -517,7 +361,7 @@ export function explainTypeCheckError(
   level?: Level,
   context?: ReturnContext,
 ): BeginnerExplanation {
-  const parsed = parseTypeCheckMessage(message);
+  const parsed = described(context?.facts?.check);
   const c: TypeCheckCase = {
     message,
     parsed,
@@ -536,7 +380,7 @@ export function explainTypeCheckError(
 
 /** One explanation per kind of message, so a new kind needs one to compile. */
 const BY_KIND: {
-  [Kind in ParsedTypeCheckError["kind"]]: (c: TypeCheckCase) => BeginnerExplanation;
+  [Kind in TypeCheck["kind"]]: (c: TypeCheckCase) => BeginnerExplanation;
 } = {
   argument: explainArgument,
   field: explainField,
@@ -696,12 +540,11 @@ function explainReturn({
   boolNote,
   annotation,
   context,
-  functionName,
 }: TypeCheckCase): BeginnerExplanation {
   // A `None` result has three quite different causes, and one message
   // for all of them describes the symptom rather than any of them.
   if (parsed.actual === "None" || parsed.actual === "NoneType") {
-    return noneReturn(owner, wanted, functionName, context);
+    return noneReturn(owner, wanted, context);
   }
   const got = parsed.actual ? describeType(parsed.actual) : "something else";
   const howToFix: string[] = [];

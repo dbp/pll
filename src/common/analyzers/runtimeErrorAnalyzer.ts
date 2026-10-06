@@ -1,6 +1,6 @@
-import { innermostUserFrame } from "../errors/pythonError";
 import { tableRowLine } from "../errors/sourceFacts";
 import { punctuated } from "../errors/wording";
+import { inRunFile, placeOf } from "./errorPlace";
 import { runtimeFindingFor, type AnalysisFinding, type RuntimeAnalyzerInput } from "./types";
 
 /**
@@ -14,27 +14,23 @@ import { runtimeFindingFor, type AnalysisFinding, type RuntimeAnalyzerInput } fr
  * riders)`). Analyzers that know an error well run first and win.
  */
 export function analyzeRuntimeError(input: RuntimeAnalyzerInput): AnalysisFinding {
-  const { error, fileName } = input;
+  const { error } = input;
   // The innermost frame the student wrote. When a library raised, that is
   // the line that called into it, which is the line to point at.
-  const blamed = innermostUserFrame(error);
-
-  // With no frame of the student's, the innermost one is PLL's or a
-  // library's, and its line number means nothing in their file. Only an
-  // error with no frames at all - one Python placed itself - keeps its own.
-  const line = blamed ? blamed.line : error.frames.length === 0 ? error.lineNumber : null;
+  const place = placeOf(input);
+  // A table's rows are read from the source, which the host has only for
+  // the file that was run.
+  const row = inRunFile(input, place) ? rowLine(input.source, place.lineNumber, error.message) : null;
   return runtimeFindingFor(input, {
     id: "runtime-error",
     headline: headlineFor(error.errorType, error.message),
     // Deliberately empty. A generic error has no generic remedy, and
     // inventing one would be worse than the message itself.
     howToFix: [],
-    fileName: blamed ? blamed.fileName : fileName,
-    lineNumber: rowLine(input.source, line, error.message) ?? line,
-    // The caret belongs to whichever frame raised, which is usually inside
-    // a library, so it would point at a column of code the student cannot
-    // see. Only trust it when the error came from their own innermost line.
-    column: blamed === null ? error.column : null,
+    lineNumber: row ?? place.lineNumber,
+    // No caret unless Python placed the error itself: the frame that raised
+    // is usually inside a library.
+    column: error.frames.length === 0 ? place.column : null,
   });
 }
 

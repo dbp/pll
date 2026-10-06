@@ -192,16 +192,29 @@ def _pll_check_dataclass_fields(cls):
                 bad = getattr(self, field_name)
                 shown = '"%s"' % bad if isinstance(bad, str) and '"' not in bad else repr(bad)
                 swapped = _pll_swapped_field(self, cache[0], field_name)
+                expected = _pll_hint_name(hint)
                 error = _pll_type_check_error(
                     "field %r of %r got %s (%s), not %s"
-                    % (field_name, cls.__name__, shown, type(bad).__name__, _pll_hint_name(hint))
+                    % (field_name, cls.__name__, shown, type(bad).__name__, expected)
                 )
+                # The parts, as `_pll_type_check_parts` gives typeguard's.
+                _pll_add_facts(error, check={
+                    "kind": "field",
+                    "name": field_name,
+                    "element": None,
+                    "actual": type(bad).__name__,
+                    "expected": [expected],
+                    "owner": cls.__name__,
+                    "value": shown,
+                })
                 if swapped:
                     _pll_add_facts(error, swapped_with=swapped)
                 raise error from None
 
     __init__.__name__ = "__init__"
     __init__.__qualname__ = "%s.__init__" % cls.__qualname__
+    # So `inspect.signature` gives the fields, not `*args, **kwargs`.
+    __init__.__wrapped__ = original
     cls.__init__ = __init__
     return cls
 

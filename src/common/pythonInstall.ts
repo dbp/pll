@@ -6,12 +6,13 @@ import {
   PLL_REACTOR_LIB_PY,
   PLL_TABLE_LIB_PY,
   PYODIDE_INSTALL_PY,
+  type PythonSource,
 } from "./pythonSources";
 import { PLL_VENDOR_DIR, VENDORED_WHEELS } from "./pythonVendor";
 
 /** The slice of the Pyodide API that putting PLL into an interpreter uses. */
 export interface PyodideCore {
-  runPython(code: string): unknown;
+  runPython(code: string, options?: { filename?: string }): unknown;
   FS: MemFS;
   globals: {
     get(name: string): PyCallable;
@@ -40,26 +41,31 @@ export function installPll(
   instance: PyodideCore,
   { interruptBuffer = null }: { interruptBuffer?: SharedArrayBuffer | null } = {},
 ): void {
-  for (const source of PLL_BOOTSTRAP_PY) {
-    instance.runPython(source);
+  for (const python of PLL_BOOTSTRAP_PY) {
+    run(instance, python);
   }
   if (interruptBuffer) {
     // PLL's SIGINT handler acknowledges a delivered Stop here, so the host
     // knows to stop re-asserting it (see interruptBuffer.ts).
     instance.globals.set("_pll_interrupt_view", new Uint8Array(interruptBuffer));
   }
-  instance.runPython(PLL_IMAGE_LIB_PY);
-  instance.runPython(PLL_TABLE_LIB_PY);
+  run(instance, PLL_IMAGE_LIB_PY);
+  run(instance, PLL_TABLE_LIB_PY);
   // After the image lib: `to_draw` handlers use the image primitives.
-  instance.runPython(PLL_REACTOR_LIB_PY);
+  run(instance, PLL_REACTOR_LIB_PY);
   // After the bootstrap: it borrows `_pll_fix_ast_ranges` for pytest's
   // assertion rewriting.
-  instance.runPython(PLL_EXAMPLAR_LIB_PY);
-  instance.runPython(PYODIDE_INSTALL_PY);
+  run(instance, PLL_EXAMPLAR_LIB_PY);
+  run(instance, PYODIDE_INSTALL_PY);
   // After PYODIDE_INSTALL_PY: it seeds `_pll_initial_globals`, which this
   // adds the typeguard helpers to.
   enableTypeChecking(instance);
   ensureWorkDir(instance.FS);
+}
+
+/** Run one of PLL's files, under its own name. */
+function run(instance: PyodideCore, python: PythonSource): void {
+  instance.runPython(python.source, { filename: python.file });
 }
 
 /** `atob` exists in both the browser worker and Node's worker_threads. */

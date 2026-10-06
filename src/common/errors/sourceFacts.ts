@@ -1,15 +1,12 @@
 /**
- * Small facts read back out of the student's own source.
+ * What the student's text says, read as text: a line of the file, the
+ * expression beside an operator on it, the line a table's row is on.
  *
- * Python's stock messages name a function or a class but not its shape:
- * `pen_cost() missing 1 required positional argument: 'message'` does not
- * say that `pen_cost` takes two, or what the other one is called. The file
- * does, and the host has it, so these read it rather than asking the
- * interpreter - which by the time the error surfaces has moved on.
- *
- * Deliberately textual, not a parse. These answer "what did the student
- * write on the `def` line", and a regex is honest about that; anything it
- * cannot read returns null and the caller falls back to Python's wording.
+ * Only what is written, and only where it is written. What a name *is* -
+ * a function's parameters, a class's fields - comes from Python, which has
+ * the definitions themselves wherever they were written
+ * (`ErrorFacts.definitions`). Anything these cannot read returns null and
+ * the caller falls back to Python's wording.
  */
 
 import { editDistance } from "../editDistance";
@@ -24,278 +21,221 @@ export function sourceLine(source: string, line: number | null): string | null {
 }
 
 /**
- * The student's text of the line `frame` is at - null unless the frame is
- * in this file. A line pulled out of the wrong file would make an
- * explanation confidently wrong.
+ * The call on `line` whose result the error is probably about.
+ *
+ * `print(deposit(acct1, 50) + 1)` has two calls on it and the interesting
+ * one is `deposit`: a wrapper like `print` or `str` is almost never what
+ * produced the offending value, so it is only named when it is the only
+ * call there.
  */
-export function frameLine(
-  source: string,
-  fileName: string,
-  frame: { fileName: string; line: number } | null,
-): string | null {
-  const basename = (path: string) => path.split(/[\\/]/).pop() ?? path;
-  if (frame === null || basename(frame.fileName) !== basename(fileName)) {
-    return null;
-  }
-  return sourceLine(source, frame.line);
-}
+export const WRAPPERS = new Set([
+  "print",
+  "str",
+  "int",
+  "float",
+  "bool",
+  "len",
+  "list",
+  "sorted",
+  "round",
+  "abs",
+  "sum",
+  "min",
+  "max",
+  "type",
+  "repr",
+]);
 
-/** Parameter names of `def name(...)`, with `self` and annotations dropped. */
-export function parametersOf(source: string, name: string): string[] | null {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`^[ \\t]*def[ \\t]+${escaped}[ \\t]*\\(([^)]*)\\)`, "m").exec(source);
-  if (match === null) {
+export function callOn(line: string | null): string | null {
+  const names = Array.from(
+    (line ?? "").matchAll(/([A-Za-z_][\w.]*)\s*\(/g),
+    (m) => m[1],
+  );
+  if (names.length === 0) {
     return null;
   }
-  return splitParameters(match[1]);
+  return names.find((name) => !WRAPPERS.has(name)) ?? names[0];
 }
 
 /**
- * The annotation written for one parameter of `def name(...)`.
+ * One line of Python, split into enough tokens to find an operand.
  *
- * `parametersOf` throws annotations away on purpose - it answers "how many
- * arguments" - but a `match` that fits no case needs the type to work out
- * which variant has no `case`.
+ * Several rules want "the expression next to this `+`" or "the argument of
+ * this `filter(`", written exactly as the student wrote it. A regex could
+ * not see past a nested call - `"Total: " + add_shipping(pen_cost(10,
+ * "bravo"))` was answered with `str(add_shipping)`, converting the function
+ * rather than its result. Tokens let brackets balance and strings be
+ * skipped, which is all these rules need.
  */
-export function annotationOf(
-  source: string,
-  name: string,
-  parameter: string,
-): string | null {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`^[ \\t]*def[ \\t]+${escaped}[ \\t]*\\(([^)]*)\\)`, "m").exec(source);
-  if (match === null) {
+export interface Token {
+  kind: "str" | "name" | "num" | "open" | "close" | "op";
+  text: string;
+  start: number;
+  end: number;
+}
+
+export function tokenize(line: string): Token[] {
+  const tokens: Token[] = [];
+  let i = 0;
+  while (i < line.length) {
+    const c = line[i];
+    if (c === "#") break;
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+    const start = i;
+    if (c === '"' || c === "'") {
+      i++;
+      while (i < line.length && line[i] !== c) i += line[i] === "\\" ? 2 : 1;
+      i = Math.min(i + 1, line.length);
+      tokens.push({ kind: "str", text: line.slice(start, i), start, end: i });
+    } else if (/[A-Za-z_]/.test(c)) {
+      while (i < line.length && /\w/.test(line[i])) i++;
+      tokens.push({ kind: "name", text: line.slice(start, i), start, end: i });
+    } else if (/\d/.test(c)) {
+      while (i < line.length && /[\d.]/.test(line[i])) i++;
+      tokens.push({ kind: "num", text: line.slice(start, i), start, end: i });
+    } else if ("([{".includes(c)) {
+      i++;
+      tokens.push({ kind: "open", text: c, start, end: i });
+    } else if (")]}".includes(c)) {
+      i++;
+      tokens.push({ kind: "close", text: c, start, end: i });
+    } else {
+      const two = line.slice(i, i + 2);
+      const op = ["<=", ">=", "==", "!=", "**", "//"].includes(two) ? two : c;
+      i += op.length;
+      tokens.push({ kind: "op", text: op, start, end: i });
+    }
+  }
+  return tokens;
+}
+
+/** The index of the bracket closing the one opened at `open`, or -1. */
+export function closing(tokens: Token[], open: number): number {
+  let depth = 0;
+  for (let i = open; i < tokens.length; i++) {
+    if (tokens[i].kind === "open") depth++;
+    if (tokens[i].kind === "close" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** The expression starting at token `at`: a name, its attributes and calls. */
+export function operandFrom(line: string, tokens: Token[], at: number): string | null {
+  if (at >= tokens.length || (tokens[at].kind !== "name" && tokens[at].kind !== "num")) {
     return null;
   }
-  for (const part of match[1].split(",")) {
-    const annotated = /^\s*([A-Za-z_]\w*)\s*:\s*([^=]+?)\s*$/.exec(part);
-    if (annotated !== null && annotated[1] === parameter) {
-      return annotated[2];
+  let last = at;
+  for (let i = at + 1; i < tokens.length; ) {
+    if (tokens[i].text === "." && tokens[i + 1]?.kind === "name") {
+      last = i + 1;
+      i += 2;
+    } else if (tokens[i].kind === "open" && tokens[i].text !== "{") {
+      const shut = closing(tokens, i);
+      if (shut < 0) return null;
+      last = shut;
+      i = shut + 1;
+    } else {
+      break;
+    }
+  }
+  return line.slice(tokens[at].start, tokens[last].end);
+}
+
+/** The expression ending at token `at`, read backwards to where it starts. */
+export function operandBefore(line: string, tokens: Token[], at: number): string | null {
+  let first = at;
+  let i = at;
+  while (i >= 0) {
+    if (tokens[i].kind === "close") {
+      // Walk back to the matching open bracket.
+      let depth = 0;
+      let j = i;
+      for (; j >= 0; j--) {
+        if (tokens[j].kind === "close") depth++;
+        if (tokens[j].kind === "open" && --depth === 0) break;
+      }
+      if (j < 0) return null;
+      first = j;
+      i = j - 1;
+      continue;
+    }
+    if (tokens[i].kind === "name" || tokens[i].kind === "num") {
+      first = i;
+      if (tokens[i - 1]?.text === "." && tokens[i - 2]?.kind === "name") {
+        i -= 2;
+        continue;
+      }
+      break;
+    }
+    if (i === at) return null;
+    break;
+  }
+  if (tokens[first].kind !== "name" && tokens[first].kind !== "num") return null;
+  return line.slice(tokens[first].start, tokens[at].end);
+}
+
+/** A string literal and the operand `+` joins it to, as written. */
+export function concatOperands(
+  line: string,
+): { text: string; value: string; textFirst: boolean } | null {
+  const tokens = tokenize(line);
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].kind !== "str") continue;
+    if (tokens[i + 1]?.text === "+") {
+      const value = operandFrom(line, tokens, i + 2);
+      if (value !== null) return { text: tokens[i].text, value, textFirst: true };
+    }
+    if (tokens[i - 1]?.text === "+" && i >= 2) {
+      const value = operandBefore(line, tokens, i - 2);
+      if (value !== null) return { text: tokens[i].text, value, textFirst: false };
     }
   }
   return null;
 }
 
-/** Field names of a dataclass body, in order. */
-export function fieldsOf(source: string, className: string): string[] | null {
-  const escaped = className.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const header = new RegExp(`^([ \\t]*)class[ \\t]+${escaped}\\b.*$`, "m").exec(source);
-  if (header === null) {
-    return null;
-  }
-  const lines = source.slice(header.index).split(/\r?\n/).slice(1);
-  const fields: string[] = [];
-  for (const line of lines) {
-    if (line.trim().length === 0) {
-      continue;
-    }
-    const indent = line.length - line.trimStart().length;
-    // Back at or left of the `class` line: the body is over.
-    if (indent <= header[1].length) {
-      break;
-    }
-    const field = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*:/.exec(line);
-    if (field !== null) {
-      fields.push(field[1]);
+/** The expression `.attr` is read from on `line`, as written. */
+export function attributeReceiver(line: string | null, attr: string): string | null {
+  if (line === null) return null;
+  const tokens = tokenize(line);
+  for (let i = 2; i < tokens.length; i++) {
+    if (tokens[i].text === attr && tokens[i - 1].text === ".") {
+      return operandBefore(line, tokens, i - 2);
     }
   }
-  return fields.length > 0 ? fields : null;
+  return null;
 }
 
-/** One line of a function body, with the line number it came from. */
-export interface BodyLine {
-  /** 1-based line number in the whole file. */
-  line: number;
-  /** The line's text, indentation included. */
-  text: string;
-  /** Columns of leading whitespace, relative to the `def`. */
-  indent: number;
+/** The expression subscripted on `line` - the `xs` of `xs[0]`. */
+export function subscriptReceiver(line: string | null): string | null {
+  if (line === null) return null;
+  const tokens = tokenize(line);
+  for (let i = 1; i < tokens.length; i++) {
+    const before = tokens[i - 1];
+    if (tokens[i].text === "[" && (before.kind === "name" || before.text === ")" || before.text === "]")) {
+      return operandBefore(line, tokens, i - 1);
+    }
+  }
+  return null;
 }
 
-/**
- * The body of `def name(...)`, by indentation.
- *
- * Blank lines are dropped, so `indent` is always meaningful, and comments
- * are kept - a comment where a `return` should be is itself a fact about
- * what the student wrote.
- */
-export function functionBody(source: string, name: string): BodyLine[] | null {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const header = new RegExp(`^([ \\t]*)def[ \\t]+${escaped}[ \\t]*\\(`, "m").exec(source);
-  if (header === null) {
-    return null;
-  }
-  const lines = source.split(/\r?\n/);
-  const start = source.slice(0, header.index).split(/\r?\n/).length;
-  const outer = header[1].length;
-  const body: BodyLine[] = [];
-  for (let i = start; i < lines.length; i++) {
-    const text = lines[i];
-    if (text.trim().length === 0) {
-      continue;
-    }
-    const indent = text.length - text.trimStart().length;
-    if (indent <= outer) {
-      break;
-    }
-    body.push({ line: i + 1, text, indent: indent - outer });
-  }
-  return body.length > 0 ? body : null;
+/** What `for ... in` loops over on `line`. */
+export function loopedOver(line: string | null): string | null {
+  if (line === null) return null;
+  const tokens = tokenize(line);
+  const at = tokens.findIndex((t) => t.text === "in" && tokens[0]?.text === "for");
+  return at < 0 ? null : operandFrom(line, tokens, at + 1);
 }
 
-/** What a `match` inside a function looks like, for a `None` that fell out of it. */
-export interface MatchFacts {
-  /** The expression being matched, as written. */
-  subject: string;
-  /** Whether reaching the end of the `match` reaches the end of the function. */
-  atEndOfFunction: boolean;
-  /** `case` patterns that are fixed-length lists of 2 or more, like `[f, r]`. */
-  fixedLengthPatterns: string[];
-  /** Every `case` pattern, as written. */
-  patterns: string[];
-  /** Whether any `case` matches a list, so the empty list is worth a mention. */
-  hasListPattern: boolean;
-}
-
-/**
- * The `match` a function ends with, if it ends with one.
- *
- * A `match` where no `case` fits does not raise: it simply does nothing,
- * and the function then runs off its end and returns `None`. That is the
- * commonest way a recursive function over a union goes wrong, and the
- * message for it - "finished without returning a value" - describes the
- * symptom rather than the cause.
- */
-export function trailingMatch(source: string, name: string): MatchFacts | null {
-  const body = functionBody(source, name);
-  if (body === null) {
-    return null;
-  }
-  // The last `match` at the body's own indentation level.
-  const base = Math.min(...body.map((entry) => entry.indent));
-  let found = -1;
-  for (let i = 0; i < body.length; i++) {
-    if (body[i].indent === base && /^match\b/.test(body[i].text.trim())) {
-      found = i;
-    }
-  }
-  if (found < 0) {
-    return null;
-  }
-  const subject = /^match\s+(.+?)\s*:\s*(?:#.*)?$/.exec(body[found].text.trim());
-  if (subject === null) {
-    return null;
-  }
-  // Anything after the match block, at the body's level, would run instead
-  // of falling off the end.
-  let atEndOfFunction = true;
-  const fixedLengthPatterns: string[] = [];
-  const patterns: string[] = [];
-  let hasListPattern = false;
-  for (let i = found + 1; i < body.length; i++) {
-    if (body[i].indent <= base) {
-      atEndOfFunction = false;
-      break;
-    }
-    const pattern = /^case\s+(.+?)\s*(?:if\s.+?)?:\s*(?:#.*)?$/.exec(body[i].text.trim());
-    if (pattern === null) {
-      continue;
-    }
-    patterns.push(pattern[1]);
-    const list = /^\[([^\]]*)\]$/.exec(pattern[1]);
-    if (list === null) {
-      continue;
-    }
-    hasListPattern = true;
-    // A pattern of two or more names with no `*` is the one that silently
-    // matches only that exact length. `[]` is the base case and correct.
-    const parts = list[1].split(",").map((part) => part.trim()).filter(Boolean);
-    if (parts.length >= 2 && !pattern[1].includes("*")) {
-      fixedLengthPatterns.push(pattern[1]);
-    }
-  }
-  return {
-    subject: subject[1],
-    atEndOfFunction,
-    fixedLengthPatterns,
-    patterns,
-    hasListPattern,
-  };
-}
-
-/**
- * The method a name was last assigned from, when that method returns `None`.
- *
- * `result = result.append(w)` leaves `result` as `None`, and the error then
- * appears at the `return` two lines later with nothing to connect them.
- */
-const RETURNS_NONE = [
-  "append",
-  "extend",
-  "insert",
-  "remove",
-  "sort",
-  "reverse",
-  "clear",
-  "add",
-  "discard",
-  "update",
-];
-
-export function assignedFromVoidMethod(
-  source: string,
-  name: string,
-): { method: string; line: number } | null {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(
-    `^[ \\t]*${escaped}[ \\t]*=[ \\t]*[A-Za-z_][\\w.]*\\.(\\w+)[ \\t]*\\(`,
-    "gm",
-  );
-  let found: { method: string; line: number } | null = null;
-  for (const match of source.matchAll(pattern)) {
-    if (!RETURNS_NONE.includes(match[1])) {
-      continue;
-    }
-    found = {
-      method: match[1],
-      line: source.slice(0, match.index).split(/\r?\n/).length,
-    };
-  }
-  return found;
-}
-
-/** The classes a union alias is made of: `Animal = Boa | Armadillo`. */
-export function unionMembersOf(source: string, name: string): string[] | null {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`^[ \\t]*${escaped}[ \\t]*(?::[^=]+)?=([^\\n#]+)`, "m").exec(source);
-  if (match === null || !match[1].includes("|")) {
-    return null;
-  }
-  const members = match[1]
-    .split("|")
-    .map((part) => part.trim().replace(/^["']|["']$/g, ""))
-    .filter((part) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(part));
-  return members.length > 1 ? members : null;
-}
-
-function splitParameters(text: string): string[] {
-  const names: string[] = [];
-  let depth = 0;
-  let current = "";
-  for (const ch of text) {
-    if ("([{".includes(ch)) depth += 1;
-    if (")]}".includes(ch)) depth -= 1;
-    if (ch === "," && depth === 0) {
-      names.push(current);
-      current = "";
-      continue;
-    }
-    current += ch;
-  }
-  names.push(current);
-  return names
-    .map((part) => part.split(/[:=]/)[0].trim().replace(/^\*+/, ""))
-    .filter((part) => part.length > 0 && part !== "self");
+/** The operand on one side of the first `operator` on `line`. */
+export function operandBeside(line: string | null, operator: string, side: "left" | "right"): string | null {
+  if (line === null) return null;
+  const tokens = tokenize(line);
+  const at = tokens.findIndex((t) => t.kind === "op" && t.text === operator);
+  if (at < 0) return null;
+  return side === "left" ? operandBefore(line, tokens, at - 1) : operandFrom(line, tokens, at + 1);
 }
 
 /** `a`, `b` and `c` - for listing names in prose. */

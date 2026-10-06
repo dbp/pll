@@ -18,6 +18,8 @@ export interface WireError {
   error_file?: string | null;
   line_number: number | null;
   column: number | null;
+  /** The text of that line, when it is the student's. */
+  error_text?: string | null;
   error_frames?: WireFrame[];
   error_facts?: WireFacts;
 }
@@ -28,6 +30,10 @@ export interface WireFrame {
   column: number | null;
   function: string | null;
   user: boolean;
+  /** The student's line, for a frame of theirs. */
+  text?: string | null;
+  /** Their function's parameters, for a frame of theirs in one. */
+  parameters?: string[] | null;
 }
 
 export interface WireFacts {
@@ -36,6 +42,39 @@ export interface WireFacts {
   length?: number;
   element_value?: string;
   swapped_with?: string;
+  check?: WireTypeCheck;
+  definitions?: Record<string, WireDefinition>;
+  assigned?: Record<string, { call: string; line: number }>;
+  returned_none?: {
+    match: WireTrailingMatch | null;
+    printed: { line: number; expression: string | null } | null;
+  };
+}
+
+/** What a name in the error is, as `_pll_definition` describes it. */
+export type WireDefinition =
+  | { kind: "function"; parameters: string[]; required: string[] }
+  | { kind: "class"; students: boolean; fields: string[]; dataclass: boolean }
+  | { kind: "union"; members: string[] };
+
+/** As `_pll_trailing_match` describes it. */
+export interface WireTrailingMatch {
+  subject: string;
+  patterns: string[];
+  fixed_length: string[];
+  has_list: boolean;
+  uncovered: string[];
+}
+
+/** What failed its annotation, as `_pll_type_check_parts` reads it. */
+export interface WireTypeCheck {
+  kind: "argument" | "return" | "variable" | "field" | "unknown";
+  name: string | null;
+  element: string | null;
+  actual: string | null;
+  expected: string[];
+  owner?: string;
+  value?: string;
 }
 
 /** Whether a prompt line is complete yet, as `_pll_repl_check` says. */

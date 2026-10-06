@@ -96,6 +96,8 @@ interface Session {
   streamLines: number;
   /** Whether this run already reported that output was cut off. */
   streamTruncated: boolean;
+  /** Other files a run put a finding on, for the next run to clear. */
+  otherDiagnosed: vscode.Uri[];
 }
 
 /**
@@ -400,6 +402,7 @@ export class ReplSession implements vscode.Disposable {
         stopRequestedSeq: -1,
         streamLines: 0,
         streamTruncated: false,
+        otherDiagnosed: [],
       };
       this.sessions.set(key, session);
     }
@@ -695,6 +698,9 @@ export class ReplSession implements vscode.Disposable {
     this.setSessionBusy(session, true, "Starting...");
 
     this.deps.diagnostics.clear(document.uri);
+    for (const uri of session.otherDiagnosed.splice(0)) {
+      this.deps.diagnostics.clear(uri);
+    }
 
     if (!this.initialized && !(await this.ensureInitialized())) {
       this.reportInitFailure(session);
@@ -775,9 +781,18 @@ export class ReplSession implements vscode.Disposable {
       },
       runtimeFinding: (finding) => {
         entry({ kind: "finding", finding: serializeFinding(finding) });
-        if (document) {
+        if (!document) return;
+        if (finding.fileName === session.fileName) {
           this.deps.diagnostics.setFinding(document.uri, document, finding);
+          return;
         }
+        // In another of the student's files, next to this one.
+        const folder = folderUri(document.uri);
+        if (folder === undefined) return;
+        const uri = vscode.Uri.joinPath(folder, finding.fileName);
+        const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+        this.deps.diagnostics.setFinding(uri, open, finding);
+        session.otherDiagnosed.push(uri);
       },
       event: (event) => this.handleEvent(session, event, shown),
       say: (text) => entry({ kind: "banner", text }),

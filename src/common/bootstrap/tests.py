@@ -149,7 +149,7 @@ def _pll_is_async(fn):
         return False
 
 
-def _pll_call_test(fn, code=""):
+def _pll_call_test(fn, run=None):
     """Run one test function.
 
     Returns `(outcome, message, stdout, error)`. `error` is the
@@ -195,7 +195,7 @@ def _pll_call_test(fn, code=""):
             "error",
             name + ": " + (str(e) or "this test raised an exception."),
             buf.getvalue().strip() or None,
-            _pll_error_info(e, code),
+            _pll_error_info(e, run),
         )
 
 
@@ -251,11 +251,12 @@ def _pll_tests_result():
     return {"passed": 0, "failed": 0, "skipped": 0, "errors": 0, "tests": []}
 
 
-def _pll_run_collected_tests(ns, locs, code):
+def _pll_run_collected_tests(ns, locs, run):
     """Run the `test_*` functions and `Test*` classes the program defined.
 
     `ns` is the program's own namespace, so the tests see exactly what it
-    made. A Stop ends them: the tests that finished keep their results, the
+    made; `run` is `(filename, code)` for the program, as `_pll_error_info`
+    takes it. A Stop ends them: the tests that finished keep their results, the
     one running is marked as where it stopped, and the rest are not run.
     """
     result = _pll_tests_result()
@@ -264,7 +265,7 @@ def _pll_run_collected_tests(ns, locs, code):
     try:
         for name, fn in _pll_iter_tests(ns):
             current = name
-            outcome, message, cap, error = _pll_call_test(fn, code)
+            outcome, message, cap, error = _pll_call_test(fn, run)
             result[{"passed": "passed", "failed": "failed", "skipped": "skipped"}.get(outcome, "errors")] += 1
             rows.append({
                 "name": name,

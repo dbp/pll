@@ -2,9 +2,9 @@
  * PLL's wording for the errors Python words badly for a beginner.
  *
  * Each rule reads Python's message and, where it needs more, the student's
- * own source: Python says `pen_cost() missing 1 required positional
- * argument: 'message'` without saying that `pen_cost` takes two, and the
- * `def` line does.
+ * line and what Python found out about their code: Python says `pen_cost()
+ * missing 1 required positional argument: 'message'` without saying that
+ * `pen_cost` takes two, and the definition it sends does.
  *
  * Returns null when no rule fits, and the message is then shown as Python
  * wrote it. That is the right default - a confident wrong explanation is
@@ -19,16 +19,23 @@ import {
   FUNCTION_TAKERS,
   HANDLER_KEYWORDS,
   libraryHint,
-  librarySignature,
 } from "./libraryFacts";
-import type { ErrorFacts, ErrorFrame } from "./pythonError";
+import type { Definition, ErrorFacts, ErrorFrame } from "./pythonError";
 import { plural, typeWords } from "./wording";
 import {
+  attributeReceiver,
+  callOn,
   closestName,
-  fieldsOf,
+  closing,
+  concatOperands,
   listNames,
-  parametersOf,
-  unionMembersOf,
+  loopedOver,
+  operandBefore,
+  operandBeside,
+  operandFrom,
+  subscriptReceiver,
+  tokenize,
+  WRAPPERS,
 } from "./sourceFacts";
 import type { BeginnerExplanation } from "./types";
 
@@ -108,41 +115,32 @@ function quotedNames(message: string): string[] {
   return Array.from(message.matchAll(/'(\w+)'/g), (m) => m[1]);
 }
 
-/**
- * The call on `line` whose result the error is probably about.
- *
- * `print(deposit(acct1, 50) + 1)` has two calls on it and the interesting
- * one is `deposit`: a wrapper like `print` or `str` is almost never what
- * produced the offending value, so it is only named when it is the only
- * call there.
- */
-const WRAPPERS = new Set([
-  "print",
-  "str",
-  "int",
-  "float",
-  "bool",
-  "len",
-  "list",
-  "sorted",
-  "round",
-  "abs",
-  "sum",
-  "min",
-  "max",
-  "type",
-  "repr",
-]);
+// -- what Python found the names to be --------------------------------------
 
-function callOn(line: string | null): string | null {
-  const names = Array.from(
-    (line ?? "").matchAll(/([A-Za-z_][\w.]*)\s*\(/g),
-    (m) => m[1],
-  );
-  if (names.length === 0) {
-    return null;
-  }
-  return names.find((name) => !WRAPPERS.has(name)) ?? names[0];
+function definition(ctx: StockContext, name: string): Definition | undefined {
+  return ctx.facts.definitions?.[name];
+}
+
+/** A function's parameters - those it requires, or every positional one. */
+function parametersOf(ctx: StockContext, name: string, which: "required" | "parameters"): string[] | null {
+  const found = definition(ctx, name);
+  return found?.kind === "function" ? found[which] : null;
+}
+
+function isStudentsClass(ctx: StockContext, name: string): boolean {
+  const found = definition(ctx, name);
+  return found?.kind === "class" && found.students;
+}
+
+/** The fields of one of the student's classes, or null when it has none. */
+function fieldsOf(ctx: StockContext, name: string): string[] | null {
+  const found = definition(ctx, name);
+  return found?.kind === "class" && found.fields.length > 0 ? found.fields : null;
+}
+
+function unionMembersOf(ctx: StockContext, name: string): string[] | null {
+  const found = definition(ctx, name);
+  return found?.kind === "union" && found.members.length > 1 ? found.members : null;
 }
 
 /** Why a value is `None`, which is almost never obvious to a beginner. */
@@ -151,152 +149,11 @@ const WHY_NONE = [
   "A method that changes something in place - `append`, `sort` - also gives back `None`.",
 ];
 
-// -- reading a line ---------------------------------------------------------
-
-/**
- * One line of Python, split into enough tokens to find an operand.
- *
- * Several rules want "the expression next to this `+`" or "the argument of
- * this `filter(`", written exactly as the student wrote it. A regex could
- * not see past a nested call - `"Total: " + add_shipping(pen_cost(10,
- * "bravo"))` was answered with `str(add_shipping)`, converting the function
- * rather than its result. Tokens let brackets balance and strings be
- * skipped, which is all these rules need.
- */
-interface Token {
-  kind: "str" | "name" | "num" | "open" | "close" | "op";
-  text: string;
-  start: number;
-  end: number;
-}
-
-function tokenize(line: string): Token[] {
-  const tokens: Token[] = [];
-  let i = 0;
-  while (i < line.length) {
-    const c = line[i];
-    if (c === "#") break;
-    if (/\s/.test(c)) {
-      i++;
-      continue;
-    }
-    const start = i;
-    if (c === '"' || c === "'") {
-      i++;
-      while (i < line.length && line[i] !== c) i += line[i] === "\\" ? 2 : 1;
-      i = Math.min(i + 1, line.length);
-      tokens.push({ kind: "str", text: line.slice(start, i), start, end: i });
-    } else if (/[A-Za-z_]/.test(c)) {
-      while (i < line.length && /\w/.test(line[i])) i++;
-      tokens.push({ kind: "name", text: line.slice(start, i), start, end: i });
-    } else if (/\d/.test(c)) {
-      while (i < line.length && /[\d.]/.test(line[i])) i++;
-      tokens.push({ kind: "num", text: line.slice(start, i), start, end: i });
-    } else if ("([{".includes(c)) {
-      i++;
-      tokens.push({ kind: "open", text: c, start, end: i });
-    } else if (")]}".includes(c)) {
-      i++;
-      tokens.push({ kind: "close", text: c, start, end: i });
-    } else {
-      const two = line.slice(i, i + 2);
-      const op = ["<=", ">=", "==", "!=", "**", "//"].includes(two) ? two : c;
-      i += op.length;
-      tokens.push({ kind: "op", text: op, start, end: i });
-    }
-  }
-  return tokens;
-}
-
-/** The index of the bracket closing the one opened at `open`, or -1. */
-function closing(tokens: Token[], open: number): number {
-  let depth = 0;
-  for (let i = open; i < tokens.length; i++) {
-    if (tokens[i].kind === "open") depth++;
-    if (tokens[i].kind === "close" && --depth === 0) return i;
-  }
-  return -1;
-}
-
-/** The expression starting at token `at`: a name, its attributes and calls. */
-function operandFrom(line: string, tokens: Token[], at: number): string | null {
-  if (at >= tokens.length || (tokens[at].kind !== "name" && tokens[at].kind !== "num")) {
-    return null;
-  }
-  let last = at;
-  for (let i = at + 1; i < tokens.length; ) {
-    if (tokens[i].text === "." && tokens[i + 1]?.kind === "name") {
-      last = i + 1;
-      i += 2;
-    } else if (tokens[i].kind === "open" && tokens[i].text !== "{") {
-      const shut = closing(tokens, i);
-      if (shut < 0) return null;
-      last = shut;
-      i = shut + 1;
-    } else {
-      break;
-    }
-  }
-  return line.slice(tokens[at].start, tokens[last].end);
-}
-
-/** The expression ending at token `at`, read backwards to where it starts. */
-function operandBefore(line: string, tokens: Token[], at: number): string | null {
-  let first = at;
-  let i = at;
-  while (i >= 0) {
-    if (tokens[i].kind === "close") {
-      // Walk back to the matching open bracket.
-      let depth = 0;
-      let j = i;
-      for (; j >= 0; j--) {
-        if (tokens[j].kind === "close") depth++;
-        if (tokens[j].kind === "open" && --depth === 0) break;
-      }
-      if (j < 0) return null;
-      first = j;
-      i = j - 1;
-      continue;
-    }
-    if (tokens[i].kind === "name" || tokens[i].kind === "num") {
-      first = i;
-      if (tokens[i - 1]?.text === "." && tokens[i - 2]?.kind === "name") {
-        i -= 2;
-        continue;
-      }
-      break;
-    }
-    if (i === at) return null;
-    break;
-  }
-  if (tokens[first].kind !== "name" && tokens[first].kind !== "num") return null;
-  return line.slice(tokens[first].start, tokens[at].end);
-}
-
-/** A string literal and the operand `+` joins it to, as written. */
-function concatOperands(
-  line: string,
-): { text: string; value: string; textFirst: boolean } | null {
-  const tokens = tokenize(line);
-  for (let i = 0; i < tokens.length; i++) {
-    if (tokens[i].kind !== "str") continue;
-    if (tokens[i + 1]?.text === "+") {
-      const value = operandFrom(line, tokens, i + 2);
-      if (value !== null) return { text: tokens[i].text, value, textFirst: true };
-    }
-    if (tokens[i - 1]?.text === "+" && i >= 2) {
-      const value = operandBefore(line, tokens, i - 2);
-      if (value !== null) return { text: tokens[i].text, value, textFirst: false };
-    }
-  }
-  return null;
-}
-
 /**
  * A `+` operand that holds what `input()` returned, and the sum with it
  * converted: `age + 1` becomes `int(age) + 1`.
  */
-function typedOperand(line: string, source: string): { name: string; fixed: string } | null {
+function typedOperand(line: string, facts: ErrorFacts): { name: string; fixed: string } | null {
   const tokens = tokenize(line);
   for (let i = 0; i < tokens.length; i++) {
     if (tokens[i].text !== "+") continue;
@@ -305,8 +162,7 @@ function typedOperand(line: string, source: string): { name: string; fixed: stri
       if (token?.kind !== "name" || tokens[at + 1]?.text === "(" || tokens[at - 1]?.text === ".") {
         continue;
       }
-      const escaped = token.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      if (!new RegExp(`^[ \\t]*${escaped}[ \\t]*=[ \\t]*input[ \\t]*\\(`, "m").test(source)) {
+      if (facts.assigned?.[token.text]?.call !== "input") {
         continue;
       }
       const left = side === "left" ? `int(${token.text})` : operandBefore(line, tokens, i - 1);
@@ -343,7 +199,7 @@ function whyNone(
     // A parameter got its `None` from whoever called the function.
     const frames = ctx.frames.filter((frame) => frame.user);
     const inside = frames.at(-1)?.functionName ?? null;
-    if (inside !== null && (parametersOf(ctx.source, inside) ?? []).includes(receiver)) {
+    if (inside !== null && (frames.at(-1)?.parameters ?? []).includes(receiver)) {
       const caller = frames.at(-2);
       return {
         subject,
@@ -355,7 +211,7 @@ function whyNone(
         ],
       };
     }
-    const setFrom = lastCallAssignedTo(ctx.source, receiver);
+    const setFrom = ctx.facts.assigned?.[receiver] ?? null;
     return {
       subject,
       howToFix:
@@ -376,60 +232,6 @@ function whyNone(
     subject: named !== undefined ? `\`${named}(...)\` gave back \`None\`` : unknown,
     howToFix: WHY_NONE,
   };
-}
-
-/** The last `name = call(...)` in `source`: the call, and its line. */
-function lastCallAssignedTo(source: string, name: string): { call: string; line: number } | null {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`^[ \\t]*${escaped}[ \\t]*=(?!=)[ \\t]*([A-Za-z_][\\w.]*)\\s*\\(`);
-  let found: { call: string; line: number } | null = null;
-  source.split(/\r?\n/).forEach((text, i) => {
-    const m = pattern.exec(text);
-    if (m !== null) found = { call: m[1], line: i + 1 };
-  });
-  return found;
-}
-
-/** The expression `.attr` is read from on `line`, as written. */
-function attributeReceiver(line: string | null, attr: string): string | null {
-  if (line === null) return null;
-  const tokens = tokenize(line);
-  for (let i = 2; i < tokens.length; i++) {
-    if (tokens[i].text === attr && tokens[i - 1].text === ".") {
-      return operandBefore(line, tokens, i - 2);
-    }
-  }
-  return null;
-}
-
-/** The expression subscripted on `line` - the `xs` of `xs[0]`. */
-function subscriptReceiver(line: string | null): string | null {
-  if (line === null) return null;
-  const tokens = tokenize(line);
-  for (let i = 1; i < tokens.length; i++) {
-    const before = tokens[i - 1];
-    if (tokens[i].text === "[" && (before.kind === "name" || before.text === ")" || before.text === "]")) {
-      return operandBefore(line, tokens, i - 1);
-    }
-  }
-  return null;
-}
-
-/** What `for ... in` loops over on `line`. */
-function loopedOver(line: string | null): string | null {
-  if (line === null) return null;
-  const tokens = tokenize(line);
-  const at = tokens.findIndex((t) => t.text === "in" && tokens[0]?.text === "for");
-  return at < 0 ? null : operandFrom(line, tokens, at + 1);
-}
-
-/** The operand on one side of the first `operator` on `line`. */
-function operandBeside(line: string | null, operator: string, side: "left" | "right"): string | null {
-  if (line === null) return null;
-  const tokens = tokenize(line);
-  const at = tokens.findIndex((t) => t.kind === "op" && t.text === operator);
-  if (at < 0) return null;
-  return side === "left" ? operandBefore(line, tokens, at - 1) : operandFrom(line, tokens, at + 1);
 }
 
 /**
@@ -508,9 +310,9 @@ const tooFewArguments: Rule = {
       };
     }
 
-    // The student's own `def` first, then PLL's own libraries - `circle` has
-    // no `def` in the file but its contract is known all the same.
-    const names = parametersOf(ctx.source, name) ?? librarySignature(name)?.required ?? null;
+    // Wherever it was defined: the student's file, another of theirs, or
+    // PLL's own library.
+    const names = parametersOf(ctx, name, "required");
     if (names === null) {
       // An imported function from somewhere else: say only what is missing,
       // which Python did name, rather than inventing a total.
@@ -547,7 +349,7 @@ const tooManyArguments: Rule = {
   explain: (m, ctx) => {
     const [, name, takesText, givenText] = m;
     // Too many, so the limit is every parameter there is, optional included.
-    const names = parametersOf(ctx.source, name) ?? librarySignature(name)?.all ?? null;
+    const names = parametersOf(ctx, name, "parameters");
     const extra = Number(givenText) - (names?.length ?? Number(takesText));
     return {
       headline: `\`${name}\` ${takesClause(names, Number(takesText))}, but got ${givenText}.`,
@@ -573,7 +375,7 @@ const missingDataclass: Rule = {
   pattern: /^(\w+)\(\) takes no arguments/,
   explain: (m, ctx) => {
     const className = m[1];
-    const fields = fieldsOf(ctx.source, className);
+    const fields = fieldsOf(ctx, className);
     if (fields === null) {
       return null;
     }
@@ -601,7 +403,7 @@ const dataclassArity: Rule = {
   pattern: /^(\w+)\.__init__\(\) (?:missing (\d+) required positional argument|takes \d+ positional arguments? but \d+ (?:was|were) given)/,
   explain: (m, ctx, message) => {
     const className = m[1];
-    const fields = fieldsOf(ctx.source, className);
+    const fields = fieldsOf(ctx, className);
     if (fields === null) {
       return {
         headline: `\`${className}\` was given the wrong number of values.`,
@@ -627,28 +429,28 @@ const dataclassArity: Rule = {
 };
 
 /**
- * A method of PLL's own libraries called with too few arguments.
+ * A method called with too few arguments.
  *
- * Python names the class (`Table.scatter_plot()`), which the student never
- * typed - they wrote `movies.scatter_plot(...)`.
+ * Python names the class (`Table.scatter_plot()`), which the student may
+ * never have typed - they wrote `movies.scatter_plot(...)`.
  */
 const methodArity: Rule = {
   types: ["TypeError"],
   pattern: /^(\w+)\.(\w+)\(\) missing (\d+) required positional argument/,
-  explain: (m, _ctx, message) => {
+  explain: (m, ctx, message) => {
     if (m[2] === "__init__") {
       return null;
     }
-    const [, , method, missingText] = m;
+    const [, owner, method, missingText] = m;
     const missing = Number(missingText);
-    const signature = librarySignature(method);
-    if (signature === null) {
+    const required = parametersOf(ctx, `${owner}.${method}`, "required");
+    if (required === null) {
       return { headline: needsMore(method, missing, message), howToFix: [] };
     }
     return {
       headline:
-        `\`${method}\` ${takesClause(signature.required, signature.required.length)}, ` +
-        `but got ${Math.max(signature.required.length - missing, 0)}.`,
+        `\`${method}\` ${takesClause(required, required.length)}, ` +
+        `but got ${Math.max(required.length - missing, 0)}.`,
       howToFix: [],
     };
   },
@@ -665,13 +467,13 @@ const noSuchAttribute: Rule = {
       const none = whyNone(ctx, attributeReceiver(ctx.offendingLine, asked));
       return { headline: `${none.subject}, so it has no \`${asked}\`.`, howToFix: none.howToFix };
     }
-    const fields = fieldsOf(ctx.source, lastSegment(type));
+    const fields = fieldsOf(ctx, lastSegment(type));
     if (fields === null) {
       // A class of theirs with no fields - the empty end of a recursive
       // type, like `NoInfo` - has nothing to get, so the value needs
       // checking for before its fields are used.
       const name = lastSegment(type);
-      if (new RegExp(`^[ \\t]*class[ \\t]+${name}\\b`, "m").test(ctx.source)) {
+      if (isStudentsClass(ctx, name)) {
         return {
           headline: `\`${name}\` has no fields at all, so it has no \`${asked}\`.`,
           howToFix: [
@@ -706,7 +508,7 @@ const attributeOnClass: Rule = {
   pattern: /^type object '(\w+)' has no attribute '(\w+)'/,
   explain: (m, ctx) => {
     const [, className, asked] = m;
-    const fields = fieldsOf(ctx.source, className);
+    const fields = fieldsOf(ctx, className);
     if (fields === null) {
       return null;
     }
@@ -736,7 +538,7 @@ const notSubscriptable: Rule = {
         howToFix: none.howToFix,
       };
     }
-    const fields = fieldsOf(ctx.source, lastSegment(type));
+    const fields = fieldsOf(ctx, lastSegment(type));
     if (fields === null) {
       return {
         headline: `Square brackets do not work on a ${friendly(type)}.`,
@@ -823,7 +625,7 @@ const concatMismatch: Rule = {
         // `age + 1` where `age = input(...)`: the text is a number someone
         // typed, and adding to it is the point - so converting it comes
         // first, and joining as text is not the advice at all.
-        const typed = typedOperand(line, ctx.source);
+        const typed = typedOperand(line, ctx.facts);
         if (typed !== null) {
           return {
             headline,
@@ -1105,7 +907,7 @@ const notCallable: Rule = {
     if (m[1] === "types.UnionType") {
       // `types.UnionType` is an implementation name for `Boa | Armadillo`.
       const called = callOn(ctx.offendingLine);
-      const members = called !== null ? unionMembersOf(ctx.source, called) : null;
+      const members = called !== null ? unionMembersOf(ctx, called) : null;
       return {
         headline:
           called !== null
@@ -1178,7 +980,7 @@ const patternArity: Rule = {
   pattern: /^(\w+)\(\) accepts (\d+) positional sub-patterns \((\d+) given\)/,
   explain: (m, ctx) => {
     const [, className, accepts, given] = m;
-    const fields = fieldsOf(ctx.source, className);
+    const fields = fieldsOf(ctx, className);
     return {
       headline:
         `\`${className}\` has ${plural(Number(accepts), "field")}` +

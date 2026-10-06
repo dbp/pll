@@ -604,6 +604,29 @@ async function main() {
     console.log(`    ${seen.join("  ")}`);
   }
 
+  console.log("\n[23] an error in another of the student's files is placed in that file");
+  {
+    fixture("helper23.py", "def greet(name):", '    return "hi " + nme');
+    const main = fixture("main23.py", "from helper23 import greet", "", 'print(greet("Ada"))');
+    const r = await run([main]);
+    expect(/at helper23\.py:2:20/.test(r.stderr), `the NameError is in helper23.py: ${r.stderr.split("\n").slice(1, 3).join(" | ")}`);
+    fixture("broken23.py", "def f(:", "    pass");
+    const importing = fixture("imports23.py", "x = 1", "import broken23");
+    const b = await run([importing]);
+    expect(/at broken23\.py:1:7/.test(b.stderr), `the syntax error is in broken23.py: ${b.stderr.split("\n").slice(1, 3).join(" | ")}`);
+    // Explained from that file's own line, and from its own definitions.
+    fixture("loops23.py", "def total(nums):", "    for x in len(nums):", "        pass");
+    const looping = await run([fixture("calls23.py", "from loops23 import total", "total([1, 2])")]);
+    expect(/`len\(nums\)` is a number/.test(looping.stderr), `the line read is the sibling's: ${looping.stderr}`);
+    fixture("shapes23.py", "def area(w, h):", "    return w * h");
+    const measuring = await run([fixture("measures23.py", "import shapes23", "print(shapes23.area(3))")]);
+    expect(
+      /`area` takes 2 arguments \(`w` and `h`\), but got 1/.test(measuring.stderr),
+      `the definition is the sibling's: ${measuring.stderr}`,
+    );
+    console.log("    helper23.py:2:20, broken23.py:1:7, each explained from its own file");
+  }
+
   rmSync(work, { recursive: true, force: true });
   if (!passed()) {
     console.error("\nsmoke-cli: FAILED");

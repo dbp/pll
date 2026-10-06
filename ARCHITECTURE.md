@@ -71,6 +71,8 @@ src/
     ├── bootstrap/                 Real Python, one file per concern, loaded in order:
     │   ├── typeChecking.py        the level's checks; typeguard set up
     │   ├── errorInfo.py           an exception described for the host
+    │   ├── codeFacts.py           what the code says about it: definitions,
+    │                              assignments, a function's shape
     │   ├── sessions.py            per-file globals; output in program order
     │   ├── stop.py                Stop as KeyboardInterrupt, acknowledged
     │   ├── compile.py             AST passes over the student's code
@@ -99,7 +101,8 @@ src/
     └── errors/
         ├── pythonError.ts         An exception as Python describes it: frames, facts
         ├── libraryFacts.ts        What the explanations know about PLL's library
-        ├── sourceFacts.ts         What they read from the student's file
+        ├── sourceFacts.ts         What they read from the student's line:
+        │                          operands, a table's row
         ├── nameErrorExplainer.ts
         ├── syntaxExplainer.ts
         ├── stockMessageExplainer.ts  Python's wording -> beginner wording
@@ -311,15 +314,32 @@ reactor handler - goes through
 - where it is: the innermost frame, or a syntax error's own position, with
   a column only where Python would draw a caret;
 - the frames, outermost first (the innermost 100), each marked `user` or
-  not. Which frames are the student's is decided here, once;
+  not. Which frames are the student's is decided here, once: their files
+  and prompt lines, never a `<...>` name - PLL's own Python runs under
+  names like `<pll:table>` and `<pll:bootstrap/running>`, so a frame says
+  which library it is. A frame of theirs carries its line, read from its
+  own file (a sibling's line is not the run file's), and its function's
+  parameters;
 - facts learned from the live frames: the name a `NameError` is about, a
   sequence's real length, the element that failed its annotation, a
-  swapped dataclass field. They travel beside the message, never in it.
+  swapped dataclass field, typeguard's message read into its parts
+  (`check`). They travel beside the message, never in it;
+- facts about the code, from `_pll_code_facts`: what the names in the
+  message and on the failing line are (`definitions` - a function's
+  parameters, a class's fields, a union's members, found from the live
+  objects wherever they were defined, PLL's libraries included), where
+  those names were last set from a call (`assigned`), and, for a function
+  that returned `None` against its annotation, the `match` it ends with
+  and a branch of it that ends in `print` (`returned_none`). The host reads
+  no definition out of the student's text.
 
 `pythonErrorFrom` turns that into a `PythonError`, and is the one place a
 Python `None` (which arrives as `undefined`) becomes `null`. The analyzers
 read its fields; nothing on the host parses a traceback. `traceback` is
-kept only to show when nothing better can be said.
+kept only to show when nothing better can be said. Where a finding goes is
+decided once, by `placeOf` (`analyzers/errorPlace.ts`): the error's own
+file and line, which may be another of the student's files than the one
+that was run.
 
 There is then one way to explain an error: `findRuntimeFinding`, which
 tries the analyzers in order and falls back to `analyzeRuntimeError`, so it
@@ -410,9 +430,11 @@ Two details that decide where the squiggle lands:
 - `_pll_format_exception` drops frames inside `/pll_vendor`, so students
   never see typeguard's internals. When nothing is dropped it returns the
   stdlib formatting unchanged, so ordinary errors are unaffected.
-- typeguard's union failures span several lines, and the lines after the
-  first name the accepted types. The message reaches `typeCheckAnalyzer`
-  whole.
+- typeguard's message is read once, in Python (`_pll_type_check_parts`),
+  into what the annotation is on, its name, the element that failed, the
+  actual type and the accepted ones - a union's on the lines after the
+  first. A dataclass field PLL checks itself sends the same parts. The
+  explainer reads only those.
 
 ## Reactors (big-bang / animate) and the universe client
 

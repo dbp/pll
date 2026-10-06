@@ -17,6 +17,10 @@ export interface ErrorFrame {
   functionName: string | null;
   /** Whether this frame runs the student's code, rather than PLL's or a library's. */
   user: boolean;
+  /** The student's line, as written, for a frame of theirs. */
+  text: string | null;
+  /** The parameters of their function, for a frame of theirs in one. */
+  parameters: string[] | null;
 }
 
 /** What Python learned about the error from the frames it was raised in. */
@@ -30,6 +34,65 @@ export interface ErrorFacts {
   elementValue?: string;
   /** For a dataclass field of the wrong type: the field whose value fits here. */
   swappedWith?: string;
+  /** For a `TypeCheckError`: what failed its annotation. */
+  check?: TypeCheck;
+  /**
+   * What the names in the message and on the failing line are, wherever
+   * they were defined: `shapes.area`, and `area` as a message names it.
+   */
+  definitions?: Record<string, Definition>;
+  /** Where each name on the failing line was last set from a call. */
+  assigned?: Record<string, { call: string; line: number }>;
+  /** For a function annotated to return something that returned `None`: how it is built. */
+  returnedNone?: ReturnedNone;
+}
+
+/**
+ * What a name in the error is: a function - its positional parameters, and
+ * those with no default, a method's `self` left out - a class, whose
+ * `fields` are listed only when it is one of the student's, or a union.
+ */
+export type Definition =
+  | { kind: "function"; parameters: string[]; required: string[] }
+  | { kind: "class"; students: boolean; fields: string[]; dataclass: boolean }
+  | { kind: "union"; members: string[] };
+
+export interface ReturnedNone {
+  /** The `match` the function ends with, if it does. */
+  match: TrailingMatch | null;
+  /** The first `print` that ends a branch: its line, and its one argument. */
+  printed: { line: number; expression: string | null } | null;
+}
+
+/** A `match` that ends a function, which returns `None` when no `case` fits. */
+export interface TrailingMatch {
+  /** What is matched, as written. */
+  subject: string;
+  /** Each `case` pattern, as written. */
+  patterns: string[];
+  /** The list patterns of a fixed length of 2 or more, like `[f, r]`. */
+  fixedLength: string[];
+  /** Whether any `case` matches a list. */
+  hasList: boolean;
+  /** The members of a union-annotated subject that no `case` names. */
+  uncovered: string[];
+}
+
+/** What failed its annotation: typeguard's message, read into its parts. */
+export interface TypeCheck {
+  /** What the annotation is on; "unknown" when the wording is unfamiliar. */
+  kind: "argument" | "return" | "variable" | "field" | "unknown";
+  /** Parameter, variable or field name, when there is one. */
+  name: string | null;
+  /** typeguard's words for the part of a collection that failed: "item 2". */
+  element: string | null;
+  /** The type the value had, as typeguard names it. */
+  actual: string | null;
+  /** The types the annotation accepts. */
+  expected: string[];
+  /** For "field": the class whose field it is, and the value it got. */
+  owner?: string;
+  value?: string;
 }
 
 export interface PythonError {
@@ -42,6 +105,8 @@ export interface PythonError {
   fileName: string | null;
   lineNumber: number | null;
   column: number | null;
+  /** The text of that line, when it is the student's. */
+  text: string | null;
   /** For a `NameError`, the unresolved name. */
   nameToken: string | null;
   /** Outermost first. */

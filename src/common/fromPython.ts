@@ -9,7 +9,7 @@
  * becomes a stream of `ExecutionEvent`s; the others become one value each.
  */
 
-import type { ErrorFrame, PythonError } from "./errors/pythonError";
+import type { ErrorFrame, PythonError, ReturnedNone, TypeCheck } from "./errors/pythonError";
 import type {
   DisplayData,
   ExamplarBuildResult,
@@ -26,7 +26,9 @@ import type {
   TestCaseData,
   TestRunResult,
   WireError,
+  WireFacts,
   WireFrame,
+  WireTypeCheck,
 } from "./wire";
 import type {
   ExecutionEvent,
@@ -216,6 +218,7 @@ export function pythonErrorFrom(wire: Partial<WireError> | null | undefined): Py
     fileName: wire.error_file ?? null,
     lineNumber: numberOrNull(wire.line_number),
     column: numberOrNull(wire.column),
+    text: wire.error_text ?? null,
     nameToken: facts.name ?? null,
     frames: (wire.error_frames ?? []).map(frameFrom),
     facts: {
@@ -224,7 +227,39 @@ export function pythonErrorFrom(wire: Partial<WireError> | null | undefined): Py
       length: numberOrNull(facts.length) ?? undefined,
       elementValue: facts.element_value ?? undefined,
       swappedWith: facts.swapped_with ?? undefined,
+      check: facts.check ? typeCheckFrom(facts.check) : undefined,
+      definitions: facts.definitions ?? undefined,
+      assigned: facts.assigned ?? undefined,
+      returnedNone: facts.returned_none ? returnedNoneFrom(facts.returned_none) : undefined,
     },
+  };
+}
+
+function typeCheckFrom(check: WireTypeCheck): TypeCheck {
+  return {
+    kind: check.kind,
+    name: check.name ?? null,
+    element: check.element ?? null,
+    actual: check.actual ?? null,
+    expected: check.expected ?? [],
+    owner: check.owner ?? undefined,
+    value: check.value ?? undefined,
+  };
+}
+
+function returnedNoneFrom(wire: NonNullable<WireFacts["returned_none"]>): ReturnedNone {
+  const match = wire.match;
+  return {
+    match: match
+      ? {
+          subject: match.subject,
+          patterns: match.patterns ?? [],
+          fixedLength: match.fixed_length ?? [],
+          hasList: match.has_list === true,
+          uncovered: match.uncovered ?? [],
+        }
+      : null,
+    printed: wire.printed ?? null,
   };
 }
 
@@ -235,6 +270,8 @@ function frameFrom(frame: WireFrame): ErrorFrame {
     column: numberOrNull(frame.column),
     functionName: frame.function ?? null,
     user: frame.user === true,
+    text: frame.text ?? null,
+    parameters: frame.parameters ?? null,
   };
 }
 

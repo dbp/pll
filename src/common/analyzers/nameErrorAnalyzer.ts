@@ -1,5 +1,5 @@
 import { explainNameError } from "../errors/nameErrorExplainer";
-import { sourceLine } from "../errors/sourceFacts";
+import { inRunFile, placeOf } from "./errorPlace";
 import { runtimeFindingFor, type AnalysisFinding, type RuntimeAnalyzer, type RuntimeAnalyzerInput } from "./types";
 
 /**
@@ -14,8 +14,10 @@ export const nameErrorAnalyzer: RuntimeAnalyzer = {
   analyze(input: RuntimeAnalyzerInput): AnalysisFinding | null {
     const { error, source } = input;
     // The file and the failing line let this tell "never heard of it" from
-    // "defined further down" and from "that is a parameter, not a value".
-    const line = sourceLine(source, error.lineNumber);
-    return runtimeFindingFor(input, { id: "name-error", ...explainNameError(error, { source, line }) });
+    // "defined further down" and from "that is a parameter, not a value" -
+    // and only the run's own file is read for that, not one it imported.
+    const place = placeOf(input);
+    const context = { source: inRunFile(input, place) ? source : "", line: place.text };
+    return runtimeFindingFor(input, { id: "name-error", ...explainNameError(error, context) });
   },
 };

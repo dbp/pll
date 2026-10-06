@@ -213,7 +213,7 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
         with _pll_recording_compile_warnings():
             compiled = compile(tree, filename, "exec")
     except SyntaxError as e:
-        result.update(_pll_error_info(e, code))
+        result.update(_pll_error_info(e, (filename, code)))
         return _pll_with_output(result, stdout, stderr)
 
     finished = False
@@ -229,7 +229,7 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
         result["ok"] = True
         result["exit_code"] = _pll_exit_status(e, stderr)
     except BaseException as e:
-        result.update(_pll_error_info(e, code))
+        result.update(_pll_error_info(e, (filename, code)))
     finally:
         # After the run, so a warning the run's own error explains can be
         # left out, and one about a line that never ran can be said.
@@ -239,7 +239,7 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
     # neither do its tests: the host says they were not run, and why.
     if run_tests and finished:
         with _pll_as_main(main):
-            result["tests"] = _pll_run_collected_tests(user_globals, tests_at, code)
+            result["tests"] = _pll_run_collected_tests(user_globals, tests_at, (filename, code))
     return result
 
 
@@ -263,7 +263,7 @@ def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
     try:
         tree = _pll_parse_and_instrument(code, filename)
     except SyntaxError as e:
-        result.update(_pll_error_info(e, code))
+        result.update(_pll_error_info(e, (filename, code)))
         return result
 
     last_expr = None
@@ -293,7 +293,7 @@ def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
         result["ok"] = True
         result["exit_code"] = _pll_exit_status(e, stderr)
     except BaseException as e:
-        result.update(_pll_error_info(e, code))
+        result.update(_pll_error_info(e, (filename, code)))
     finally:
         _pll_say_compile_warnings(stderr, result["error_message"], code)
         _pll_with_output(result, stdout, stderr)

@@ -1,6 +1,5 @@
-import { innermostUserFrame } from "../errors/pythonError";
-import { frameLine, sourceLine } from "../errors/sourceFacts";
 import { explainStockMessage, stockErrorTypes } from "../errors/stockMessageExplainer";
+import { placeOf } from "./errorPlace";
 import { analyzeRuntimeError } from "./runtimeErrorAnalyzer";
 import type { AnalysisFinding, RuntimeAnalyzer, RuntimeAnalyzerInput } from "./types";
 
@@ -19,15 +18,13 @@ export const stockMessageAnalyzer: RuntimeAnalyzer = {
   handles: stockErrorTypes(),
 
   analyze(input: RuntimeAnalyzerInput): AnalysisFinding | null {
-    const { source, fileName, error, level } = input;
-    const blamed = innermostUserFrame(error);
+    const { source, error, level } = input;
     const explanation = explainStockMessage(error.errorType, error.message, {
       source,
       // The line that raised, which several rules need - `for x in len(xs)`
       // is only told apart from any other `'int' object is not iterable` by
       // reading it.
-      offendingLine:
-        blamed !== null ? frameLine(source, fileName, blamed) : sourceLine(source, error.lineNumber),
+      offendingLine: placeOf(input).text,
       frames: error.frames,
       facts: error.facts,
       level,

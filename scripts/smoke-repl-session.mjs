@@ -493,7 +493,7 @@ async function harness(script = {}, doc = makeDoc("hello.py")) {
 /**
  * An error event, as the runtime builds one from `_pll_error_info`: `frames`
  * is `[file, line, function]` per frame, outermost first, and a frame is the
- * student's unless its file is `<exec>`.
+ * student's unless its file is a `<...>` other than `<repl>`.
  */
 function errorEvent({ type, message, file, line, column = null, frames = [], facts = {} }) {
   return {
@@ -506,13 +506,16 @@ function errorEvent({ type, message, file, line, column = null, frames = [], fac
       fileName: file,
       lineNumber: line,
       column,
+      text: null,
       nameToken: facts.name ?? null,
       frames: frames.map(([fileName, frameLine, functionName = null]) => ({
         fileName,
         line: frameLine,
         column: null,
         functionName,
-        user: fileName !== "<exec>",
+        // As `_pll_is_students` decides: no `<...>` but a prompt line.
+        user: fileName === "<repl>" || !fileName.startsWith("<"),
+        text: null,
       })),
       facts,
     },
@@ -2847,6 +2850,36 @@ console.log("\n[72] a file's reactor pauses while another file is shown, and res
   const paused = steps();
   await new Promise((r) => setTimeout(r, 150));
   expect(steps() === paused, "a reactor paused by hand is not resumed");
+  repl.dispose();
+}
+
+console.log("\n[73] a finding in another of the student's files is put on that file, and cleared from it");
+{
+  const failure = errorEvent({
+    type: "NameError",
+    message: "name 'nme' is not defined",
+    file: "helper.py",
+    line: 2,
+    frames: [["main.py", 3], ["helper.py", 2, "greet"]],
+    facts: { name: "nme" },
+  });
+  let fail = true;
+  const doc = makeDoc("main.py", 'from helper import greet\n\nprint(greet("Ada"))\n');
+  const { repl, view, diagnostics } = await harness(
+    { events: (kind) => (kind === "runFile" ? (fail ? [failure, { kind: "done" }] : [{ kind: "done" }]) : []) },
+    doc,
+  );
+  await repl.runFile(doc.getText(), "main.py", doc);
+  await settle();
+  const finding = view.entries.find((e) => e.kind === "finding")?.finding;
+  expect(finding?.location?.label === "helper.py:2", `the panel says helper.py: ${finding?.location?.label}`);
+  const set = diagnostics.calls.filter((c) => c[0] === "setFinding").map((c) => c[1]);
+  expect(set.join() === "file:/work/helper.py", `the squiggle is on helper.py: ${set.join()}`);
+  fail = false;
+  await repl.runFile(doc.getText(), "main.py", doc);
+  await settle();
+  const cleared = diagnostics.calls.filter((c) => c[0] === "clear").map((c) => c[1]);
+  expect(cleared.includes("file:/work/helper.py"), `the next run clears it: ${cleared.join()}`);
   repl.dispose();
 }
 

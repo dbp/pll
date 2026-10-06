@@ -5,10 +5,8 @@
  * This bundles the relevant TS modules with esbuild on the fly so we don't
  * need a separate build step.
  */
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { expect, passed } from "./lib/check.mjs";
-import { importSource, ROOT } from "./lib/bundle.mjs";
+import { importSource } from "./lib/bundle.mjs";
 
 const mod = await importSource(`
 import { parseLevel, levelHeaderProblem } from "./src/common/level";
@@ -20,7 +18,6 @@ import { staticFindingsFrom } from "./src/common/fromPython";
 const enrichStaticFindings = (raw, level, fileName) => explainFindings(staticFindingsFrom(raw), level, fileName);
 import { formatFriendlyError } from "./src/common/errorFormatter";
 import { findRuntimeFinding } from "./src/common/analyzers/registry";
-import { LIBRARY_SIGNATURES } from "./src/common/errors/libraryFacts";
 
 export {
   parseLevel,
@@ -30,7 +27,6 @@ export {
   enrichStaticFindings,
   formatFriendlyError,
   findRuntimeFinding,
-  LIBRARY_SIGNATURES,
 };
 `);
 
@@ -38,7 +34,7 @@ export {
  * A `PythonError`, as `pythonErrorFrom` builds one from `_pll_error_info`.
  *
  * `frames` are `[file, line, function]`, outermost first; a frame is the
- * student's unless its file is PLL's (`<exec>`) or a library's. The error is
+ * student's unless its file is PLL's (`<pll:...>`) or a library's. The error is
  * at the innermost frame. `facts` are what Python would have learned from
  * the live frames, and `name` among them is the name a `NameError` is about.
  */
@@ -51,13 +47,16 @@ function pyError(type, message, frames, { facts = {}, column = null } = {}) {
     fileName: innermost?.[0] ?? null,
     lineNumber: innermost?.[1] ?? null,
     column,
+    text: null,
     nameToken: facts.name ?? null,
     frames: frames.map(([fileName, line, functionName = "<module>"]) => ({
       fileName,
       line,
       column: null,
       functionName: functionName === "<module>" ? null : functionName,
-      user: !/<exec>|site-packages|\/lib\/python|_pytest|pluggy|pll_vendor/.test(fileName),
+      // As `_pll_is_students` decides.
+      user: fileName === "<repl>" || (!fileName.startsWith("<") && !/site-packages|\/lib\/python|_pytest|pluggy|pll_vendor/.test(fileName)),
+      text: null,
     })),
     facts,
   };
@@ -79,6 +78,23 @@ function pyErrorLine(errorLine, frames, options = {}) {
   if (named && facts.name === undefined) facts.name = named[1];
   return pyError(type, message, frames, { ...options, facts });
 }
+
+/**
+ * What Python reads a `TypeCheckError`'s message into, as
+ * `_pll_type_check_parts` does - tested against typeguard itself in
+ * smoke-typecheck.
+ */
+function check(kind, name, actual, expected, more = {}) {
+  return { kind, name, element: null, actual, expected, ...more };
+}
+
+/**
+ * What `_pll_definition` sends for a function, one of the student's
+ * classes, and a union - tested against Python itself in smoke-typecheck.
+ */
+const defFunction = (parameters, required = parameters) => ({ kind: "function", parameters, required });
+const defClass = (fields, dataclass = true) => ({ kind: "class", students: true, fields, dataclass });
+const defUnion = (members) => ({ kind: "union", members });
 
 console.log("\n[parseLevel]");
 expect(mod.parseLevel("#level raw\nx=1") === "raw", "#level raw");
@@ -575,8 +591,9 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     mod.findRuntimeFinding(source, "lab.py", "beginner", error);
 
   /** A one-frame traceback pointing at `line` of `source`. */
-  const raised = (source, line, fn, errorLine) =>
-    finding(pyErrorLine(errorLine, [["<exec>", 560, "run"], ["lab.py", line, fn]]), source);
+  const raised = (source, line, fn, errorLine, facts = {}) =>
+    finding(pyErrorLine(errorLine, [["<pll:bootstrap/running>", 560, "run"], ["lab.py", line, fn]], { facts }), source);
+  const songFacts = { definitions: { ITunesSong: defClass(["name", "singer", "year"]) } };
 
   /** Nothing a student never typed should ever reach them. */
   const INTERNALS = [/__init__/, /types\.UnionType/, /__main__/, /_Rectangle/, /NoneType/];
@@ -594,6 +611,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     5,
     "<module>",
     "TypeError: pen_cost() missing 1 required positional argument: 'message'",
+    { definitions: { pen_cost: defFunction(["num_pens", "message"]) } },
   );
   expect(
     tooFew.headline === "`pen_cost` takes 2 arguments (`num_pens` and `message`), but got 1.",
@@ -606,27 +624,29 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     5,
     "<module>",
     "TypeError: add_shipping() takes 1 positional argument but 2 were given",
+    { definitions: { add_shipping: defFunction(["order_amt"]) } },
   );
   expect(
     tooMany.headline === "`add_shipping` takes 1 argument (`order_amt`), but got 2.",
     `too many args: ${tooMany.headline}`,
   );
 
-  // A library function has no `def` in the file, but PLL knows its own
-  // contract, so the total is named just as it is for the student's.
+  // A library function has no `def` in the file, but Python has its
+  // definition, so the total is named just as it is for the student's.
   const lib = "from pll.image import circle\n\ncircle(50)\n";
   const missing = raised(
     lib,
     3,
     "<module>",
     "TypeError: circle() missing 2 required positional arguments: 'mode' and 'color'",
+    { definitions: { circle: defFunction(["radius", "mode", "color"]) } },
   );
   expect(
     missing.headline === "`circle` takes 3 arguments (`radius`, `mode` and `color`), but got 1.",
     `library call: ${missing.headline}`,
   );
 
-  // A function from somewhere else entirely: only what Python named.
+  // A function Python could not find the definition of: only what it named.
   const foreign = raised(
     "from helpers import prep\n\nprep(1)\n",
     3,
@@ -657,6 +677,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     4,
     "<module>",
     "TypeError: Table.scatter_plot() missing 1 required positional argument: 'y'",
+    { definitions: { "Table.scatter_plot": defFunction(["x", "y", "title"], ["x", "y"]) } },
   );
   expect(
     method.headline === "`scatter_plot` takes 2 arguments (`x` and `y`), but got 1.",
@@ -672,6 +693,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     11,
     "<module>",
     "TypeError: ITunesSong.__init__() missing 1 required positional argument: 'year'",
+    songFacts,
   );
   expect(
     dcFew.headline === "`ITunesSong` needs 3 values (`name`, `singer` and `year`), but got 2.",
@@ -684,6 +706,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     11,
     "<module>",
     "TypeError: ITunesSong.__init__() takes 4 positional arguments but 5 were given",
+    songFacts,
   );
   expect(
     dcMany.headline === "`ITunesSong` needs 3 values (`name`, `singer` and `year`), but got 4.",
@@ -696,6 +719,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     11,
     "<module>",
     "AttributeError: 'ITunesSong' object has no attribute 'yaer'",
+    songFacts,
   );
   expect(
     typo.headline ===
@@ -712,6 +736,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     11,
     "<module>",
     "TypeError: 'ITunesSong' object is not subscriptable",
+    songFacts,
   );
   expect(
     /Square brackets do not get a field out of `ITunesSong`/.test(brackets.headline),
@@ -831,7 +856,9 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
 
   const union =
     "Animal = Boa | Armadillo\n\n\ndef make():\n    return Animal(\"Slithers\")\n";
-  const unionCall = raised(union, 5, "make", "TypeError: 'types.UnionType' object is not callable");
+  const unionCall = raised(union, 5, "make", "TypeError: 'types.UnionType' object is not callable", {
+    definitions: { Animal: defUnion(["Boa", "Armadillo"]) },
+  });
   expect(
     unionCall.headline === "`Animal` is a union of several types, not something to make one of.",
     `union call: ${unionCall.headline}`,
@@ -850,6 +877,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     12,
     "describe",
     "TypeError: Boa() accepts 2 positional sub-patterns (3 given)",
+    { definitions: { Boa: defClass(["name", "length"]) } },
   );
   expect(
     pattern.headline === "`Boa` has 2 fields (`name` and `length`), but this pattern names 3.",
@@ -912,6 +940,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     pyErrorLine(
       'TypeCheckError: argument "s" (class __main__.ITunesSong) is not an instance of __main__.ITunesSong',
       [["lab.py", 12], ["lab.py", 11, "title"]],
+      { facts: { check: check("argument", "s", "class __main__.ITunesSong", ["__main__.ITunesSong"]) } },
     ),
     song + "\n\ndef title(s: ITunesSong) -> str:\n    return s.name\n\n\nprint(title(ITunesSong))\n",
   );
@@ -932,6 +961,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     11,
     "<module>",
     "AttributeError: type object 'ITunesSong' has no attribute 'name'",
+    songFacts,
   );
   expect(
     onClass.headline ===
@@ -968,6 +998,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     12,
     "<module>",
     "TypeError: total() missing 1 required positional argument: 'n'",
+    { definitions: { total: defFunction(["n"]) } },
   );
   expect(
     !/calls `total` for you/.test(beside.headline),
@@ -997,6 +1028,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     1,
     "<module>",
     "TypeError: table() missing 1 required positional argument: 'rows'",
+    { definitions: { table: defFunction(["columns", "rows"]) } },
   );
   expect(
     noColumns.headline === "`table` takes 2 arguments (`columns` and `rows`), but got 1.",
@@ -1026,6 +1058,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     7,
     "<module>",
     "TypeError: ITunesSong() takes no arguments",
+    { definitions: { ITunesSong: defClass(["name", "singer", "year"], false) } },
   );
   expect(
     /lists fields \(`name`, `singer` and `year`\) but has no `@dataclass`/.test(
@@ -1123,69 +1156,6 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     `unrecognised messages pass through: ${unknown.headline}`,
   );
   console.log("    twenty-five stock messages reworded, with no internal names left in them");
-}
-
-console.log("[library signatures match the Python they describe]");
-{
-  // `libraryFacts.ts` is written by hand so the Python sources stay
-  // out of the extension bundle. That only works if it cannot drift, so
-  // re-derive every signature from the real files and compare both ways.
-  const PUBLIC_CLASSES = new Set(["Table", "Reactor", "Row", "Image"]);
-  const derived = new Map();
-  for (const rel of ["imageLib.py", "tableLib.py", "reactorLib.py"]) {
-    const src = readFileSync(resolve(ROOT, "src/common", rel), "utf8");
-    const exported = new Set();
-    for (const m of src.matchAll(/PLL_\w*EXPORTS\s*=\s*\[([\s\S]*?)\]/g)) {
-      for (const name of m[1].matchAll(/"([^"]+)"/g)) exported.add(name[1]);
-    }
-    let cls = null;
-    for (const line of src.split("\n")) {
-      const classLine = /^class (\w+)/.exec(line);
-      if (classLine) {
-        cls = classLine[1];
-        continue;
-      }
-      if (/^\S/.test(line) && !line.startsWith("def ")) cls = null;
-      const def = /^([ \t]*)def (\w+)\(([^)]*)\)/.exec(line);
-      if (def === null) continue;
-      const [, indent, name, params] = def;
-      if (name.startsWith("_")) continue;
-      const top = indent.length === 0;
-      if (top && !exported.has(name)) continue;
-      if (!top && !PUBLIC_CLASSES.has(cls)) continue;
-      const required = [];
-      const all = [];
-      for (const raw of params.split(",")) {
-        const part = raw.trim();
-        if (!part || part === "self" || part === "cls" || part.startsWith("*")) continue;
-        const pname = part.split(":")[0].split("=")[0].trim();
-        all.push(pname);
-        if (!part.includes("=")) required.push(pname);
-      }
-      if (required.length === 0) continue;
-      if (!derived.has(name)) derived.set(name, { required, all });
-    }
-  }
-
-  expect(derived.size > 50, `the derivation found signatures, got ${derived.size}`);
-  const table = mod.LIBRARY_SIGNATURES;
-  for (const [name, sig] of derived) {
-    const written = table[name];
-    expect(written !== undefined, `libraryFacts.ts is missing \`${name}\``);
-    if (written === undefined) continue;
-    expect(
-      written.required.join(",") === sig.required.join(","),
-      `\`${name}\` required: table has ${JSON.stringify(written.required)}, Python has ${JSON.stringify(sig.required)}`,
-    );
-    expect(
-      written.all.join(",") === sig.all.join(","),
-      `\`${name}\` all: table has ${JSON.stringify(written.all)}, Python has ${JSON.stringify(sig.all)}`,
-    );
-  }
-  for (const name of Object.keys(table)) {
-    expect(derived.has(name), `libraryFacts.ts has \`${name}\`, which Python does not`);
-  }
-  console.log(`    ${derived.size} signatures agree with imageLib, tableLib and reactorLib`);
 }
 
 console.log("[name errors: the hint that fits, not the one that always fits]");
@@ -1357,8 +1327,12 @@ console.log("[second review: advice that has to come from the program in hand]")
 {
   const finding = (error, source, level = "raw") =>
     mod.findRuntimeFinding(source, "lab.py", level, error);
-  const raised = (source, line, errorLine, level = "raw") =>
-    finding(pyErrorLine(errorLine, [["<exec>", 560, "run"], ["lab.py", line]]), source, level);
+  const raised = (source, line, errorLine, level = "raw", facts = {}) =>
+    finding(
+      pyErrorLine(errorLine, [["<pll:bootstrap/running>", 560, "run"], ["lab.py", line]], { facts }),
+      source,
+      level,
+    );
 
   // The comparison hint fits what the program compared: no fixed
   // `int("999")` / `str(1000)` example, and CSV columns only with a table.
@@ -1491,6 +1465,8 @@ console.log("[second review: advice that has to come from the program in hand]")
     'from dataclasses import dataclass\n\n\n@dataclass\nclass Song:\n    name: str\n    year: int\n\n\nsong = Song("a", 1)\nprint(song["year"])\n',
     11,
     "TypeError: 'Song' object is not subscriptable",
+    "raw",
+    { definitions: { Song: defClass(["name", "year"]) } },
   );
   expect(
     dot.howToFix.some((l) => /`song\.year` rather than `song\["year"\]`/.test(l)),
@@ -1562,9 +1538,11 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
 {
   const finding = (error, source, level = "beginner") =>
     mod.findRuntimeFinding(source, "student.py", level, error);
-  const raised = (source, line, errorLine, frames = []) =>
+  const raised = (source, line, errorLine, frames = [], facts = {}) =>
     finding(
-      pyErrorLine(errorLine, [["<exec>", 1, "_pll_run_file"], ["student.py", line], ...frames]),
+      pyErrorLine(errorLine, [["<pll:bootstrap/running>", 1, "_pll_run_file"], ["student.py", line], ...frames], {
+        facts,
+      }),
       source,
     );
   const text = (f) => `${f.headline}\n${f.howToFix.join("\n")}`;
@@ -1599,6 +1577,8 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
     'age = input("How old are you? ")\nprint("Next year you will be", age + 1)\n',
     2,
     'TypeError: can only concatenate str (not "int") to str',
+    [],
+    { assigned: { age: { call: "input", line: 1 } } },
   );
   expect(/came from `input`, which always gives back text/.test(text(typed)), `input named: ${text(typed)}`);
   expect(/`int\(age\) \+ 1`/.test(text(typed)), `converted first: ${text(typed)}`);
@@ -1662,6 +1642,8 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
     't = table([["Jan", 1121]])\n',
     1,
     "TypeError: table() missing 1 required positional argument: 'rows'",
+    [],
+    { definitions: { table: defFunction(["columns", "rows"]) } },
   );
   expect(
     noColumns.howToFix.some((l) => /one more list: `table\(\["month", "riders"\]/.test(l)),
@@ -1677,7 +1659,12 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
     pyErrorLine(
       'TypeCheckError: item 0 of argument "lst" (list) is not an instance of float',
       [["student.py", 25], ["student.py", 2, "sum_list"]],
-      { facts: { elementValue: 'the string "1"' } },
+      {
+        facts: {
+          check: check("argument", "lst", "list", ["float"], { element: "item 0" }),
+          elementValue: 'the string "1"',
+        },
+      },
     ),
     'def sum_list(lst: list[float]) -> float:\n    return 0\n',
   );
@@ -1692,7 +1679,12 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
       pyErrorLine(
         `TypeCheckError: ${element} of argument "d" (dict) is not an instance of int`,
         [["student.py", 4], ["student.py", 2, "total"]],
-        { facts: value ? { elementValue: value } : {} },
+        {
+          facts: {
+            check: check("argument", "d", "dict", ["int"], { element }),
+            ...(value ? { elementValue: value } : {}),
+          },
+        },
       ),
       "def total(d: dict[str, int]) -> int:\n    return 0\n",
     );
@@ -1710,6 +1702,7 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
     pyErrorLine(
       "TypeCheckError: value assigned to ac (int) is not an instance of __main__.Account",
       [["student.py", 14], ["student.py", 3, "deposit"]],
+      { facts: { check: check("variable", "ac", "int", ["__main__.Account"]) } },
     ),
     "def deposit(ac: Account, amt: float) -> None:\n    x = 1\n    ac = ac.balance + amt\n",
   );
@@ -1728,6 +1721,7 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
     pyErrorLine(
       'TypeCheckError: argument "s" (class __main__.ITunesSong) is not an instance of __main__.ITunesSong',
       [["student.py", 8], ["student.py", 5, "song_age"]],
+      { facts: { check: check("argument", "s", "class __main__.ITunesSong", ["__main__.ITunesSong"]) } },
     ),
     "class ITunesSong:\n    pass\n\n\ndef song_age(s: ITunesSong) -> int:\n    return 1\n\n\nsong_age(ITunesSong)\n",
   );
@@ -1736,13 +1730,13 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
   // rx-init-string: a capital, and the handler named.
   const state = finding(
     pyErrorLine('TypeCheckError: argument "x" (str) is not an instance of float', [
-      ["<exec>", 960, "_pll_run_file"],
+      ["<pll:bootstrap/running>", 960, "_pll_run_file"],
       ["student.py", 21],
-      ["<exec>", 223, "interact"],
-      ["<exec>", 431, "_pll_reactor_interact"],
-      ["<exec>", 396, "_pll_reactor_view"],
+      ["<pll:reactor>", 223, "interact"],
+      ["<pll:reactor>", 431, "_pll_reactor_interact"],
+      ["<pll:reactor>", 396, "_pll_reactor_view"],
       ["student.py", 5, "draw_dog"],
-    ]),
+    ], { facts: { check: check("argument", "x", "str", ["float"]) } }),
     "#level beginner\n\n\n\ndef draw_dog(x: float) -> Image:\n    return x\n",
   );
   expect(
@@ -1819,6 +1813,7 @@ console.log("[fourth pass: every replayed case read for the same patterns]");
     "class NoInfo:\n    pass\n\n\nprint(NoInfo().name)\n",
     5,
     "AttributeError: 'NoInfo' object has no attribute 'name'",
+    { definitions: { NoInfo: defClass([], false) } },
   );
   expect(/`NoInfo` has no fields at all, so it has no `name`/.test(empty.headline), `empty class: ${empty.headline}`);
   expect(/`case NoInfo\(\):`/.test(text(empty)), `with the check to add: ${text(empty)}`);
@@ -1835,7 +1830,7 @@ console.log("[fourth pass: every replayed case read for the same patterns]");
   const returned = finding(
     pyErrorLine("TypeCheckError: the return value (str) is not an instance of Image", [
       ["student.py", 2, "flag"],
-    ]),
+    ], { facts: { check: check("return", null, "str", ["Image"]) } }),
     'def flag() -> Image:\n    return "red"\n',
   );
   expect(returned.howToFix.includes("Return an `Image` from this line."), `article: ${JSON.stringify(returned.howToFix)}`);
@@ -1843,7 +1838,10 @@ console.log("[fourth pass: every replayed case read for the same patterns]");
   // Swapped values in a dataclass, as Python reports them.
   const swapped = finding(
     pyErrorLine("TypeCheckError: field 'singer' of 'Song' got 2015 (int), not str", [["student.py", 9]], {
-      facts: { swappedWith: "year" },
+      facts: {
+        check: check("field", "singer", "int", ["str"], { owner: "Song", value: "2015" }),
+        swappedWith: "year",
+      },
     }),
     'class Song:\n    name: str\n    singer: str\n    year: int\n',
   );

@@ -1060,6 +1060,148 @@ async function main() {
         "beginner",
       );
       expect(swapped.error_facts?.swapped_with === "year", `the swap: ${JSON.stringify(swapped.error_facts)}`);
+      const swappedCheck = swapped.error_facts?.check;
+      expect(
+        swappedCheck?.kind === "field" &&
+          swappedCheck.name === "title" &&
+          swappedCheck.owner === "Song" &&
+          swappedCheck.value === "1999" &&
+          swappedCheck.actual === "int" &&
+          swappedCheck.expected.join() === "str",
+        `the field check, in parts: ${JSON.stringify(swappedCheck)}`,
+      );
+
+      // typeguard's message, read into its parts once, by Python.
+      const parts = async (code) => (await described(code, "beginner")).error_facts?.check;
+      const same = (got, want) => JSON.stringify(got) === JSON.stringify(want);
+      const typeguardShapes = [
+        [
+          'def f(x: int) -> int:\n    return x\n\nf("a")\n',
+          { kind: "argument", name: "x", element: null, actual: "str", expected: ["int"] },
+        ],
+        [
+          'def f() -> int:\n    return "a"\n\nf()\n',
+          { kind: "return", name: null, element: null, actual: "str", expected: ["int"] },
+        ],
+        ['x: int = "a"\n', { kind: "variable", name: "x", element: null, actual: "str", expected: ["int"] }],
+        [
+          'def f(x: float) -> float:\n    return x\n\nf("a")\n',
+          { kind: "argument", name: "x", element: null, actual: "str", expected: ["float"] },
+        ],
+        [
+          'def f(lst: list[float]) -> float:\n    return 0\n\nf(["1", 2.0])\n',
+          { kind: "argument", name: "lst", element: "item 0", actual: "list", expected: ["float"] },
+        ],
+        [
+          'def f(d: dict[str, int]) -> int:\n    return 0\n\nf({"a": "1"})\n',
+          { kind: "argument", name: "d", element: "value of key 'a'", actual: "dict", expected: ["int"] },
+        ],
+      ];
+      for (const [code, want] of typeguardShapes) {
+        const got = await parts(code);
+        expect(same(got, want), `${JSON.stringify(code)}: ${JSON.stringify(got)}`);
+      }
+      const union = await parts('def f(x: int | None) -> int:\n    return 0\n\nf("a")\n');
+      expect(
+        union?.kind === "argument" && union.name === "x" && union.expected.length === 2 && union.expected.includes("int"),
+        `a union names what it accepts: ${JSON.stringify(union)}`,
+      );
+      const keyValue = await described('def f(d: dict[str, int]) -> int:\n    return 0\n\nf({"a": "1"})\n', "beginner");
+      expect(
+        keyValue.error_facts?.element_value === 'the string "1"',
+        `a value by its key: ${JSON.stringify(keyValue.error_facts)}`,
+      );
+
+      // An IndexError in a file of its own, read from that file's line.
+      await send({
+        type: "mountWorkspace",
+        files: [
+          { name: "hello.py", contents: "from helper import get\nnums = [1, 2]\nget(nums)\n" },
+          { name: "helper.py", contents: "def get(xs):\n    return xs[5]\n" },
+        ],
+      });
+      const sibling = await run("from helper import get\nnums = [1, 2]\nget(nums)\n", { level: "beginner" });
+      expect(
+        sibling.error_facts?.sequence === "xs" && sibling.error_facts?.length === 2,
+        `the sibling's own line: ${JSON.stringify(sibling.error_facts)}`,
+      );
+
+      // What the names in an error are, from the definitions themselves.
+      const definitions = async (code, files = []) => {
+        await send({ type: "mountWorkspace", files: [{ name: "hello.py", contents: code }, ...files] });
+        const result = await run(code, { level: "advanced" });
+        return { result, defs: result.error_facts?.definitions ?? {} };
+      };
+      // In another of their files, reached through its module.
+      const area = await definitions("import shapes\nprint(shapes.area(3))\n", [
+        { name: "shapes.py", contents: "def area(w, h):\n    return w * h\n" },
+      ]);
+      expect(
+        same(area.defs.area, { kind: "function", parameters: ["w", "h"], required: ["w", "h"] }),
+        `a function in another file: ${JSON.stringify(area.defs)}`,
+      );
+      const areaFinding = findRuntimeFinding("import shapes\nprint(shapes.area(3))\n", "hello.py", "advanced", pythonErrorFrom(area.result));
+      expect(
+        areaFinding.headline === "`area` takes 2 arguments (`w` and `h`), but got 1.",
+        `and its total is said: ${areaFinding.headline}`,
+      );
+      // PLL's own, a function and a method of a class the student never wrote.
+      const circleDefs = (await definitions("circle(10)\n")).defs;
+      expect(
+        same(circleDefs.circle?.required, ["radius", "mode", "color"]),
+        `a library function: ${JSON.stringify(circleDefs)}`,
+      );
+      const plotDefs = (await definitions('t = table(["a", "b"], [[1, 2]])\nt.scatter_plot("a")\n')).defs;
+      expect(
+        same(plotDefs["Table.scatter_plot"], { kind: "function", parameters: ["x", "y", "title"], required: ["x", "y"] }),
+        `a library method, without its self: ${JSON.stringify(plotDefs["Table.scatter_plot"])}`,
+      );
+      expect(plotDefs.Table?.kind === "class" && plotDefs.Table.students === false, `and its class is PLL's: ${JSON.stringify(plotDefs.Table)}`);
+      // A dataclass of theirs, in another file, by the value it was asked of:
+      // no name in this file reaches it.
+      const dog = "from dataclasses import dataclass\n\n@dataclass\nclass Dog:\n    name: str\n    age: int\n";
+      const dogDefs = (await definitions('import pets\nd = pets.Dog("Rex", 3)\nprint(d.nme)\n', [{ name: "pets.py", contents: dog }])).defs;
+      expect(
+        same(dogDefs.Dog, { kind: "class", students: true, fields: ["name", "age"], dataclass: true }),
+        `a class of theirs: ${JSON.stringify(dogDefs)}`,
+      );
+      // In the file that ran, where PLL checks its fields in an `__init__` of its own.
+      const initDefs = (await definitions(dog + 'Dog("Rex")\n')).defs;
+      expect(
+        same(initDefs["Dog.__init__"]?.parameters, ["name", "age"]),
+        `a checked dataclass's own parameters: ${JSON.stringify(initDefs["Dog.__init__"])}`,
+      );
+      const unionDefs = (await definitions("class A:\n    pass\nclass B:\n    pass\nAB = A | B\nAB()\n")).defs;
+      expect(same(unionDefs.AB, { kind: "union", members: ["A", "B"] }), `a union: ${JSON.stringify(unionDefs)}`);
+      expect(
+        (await definitions("x = 1\nx[0]\n")).defs.int?.students === false,
+        "and Python's own classes are not theirs",
+      );
+      // Where a name on the line was set, and the parameters of the function.
+      const sorted = await definitions("def f(xs):\n    r = xs.sort()\n    return r.total\n\nf([1])\n");
+      expect(
+        same(sorted.result.error_facts?.assigned?.r, { call: "xs.sort", line: 2 }),
+        `what a name was set from: ${JSON.stringify(sorted.result.error_facts?.assigned)}`,
+      );
+      expect(
+        same(sorted.result.error_frames.at(-1)?.parameters, ["xs"]),
+        `a frame's parameters: ${JSON.stringify(sorted.result.error_frames.at(-1))}`,
+      );
+      const twice = await definitions(
+        "def make(xs):\n    return xs\n\ndef f(xs):\n    r = make(xs)\n    r = xs.sort()\n    return r.total\n\nf([1])\n",
+      );
+      expect(
+        same(twice.result.error_facts?.assigned?.r, { call: "xs.sort", line: 6 }),
+        `the last time it was set: ${JSON.stringify(twice.result.error_facts?.assigned)}`,
+      );
+      // Set only after the line, by a loop that has gone round once.
+      const looped = await definitions(
+        "def find(i):\n    return None\n\nfor i in range(2):\n    if i:\n        print(x.total)\n    x = find(i)\n",
+      );
+      expect(
+        same(looped.result.error_facts?.assigned?.x, { call: "find", line: 7 }),
+        `or after it, in a loop: ${JSON.stringify(looped.result.error_facts?.assigned)}`,
+      );
       await send({ type: "mountWorkspace", files: [] });
       console.log("    names, frames, columns, facts and messages, each from the exception itself");
     }

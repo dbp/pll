@@ -31,6 +31,7 @@
 
 import typeCheckingSource from "./bootstrap/typeChecking.py";
 import errorInfoSource from "./bootstrap/errorInfo.py";
+import codeFactsSource from "./bootstrap/codeFacts.py";
 import sessionsSource from "./bootstrap/sessions.py";
 import stopSource from "./bootstrap/stop.py";
 import compileSource from "./bootstrap/compile.py";
@@ -43,6 +44,13 @@ import tableLibSource from "./tableLib.py";
 import reactorLibSource from "./reactorLib.py";
 import examplarLibSource from "./examplarLib.py";
 import installSource from "./install.py";
+import { bootstrapFile, PLL_INSTALL_FILE, PLL_LIBRARY_FILES } from "./pythonFiles";
+
+/** One of PLL's Python files, and the name its frames show (`pythonFiles.ts`). */
+export interface PythonSource {
+  file: string;
+  source: string;
+}
 
 /**
  * The bootstrap, one file per concern. They share one set of globals, so a
@@ -50,21 +58,22 @@ import installSource from "./install.py";
  * what runs as a file loads - `errorInfo` reads the vendor directory from
  * `typeChecking`, and `tests` decorates with `running`'s `_pll_stoppable`.
  */
-export const PLL_BOOTSTRAP_PY: ReadonlyArray<string> = [
-  typeCheckingSource,
-  errorInfoSource,
-  sessionsSource,
-  stopSource,
-  compileSource,
-  libraryHelpersSource,
-  runningSource,
-  testsSource,
-  staticAnalysisSource,
+export const PLL_BOOTSTRAP_PY: ReadonlyArray<PythonSource> = [
+  { file: bootstrapFile("typeChecking"), source: typeCheckingSource },
+  { file: bootstrapFile("errorInfo"), source: errorInfoSource },
+  { file: bootstrapFile("codeFacts"), source: codeFactsSource },
+  { file: bootstrapFile("sessions"), source: sessionsSource },
+  { file: bootstrapFile("stop"), source: stopSource },
+  { file: bootstrapFile("compile"), source: compileSource },
+  { file: bootstrapFile("libraryHelpers"), source: libraryHelpersSource },
+  { file: bootstrapFile("running"), source: runningSource },
+  { file: bootstrapFile("tests"), source: testsSource },
+  { file: bootstrapFile("staticAnalysis"), source: staticAnalysisSource },
 ];
-export const PLL_IMAGE_LIB_PY = imageLibSource;
-export const PLL_TABLE_LIB_PY = tableLibSource;
-export const PLL_REACTOR_LIB_PY = reactorLibSource;
-export const PLL_EXAMPLAR_LIB_PY = examplarLibSource;
+export const PLL_IMAGE_LIB_PY: PythonSource = { file: PLL_LIBRARY_FILES.image, source: imageLibSource };
+export const PLL_TABLE_LIB_PY: PythonSource = { file: PLL_LIBRARY_FILES.table, source: tableLibSource };
+export const PLL_REACTOR_LIB_PY: PythonSource = { file: PLL_LIBRARY_FILES.reactor, source: reactorLibSource };
+export const PLL_EXAMPLAR_LIB_PY: PythonSource = { file: PLL_LIBRARY_FILES.examplar, source: examplarLibSource };
 
 /**
  * Routes `urllib`/`requests` (and therefore pandas URL readers) through the
@@ -75,4 +84,4 @@ export const PLL_EXAMPLAR_LIB_PY = examplarLibSource;
 export const PYODIDE_HTTP_PATCH_PY = "import pyodide_http as _pll_ph; _pll_ph.patch_all()";
 
 /** The install step, run after the libraries (`install.py`). */
-export const PYODIDE_INSTALL_PY = installSource;
+export const PYODIDE_INSTALL_PY: PythonSource = { file: PLL_INSTALL_FILE, source: installSource };

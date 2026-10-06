@@ -1,6 +1,7 @@
 import type { Level } from "../level";
 import type { PythonError } from "../errors/pythonError";
 import type { StaticFinding } from "../fromPython";
+import { placeOf } from "./errorPlace";
 
 export interface AnalysisFinding {
   /** Short id like "name-error" or "shadowing". */
@@ -46,19 +47,20 @@ export interface RuntimeAnalyzerInput extends AnalyzerContext {
 
 /**
  * A runtime finding about `input.error`, given only what this one says
- * differently. Everything else - where it is, what Python called it - is
- * the error's own.
+ * differently. Everything else - what Python called it, and where it is
+ * (`placeOf`) - is the error's own.
  */
 export function runtimeFindingFor(
   input: RuntimeAnalyzerInput,
   fields: Pick<AnalysisFinding, "id" | "headline" | "howToFix"> & Partial<AnalysisFinding>,
 ): AnalysisFinding {
-  const { error, fileName, level } = input;
+  const { error, level } = input;
+  const place = placeOf(input);
   return {
     errorType: error.errorType,
-    fileName,
-    lineNumber: error.lineNumber,
-    column: error.column,
+    fileName: place.fileName,
+    lineNumber: place.lineNumber,
+    column: place.column,
     nameToken: error.nameToken,
     severity: "error",
     origin: "runtime",
