@@ -182,9 +182,9 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     return result;
   }
 
-  async examplarRun(testSource: string, bundle: string): Promise<ExamplarOutcome> {
+  async examplarRun(testSource: string, bundle: string, fileName: string): Promise<ExamplarOutcome> {
     await this.initialize();
-    const { result } = await this.request({ type: "examplarRun", testSource, bundle });
+    const { result } = await this.request({ type: "examplarRun", testSource, bundle, fileName });
     return examplarOutcomeFrom(result);
   }
 

@@ -76,6 +76,26 @@
   is forgotten as well as cleared from the panel, since there is no file to
   run again.
 
+- **The Examplar check works for image and table assignments.** The
+  student's tests and the known implementations ran without PLL's library
+  names, so a test calling `image_width` - or an implementation calling
+  `circle` - could not run at all.
+- **The Examplar check gives nothing away**: an error a known correct
+  implementation raises itself (`ValueError: shout needs at least one
+  character`) was shown on the card, and is now reported as the test
+  disagreeing, by name only; and an error from the student's own code shows
+  only its type, unless it is about a file, module or name of theirs, so
+  that it cannot carry what the implementation returned.
+- **An Examplar check that gets stuck stops**, after 2 seconds on any one
+  test, with a card saying which test and against which kind of
+  implementation. It ran until Stop was pressed. `pll examplar build
+  --verify` refuses a bundle with an implementation that does this, or one
+  that will not load - which every student's tests "caught".
+- **The Examplar check prints nothing of its own**: a `print` in a test ran
+  once per known implementation, before the program's own output.
+- **A test that needs another of the student's files** gets the hint that
+  files are not there during the check, naming the line that needed one.
+
 ### Removed
 - **Two guesses about where an error came from.** A missing column is no
   longer blamed on an `add_column` whose result was thrown away somewhere

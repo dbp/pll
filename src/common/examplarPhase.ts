@@ -127,6 +127,7 @@ export async function runExamplarStep(
   bundles: BundleStore,
   host: ExamplarHost,
   code: string,
+  fileName: string,
 ): Promise<boolean | null> {
   const bundle = await fetchBundle(bundles, host, code);
   if (bundle === null) {
@@ -161,7 +162,7 @@ export async function runExamplarStep(
   }
   let result: ExamplarOutcome;
   try {
-    result = await runtime.examplarRun(code, bundle.json);
+    result = await runtime.examplarRun(code, bundle.json, fileName);
   } catch (err) {
     // A Stop is not a reason the check failed; the run plan says it.
     if (!(err instanceof StoppedError)) {
@@ -233,15 +234,23 @@ export function buildExamplarEntries(bundle: Bundle, result: ExamplarOutcome): E
   if (!result.ok) {
     return [failedCard(bundle, result.error ?? "the known implementations could not be run")];
   }
+  // Something stuck ends the whole check: nothing after it was run, and
+  // nothing before it can be trusted to stand alone.
+  if (result.timedOut) {
+    return [failedCard(bundle, timedOutProblem(result.timedOut))];
+  }
   const wheats = result.wheats ?? [];
-  const unloadable = wheats.find((w) => !w.loaded);
+  // Only the bundle can fail to load, so this is a message for whoever
+  // built it rather than for the student. A buggy one that does not load
+  // would otherwise count as caught, by every test.
+  const unloadable =
+    wheats.find((w) => !w.loaded) ?? (result.chaffs ?? []).find((c) => !c.loaded);
   if (unloadable) {
-    // Only the bundle can fail this way, so this is a message for whoever
-    // built it rather than for the student.
+    const which = unloadable.targets === undefined ? "correct" : "buggy";
     return [
       failedCard(
         bundle,
-        `a known correct implementation could not be loaded ` +
+        `a known ${which} implementation could not be loaded ` +
           `(${unloadable.errorType}: ${unloadable.errorMessage}). ` +
           `The bundle may need rebuilding.`,
       ),
@@ -261,10 +270,13 @@ export function buildExamplarEntries(bundle: Bundle, result: ExamplarOutcome): E
       if (outcome.outcome === "fail") {
         disagreed.add(test);
       } else if (outcome.outcome === "error" && !raised.has(test)) {
-        raised.set(test, outcome.message ?? outcome.outcome);
+        raised.set(test, shownError(outcome.message ?? outcome.outcome));
       }
     }
   }
+  // The student's definitions that could not load here, for the hint: a
+  // file or module of theirs that is not there during the check.
+  const unloadedFiles = (wheats[0]?.unloaded ?? []).filter((u) => isFileAccessError(u.error));
   // A test that disagrees with one reference and raises on another is a
   // disagreement: that is the half the student can act on.
   for (const test of disagreed) {
@@ -296,7 +308,11 @@ export function buildExamplarEntries(bundle: Bundle, result: ExamplarOutcome): E
       allPass: tests.length > 0 && failures.length === 0 && errors.length === 0,
       failures,
       errors,
-      hint: errors.some((e) => isFileAccessError(e.message)) ? UNMOUNTED_HINT : undefined,
+      hint:
+        errors.length > 0 && (errors.some((e) => isFileAccessError(e.message)) || unloadedFiles.length > 0)
+          ? UNMOUNTED_HINT +
+            unloadedFiles.map((u) => ` Line ${u.line} could not run here: ${u.error}.`).join("")
+          : undefined,
       total: mine.length,
       caught: mine.length - missed.length,
       missed,
@@ -376,7 +392,37 @@ const UNMOUNTED_HINT =
   "Your tests are checked on their own, so files next to your program are not " +
   "available while that happens.";
 
-/** True for the errors Python raises when a path is not there to be opened. */
+/** True for the errors Python raises when a file or module is not there to be opened. */
 function isFileAccessError(message: string): boolean {
-  return /^(FileNotFoundError|IsADirectoryError|NotADirectoryError|PermissionError):/.test(message);
+  return /^(FileNotFoundError|IsADirectoryError|NotADirectoryError|PermissionError|ModuleNotFoundError|ImportError):/.test(
+    message,
+  );
+}
+
+/**
+ * What of an error raised in the student's own code a card may show. Its
+ * type always; its message only when it cannot carry what the implementation
+ * gave back - a file or name of theirs that is not there. `int(convert(x))`
+ * raising "invalid literal for int(): 'abc'" would put the correct answer on
+ * the card.
+ */
+function shownError(message: string): string {
+  if (isFileAccessError(message) || /^(NameError|UnboundLocalError):/.test(message)) {
+    return message;
+  }
+  return message.split(":")[0];
+}
+
+/** What to say when something ran past the time a test is given. */
+function timedOutProblem(stuck: NonNullable<ExamplarOutcome["timedOut"]>): string {
+  const against = stuck.kind === "wheat" ? "a known correct implementation" : "a known buggy implementation";
+  if (stuck.test === null) {
+    return `Loading your definitions with ${against} took more than ${stuck.seconds} seconds, so the check stopped.`;
+  }
+  return (
+    `\`${stuck.test}\` ran for more than ${stuck.seconds} seconds against ${against}, so the check stopped. ` +
+    (stuck.kind === "wheat"
+      ? "A test that runs that long is usually stuck in a loop."
+      : "That implementation may never finish on what this test gives it; tell your course staff.")
+  );
 }

@@ -217,7 +217,8 @@ export interface PythonRuntime {
    */
   examplarBuild(sources: string): Promise<ExamplarBuildResult>;
   /** Run a student's tests against every implementation in a bundle. */
-  examplarRun(testSource: string, bundle: string): Promise<ExamplarOutcome>;
+  /** `fileName` is the student's file, whose own errors are told from the implementation's. */
+  examplarRun(testSource: string, bundle: string, fileName: string): Promise<ExamplarOutcome>;
   /**
    * Apply one event to a running reactor and get the frame it produced.
    * `event` is the JSON of `{kind, ...}`; see `Reactor.react`.

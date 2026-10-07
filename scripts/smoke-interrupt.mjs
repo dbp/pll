@@ -465,6 +465,7 @@ async function main() {
         type: "examplarRun",
         testSource: "def test_shout():\n    while True:\n        pass\n",
         bundle: JSON.stringify(built.result.bundle),
+        fileName: "hw.py",
       });
       await sleep(1000);
       stop(check);

@@ -206,7 +206,7 @@ export async function runExamplar(
 
 /** True if any test failed or errored against this implementation. */
 function caught(impl: ExamplarImpl): boolean {
-  return !impl.loaded || Object.values(impl.tests).some((t) => t.outcome !== "pass");
+  return Object.values(impl.tests).some((t) => t.outcome !== "pass");
 }
 
 /**
@@ -241,6 +241,7 @@ async function verify(
   const result: ExamplarOutcome = await runtime.examplarRun(
     testSource,
     JSON.stringify(bundle),
+    path.basename(testsPath),
   );
   if (!result.ok) {
     view.problem(`pll: ${result.error ?? "the bundle could not be run"}`);
@@ -249,6 +250,18 @@ async function verify(
 
   let bad = 0;
   view.problem(`verifying with ${path.basename(testsPath)}:`);
+  // Something stuck ends the check for students, so it has to be found here.
+  if (result.timedOut) {
+    const { kind, id, targets, test, seconds } = result.timedOut;
+    const where = kind === "wheat" ? `wheat ${id}` : `chaff ${targets}/${id}`;
+    view.problem(
+      test !== null
+        ? `  BAD   ${where}: ${test} ran for more than ${seconds} seconds, which stops every student's check`
+        : `  BAD   ${where}: loading took more than ${seconds} seconds, which stops every student's check`,
+    );
+    view.problem("pll: the bundle has a problem; not written.");
+    return EXIT.testsFailed;
+  }
   for (const wheat of result.wheats ?? []) {
     const failures = Object.entries(wheat.tests).filter(([, t]) => t.outcome !== "pass");
     if (wheat.loaded && failures.length === 0) {
@@ -269,6 +282,12 @@ async function verify(
   // or the silence about them reads as approval.
   for (const chaff of result.chaffs ?? []) {
     const where = `chaff ${chaff.targets}/${chaff.id}`;
+    // One that does not load would count as caught by every test there is.
+    if (!chaff.loaded) {
+      bad += 1;
+      view.problem(`  BAD   ${where}: ${chaff.errorMessage}`);
+      continue;
+    }
     if (caught(chaff)) {
       const by = Object.entries(chaff.tests)
         .filter(([, t]) => t.outcome !== "pass")

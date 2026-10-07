@@ -10,6 +10,8 @@
  * Requires `pnpm run build`.
  */
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -41,7 +43,9 @@ function runHere(args) {
 
 function run(args) {
   return new Promise((res, rej) => {
-    const child = spawn(process.execPath, [CLI, "--no-color", ...args], { cwd: work });
+    // A cache of its own: a bundle fetched here must not land in the user's.
+    const env = { ...process.env, PLL_CACHE_DIR: join(work, "cache") };
+    const child = spawn(process.execPath, [CLI, "--no-color", ...args], { cwd: work, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (b) => (stdout += b.toString()));
@@ -345,6 +349,92 @@ async function main() {
       `expected two gaps per function, got ${uncaught.join(",") || "none"}`,
     );
     console.log(`    samples/examplar.py passes the wheats and misses chaffs ${uncaught.join(", ")}`);
+  }
+
+  console.log("\n[10] a student's check: the names a run has, nothing given away, nothing stuck");
+  {
+    // Bundles served from here, as a course's server would.
+    const server = createServer((req, res) => {
+      try {
+        res.end(readFileSync(join(work, "site", req.url.slice(1))));
+      } catch {
+        res.statusCode = 404;
+        res.end();
+      }
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const bundle = async (name, wheat, chaffs) => {
+      write(`${name}/wheats/reference.py`, ...wheat);
+      for (const [id, lines] of Object.entries(chaffs)) write(`${name}/chaffs/${id}.py`, ...lines);
+      const built = await run(["examplar", "build", name, "-o", `site/${name}.json`]);
+      expect(built.code === 0, `${name} builds: ${built.stderr}`);
+    };
+    const student = (name, ...lines) =>
+      run([write(`students/${name}.py`, `#examplar ${base}/${name}.json`, "", ...lines)]);
+    mkdirSync(join(work, "site"), { recursive: true });
+
+    // An image assignment: the implementation draws, and the test measures.
+    await bundle("dots", ['def dot(r):', '    return circle(r, "solid", "red")'], {
+      "dot/1": ['def dot(r):', '    return circle(r + 1, "solid", "red")'],
+    });
+    const dots = await student("dots", "def test_dot():", "    assert image_width(dot(5)) == 10");
+    expect(/dot\n  Against correct implementations: your test passes\./.test(dots.stderr), `the libraries are there: ${dots.stderr}`);
+    expect(/Against buggy implementations: caught all 1\./.test(dots.stderr), `and it is scored: ${dots.stderr}`);
+
+    // A correct implementation's own error is not shown, and counts as a disagreement.
+    const SHOUT = ['def shout(s):', '    if not s:', '        raise ValueError("shout needs at least one character")', '    return s.upper() + "!"'];
+    await bundle("shouts", SHOUT, { "shout/1": ['def shout(s):', '    return s.upper()'] });
+    const rejected = await student(
+      "shouts",
+      "import sys",
+      "def test_hi():",
+      '    print("checking hi")',
+      '    assert shout("hi") == "HI!"',
+      "def test_empty():",
+      '    assert shout("") == ""',
+      "def test_main():",
+      '    assert sys.modules["__main__"].shout is shout',
+      "def test_number():",
+      '    assert int(shout("x")) == 1',
+    );
+    const card = rejected.stderr.slice(rejected.stderr.indexOf("examplar: shout"), rejected.stderr.indexOf("tests:"));
+    expect(/expects? the wrong answer:\n    test_empty\n/.test(card), `a disagreement, by name: ${card}`);
+    expect(!/shout needs|X!/.test(card), `nothing the implementation said or gave back: ${card}`);
+    expect(/could not run here:\n    test_number\n      ValueError\n/.test(card), `an error of their own, by its type: ${card}`);
+    expect(!/test_main/.test(card), `the check is __main__: ${card}`);
+    expect(!/checking hi/.test(rejected.stdout + rejected.stderr), `and what it printed is dropped: ${rejected.stdout}`);
+
+    // A buggy implementation that never finishes stops the check.
+    await bundle("loops", SHOUT, { "shout/1": ['def shout(s):', '    while True:', '        pass'] });
+    const started = Date.now();
+    const stuck = await student("loops", "def test_hi():", '    assert shout("hi") == "HI!"');
+    expect(
+      /`test_hi` ran for more than 2 seconds against a known buggy implementation, so the check stopped\./.test(stuck.stderr),
+      `the card says so: ${stuck.stderr}`,
+    );
+    expect(Date.now() - started < 60_000, `and the run goes on: ${Date.now() - started} ms`);
+    // And so does one that will not load.
+    await bundle("unloadable", SHOUT, { "shout/1": ["import nothing_here", "def shout(s):", "    return s"] });
+    const broken = await student("unloadable", "def test_hi():", '    assert shout("hi") == "HI!"');
+    expect(/a known buggy implementation could not be loaded/.test(broken.stderr), `not counted as caught: ${broken.stderr}`);
+    // A file of theirs that is not there during the check is named.
+    const helper = await student("shouts", "from helper import word", "def test_hi():", '    assert shout(word) == "HI!"');
+    expect(
+      /Line 3 could not run here: ModuleNotFoundError: No module named 'helper'\./.test(helper.stderr),
+      `the line that needed it: ${helper.stderr}`,
+    );
+
+    // And `--verify` refuses both broken bundles before a student meets them.
+    write("verify.py", "def test_hi():", '    assert shout("hi") == "HI!"');
+    const verifyStuck = await run(["examplar", "build", "loops", "--verify", "verify.py"]);
+    expect(verifyStuck.code === 3 && /BAD +chaff shout\/1: test_hi ran for more than 2 seconds/.test(verifyStuck.stderr),
+      `a chaff that never finishes: ${verifyStuck.stderr}`);
+    const verifyBroken = await run(["examplar", "build", "unloadable", "--verify", "verify.py"]);
+    expect(verifyBroken.code === 3 && /BAD +chaff shout\/1: the implementation could not be loaded/.test(verifyBroken.stderr),
+      `a chaff that will not load: ${verifyBroken.stderr}`);
+    await new Promise((r) => server.close(r));
+    console.log("    libraries present; nothing given away; stuck and broken bundles stopped");
   }
 
   rmSync(work, { recursive: true, force: true });

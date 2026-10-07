@@ -231,10 +231,15 @@ export interface ExamplarBuildResult {
 }
 
 export interface ExamplarTestOutcome {
+  /**
+   * `fail` when the test disagrees with the implementation - an assertion,
+   * or an error the implementation itself raised; `error` when the
+   * student's own code raised.
+   */
   outcome: "pass" | "fail" | "error";
   /**
-   * pytest's rewritten assertion text, when it failed. For `--verify` only -
-   * it states the correct answer, so it never reaches a student's card.
+   * What it failed or raised with. For a failure, for `--verify` only - it
+   * states the correct answer, so it never reaches a student's card.
    */
   message: string | null;
 }
@@ -256,6 +261,10 @@ export interface ExamplarImplResult {
    * tests and no code yet.
    */
   student_defines: string[];
+  /** The student's definitions that could not be loaded, by line, and why. */
+  unloaded?: { line: number; error: string }[];
+  /** The test that ran too long here, null for loading, false for none. */
+  timed_out?: string | null | false;
   error_type?: string;
   error_message?: string;
   traceback?: string;
@@ -275,6 +284,18 @@ export interface ExamplarRunResult {
    * where the suite has been shown to be correct.
    */
   chaffs_skipped?: string[];
+  /**
+   * What ran past the time a test is given, which ended the check: the
+   * implementation it ran against, and the test (null for loading).
+   */
+  timed_out?: {
+    kind: "wheat" | "chaff";
+    id: string;
+    /** For a chaff, the function it breaks. */
+    targets: string | null;
+    test: string | null;
+    seconds: number;
+  } | null;
 }
 
 export interface TestCaseData {

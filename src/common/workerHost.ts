@@ -375,6 +375,7 @@ export function createWorkerHost(
       const result = callPython<ExamplarRunResult>("_pll_examplar_run", [
         data.testSource,
         data.bundle,
+        data.fileName,
       ]);
       return { type: "examplarRan", result };
     },

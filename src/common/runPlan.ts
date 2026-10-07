@@ -120,7 +120,7 @@ export async function runFilePlan(
     }
     // Before the files are mounted: the known implementations run without
     // access to the student's files.
-    const complete = await runExamplarStep(runtime, plan.bundles, host, code);
+    const complete = await runExamplarStep(runtime, plan.bundles, host, code, fileName);
     if (complete !== null && stopped(host, STOPPED.checking)) {
       return "stopped";
     }

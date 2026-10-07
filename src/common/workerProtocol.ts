@@ -53,7 +53,7 @@ export type WorkerInbound =
   /** Compile wheats and chaffs into a bundle (authoring). */
   | { id: number; type: "examplarBuild"; sources: string }
   /** Run a student's tests against every implementation in a bundle. */
-  | { id: number; type: "examplarRun"; testSource: string; bundle: string };
+  | { id: number; type: "examplarRun"; testSource: string; bundle: string; fileName: string };
 
 export type WorkerOutbound =
   | { id: number; type: "ready" }

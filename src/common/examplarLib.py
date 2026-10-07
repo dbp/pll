@@ -24,10 +24,53 @@
 
 import ast as _ex_ast
 import base64 as _ex_b64
+import contextlib as _ex_contextlib
 import importlib.util as _ex_util
+import io as _ex_io
 import marshal as _ex_marshal
+import sys as _ex_sys
+import time as _ex_time
+import types as _ex_types
 
 EXAMPLAR_FORMAT = 2
+
+#: How long one test may run against one implementation - or one of the
+#: student's definitions, or an implementation, take to load. Anything that
+#: runs longer is stuck, and the check stops there (`_PllExamplarTimeout`).
+_PLL_EXAMPLAR_SECONDS = 2.0
+
+#: How many trace events pass between looks at the clock.
+_PLL_EXAMPLAR_CLOCK_EVERY = 1024
+
+
+class _PllExamplarTimeout(BaseException):
+    """Raised into code that ran past `_PLL_EXAMPLAR_SECONDS`. A
+    `BaseException`, so a test's own `except Exception` does not swallow it."""
+
+
+@_ex_contextlib.contextmanager
+def _pll_examplar_budget():
+    """Run the body with `_PLL_EXAMPLAR_SECONDS` to finish in.
+
+    A trace function rather than the interrupt channel Stop uses, so it
+    works wherever the check runs, with or without one. A loop in Python
+    code is caught; one inside a single call into C is not.
+    """
+    deadline = _ex_time.monotonic() + _PLL_EXAMPLAR_SECONDS
+    events = [0]
+
+    def tracer(frame, event, arg):
+        events[0] += 1
+        if events[0] % _PLL_EXAMPLAR_CLOCK_EVERY == 0 and _ex_time.monotonic() > deadline:
+            raise _PllExamplarTimeout()
+        return tracer
+
+    previous = _ex_sys.gettrace()
+    _ex_sys.settrace(tracer)
+    try:
+        yield
+    finally:
+        _ex_sys.settrace(previous)
 
 
 def _pll_examplar_magic():
@@ -181,8 +224,9 @@ def _pll_examplar_build(sources_json):
 
 def _pll_examplar_free_names(fn_node):
     """Names a function body reads without binding them itself."""
-    bound = {arg.arg for arg in fn_node.args.args}
-    bound.update(arg.arg for arg in getattr(fn_node.args, "kwonlyargs", []))
+    arguments = fn_node.args
+    bound = {arg.arg for arg in arguments.posonlyargs + arguments.args + arguments.kwonlyargs}
+    bound.update(arg.arg for arg in (arguments.vararg, arguments.kwarg) if arg is not None)
     read = set()
     for node in _ex_ast.walk(fn_node):
         if isinstance(node, _ex_ast.Name):
@@ -244,18 +288,42 @@ def _pll_examplar_attribution(test_source, provides):
     return out
 
 
-def _pll_examplar_outcome(exc):
-    """How a test ended, and what to say about it."""
+def _pll_examplar_raised_in_implementation(exc, student_file):
+    """Whether `exc` came from the implementation rather than the student's
+    own code: the innermost frame of either's, from the inside out. A
+    library the implementation called counts as the implementation."""
+    frames = []
+    tb = exc.__traceback__
+    while tb is not None:
+        frames.append(tb.tb_frame.f_code.co_filename)
+        tb = tb.tb_next
+    for filename in reversed(frames):
+        if filename == student_file:
+            return False
+        if filename.startswith(("wheats/", "chaffs/")):
+            return True
+    return False
+
+
+def _pll_examplar_outcome(exc, student_file):
+    """How a test ended, and what to say about it.
+
+    A test the implementation itself refused - `shout("")` raising its own
+    `ValueError` - disagrees with it, as a wrong expectation does. Its
+    message is the implementation's, so it is kept for `--verify` and never
+    shown to a student. Only an error from the student's own code is one
+    their test "could not run" past.
+    """
     if exc is None:
         return {"outcome": "pass", "message": None}
     if isinstance(exc, AssertionError):
         # Kept for `--verify`, whose reader is the author. A student is shown
         # the test's name and not this - see `_pll_examplar_compile_tests`.
         return {"outcome": "fail", "message": str(exc) or "assertion failed"}
-    return {
-        "outcome": "error",
-        "message": "%s: %s" % (type(exc).__name__, exc),
-    }
+    message = "%s: %s" % (type(exc).__name__, exc)
+    if _pll_examplar_raised_in_implementation(exc, student_file):
+        return {"outcome": "fail", "message": message}
+    return {"outcome": "error", "message": message}
 
 
 # The top-level statements that give a file its *names*. Everything else is
@@ -277,6 +345,14 @@ _PLL_EXAMPLAR_DEFINITIONS = (
 
 
 def _pll_examplar_compile_tests(test_source, filename):
+    """-> [(line, code)], one for each definition: see below."""
+    return [
+        (node.lineno, code)
+        for node, code in _pll_examplar_compiled_definitions(test_source, filename)
+    ]
+
+
+def _pll_examplar_compiled_definitions(test_source, filename):
     """Compile the student's definitions, one statement at a time.
 
     Through pytest's assertion rewriting, so a failure carries the values it
@@ -319,17 +395,16 @@ def _pll_examplar_compile_tests(test_source, filename):
         with _pll_recording_compile_warnings():
             for node in tree.body:
                 if isinstance(node, _PLL_EXAMPLAR_DEFINITIONS):
-                    pieces.append(
-                        compile(
-                            _ex_ast.Module(body=[node], type_ignores=[]), filename, "exec"
-                        )
-                    )
+                    pieces.append((
+                        node,
+                        compile(_ex_ast.Module(body=[node], type_ignores=[]), filename, "exec"),
+                    ))
     finally:
         del _pll_compile_warnings[:]
     return pieces
 
 
-def _pll_examplar_run_one(test_pieces, code_blob, provided=(), only=None):
+def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), only=None):
     """Run every `test_*` the student defined against one implementation.
 
     Their definitions are loaded first and the implementation second, so a
@@ -347,62 +422,93 @@ def _pll_examplar_run_one(test_pieces, code_blob, provided=(), only=None):
     of `total` fails on it too - a broken `total` test fails on everything -
     and counting that as having caught it would credit the student for a
     signal that has nothing to do with the function.
+
+    Run in a module made `__main__`, starting with the names a run starts
+    with - the libraries' among them - so an image assignment's tests can
+    call `image_width` and its implementations `circle`. Whatever runs past
+    `_PLL_EXAMPLAR_SECONDS` ends it: `timed_out` names the test, or None for
+    a definition or the implementation's own loading.
     """
-    namespace = {"__name__": "__main__"}
-    for piece in test_pieces:
-        try:
-            exec(piece, namespace)
-        except Exception:
-            # Deliberately `Exception`, not `BaseException`: a
-            # `KeyboardInterrupt` from the Stop button has to get out.
-            continue
-    # Which provided names the student has written themselves, recorded
-    # *before* the overlay replaces them. The host uses this to decide
-    # whether running their tests against their own code makes sense yet:
-    # early in the exercise there is no implementation, and doing so would
-    # just spray NameErrors.
-    student_defines = sorted(
-        name for name in provided if callable(namespace.get(name)) or name in namespace
-    )
-    try:
-        exec(_ex_marshal.loads(_ex_b64.b64decode(code_blob)), namespace)
-    except KeyboardInterrupt:
-        # A Stop, not a broken implementation, which the card would report
-        # as "the bundle may need rebuilding".
-        raise
-    except BaseException as e:
+    module = _ex_types.ModuleType("__main__")
+    module.__dict__.update(_pll_initial_globals)
+    namespace = module.__dict__
+    # The student's definitions that could not be loaded here, and why.
+    unloaded = []
+    results = {}
+
+    def ended(timed_out, **extra):
         return {
-            "loaded": False,
-            "error_type": type(e).__name__,
-            "error_message": "the implementation could not be loaded (%s)" % e,
-            "traceback": "",
-            "tests": {},
+            "loaded": True,
+            "tests": results,
             "student_defines": student_defines,
+            "unloaded": unloaded,
+            "timed_out": timed_out,
+            **extra,
         }
 
-    results = {}
-    for name in sorted(namespace):
-        if not name.startswith("test_"):
-            continue
-        if only is not None and name not in only:
-            continue
-        fn = namespace[name]
-        if not callable(fn):
-            continue
+    student_defines = []
+    with _pll_as_main(module):
+        for line, piece in test_pieces:
+            try:
+                with _pll_examplar_budget():
+                    exec(piece, namespace)
+            except _PllExamplarTimeout:
+                return ended(None)
+            except Exception as e:
+                # Deliberately `Exception`, not `BaseException`: a
+                # `KeyboardInterrupt` from the Stop button has to get out.
+                unloaded.append({"line": line, "error": "%s: %s" % (type(e).__name__, e)})
+        # Which provided names the student has written themselves, recorded
+        # *before* the overlay replaces them. The host uses this to decide
+        # whether running their tests against their own code makes sense yet:
+        # early in the exercise there is no implementation, and doing so would
+        # just spray NameErrors.
+        student_defines = sorted(name for name in provided if name in namespace)
         try:
-            fn()
-            results[name] = _pll_examplar_outcome(None)
+            with _pll_examplar_budget():
+                exec(_ex_marshal.loads(_ex_b64.b64decode(code_blob)), namespace)
         except KeyboardInterrupt:
-            # A Stop ends the whole check. Recorded as this test's error, it
-            # let the next implementation run the same test - which, if it
-            # loops, needed another Stop, and another, one per implementation.
+            # A Stop, not a broken implementation, which the card would report
+            # as "the bundle may need rebuilding".
             raise
+        except _PllExamplarTimeout:
+            return ended(None)
         except BaseException as e:
-            results[name] = _pll_examplar_outcome(e)
-    return {"loaded": True, "tests": results, "student_defines": student_defines}
+            return {
+                **ended(None),
+                "loaded": False,
+                "error_type": type(e).__name__,
+                "error_message": "the implementation could not be loaded (%s)" % e,
+                "traceback": "",
+                "tests": {},
+                "timed_out": False,
+            }
+
+        for name in sorted(namespace):
+            if not name.startswith("test_"):
+                continue
+            if only is not None and name not in only:
+                continue
+            fn = namespace[name]
+            if not callable(fn):
+                continue
+            try:
+                with _pll_examplar_budget():
+                    fn()
+                results[name] = _pll_examplar_outcome(None, student_file)
+            except KeyboardInterrupt:
+                # A Stop ends the whole check. Recorded as this test's error, it
+                # let the next implementation run the same test - which, if it
+                # loops, needed another Stop, and another, one per implementation.
+                raise
+            except _PllExamplarTimeout:
+                return ended(name)
+            except BaseException as e:
+                results[name] = _pll_examplar_outcome(e, student_file)
+    return ended(False)
 
 
-def _pll_examplar_run(test_source, bundle_json):
+def _pll_examplar_run(test_source, bundle_json, filename="hw.py"):
     """Run a student's suite against a bundle, per function and in two phases.
 
     Returns a dict the host turns into one report per provided function.
@@ -420,7 +526,18 @@ def _pll_examplar_run(test_source, bundle_json):
     same way on every implementation. Gating means those chaffs are not even
     run, so nothing about them can be reported before it would mean
     something.
+
+    Two things end the whole check rather than one card: an implementation
+    that will not load - the bundle is broken - and anything that runs past
+    `_PLL_EXAMPLAR_SECONDS` (`timed_out`), which no later result could be
+    trusted after. What the code prints is dropped: the file's own tests,
+    which run next, show it once.
     """
+    with _ex_contextlib.redirect_stdout(_ex_io.StringIO()), _ex_contextlib.redirect_stderr(_ex_io.StringIO()):
+        return _pll_examplar_judge(test_source, bundle_json, filename)
+
+
+def _pll_examplar_judge(test_source, bundle_json, filename):
     import json as _ex_json
 
     try:
@@ -451,7 +568,7 @@ def _pll_examplar_run(test_source, bundle_json):
     # implementation. Some code parses and does not compile (`case Boa:`),
     # so this covers both and says neither.
     try:
-        test_pieces = _pll_examplar_compile_tests(test_source, "hw.py")
+        test_pieces = _pll_examplar_compile_tests(test_source, filename)
     except SyntaxError as e:
         return {
             "ok": False,
@@ -466,11 +583,29 @@ def _pll_examplar_run(test_source, bundle_json):
         "wheats": [],
         "chaffs": [],
         "chaffs_skipped": [],
+        "timed_out": None,
     }
+
+    def stopped_by(ran, kind):
+        """Record a timeout as the end of the check; True if there was one."""
+        if ran["timed_out"] is False:
+            return False
+        result["timed_out"] = {
+            "kind": kind,
+            "id": ran["id"],
+            "targets": ran.get("targets"),
+            "test": ran["timed_out"],
+            "seconds": _PLL_EXAMPLAR_SECONDS,
+        }
+        result["chaffs_skipped"] = sorted(provides)
+        return True
+
     for entry in bundle.get("wheats") or []:
-        ran = _pll_examplar_run_one(test_pieces, entry.get("pyc", ""), provides)
+        ran = _pll_examplar_run_one(test_pieces, entry.get("pyc", ""), filename, provides)
         ran["id"] = entry.get("id", "?")
         result["wheats"].append(ran)
+        if stopped_by(ran, "wheat"):
+            return result
 
     # A wheat that will not load is a broken bundle, not a student's problem,
     # and there is nothing to measure against - so no phase two anywhere.
@@ -504,9 +639,11 @@ def _pll_examplar_run(test_source, bundle_json):
         # fails on it as well, and crediting that would score the student
         # for a signal that says nothing about this chaff.
         mine = {name for name, names in attribution.items() if function in names}
-        ran = _pll_examplar_run_one(test_pieces, entry.get("pyc", ""), provides, mine)
+        ran = _pll_examplar_run_one(test_pieces, entry.get("pyc", ""), filename, provides, mine)
         ran["id"] = entry.get("id", "?")
         ran["targets"] = function
         result["chaffs"].append(ran)
+        if stopped_by(ran, "chaff"):
+            return result
     result["chaffs_skipped"] = sorted(set(provides) - settled)
     return result

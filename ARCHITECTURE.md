@@ -1168,7 +1168,21 @@ here"* instead of `ValueError: bad marshal data`.
 line: `_pll_examplar_build` (authoring) and `_pll_examplar_run`, which execs
 the student's file, overlays an implementation so its names win, and calls
 each `test_*`. That overlay *is* the Examplar semantics - their tests are
-judged against the given implementation, not their own attempt.
+judged against the given implementation, not their own attempt. Each
+implementation runs in a module of its own, made `__main__` while it runs,
+that starts with the names a run starts with - so an image assignment's
+tests can call `image_width` and its implementations `circle`. What the
+code prints is dropped: the file's own tests, which run next, show it once.
+
+Two things stop the whole check, as one failed card, rather than any one
+function's: an implementation that will not load (correct or buggy - a
+buggy one that does not load would count as caught by every test), and
+anything that runs past `_PLL_EXAMPLAR_SECONDS` (2) - a test against an
+implementation, one of the student's definitions, or an implementation
+loading. That is a trace-function budget, so it works with or without the
+interrupt channel Stop uses; a loop inside a single call into C is not
+caught. Nothing after it runs, and `--verify` refuses a bundle that does
+either, so an author finds a chaff that never finishes before a class does.
 
 Two details that earn their place:
 
@@ -1183,7 +1197,14 @@ Two details that earn their place:
   test's name and nothing more - a card carrying `assert 'HI!' == 'hi!'` is
   an oracle, and the assignment can be read off it one deliberately-wrong
   test at a time. Both messages survive on the raw result for `--verify`;
-  neither is copied into an entry, so neither can reach the webview.
+  neither is copied into an entry, so neither can reach the webview. The
+  same goes for an error a correct implementation raises itself
+  (`ValueError: shout needs at least one character`): where the exception
+  was raised decides it, and one from the implementation's code is a
+  disagreement, named and no more. An error from the student's own code
+  shows its type, and its message only when that cannot carry what the
+  implementation returned - a file, module or name of theirs that is not
+  there.
 
 `--verify` checks the property nothing else can: the author's own suite
 passes on every wheat and fails on every chaff. A chaff no test catches
@@ -1208,11 +1229,9 @@ silently leave it off every card. It stops at a provided name rather than
 descending into it - during the phase that name is the bundle's function.
 
 Where the bundle came from is that small label's `title`, not a visible
-badge of its own. It
-used to read *"known implementations (cached)"*, which was misleading: cached
-here means a 304, so the bundle is *current* rather than stale. The case
-worth saying out loud - an unreachable server and a fallback to an older copy
-- already gets a banner.
+badge of its own: "cached" here means a 304, so the bundle is *current*
+rather than stale. The case worth saying out loud - an unreachable server
+and a fallback to an older copy - gets a banner.
 
 ### The phase in a run
 
@@ -1250,8 +1269,10 @@ That unmount has a student-visible cost, and three decisions pay for it:
   known-correct implementation expects the wrong answer, while a test that
   raised never got as far as having an expectation. Saying "you expect the
   wrong answer" over a `FileNotFoundError` would be a false accusation. When
-  one of those errors is a file-access error, it adds the one thing the
-  student cannot deduce - that their files are not there during the check.
+  one of those errors is a file-access error, or one of the student's
+  definitions could not load for want of a file or module of theirs, it
+  adds the one thing the student cannot deduce - that their files are not
+  there during the check - and names the line that needed one.
 - **A test that raised catches nothing.** It raises the same way on every
   implementation, so crediting it would score the student for a signal made
   entirely of our own unmounting. It is excluded from the chaff count. A test
