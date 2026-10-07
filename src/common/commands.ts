@@ -4,6 +4,7 @@ import type { InteractionsView } from "./interactionsView";
 import type { ReplSession } from "./replSession";
 import { errorText } from "./errorText";
 import { showError, showWarning } from "./notify";
+import { isProgramDocument } from "./programDocuments";
 
 export interface ExtensionServices {
   repl: ReplSession;
@@ -49,6 +50,10 @@ async function runActiveFile(services: ExtensionServices): Promise<void> {
   const document = editor.document;
   if (document.languageId !== "python") {
     void showWarning("active file is not Python.");
+    return;
+  }
+  if (!isProgramDocument(document.uri)) {
+    void showWarning("only a file can be run, and this editor shows something else - a diff, or a notebook cell.");
     return;
   }
 

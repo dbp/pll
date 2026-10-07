@@ -110,6 +110,18 @@
 - **`package(...)` with a value the server cannot read leaves the reactor
   where it was**; it used to move on a frame and then report the error.
 
+- **Several lines submitted at once run as one input** - written with
+  Shift+Enter, or pasted - as Python 3.13's own shell takes a paste. They
+  were run as if typed a line at a time, so a blank line inside a function
+  ended it and the rest failed with an `IndentationError`.
+- **A diff or a notebook cell is not taken for a file.** Looking at a `git`
+  diff of `hw.py` turned the panel to an empty session named `hw.py`, and
+  **PLL: Run Python File** ran a notebook cell as if it were a file. Only a
+  file, an untitled editor, or a document from the workspace's own folders
+  has a session, can be run, or shows the Run button.
+- **Before a file has run, its prompt uses the file's `#level` line**, where
+  it was always `raw`.
+
 ### Removed
 - **Two guesses about where an error came from.** A missing column is no
   longer blamed on an `add_column` whose result was thrown away somewhere

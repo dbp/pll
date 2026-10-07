@@ -1219,6 +1219,14 @@ async function main() {
         `and what is learned from it: ${JSON.stringify(later.error_facts)}`,
       );
 
+      // Several lines submitted at once are judged as one input.
+      const complete = async (code, whole) => (await send({ type: "checkSyntax", code, whole })).result.status;
+      const fn = "def f():\n    x = 1\n\n    return x";
+      expect(await complete(fn, true) === "complete", "a function with a blank line in it is whole");
+      expect(await complete("x = 1\ny = 2", true) === "complete", "statements one after another are one input");
+      expect(await complete("for x in [1]:", true) === "incomplete", "an unfinished block waits for more");
+      expect(await complete("def f():\n    x = 1", false) === "incomplete", "a shell line still waits for a blank line");
+
       // A file another imports is held to its own level: a grader at `raw`
       // importing a student's beginner file gets the student's checks.
       const graded = async (grader, student, name = "student.py") => {

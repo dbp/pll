@@ -127,7 +127,7 @@ remember it. You can always change or delete the line.
 
 The prompt at the bottom of the interactions panel uses the **same**
 level as the last run (the one shown in the header). If you have not run
-the file yet, the prompt is raw.
+the file yet, it uses the level the file's `#level` line names.
 
 ## Type annotations are checked as your program runs
 

@@ -137,9 +137,9 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     deliverRunResult(result, onEvent, "<repl>");
   }
 
-  async checkReplComplete(code: string): Promise<ReplCheckResult> {
+  async checkReplComplete(code: string, whole = false): Promise<ReplCheckResult> {
     await this.initialize();
-    const { result } = await this.request({ type: "checkSyntax", code });
+    const { result } = await this.request({ type: "checkSyntax", code, whole });
     return replCheckFrom(result);
   }
 

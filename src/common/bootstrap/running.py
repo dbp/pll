@@ -58,15 +58,18 @@ _pll_os.abort = _pll_os_abort
 # REPL syntax check (codeop.compile_command in 'single' mode)
 # -----------------------------------------------------------------------------
 
-def _pll_repl_check(source):
+def _pll_repl_check(source, whole=False):
     """Return whether 'source' is a complete REPL input.
 
     Mirrors what CPython's interactive shell does: uses codeop.compile_command
     in 'single' mode, which returns None for incomplete input (e.g. open
     parens, unfinished block) and raises SyntaxError for actually-broken code.
+    `whole` is for several lines submitted at once, judged as a whole in
+    'exec' mode - so a blank line inside a function does not end it, and
+    statements one after another are not "multiple statements".
     """
     try:
-        result = _codeop.compile_command(source, "<repl>", "single")
+        result = _codeop.compile_command(source, "<repl>", "exec" if whole else "single")
     except (SyntaxError, OverflowError, ValueError) as e:
         return {
             "status": "invalid",

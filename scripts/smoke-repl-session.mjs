@@ -387,8 +387,13 @@ function makeRuntime(script = {}) {
         else onEvent(event);
       }
     },
-    async checkReplComplete(code) {
+    async checkReplComplete(code, whole = false) {
       calls.push(["checkReplComplete", code]);
+      // A whole block, as Python's `exec` mode judges it: complete unless it
+      // ends where more must follow.
+      if (whole) {
+        return { status: /[:\[({]\s*$/.test(code) ? "incomplete" : "complete" };
+      }
       // Good enough for the prompt: a trailing colon or open bracket
       // continues, as does a line inside an indented block.
       const lines = code.split("\n");
@@ -619,14 +624,14 @@ console.log("\n[3] Ctrl+C during a continuation abandons the buffer");
   repl.dispose();
 }
 
-console.log("\n[4] a multi-line paste is processed one line at a time");
+console.log("\n[4] a multi-line paste is one input, echoed line by line");
 {
   const { repl, view, runtime } = await harness({ events: () => [{ kind: "done" }] });
   view.handlers.onSubmit("x = 1\ny = 2");
   await settle();
   const evaluated = runtime.calls.filter((c) => c[0] === "replEval").map((c) => c[1]);
   console.log(`    evaluated: ${JSON.stringify(evaluated)}`);
-  expect(evaluated.join("|") === "x = 1|y = 2", "each pasted line runs on its own");
+  expect(evaluated.join("|") === "x = 1\ny = 2", "the paste runs as one input");
   expect(texts(view, "echo").join("|") === "x = 1|y = 2", "each line should be echoed");
   repl.dispose();
 }
@@ -2626,14 +2631,15 @@ console.log("\n[64] a webview that reloads is replayed the session, from the ses
   await repl.runFile('print("hi")\n', "reload.py", doc);
   await settle();
   view.showSession({ title: "", entries: [], prompt: "primary", busy: false });
-  expect(view.handlers.onViewReady() === true, "a session is showing");
+  view.handlers.onViewReady();
   expect(texts(view, "stdout").join("|") === "hi", `its output is back: ${JSON.stringify(texts(view, "stdout"))}`);
   expect(view.title === "reload.py [raw]", `and its title: ${view.title}`);
   repl.dispose();
 
   // With no Python file open, the session with no file.
   const none = await harness({}, null);
-  expect(none.view.handlers.onViewReady() === true, "a session is showing");
+  none.view.showSession({ title: "", entries: [], prompt: "primary", busy: false });
+  none.view.handlers.onViewReady();
   expect(none.view.title === "No file [beginner]", `the one with no file: ${none.view.title}`);
   none.repl.dispose();
 }
@@ -3013,6 +3019,68 @@ console.log("\n[75] a world's messages wait for its newest frame, and none is lo
     expect(received(runtime).length === 0, `a stopped world is not stepped: ${JSON.stringify(received(runtime))}`);
     repl.dispose();
   }
+}
+
+console.log("\n[76] a diff or a notebook cell is not a file: no session, and no run");
+{
+  const doc = makeDoc("hw.py", "x = 1\n");
+  const { repl, view, runtime } = await harness({ events: () => [{ kind: "done" }] }, doc);
+  expect(view.title === "hw.py", `the file's session: ${view.title}`);
+  const diff = { ...makeDoc("hw.py", "x = 0\n"), uri: new Uri("git", "/work/hw.py") };
+  __setActiveEditor({ document: diff });
+  expect(view.title === "hw.py", `a git: view of it leaves the panel alone: ${view.title}`);
+  const cell = { ...makeDoc("nb.ipynb", "print(1)\n"), uri: new Uri("vscode-notebook-cell", "/work/nb.ipynb") };
+  __setActiveEditor({ document: cell });
+  expect(view.title === "hw.py", `so does a notebook cell: ${view.title}`);
+  // And Run File refuses it, with a reason.
+  const context = { subscriptions: [] };
+  registerCommands(context, { repl, view });
+  const warned = [];
+  const warn = vscodeStub.window.showWarningMessage;
+  vscodeStub.window.showWarningMessage = async (text) => { warned.push(text); };
+  await vscodeStub.registeredCommands.get("pll.runActiveFile")();
+  await settle();
+  vscodeStub.window.showWarningMessage = warn;
+  expect(!runtime.calls.some((c) => c[0] === "runFile"), "nothing is run");
+  expect(warned.some((t) => /only a file can be run/.test(t)), `and it says why: ${JSON.stringify(warned)}`);
+  // A file on the workspace's own file system is a file: vscode.dev's repositories.
+  vscodeStub.workspace.workspaceFolders = [{ uri: new Uri("vscode-vfs", "/github/course") }];
+  const repoFile = { ...makeDoc("lab.py", "x = 1\n"), uri: new Uri("vscode-vfs", "/github/course/lab.py") };
+  __setActiveEditor({ document: repoFile });
+  expect(view.title === "lab.py", `a repository's file has a session: ${view.title}`);
+  vscodeStub.workspace.workspaceFolders = undefined;
+  repl.dispose();
+}
+
+console.log("\n[77] several lines submitted at once are one input");
+{
+  const { repl, view, runtime, doc } = await harness({ events: () => [{ kind: "done" }] });
+  await repl.runFile("x = 1\n", "hello.py", doc);
+  await settle();
+  view.handlers.onSubmit("def f():\n    x = 1\n\n    return x\n");
+  await settle();
+  const evaluated = runtime.calls.filter((c) => c[0] === "replEval").map((c) => c[1]);
+  expect(evaluated.join("|") === "def f():\n    x = 1\n\n    return x", `run whole: ${JSON.stringify(evaluated)}`);
+  const echoes = view.entries.filter((e) => e.kind === "echo").map((e) => `${e.prompt} ${e.code}`);
+  expect(echoes.join("|") === ">>> def f():|...     x = 1|... |...     return x", `echoed as written: ${JSON.stringify(echoes)}`);
+  // An unfinished one waits for more, as a continuation.
+  view.handlers.onSubmit("for i in [1, 2]:\n");
+  await settle();
+  expect(view.prompt === "continuation", `waits for the rest: ${view.prompt}`);
+  repl.dispose();
+}
+
+console.log("\n[78] before a file's first run, its prompt is at its #level line's level");
+{
+  const doc = makeDoc("unrun.py", "#level beginner\nx = 1\n");
+  vscodeStub.workspace.textDocuments.push(doc);
+  const { repl, view, runtime } = await harness({ events: () => [{ kind: "done" }] }, doc);
+  view.handlers.onSubmit("y = 2");
+  await settle();
+  const [line] = runtime.calls.filter((c) => c[0] === "replEval");
+  expect(line?.[3] === "beginner", `the header's level, not raw: ${JSON.stringify(line)}`);
+  vscodeStub.workspace.textDocuments.length = 0;
+  repl.dispose();
 }
 
 console.log(`\nsmoke-repl-session: ${passed() ? "ok" : "FAILED"}`);

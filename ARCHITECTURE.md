@@ -175,7 +175,12 @@ loaded into that interpreter.
 
 ## Sessions
 
-Each Python file gets a session: a module whose `__dict__` holds the names
+Each Python file gets a session - each *file*: a document from disk, an
+untitled editor, or one from the file system a workspace folder is on
+(`programDocuments.ts`). A diff's `git:` side, a notebook cell or an output
+pane has a file's language and name and is not the file, so it gets no
+session, cannot be run, and does not show the Run button, whose `when`
+clause reads the same rule (`pll.programSchemes`). Each such session is: a module whose `__dict__` holds the names
 its runs and prompt lines define, separate from every other file's and
 from PLL's own namespace. While a file's code runs - its program, its
 tests, a prompt line, a reactor's handler - its module is `__main__` in

@@ -4,6 +4,7 @@ import { Diagnostics } from "./diagnostics";
 import { checkConflictingExtensions } from "./extensionGuard";
 import { InteractionsView } from "./interactionsView";
 import { registerNewFileLevel } from "./newFileLevel";
+import { trackProgramSchemes } from "./programDocuments";
 import { ReplSession } from "./replSession";
 import type { PythonRuntime } from "./types";
 import { connectUniverse } from "./universeClient";
@@ -33,6 +34,7 @@ export function activateWithRuntime(
     view,
     repl,
     registerNewFileLevel(),
+    trackProgramSchemes(),
     { dispose: () => runtime.dispose() },
   );
 

@@ -36,7 +36,7 @@ export type WorkerInbound =
       sessionKey: string;
       level?: Level;
     }
-  | { id: number; type: "checkSyntax"; code: string }
+  | { id: number; type: "checkSyntax"; code: string; whole?: boolean }
   | { id: number; type: "loadPackages"; code: string }
   | { id: number; type: "hasTests"; code: string }
   | { id: number; type: "loadPytest" }

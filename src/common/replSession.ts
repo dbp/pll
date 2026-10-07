@@ -8,13 +8,14 @@ import {
   type ReactorPatch,
   type SessionDisplayState,
 } from "./interactionsView";
-import { DEFAULT_LEVEL, LEVEL_BEGINNER, type Level } from "./level";
+import { DEFAULT_LEVEL, LEVEL_BEGINNER, parseLevel, type Level } from "./level";
 import type { BundleStore } from "./examplarSource";
 import { ReactorController, type ProgramInfo, type ReactorEvent } from "./reactorController";
 import { runFilePlan, runInputPlan, type RunHost, type RunSummary } from "./runPlan";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 import type { UniverseConnect } from "./universeClient";
 import { collectSiblingFiles, folderUri, writeBackSiblingFiles } from "./workspaceFiles";
+import { isProgramDocument } from "./programDocuments";
 import type { Selection } from "./workspaceFilePolicy";
 import { errorText } from "./errorText";
 import { PythonLostError } from "./runtimeErrors";
@@ -178,7 +179,6 @@ export class ReplSession implements vscode.Disposable {
       onViewReady: () => {
         const session = this.activeSession();
         if (session) this.deps.view.showSession(this.displayStateOf(session));
-        return session !== null;
       },
     });
     deps.runtime.setStdinHandler(() => this.provideStdin());
@@ -295,7 +295,7 @@ export class ReplSession implements vscode.Disposable {
     editor: vscode.TextEditor | undefined,
   ): void {
     if (!editor) return;
-    if (editor.document.languageId !== "python") return;
+    if (editor.document.languageId !== "python" || !isProgramDocument(editor.document.uri)) return;
     const fileName = displayName(editor.document.uri);
     const session = this.getOrCreateSession(editor.document.uri, fileName);
 
@@ -659,9 +659,35 @@ export class ReplSession implements vscode.Disposable {
       return;
     }
     const lines = rawCode.split(/\r?\n/);
+    if (lines.length > 1 && !session.continuing) {
+      return this.processBlock(session, rawCode);
+    }
     for (const line of lines) {
       await this.processLine(session, line);
     }
+  }
+
+  /**
+   * Several lines submitted at once - written with Shift+Enter, or pasted -
+   * are one input, as Python 3.13's own shell takes a paste: a blank line
+   * inside a function does not end it. Unfinished, it waits for more as a
+   * continuation; otherwise it runs whole, errors and all.
+   */
+  private async processBlock(session: Session, rawCode: string): Promise<void> {
+    const block = rawCode.replace(/\s+$/, "");
+    const lines = block.split(/\r?\n/);
+    lines.forEach((line, i) => {
+      this.appendToSession(session, { kind: "echo", prompt: i === 0 ? ">>>" : "...", code: line });
+    });
+    if (block.trim() === "") return;
+    const status = await this.deps.runtime.checkReplComplete(block, true);
+    if (status.status === "incomplete") {
+      session.continuationLines.push(...lines);
+      session.continuing = true;
+      this.setSessionPrompt(session, "continuation");
+      return;
+    }
+    return this.runSnippet(session, block);
   }
 
   private async processLine(session: Session, rawLine: string): Promise<void> {
@@ -720,12 +746,12 @@ export class ReplSession implements vscode.Disposable {
   /* -------- Execution -------- */
 
   /**
-   * Run a prompt line, at the level of the file's last run (or `raw`). The
-   * steps - packages, sibling files, the checks, the run - are
-   * `runInputPlan`'s.
+   * Run a prompt line, at the level of the file's last run - or, before
+   * its first, of its `#level` line. The steps - packages, sibling files,
+   * the checks, the run - are `runInputPlan`'s.
    */
   private async executeRepl(session: Session, code: string): Promise<void> {
-    const level = session.lastLevel ?? DEFAULT_LEVEL;
+    const level = session.lastLevel ?? this.headerLevel(session);
     session.runSeq += 1;
     this.resetStreamBudget(session);
     this.setSessionBusy(session, true, "Starting...");
@@ -733,6 +759,13 @@ export class ReplSession implements vscode.Disposable {
     await this.runWithSession(session, program, undefined, (host) =>
       runInputPlan(this.deps.runtime, host, { code, sessionKey: session.key, level }),
     );
+  }
+
+  /** The level the `#level` line of `session`'s file names, as it is in the editor. */
+  private headerLevel(session: Session): Level {
+    const uri = session.documentUri?.toString();
+    const document = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri);
+    return document ? parseLevel(document.getText()) : DEFAULT_LEVEL;
   }
 
   private async executeFile(
@@ -969,8 +1002,6 @@ export class ReplSession implements vscode.Disposable {
         break;
     }
   }
-
-  /* -------- Examplar -------- */
 
   /* -------- Reactors -------- */
 

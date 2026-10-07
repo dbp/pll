@@ -89,7 +89,7 @@
       "editor/title/run": [
         {
           "command": "pll.runActiveFile",
-          "when": "editorLangId == python",
+          "when": "editorLangId == python && resourceScheme in pll.programSchemes",
           "group": "navigation"
         }
       ]

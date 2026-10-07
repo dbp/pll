@@ -19,7 +19,6 @@
 //   { type: "awaitingInput", awaiting, prefix? } - program input() is waiting
 //   { type: "replay", mode: "session", title, entries, prompt, busy, status?,
 //     awaitingInput?, inputPrefix? }         - show a session, from scratch
-//   { type: "empty", message }               - no session active
 //   { type: "title", title }                 - update header title in place
 //   { type: "focusInput" }
 //
@@ -38,10 +37,10 @@
   const vscode = acquireVsCodeApi();
 
   const saved = vscode.getState();
-  /** @type {{ mode: "session" | "empty", emptyMessage: string, title: string, entries: any[], prompt: "primary" | "continuation", busy: boolean, status: string, awaitingInput: boolean, inputPrefix: string, history: string[] }} */
+  /** @type {{ mode: "session" | "waiting", title: string, entries: any[], prompt: "primary" | "continuation", busy: boolean, status: string, awaitingInput: boolean, inputPrefix: string, history: string[] }} */
   const state = {
-    mode: "empty",
-    emptyMessage: "Open a Python file to start an interactions session.",
+    // Until the host's first replay, which is almost at once.
+    mode: "waiting",
     title: "",
     entries: [],
     prompt: "primary",
@@ -81,7 +80,7 @@
   }
 
   function applyMode() {
-    body.classList.toggle("mode-empty", state.mode === "empty");
+    body.classList.toggle("mode-waiting", state.mode === "waiting");
     body.classList.toggle("mode-session", state.mode === "session");
   }
 
@@ -152,8 +151,8 @@
     const span = document.createElement("span");
     span.textContent = busyWait
       ? (state.status || "Running...")
-      : state.mode === "empty"
-        ? state.emptyMessage
+      : state.mode === "waiting"
+        ? ""
         : SESSION_EMPTY_TEXT;
     empty.appendChild(span);
   }
@@ -952,19 +951,6 @@
         setPromptText();
         setBusy(state.busy, msg.status);
         break;
-      case "empty":
-        state.mode = "empty";
-        state.emptyMessage = msg.message || state.emptyMessage;
-        state.title = "";
-        state.entries = [];
-        state.busy = false;
-        state.awaitingInput = false;
-        state.inputPrefix = "";
-        applyMode();
-        applyTitle();
-        renderAll();
-        setBusy(false);
-        break;
       case "title":
         if (state.mode !== "session") return;
         state.title = typeof msg.title === "string" ? msg.title : "";
@@ -984,6 +970,6 @@
   setBusy(state.busy);
   renderAll();
 
-  // Tell the host we're alive and ready to receive a fresh replay/empty.
+  // Tell the host we're alive and ready to receive a fresh replay.
   vscode.postMessage({ type: "ready" });
 })();

@@ -308,7 +308,7 @@ export function createWorkerHost(
       return { type: "result", result };
     },
     checkSyntax(data) {
-      const result = callPython<RawReplCheck>("_pll_repl_check", [data.code]);
+      const result = callPython<RawReplCheck>("_pll_repl_check", [data.code, data.whole === true]);
       return { type: "syntax", result };
     },
     hasTests(data) {

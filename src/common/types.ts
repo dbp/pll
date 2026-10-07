@@ -191,7 +191,8 @@ export interface PythonRuntime {
   /** Load the pytest package (no-op if already loaded). Needs network the first time. */
   ensurePytest(): Promise<void>;
   /** Decide whether `code` is a complete REPL input (codeop.compile_command). */
-  checkReplComplete(code: string): Promise<ReplCheckResult>;
+  /** `whole` judges several lines submitted at once as one input (`exec`), not as a shell line. */
+  checkReplComplete(code: string, whole?: boolean): Promise<ReplCheckResult>;
   /**
    * Run language-level static checks against a file. Returns an empty array
    * for `advanced` (no checks) or when the file doesn't parse (let runtime

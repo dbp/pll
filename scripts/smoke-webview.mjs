@@ -134,9 +134,7 @@ view.setHandlers({
   onOpenLocation: (fileName, line, column) => opened.push({ fileName, line, column }),
   onViewReady() {
     toHost.push({ type: "ready" });
-    if (!showOnReady) return false;
-    view.showSession(session);
-    return true;
+    if (showOnReady) view.showSession(session);
   },
 });
 
@@ -196,7 +194,7 @@ const settle = async () => {
 };
 
 try {
-  console.log("\n[1] a fresh view says it is ready, and shows the empty message");
+  console.log("\n[1] a fresh view says it is ready, and waits for the host's session");
   await page.goto(`${ORIGIN}/view.html`);
   await settle();
   const empty = await page.evaluate(() => ({
@@ -204,8 +202,8 @@ try {
     text: document.getElementById("empty")?.innerText ?? "",
   }));
   expect(toHost.filter((m) => m.type === "ready").length === 1, "one ready");
-  expect(empty.mode.includes("mode-empty"), `empty mode: ${empty.mode}`);
-  expect(/Open a Python file/.test(empty.text), `the empty message: ${JSON.stringify(empty.text)}`);
+  expect(empty.mode.includes("mode-waiting"), `waiting: ${empty.mode}`);
+  expect(empty.text === "", `with nothing to say yet: ${JSON.stringify(empty.text)}`);
 
   console.log("\n[2] a session's entries are drawn from the host's own shapes");
   view.showSession(session);
@@ -279,8 +277,8 @@ try {
     mode: document.body.className,
     entries: document.querySelectorAll("#stream .entry").length,
   }));
-  expect(afterReload.mode.includes("mode-empty") && afterReload.entries === 0,
-    `empty until the host says otherwise: ${JSON.stringify(afterReload)}`);
+  expect(afterReload.mode.includes("mode-waiting") && afterReload.entries === 0,
+    `waiting until the host says otherwise: ${JSON.stringify(afterReload)}`);
   showOnReady = true;
   await page.reload();
   await settle();

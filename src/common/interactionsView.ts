@@ -14,17 +14,11 @@ import { showInfo } from "./notify";
  * Sessions
  * --------
  * The view itself is unaware of sessions; the session manager owns one
- * `Session` per Python file and uses `showSession({entries, prompt, busy})`
- * to swap which session's content is visible. Per-session incremental
- * updates go through the regular `append` / `setBusy` / `setPrompt` /
- * `clear` methods, but the session manager only calls those for the
- * currently-displayed session.
- *
- * Empty mode
- * ----------
- * Until a Python file has been active in the workspace, the view shows a
- * placeholder message and hides the input row. `showSession(...)` switches
- * out of that mode.
+ * `Session` per Python file, and the one with no file, and uses
+ * `showSession({entries, prompt, busy})` to swap which session's content is
+ * visible - there is always one. Per-session incremental updates go through
+ * the regular `append` / `setBusy` / `setPrompt` / `clear` methods, but the
+ * session manager only calls those for the currently-displayed session.
  */
 
 /* -------------------------------------------------------------- */
@@ -154,10 +148,6 @@ interface HostMessageReplay {
   awaitingInput?: boolean;
   inputPrefix?: string;
 }
-interface HostMessageEmpty {
-  type: "empty";
-  message: string;
-}
 interface HostMessageTitle {
   type: "title";
   title: string;
@@ -173,7 +163,6 @@ type HostToView =
   | HostMessageBusy
   | HostMessageAwaitingInput
   | HostMessageReplay
-  | HostMessageEmpty
   | HostMessageTitle
   | HostMessageFocus;
 
@@ -271,11 +260,8 @@ export interface InteractionsHandlers {
    * which knows whose output the entry is.
    */
   onOpenLocation(fileName: string, line: number, column: number | null): void;
-  /**
-   * The webview has (re)loaded and has nothing on it: show it the visible
-   * session with `showSession`, or return false when there is none.
-   */
-  onViewReady(): boolean;
+  /** The webview has (re)loaded and has nothing on it: show it the visible session. */
+  onViewReady(): void;
 }
 
 /**
@@ -301,11 +287,8 @@ export class InteractionsView
   private webviewReady = false;
   private readonly disposables: vscode.Disposable[] = [];
 
-  // Only whether a session is showing. What it shows is the session
-  // manager's, which replays it when the webview (re)loads - so there is no
-  // copy here to keep in step.
-  private mode: "session" | "empty" = "empty";
-  private readonly emptyMessage = "Open a Python file to start an interactions session.";
+  // What the view shows is the session manager's, which replays it when the
+  // webview (re)loads - so there is no copy here to keep in step.
 
   // Appends waiting to be sent as one `appendMany`.
   private pendingAppends: Entry[] = [];
@@ -328,7 +311,6 @@ export class InteractionsView
    * file (or when the very first Python session becomes active).
    */
   showSession(state: SessionDisplayState): void {
-    this.mode = "session";
     // The replay carries every entry, so anything queued is already in it.
     this.dropPendingAppends();
     this.post({
@@ -344,16 +326,8 @@ export class InteractionsView
     });
   }
 
-  /** Show no session: the one that was showing has ended. */
-  showEmpty(): void {
-    this.mode = "empty";
-    this.dropPendingAppends();
-    this.post({ type: "empty", message: this.emptyMessage });
-  }
-
   /** Update the header title without otherwise changing state. */
   setTitle(title: string): void {
-    if (this.mode !== "session") return;
     this.post({ type: "title", title });
   }
 
@@ -363,7 +337,6 @@ export class InteractionsView
    * sessions. */
 
   append(entry: Entry): void {
-    if (this.mode !== "session") return;
     this.pendingAppends.push(entry);
     if (this.appendTimer === null) {
       this.appendTimer = setTimeout(() => this.flushAppends(), APPEND_FLUSH_MS);
@@ -376,12 +349,10 @@ export class InteractionsView
    * them would only mean showing stale ones.
    */
   updateReactor(id: string, patch: ReactorPatch): void {
-    if (this.mode !== "session") return;
     this.post({ type: "reactorPatch", id, patch });
   }
 
   clear(): void {
-    if (this.mode !== "session") return;
     // Queued appends belong to entries that no longer exist; sending them
     // after a clear would resurrect them.
     this.dropPendingAppends();
@@ -389,12 +360,10 @@ export class InteractionsView
   }
 
   setPrompt(kind: PromptKind): void {
-    if (this.mode !== "session") return;
     this.post({ type: "prompt", kind });
   }
 
   setBusy(busy: boolean, status?: string): void {
-    if (this.mode !== "session") return;
     this.post({ type: "busy", busy, status });
     if (!busy) {
       this.post({ type: "awaitingInput", awaiting: false });
@@ -407,7 +376,6 @@ export class InteractionsView
    * `input("Choice: ")` prompt) shown next to the textarea.
    */
   setAwaitingInput(awaiting: boolean, prefix?: string): void {
-    if (this.mode !== "session") return;
     this.post({ type: "awaitingInput", awaiting, prefix: awaiting ? (prefix ?? "") : "" });
   }
 
@@ -457,9 +425,7 @@ export class InteractionsView
         this.webviewReady = true;
         // A fresh webview has nothing on it; the session manager says what
         // it should show.
-        if (!this.handlers?.onViewReady()) {
-          this.showEmpty();
-        }
+        this.handlers?.onViewReady();
         break;
       case "submit":
         this.handlers?.onSubmit(m.code);
@@ -571,7 +537,7 @@ export class InteractionsView
   <link rel="stylesheet" href="${styleUri}" />
   <title>Python Language Levels</title>
 </head>
-<body class="mode-empty">
+<body class="mode-waiting">
   <div id="root">
     <div id="header">
       <span id="title" class="title"></span>

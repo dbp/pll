@@ -401,12 +401,10 @@ button:disabled {
   }
 }
 
-/* Mode toggling: when the host signals "empty mode" (no Python file is
- * active), the header (file name + Clear) and input row are both
- * irrelevant - hide them entirely so the empty placeholder centerpiece
- * carries the whole message. */
-body.mode-empty #header,
-body.mode-empty #inputRow {
+/* Until the host's first replay there is no session to name or to type
+ * into, so the header and input row are hidden. */
+body.mode-waiting #header,
+body.mode-waiting #inputRow {
   display: none;
 }
 
