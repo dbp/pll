@@ -7,7 +7,8 @@
  * Loaded once, in this order, into one interpreter (see `installPll`):
  *   1. PLL_BOOTSTRAP_PY      - the files in `bootstrap/`, in its order:
  *                              running files, prompt lines and tests; the
- *                              static checks; describing errors
+ *                              static checks; describing errors; importing
+ *                              the student's files at their own levels
  *   2. PLL_IMAGE_LIB_PY      - images
  *   3. PLL_TABLE_LIB_PY      - tables and charts
  *   4. PLL_REACTOR_LIB_PY    - reactors, after images: handlers draw with them
@@ -39,6 +40,7 @@ import libraryHelpersSource from "./bootstrap/libraryHelpers.py";
 import runningSource from "./bootstrap/running.py";
 import testsSource from "./bootstrap/tests.py";
 import staticAnalysisSource from "./bootstrap/staticAnalysis.py";
+import importsSource from "./bootstrap/imports.py";
 import imageLibSource from "./imageLib.py";
 import tableLibSource from "./tableLib.py";
 import reactorLibSource from "./reactorLib.py";
@@ -69,6 +71,7 @@ export const PLL_BOOTSTRAP_PY: ReadonlyArray<PythonSource> = [
   { file: bootstrapFile("running"), source: runningSource },
   { file: bootstrapFile("tests"), source: testsSource },
   { file: bootstrapFile("staticAnalysis"), source: staticAnalysisSource },
+  { file: bootstrapFile("imports"), source: importsSource },
 ];
 export const PLL_IMAGE_LIB_PY: PythonSource = { file: PLL_LIBRARY_FILES.image, source: imageLibSource };
 export const PLL_TABLE_LIB_PY: PythonSource = { file: PLL_LIBRARY_FILES.table, source: tableLibSource };

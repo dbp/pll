@@ -86,7 +86,7 @@ export function staticFindingFor(
     lineNumber: raw.lineNumber,
     column: raw.column,
     nameToken: raw.nameToken,
-    severity: "error",
+    severity: raw.severity,
     origin: "static",
     level,
     ...fields,

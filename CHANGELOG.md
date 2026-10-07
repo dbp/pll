@@ -15,6 +15,14 @@
   have a repository. **PLL: Start REPL** switches back to it once files are
   open. It has no folder, so a file it writes is not saved, and it says so.
 
+- **A file another imports keeps its own `#level`.** When `main.py`
+  imports `helper.py`, the helper is checked at the level its own first line
+  names: a problem the checks find stops the import (`ChecksFailed`, listing
+  each one), and its annotations are checked as it runs. It was imported as
+  plain Python, so a grading script importing a student's beginner file got
+  none of the student's checks. An imported file also starts with the
+  libraries' names, as it does when it is run.
+
 - **The command line takes options in the usual forms**: `--save-images=out`,
   `-qv`, and `--` before a file whose name starts with a dash. `examplar
   build` takes `--out` as well as `-o`.
@@ -58,6 +66,16 @@
   window closed - for every file opened in it. Opening the file again
   starts afresh. A run still going when the file closes finishes first.
 
+- **Up to 100 files next to a program are loaded**, where it was 50, and
+  any file a limit leaves out - past the 100, over 2 MB, past 8 MB in all,
+  or not text - is named: "Not loaded: ... - at most 100 files next to a
+  program are." They were left out without a word, so a program importing
+  one failed with a `ModuleNotFoundError` that said nothing about why. The
+  same for the files a program writes that are not saved.
+- **Clear starts the session with no file afresh**: what was typed in it
+  is forgotten as well as cleared from the panel, since there is no file to
+  run again.
+
 ### Removed
 - **Two guesses about where an error came from.** A missing column is no
   longer blamed on an `add_column` whose result was thrown away somewhere
@@ -76,6 +94,16 @@
 - **An error in a function defined at an earlier prompt line is explained
   from that line.** It was explained from the line that called it, so the
   length of a list indexed past its end, say, was not found.
+- **Correct programs the checks refused now run.** An annotation naming an
+  alias of your own (`Number = int | float`), a `NamedTuple` or other class
+  with a base, and comparing a class with a class (`kind == Boa`, `kind:
+  type`) were all reported as mistakes, and the file was not run. A method
+  with an `assert` that is called (`a.check()`) is no longer "never run",
+  `str.upper` passed as a function is no longer "never called", the same
+  name caught in two `case`s or two `except`s is not a reassignment, and a
+  property's setter is not a second function. A `case` pattern that hides a
+  built-in (`case Point(x, len)`) is now reported, as any other name that
+  does is.
 - **Stop ends an Examplar check.** A Stop was recorded as the running test's
   error and the check carried on, so a test that looped needed one Stop for
   each known implementation - and the panel meanwhile suggested reloading

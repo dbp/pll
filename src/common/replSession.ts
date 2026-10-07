@@ -15,7 +15,7 @@ import { runFilePlan, runInputPlan, type RunHost, type RunSummary } from "./runP
 import type { ExecutionEvent, PythonRuntime } from "./types";
 import type { UniverseConnect } from "./universeClient";
 import { collectSiblingFiles, folderUri, writeBackSiblingFiles } from "./workspaceFiles";
-import type { WorkspaceFile } from "./workspaceFilePolicy";
+import type { Selection } from "./workspaceFilePolicy";
 import { errorText } from "./errorText";
 import { PythonLostError } from "./runtimeErrors";
 
@@ -385,7 +385,7 @@ export class ReplSession implements vscode.Disposable {
     if (!this.reactors.hasAny(session)) return;
     void this.enqueue(async () => {
       try {
-        await this.deps.runtime.mountWorkspaceFiles(await this.filesBeside(session));
+        await this.deps.runtime.mountWorkspaceFiles((await this.filesBeside(session)).files);
       } catch {
         /* the reactor still runs; a file it opens may be missing */
       }
@@ -440,8 +440,10 @@ export class ReplSession implements vscode.Disposable {
   }
 
   /** The files a run of `session` sees: those beside its file, and none without one. */
-  private filesBeside(session: Session): Promise<WorkspaceFile[]> {
-    return session.documentUri === null ? Promise.resolve([]) : collectSiblingFiles(session.documentUri);
+  private filesBeside(session: Session): Promise<Selection> {
+    return session.documentUri === null
+      ? Promise.resolve({ files: [], leftOut: [] })
+      : collectSiblingFiles(session.documentUri);
   }
 
   /** The string we display as the view's header for `session`. */
@@ -627,9 +629,26 @@ export class ReplSession implements vscode.Disposable {
     }
   }
 
+  /**
+   * Clear the panel. With no file to run again, the session with no file
+   * also forgets what was typed in it, or a name set once at `beginner`
+   * could never be set again.
+   */
   private handleClearRequested(): void {
     const session = this.activeSession();
-    if (session) this.clearSession(session);
+    if (!session) return;
+    this.clearSession(session);
+    if (session.documentUri !== null) return;
+    session.continuationLines = [];
+    session.continuing = false;
+    this.setSessionPrompt(session, "primary");
+    void this.enqueue(async () => {
+      await this.deps.runtime.endSession(session.key).catch(() => undefined);
+      this.appendToSession(session, {
+        kind: "banner",
+        text: "Started afresh: nothing typed here before is defined now.",
+      });
+    });
   }
 
   /* -------- Submission flow (matches CPython's interactive shell) -------- */
@@ -842,7 +861,7 @@ export class ReplSession implements vscode.Disposable {
           kind: "banner",
           text: `Not saved: ${files.map((f) => f.name).join(", ")}. With no file open, there is no folder to save it in.`,
         });
-        return [];
+        return { written: [], leftOut: [] };
       },
       examplarCard: (card) => entry(card),
       aroundProgram: async (run) => {

@@ -195,7 +195,6 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
     # Each Run File starts with a clean slate for this session: discard any
     # names defined by a previous Run File of the same session or by REPL
     # exploration since then.
-    _pll_apply_level(level)
     _pll_protect_import_path()
     user_globals = _pll_reset_session(session_key, level)
     main = _pll_session_module(session_key)
@@ -203,7 +202,7 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
     _pll_reset_notes()
     del _pll_compile_warnings[:]
     try:
-        tree = _pll_parse_and_instrument(code, filename)
+        tree = _pll_parse_and_instrument(code, filename, level)
         # Where each test is, read before anything is added to the tree.
         tests_at = _pll_test_locations(tree) if run_tests else None
         _PllTopLevelExprWrapper().visit(tree)
@@ -253,7 +252,6 @@ def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
     stderr = _PllStream("stderr")
     result = _pll_run_result()
     _pll_displays.clear()
-    _pll_apply_level(level)
     _pll_protect_import_path()
     user_globals = _pll_get_session(session_key)
     user_globals["__pll_level__"] = level
@@ -261,7 +259,7 @@ def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
     filename = "<repl>"
     del _pll_compile_warnings[:]
     try:
-        tree = _pll_parse_and_instrument(code, filename)
+        tree = _pll_parse_and_instrument(code, filename, level)
     except SyntaxError as e:
         result.update(_pll_error_info(e))
         return result

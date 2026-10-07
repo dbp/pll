@@ -118,7 +118,6 @@ export function explainMethodNotCalled(
       `Add the brackets: \`.${method}()\`.`,
       `Without them this is the method itself, which displays as \`<bound method ...>\`.`,
     ],
-    severity: "warning",
   });
 }
 
@@ -164,7 +163,6 @@ export function explainTestNotNamed(
       `Rename it \`test_${name}\` and it will run with the other tests.`,
       "Only functions whose names start with `test_` are run automatically.",
     ],
-    severity: "warning",
   });
 }
 

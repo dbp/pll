@@ -80,7 +80,8 @@ src/
     │   ├── libraryHelpers.py      what the libraries share (sources, names)
     │   ├── running.py             run a file / a prompt line
     │   ├── tests.py               the file's own tests
-    │   └── staticAnalysis.py      the checks made before a program runs
+    │   ├── staticAnalysis.py      the checks made before a program runs
+    │   └── imports.py             the student's files, imported at their own levels
     ├── imageLib.py                Real Python: SVG image primitives + combinators
     ├── reactorLib.py              Real Python: reactor values + history
     ├── examplarLib.py             Real Python: wheat/chaff build + run
@@ -189,7 +190,8 @@ shown, or the one it was showing closes, and **PLL: Start REPL** switches
 to it. On vscode.dev a student with no repository has no file to make, so
 this is where their first prompt lines run. It has no header to read, so
 its level is fixed at `beginner`; it has no folder, so its runs mount no
-files and save none (it says which it could not save).
+files and save none (it says which it could not save). With no file to run
+again, Clear also forgets its names, so it starts afresh.
 
 ## Language levels
 
@@ -215,11 +217,29 @@ homes, and they are kept to exactly two. On the host, the predicates in
 `level.ts` are the only place a level is asked about -
 `levelHasStaticChecks`, `levelRejectsBoolAsNumber`,
 `levelRefusesReassignment` - and the explanations use them to word a finding
-and to offer only fixes the level accepts. In Python, `_pll_apply_level`
-decides whether annotations are checked and how strictly, and
-`_pll_static_analyze` which reassignments it refuses. Adding a level means
-adding it to `Level`, `LEVEL_NAMES`, those predicates, and their Python
-counterparts.
+and to offer only fixes the level accepts. In Python,
+`_pll_checks_annotations` decides whether code is compiled with its
+annotation checks, `_pll_rejects_bool` how strictly a number is checked,
+and `_pll_static_analyze` which reassignments it refuses - and which
+findings are errors that stop the code running and which are only
+warnings. Adding a level means adding it to `Level`, `LEVEL_NAMES`, those
+predicates, and their Python counterparts.
+
+### A file another imports
+
+Every one of the student's files is held to its own `#level`, whichever
+file imports it: a grader importing a student's file gets that file's
+checks, and a `#level beginner` helper is beginner when `main.py` imports
+it. The worker reads each mounted `.py` file's level with `level.ts` and
+gives Python the table (`_pll_note_file_levels`). `imports.py` finds the
+student's files by Python's own search - a file next to the program is
+theirs only if nothing earlier on `sys.path` has its name - and loads each
+at its level, always from source: a broken `#level` line, then the static
+checks' errors, refuse the import with `ChecksFailed` (an `ImportError`,
+explained at the `import` with each problem by line); then the file is
+compiled with its level's annotation checks and starts with the names a run
+starts with. Its namespace records its level, so its code is checked at it
+whoever calls it.
 
 ### Seeding new files
 
@@ -364,9 +384,8 @@ on the command line.
 Annotations are checked while the program runs at every level except
 `#level raw`, which exists precisely so a file can opt out. There is
 deliberately **no setting** for this: the level is the only input, so
-nothing can contradict it, and the `typeCheck` flag that used to ride
-alongside `level` through the worker protocol is gone —
-`_pll_apply_level` derives `_PLL_TYPE_CHECK` from the level instead. The
+nothing can contradict it. Whether code is instrumented is decided as it
+is compiled, from its own file's level (`_pll_checks_annotations`). The
 work is done by
 [typeguard](https://typeguard.readthedocs.io), which is **not** in
 Pyodide's lockfile, so `vendor/python/` holds its wheel plus

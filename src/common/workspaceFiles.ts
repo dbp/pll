@@ -2,6 +2,8 @@ import * as vscode from "vscode";
 import {
   readSiblingFiles,
   writeSiblingFiles,
+  type LeftOut,
+  type Selection,
   type SiblingFolder,
   type WorkspaceFile,
 } from "./workspaceFilePolicy";
@@ -46,17 +48,17 @@ function siblingFolder(documentUri: vscode.Uri): SiblingFolder | null {
   };
 }
 
-/** Text and picture files in the same folder as `documentUri`. */
-export async function collectSiblingFiles(documentUri: vscode.Uri): Promise<WorkspaceFile[]> {
+/** Text and picture files in the same folder as `documentUri`, and those the limits kept back. */
+export async function collectSiblingFiles(documentUri: vscode.Uri): Promise<Selection> {
   const folder = siblingFolder(documentUri);
-  return folder ? readSiblingFiles(folder) : [];
+  return folder ? readSiblingFiles(folder) : { files: [], leftOut: [] };
 }
 
-/** Write changed and new data files next to the file. Returns their names. */
+/** Write changed and new data files next to the file: the names written, and those kept back. */
 export async function writeBackSiblingFiles(
   documentUri: vscode.Uri,
   files: WorkspaceFile[],
-): Promise<string[]> {
+): Promise<{ written: string[]; leftOut: LeftOut[] }> {
   const folder = siblingFolder(documentUri);
-  return folder ? writeSiblingFiles(folder, files) : [];
+  return folder ? writeSiblingFiles(folder, files) : { written: [], leftOut: [] };
 }

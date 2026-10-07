@@ -189,6 +189,10 @@ def _pll_enrich_type_check(exc):
     check = (getattr(exc, "_pll_facts", None) or {}).get("check")
     if check is None:
         check = _pll_type_check_parts(str(exc))
+        # The level of the code checked, which may not be the run's: an
+        # argument is checked in the function it is passed to.
+        frames = _pll_student_frames(exc)
+        check["level"] = frames[-1][0].f_globals.get("__pll_level__") if frames else None
         _pll_add_facts(exc, check=check)
     element, name = check.get("element"), check.get("name")
     if check["kind"] != "argument" or element is None:

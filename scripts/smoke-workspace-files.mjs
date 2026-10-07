@@ -51,7 +51,7 @@ function testPolicy() {
   expect(policy.isWritebackName("assignment.py") === false, "py is not writeback");
 
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d]);
-  const selected = policy.selectMountableFiles([
+  const { files: selected, leftOut } = policy.selectMountableFiles([
     { name: "../x.csv", contents: "a" },
     { name: "ok.csv", contents: "a,b\n1,2\n" },
     { name: "cat.png", contents: png },
@@ -72,15 +72,47 @@ function testPolicy() {
   );
   const text = selected.find((f) => f.name === "ok.csv");
   expect(typeof text.contents === "string", "a csv still arrives as text");
+  // Kept back, and said why; a name that is not a file's is not one kept back.
+  expect(
+    JSON.stringify(leftOut) === JSON.stringify([{ name: "nul.csv", reason: "notText" }]),
+    `what was kept back: ${JSON.stringify(leftOut)}`,
+  );
 
   const bigPng = policy.selectMountableFiles([
     { name: "huge.png", contents: new Uint8Array(policy.MAX_FILE_BYTES + 1) },
   ]);
-  expect(bigPng.length === 0, "an oversize picture is dropped, same cap as text");
+  expect(
+    bigPng.files.length === 0 && bigPng.leftOut[0]?.reason === "size",
+    "an oversize picture is kept back, same cap as text",
+  );
 
   const huge = "x".repeat(policy.MAX_FILE_BYTES + 1);
   const oversize = policy.selectMountableFiles([{ name: "big.csv", contents: huge }]);
-  expect(oversize.length === 0, "oversize file should be dropped");
+  expect(oversize.files.length === 0 && oversize.leftOut[0]?.reason === "size", "an oversize file is kept back");
+
+  // At most MAX_FILES, and the rest said.
+  expect(policy.MAX_FILES === 100, `the limit: ${policy.MAX_FILES}`);
+  const many = Array.from({ length: 107 }, (_, i) => ({ name: `f${String(i).padStart(3, "0")}.csv`, contents: "a\n" }));
+  const counted = policy.selectMountableFiles(many);
+  expect(
+    counted.files.length === 100 && counted.leftOut.length === 7 && counted.leftOut.every((f) => f.reason === "count"),
+    `100 mounted and 7 kept back: ${counted.files.length} ${JSON.stringify(counted.leftOut)}`,
+  );
+  const [note] = policy.leftOutNotes(counted.leftOut, "loaded");
+  expect(
+    note === "Not loaded: f100.csv, f101.csv, f102.csv, f103.csv, f104.csv and 2 more - at most 100 files next to a program are.",
+    `said once, naming them: ${note}`,
+  );
+  const almost = "x".repeat(policy.MAX_FILE_BYTES - 10);
+  const total = policy.selectMountableFiles(Array.from({ length: 5 }, (_, i) => ({ name: `b${i}.csv`, contents: almost })));
+  expect(
+    total.files.length === 4 && total.leftOut.map((f) => `${f.name}:${f.reason}`).join() === "b4.csv:total",
+    `the total kept: ${JSON.stringify(total.leftOut)}`,
+  );
+  expect(
+    policy.leftOutNotes(total.leftOut, "loaded")[0] === "Not loaded: b4.csv - the files together can be at most 8 MB.",
+    `and said: ${policy.leftOutNotes(total.leftOut, "loaded")[0]}`,
+  );
 
   const writeback = policy.selectWritebackFiles([
     { name: "out.csv", contents: "a,b\n" },
@@ -89,9 +121,14 @@ function testPolicy() {
     { name: "cat.png", contents: png },
   ]);
   expect(
-    writeback.map((f) => f.name).join(",") === "out.csv",
+    writeback.files.map((f) => f.name).join(",") === "out.csv" && writeback.leftOut.length === 0,
     "selectWritebackFiles should keep data files only, got " +
-      writeback.map((f) => f.name).join(","),
+      writeback.files.map((f) => f.name).join(","),
+  );
+  const tooManyWritten = policy.selectWritebackFiles(many);
+  expect(
+    tooManyWritten.files.length === 100 && policy.leftOutNotes(tooManyWritten.leftOut, "saved")[0]?.startsWith("Not saved: f100.csv"),
+    `writing back past the limit is said too: ${JSON.stringify(policy.leftOutNotes(tooManyWritten.leftOut, "saved"))}`,
   );
   console.log("    safe names, extensions, size, writeback filters ok");
 }

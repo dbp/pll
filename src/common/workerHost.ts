@@ -1,4 +1,5 @@
 import { collectChangedWorkspaceFiles, mountWorkspaceFiles } from "./memfsWorkspace";
+import type { WorkspaceFile } from "./workspaceFilePolicy";
 import { NETWORK_IMPORT_RE, PANDAS_METHOD_RE } from "./packages";
 import { installPll, type PyodideCore } from "./pythonInstall";
 import { PYODIDE_HTTP_PATCH_PY } from "./pythonSources";
@@ -15,7 +16,7 @@ import { clearInterrupt } from "./interruptBuffer";
 import { waitForStdinLine } from "./stdinBuffer";
 import type { ReplyFor, WorkerErrorKind, WorkerInbound, WorkerOutbound } from "./workerProtocol";
 import { errorText } from "./errorText";
-import { DEFAULT_LEVEL } from "./level";
+import { DEFAULT_LEVEL, levelHeaderProblem, parseLevel } from "./level";
 import { onceSuccessful } from "./onceSuccessful";
 
 export interface PackageLoadOptions {
@@ -379,6 +380,7 @@ export function createWorkerHost(
     },
     mountWorkspace(data) {
       mountWorkspaceFiles(ready().FS, data.files);
+      callPython("_pll_note_file_levels", [JSON.stringify(levelsOf(data.files))]);
       return { type: "workspaceReady" };
     },
     collectWorkspace() {
@@ -409,4 +411,20 @@ export function createWorkerHost(
     queue = queue.then(() => handleOne(data));
     return queue;
   };
+}
+
+/**
+ * Each Python file's level, read from its `#level` line as a run of it
+ * would read it - and what is wrong with the line, if anything - so that
+ * Python can hold the file to it when another file imports it.
+ */
+function levelsOf(files: WorkspaceFile[]): Record<string, [string, { line: number; message: string } | null]> {
+  const levels: Record<string, [string, { line: number; message: string } | null]> = {};
+  for (const file of files) {
+    if (file.name.endsWith(".py") && typeof file.contents === "string") {
+      const problem = levelHeaderProblem(file.contents);
+      levels[file.name] = [parseLevel(file.contents), problem && { line: problem.line, message: problem.message }];
+    }
+  }
+  return levels;
 }

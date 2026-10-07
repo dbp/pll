@@ -49,6 +49,13 @@ export interface WireFacts {
     match: WireTrailingMatch | null;
     printed: { line: number; expression: string | null } | null;
   };
+  /** For `ChecksFailed`: the imported file, and what its level's checks found. */
+  checks?: {
+    file: string;
+    level: string;
+    findings: RawStaticFinding[];
+    header_problem: { line: number; message: string } | null;
+  };
 }
 
 /** What a name in the error is, as `_pll_definition` describes it. */
@@ -75,6 +82,8 @@ export interface WireTypeCheck {
   expected: string[];
   owner?: string;
   value?: string;
+  /** The level of the code whose annotation it is. */
+  level?: string | null;
 }
 
 /** Whether a prompt line is complete yet, as `_pll_repl_check` says. */
@@ -294,6 +303,8 @@ export interface TestRunResult {
 /** What every static finding carries, whatever it is about. */
 interface StaticFindingBase {
   error_type: string;
+  /** An error stops the code running; a warning is only said. */
+  severity: "error" | "warning";
   line_number: number | null;
   column: number | null;
   name_token: string | null;

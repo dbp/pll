@@ -24,11 +24,6 @@ _PLL_TYPEGUARD_READY = False
 _pll_typeguard_transformer = None
 _pll_type_check_error = None
 
-# Whether annotations are instrumented at all. Set per run from the language
-# level, and decided only here: False only at `#level raw`, which exists so a
-# file can opt out. There is no separate setting: the level is the single
-# input, so nothing can disagree with it.
-_PLL_TYPE_CHECK = False
 
 
 def _pll_rejects_bool(memo):
@@ -69,15 +64,14 @@ def _pll_number_lookup(origin_type, args, extras):
     return None
 
 
-def _pll_apply_level(level):
-    """Set whether the code about to be compiled is instrumented.
+def _pll_checks_annotations(level):
+    """Whether code at `level` has its annotations checked as it runs.
 
-    `raw` checks nothing; the other levels check annotations. Read only
-    while compiling, so it belongs to the code compiled next. How strictly
+    Every level but `raw`, which exists so a file can opt out; there is no
+    separate setting, so nothing can disagree with the level. How strictly
     a number is checked is decided later, per check (`_pll_rejects_bool`).
     """
-    global _PLL_TYPE_CHECK
-    _PLL_TYPE_CHECK = level != _PLL_LEVEL_RAW
+    return level != _PLL_LEVEL_RAW
 
 
 def _pll_enable_type_checking():

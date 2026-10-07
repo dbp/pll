@@ -10,7 +10,7 @@
  * Requires `pnpm run build` so dist-cli/ exists.
  */
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, passed } from "./lib/check.mjs";
@@ -625,6 +625,48 @@ async function main() {
       `the definition is the sibling's: ${measuring.stderr}`,
     );
     console.log("    helper23.py:2:20, broken23.py:1:7, each explained from its own file");
+  }
+
+  console.log("\n[24] a file another imports is held to its own #level");
+  {
+    // A folder of its own: only the first 50 files beside a program are mounted.
+    mkdirSync(join(work, "grading"));
+    fixture("grading/student24.py", "#level beginner", "total = 0", "total = 1");
+    const refused = await run([fixture("grading/grader24.py", "import student24")]);
+    expect(
+      /ChecksFailed: `student24\.py` was not imported: the checks of `#level beginner` found a problem in it\./.test(refused.stderr) &&
+        /Line 3: `total` is already assigned \(first assigned on line 2\)\./.test(refused.stderr) &&
+        /at grader24\.py:1/.test(refused.stderr),
+      `refused at the import, with the problem: ${refused.stderr}`,
+    );
+    expect(refused.code === 1, `and the run failed: ${refused.code}`);
+    fixture("grading/typed24.py", "#level beginner", "def half(n: int) -> int:", "    return n / 2");
+    const checked = await run([fixture("grading/grades24.py", "from typed24 import half", "print(half(3))")]);
+    expect(/TypeMismatch: `half` says it returns a whole number/.test(checked.stderr) && /at typed24\.py:3/.test(checked.stderr),
+      `its annotations are checked: ${checked.stderr}`);
+    console.log("    refused for its checks; annotations checked in it");
+  }
+
+  console.log("\n[25] files past the limit are named, not dropped in silence");
+  {
+    mkdirSync(join(work, "crowded"));
+    for (let i = 0; i < 103; i++) fixture(`crowded/d${String(i).padStart(3, "0")}.csv`, "a", "1");
+    const crowded = await run([fixture("crowded/a_main.py", 'print(open("d001.csv").read().split()[0])')]);
+    expect(crowded.code === 0 && crowded.stdout === "a\n", `the program still runs: ${crowded.code} ${crowded.stdout}`);
+    expect(
+      /Not loaded: d099\.csv, d100\.csv, d101\.csv, d102\.csv - at most 100 files next to a program are\./.test(crowded.stderr),
+      `and says which were left out: ${crowded.stderr}`,
+    );
+    mkdirSync(join(work, "busy"));
+    const busy = await run([
+      fixture("busy/writes.py", "for i in range(102):", '    open(f"w{i:03}.txt", "w").write("x")'),
+    ]);
+    expect(
+      /Not saved: w100\.txt, w101\.txt - at most 100 files next to a program are\./.test(busy.stderr) &&
+        readdirSync(join(work, "busy")).filter((name) => name.endsWith(".txt")).length === 100,
+      `and which it wrote but could not save: ${busy.stderr.slice(-300)}`,
+    );
+    console.log("    the 4 past the limit named, and the 2 not saved");
   }
 
   rmSync(work, { recursive: true, force: true });

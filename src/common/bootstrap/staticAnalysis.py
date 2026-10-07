@@ -8,20 +8,21 @@
 #                          provided by a PLL library (image / table /
 #                          reactor - the names every session starts with).
 #     2. Reassignment:     a name bound more than once within the *same*
-#                          scope. Suppressed for names already flagged as
-#                          shadowing in that scope (fix the shadow first).
+#                          scope - or, for a `def` or `class` written
+#                          twice, a duplicate definition. Suppressed for
+#                          names already flagged as shadowing in that scope
+#                          (fix the shadow first).
 #     3. Disallowed kw:    `global` and `nonlocal` statements.
+#     4. Silent mistakes:  code that runs without a word but cannot be what
+#                          was meant (`_PllSilenceVisitor`).
 #
 #   intermediate:
-#     1. Shadowing:        same as beginner.
-#     2. Reassignment:     only flagged at module scope. Function/lambda/
-#                          class/comprehension scopes are allowed to rebind,
-#                          which is what enables for-loop accumulator
-#                          patterns (e.g. `total = 0; for x in xs: total += x`
-#                          inside `def`).
-#     3. Disallowed kw:    `global` and `nonlocal` statements.
+#     The same, except that reassignment is only flagged at module scope.
+#     Function/lambda/class/comprehension scopes are allowed to rebind,
+#     which is what enables for-loop accumulator patterns (e.g. `total = 0;
+#     for x in xs: total += x` inside `def`).
 #
-#   advanced:
+#   raw, advanced:
 #     No checks. Full Python.
 #
 # A "scope" is one of: module, function (incl. async), lambda, class,
@@ -62,6 +63,24 @@ class _PllScope:
         self.declared_elsewhere = set()
 
 
+def _pll_redefines_on_purpose(node):
+    """Whether a `def` is meant to share its name with one above it: a
+    property's `@name.setter` (or `getter`, `deleter`), or an `@overload`."""
+    for decorator in node.decorator_list:
+        if (
+            isinstance(decorator, _ast.Attribute)
+            and decorator.attr in ("setter", "getter", "deleter")
+            and isinstance(decorator.value, _ast.Name)
+            and decorator.value.id == node.name
+        ):
+            return True
+        if (isinstance(decorator, _ast.Name) and decorator.id == "overload") or (
+            isinstance(decorator, _ast.Attribute) and decorator.attr == "overload"
+        ):
+            return True
+    return False
+
+
 def _pll_arg_names(args):
     """All argument names (with positions) on an ast.arguments node."""
     out = []
@@ -86,8 +105,10 @@ class _PllScopeBuilder:
 
     def __init__(self):
         self.scopes = []
+        self._classes = set()
 
     def build(self, tree):
+        self._classes = {node.name for node in _ast.walk(tree) if isinstance(node, _ast.ClassDef)}
         module = _PllScope(tree, "module", None)
         self.scopes.append(module)
         for stmt in tree.body:
@@ -171,11 +192,26 @@ class _PllScopeBuilder:
             # and reassignment checks do not report it twice over.
             scope.declared_elsewhere.update(node.names)
             return
+        # A `case` pattern's captures, and `except ... as e`, bind a name -
+        # one of the alternatives, of which only one runs. Not `case Boa:`
+        # for a class `Boa`: that is the class with its brackets left off,
+        # which the compiler's own error, or the match it then fits, says.
+        if (
+            isinstance(node, (_ast.MatchAs, _ast.MatchStar))
+            and node.name is not None
+            and not (isinstance(node, _ast.MatchAs) and node.pattern is None and node.name in self._classes)
+        ):
+            self._add(scope, node.name, node.lineno, node.col_offset, "capture")
+        if isinstance(node, _ast.MatchMapping) and node.rest is not None:
+            self._add(scope, node.rest, node.lineno, node.col_offset, "capture")
+        if isinstance(node, _ast.ExceptHandler) and node.name is not None:
+            self._add(scope, node.name, node.lineno, node.col_offset, "capture")
 
         # --- Scope-introducing nodes -------------------------------------
         if isinstance(node, _PLL_SCOPE_FUNC):
             # Function name binds in the OUTER scope.
-            self._add(scope, node.name, node.lineno, node.col_offset, "functiondef")
+            kind = "accessor" if _pll_redefines_on_purpose(node) else "functiondef"
+            self._add(scope, node.name, node.lineno, node.col_offset, kind)
             for d in node.decorator_list:
                 self._walk(d, scope)
             for d in node.args.defaults:
@@ -240,6 +276,11 @@ class _PllScopeBuilder:
             self._walk(child, scope)
 
 
+#: The kinds that are said but do not stop the code running: each can be
+#: right as written. Every other kind is an error, which does.
+_PLL_WARNING_KINDS = frozenset(("method-not-called", "test-not-named"))
+
+
 def _pll_finding(kind, error_type, line, column, name_token=None, **extras):
     """One static finding, in the shape the host reads (`RawStaticFinding`).
 
@@ -249,6 +290,7 @@ def _pll_finding(kind, error_type, line, column, name_token=None, **extras):
     finding = {
         "id": kind,
         "error_type": error_type,
+        "severity": "warning" if kind in _PLL_WARNING_KINDS else "error",
         "line_number": line,
         "column": column,
         "name_token": name_token,
@@ -327,6 +369,17 @@ _PLL_TAKES_A_FUNCTION = frozenset(
 #: rather than `year: int`.
 _PLL_TYPE_NAMES = frozenset(("int", "float", "str", "bool", "list", "dict", "tuple"))
 
+#: Built-in types whose methods are passed as functions: `str.upper` is the
+#: function every string's `.upper()` calls, and can never be one forgotten.
+_PLL_METHOD_TYPES = frozenset(("str", "int", "float", "list", "dict", "set", "tuple", "bytes", "frozenset"))
+
+
+def _pll_names_type(annotation):
+    """Whether an annotation is `type` or `type[...]`."""
+    if isinstance(annotation, _ast.Subscript):
+        annotation = annotation.value
+    return isinstance(annotation, _ast.Name) and annotation.id == "type"
+
 
 class _PllSilenceVisitor(_ast.NodeVisitor):
     """Collect mistakes that run without a word being said.
@@ -355,19 +408,27 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
     __slots__ = (
         "found",
         "_code",
+        "_defined",
         "_depth",
         "_called",
         "_asserting",
         "_classes",
         "_fields",
+        "_type_valued",
     )
 
-    def __init__(self, code):
+    def __init__(self, code, defined):
         self.found = []
         # The student's text, so advice can quote `return order_amt + 4`
         # rather than say "`return` it".
         self._code = code
+        # Every name the file (or the session) binds at the top level: an
+        # alias like `Number = int | float` is a type an annotation can name.
+        self._defined = defined
         self._depth = 0
+        # For each function being visited, its parameters annotated `type`,
+        # whose values are classes and can be compared with one.
+        self._type_valued = []
         # Classes defined in this file, so `== Boa` can be told from `== b`.
         self._classes = set()
         # Their field names. A field called `count` or `items` happens to
@@ -404,7 +465,13 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
 
     def _function(self, node):
         self._depth += 1
+        self._type_valued.append({
+            arg.arg
+            for arg in node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+            if _pll_names_type(arg.annotation)
+        })
         self.generic_visit(node)
+        self._type_valued.pop()
         self._depth -= 1
         if self._contains_assert(node) and not node.name.startswith("test_"):
             self._asserting.append(
@@ -425,6 +492,12 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
     def visit_Name(self, node):
         if isinstance(node.ctx, _ast.Load):
             self._called.add(node.id)
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node):
+        # A method is called through its object: `a.check()`.
+        if isinstance(node.ctx, _ast.Load):
+            self._called.add(node.attr)
         self.generic_visit(node)
 
     # ---- classes and their fields ----
@@ -451,11 +524,7 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         for stmt in node.body:
             # `year` on a line of its own: meant as a field, but it is a
             # use of a name, so it fails as a NameError somewhere else.
-            if (
-                isinstance(stmt, _ast.Expr)
-                and isinstance(stmt.value, _ast.Name)
-                and stmt.value.id not in ("Ellipsis",)
-            ):
+            if isinstance(stmt, _ast.Expr) and isinstance(stmt.value, _ast.Name):
                 self.found.append(
                     _pll_finding(
                         "field-no-type", "FieldNeedsType", stmt.lineno, stmt.col_offset, stmt.value.id
@@ -483,38 +552,47 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
                     )
                 )
         # Annotated fields and no `@dataclass`: `X(...)` then fails with
-        # "takes no arguments", which says nothing about the decorator.
+        # "takes no arguments", which says nothing about the decorator. Only
+        # for a class with no base: a `NamedTuple` declares its fields this
+        # way, and a subclass is made by its base's constructor.
         writes_init = any(
             isinstance(stmt, _PLL_SCOPE_FUNC) and stmt.name == "__init__"
             for stmt in node.body
         )
-        if annotated and not decorated and not writes_init:
+        has_base = any(not (isinstance(b, _ast.Name) and b.id == "object") for b in node.bases)
+        if annotated and not decorated and not writes_init and not has_base:
             self.found.append(
                 _pll_finding("class-needs-dataclass", "NotADataclass", node.lineno, node.col_offset, node.name)
             )
         self.generic_visit(node)
 
+    def _class_valued(self, side):
+        """Whether `side` is a class itself, which a class can equal:
+        `type(a)`, `a.__class__`, another class, or a parameter annotated
+        `type`."""
+        if isinstance(side, _ast.Call) and isinstance(side.func, _ast.Name) and side.func.id == "type":
+            return True
+        if isinstance(side, _ast.Attribute) and side.attr == "__class__":
+            return True
+        return isinstance(side, _ast.Name) and (
+            side.id in self._classes or any(side.id in names for names in self._type_valued)
+        )
+
     def visit_Compare(self, node):
         # `if a == Boa:` is always False - a value is never equal to the
         # class it was made from. `type(a) == Boa`, though, is a real check.
         sides = [node.left] + list(node.comparators)
-        if any(
-            isinstance(side, _ast.Call)
-            and isinstance(side.func, _ast.Name)
-            and side.func.id == "type"
-            for side in sides
-        ):
-            self.generic_visit(node)
-            return
-        for side in sides:
-            if (
-                isinstance(side, _ast.Name)
-                and side.id in self._classes
-                and any(isinstance(op, (_ast.Eq, _ast.NotEq)) for op in node.ops)
-            ):
-                self.found.append(
-                    _pll_finding("compared-with-class", "AlwaysFalse", side.lineno, side.col_offset, side.id)
-                )
+        if any(isinstance(op, (_ast.Eq, _ast.NotEq)) for op in node.ops):
+            for i, side in enumerate(sides):
+                others = sides[:i] + sides[i + 1 :]
+                if (
+                    isinstance(side, _ast.Name)
+                    and side.id in self._classes
+                    and not any(self._class_valued(other) for other in others)
+                ):
+                    self.found.append(
+                        _pll_finding("compared-with-class", "AlwaysFalse", side.lineno, side.col_offset, side.id)
+                    )
         self.generic_visit(node)
 
     # ---- statements whose value goes nowhere ----
@@ -564,6 +642,11 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
             isinstance(value, _ast.Attribute)
             and value.attr in _PLL_CALLED_METHODS
             and value.attr not in self._fields
+            # `str.upper`: read off a type, so the function, on purpose.
+            and not (
+                isinstance(value.value, _ast.Name)
+                and (value.value.id in _PLL_METHOD_TYPES or value.value.id in self._classes)
+            )
         ):
             self.found.append(
                 _pll_finding("method-not-called", "NotCalled", value.lineno, value.col_offset, value.attr)
@@ -603,9 +686,10 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         if (
             isinstance(annotation, _ast.Name)
             and annotation.id in _PLL_NOT_A_TYPE
-            # A class of their own called `Number` is a type, and naming it
-            # in an annotation is right.
+            # A class or alias of their own called `Number` is a type, and
+            # naming it in an annotation is right.
             and annotation.id not in self._classes
+            and annotation.id not in self._defined
         ):
             self.found.append(
                 _pll_finding(
@@ -742,18 +826,16 @@ def _pll_static_analyze(code, level, filename, session_key=None):
         # ---- Shadowing first ----
         for name, locs in scope.bindings.items():
             if name in scope.declared_elsewhere:
-                # `global x` already produced its own finding; an extra
-                # Shadowing for the same name sent students looking for a
-                # second, separate mistake.
+                # `global x` has its own finding; one for the same name here
+                # would read as a second, separate mistake.
                 continue
             if scope.kind == "class":
                 # A name bound in a class body is an *attribute*, not a
                 # variable. `id: int` in a dataclass declares a field, and
-                # `id` everywhere else still finds the built-in - so there
-                # is nothing being shadowed, and telling a student to
-                # rename the field was simply wrong. The class's own name
-                # is bound in the enclosing scope and is still checked
-                # there, so `class list:` is still caught.
+                # `id` everywhere else still finds the built-in, so nothing
+                # is shadowed. The class's own name is bound in the
+                # enclosing scope and checked there, so `class list:` is
+                # still caught.
                 continue
             first_loc = locs[0]
             # A binding imported from a `pll` module re-binds the library's
@@ -797,6 +879,12 @@ def _pll_static_analyze(code, level, filename, session_key=None):
             for name, locs in scope.bindings.items():
                 if name in shadowed_in_scope or name in scope.declared_elsewhere:
                     continue
+                # A property's setter is the property, not a second one.
+                locs = [loc for loc in locs if loc[2] != "accessor"]
+                # The same capture in two `case`s (or two `except`s) is bound
+                # by whichever one runs, never twice.
+                if all(loc[2] == "capture" for loc in locs):
+                    continue
                 if len(locs) > 1:
                     second_loc = locs[1]
                     first_loc = locs[0]
@@ -834,7 +922,7 @@ def _pll_static_analyze(code, level, filename, session_key=None):
             ))
 
     # ---- mistakes that would otherwise run without a word ----
-    findings.extend(_PllSilenceVisitor(code).scan(tree))
+    findings.extend(_PllSilenceVisitor(code, set(builder.scopes[0].bindings)).scan(tree))
 
     findings.sort(key=lambda f: (f["line_number"] or 0, f["column"] or 0))
     return findings

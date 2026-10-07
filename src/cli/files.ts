@@ -3,6 +3,8 @@ import * as path from "node:path";
 import {
   readSiblingFiles,
   writeSiblingFiles,
+  type LeftOut,
+  type Selection,
   type SiblingFolder,
   type WorkspaceFile,
 } from "../common/workspaceFilePolicy";
@@ -23,15 +25,15 @@ function siblingFolder(scriptPath: string): SiblingFolder {
   };
 }
 
-/** Text and picture files next to the script. */
-export function collectSiblingFiles(scriptPath: string): Promise<WorkspaceFile[]> {
+/** Text and picture files next to the script, and those the limits kept back. */
+export function collectSiblingFiles(scriptPath: string): Promise<Selection> {
   return readSiblingFiles(siblingFolder(scriptPath));
 }
 
-/** Write changed data files back next to the script. Returns their names. */
+/** Write changed data files back next to the script: the names written, and those kept back. */
 export function writeBackSiblingFiles(
   scriptPath: string,
   files: WorkspaceFile[],
-): Promise<string[]> {
+): Promise<{ written: string[]; leftOut: LeftOut[] }> {
   return writeSiblingFiles(siblingFolder(scriptPath), files);
 }

@@ -6,10 +6,9 @@ import { staticFindingFor, type AnalysisFinding } from "../types";
  * Two `def`s (or two `class`es) with the same name.
  *
  * Python keeps the second and throws the first away silently, which is how
- * a test copied without renaming it disappears. Before this it arrived as
- * the Reassignment finding, whose advice is about variables - accumulators,
- * running totals, "use a built-in like `sum`" - and so pointed nowhere
- * near the actual fix, which is to rename one of them.
+ * a test copied without renaming it disappears. Its own finding, not a
+ * reassignment: that advice is about variables - accumulators, running
+ * totals - and the fix here is to rename one of them.
  */
 export function explainDuplicateDefinition(
   raw: StaticFindingOf<"duplicate-definition">,

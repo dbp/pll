@@ -640,6 +640,7 @@ console.log("\n[5] beginner static findings block the file and become diagnostic
         {
           id: "reassignment",
           error_type: "Reassignment",
+          severity: "error",
           message: "x is assigned twice",
           line_number: 3,
           column: 0,
@@ -689,6 +690,7 @@ console.log("\n[6] prompt findings stay in the view and carry the session key");
         {
           id: "shadowing-builtin",
           error_type: "Shadowing",
+          severity: "error",
           message: "list shadows a builtin",
           line_number: 1,
           column: 0,
@@ -1860,6 +1862,7 @@ console.log("\n[45] a warning is shown and the file still runs");
         {
           id: "test-not-named",
           error_type: "NeverRun",
+          severity: "warning",
           message: "`check_total` has an `assert` in it, but nothing runs it",
           line_number: 2,
           column: 0,
@@ -1897,6 +1900,7 @@ console.log("\n[46] an error still stops the file");
         {
           id: "assert-tuple",
           error_type: "AlwaysTrue",
+          severity: "error",
           message: "this `assert` is always true",
           line_number: 3,
           column: 4,
@@ -2920,6 +2924,22 @@ console.log("\n[74] prompt lines with no file open: a session of their own, at b
   repl.showNoFileSession();
   expect(view.title === "No file [beginner]", `back to the one with no file: ${view.title}`);
   expect(view.entries.some((e) => e.kind === "echo" && e.code === "x = 1"), "with what was typed in it");
+
+  // Clear starts it afresh, names and all: there is no file to run again.
+  const ended = () => runtime.calls.filter((c) => c[0] === "endSession").map((c) => c[1]);
+  view.handlers.onClearRequested();
+  await settle();
+  expect(ended().join() === "pll:no-file", `its names are forgotten: ${JSON.stringify(ended())}`);
+  expect(
+    bannerTexts(view).join("|") === "Started afresh: nothing typed here before is defined now.",
+    `and the panel says so: ${JSON.stringify(bannerTexts(view))}`,
+  );
+  // A file's session keeps its names: running the file again starts it afresh.
+  __setActiveEditor({ document: doc });
+  view.handlers.onClearRequested();
+  await settle();
+  expect(ended().length === 1, `a file's session is only cleared: ${JSON.stringify(ended())}`);
+  repl.showNoFileSession();
 
   // If Python stops completely, there is no file to run again.
   runtime.lose();

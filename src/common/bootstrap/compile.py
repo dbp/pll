@@ -150,7 +150,7 @@ def _pll_check_dataclass_fields(cls):
     every recursive annotation failed to resolve and its field went
     unchecked.
     """
-    if not _PLL_TYPE_CHECK or not _PLL_TYPEGUARD_READY:
+    if not _PLL_TYPEGUARD_READY:
         return cls
     memo_type = _pll_initial_globals.get("_pll_tg_memo")
     check = _pll_initial_globals.get("_pll_tg_check_assign")
@@ -206,6 +206,7 @@ def _pll_check_dataclass_fields(cls):
                     "expected": [expected],
                     "owner": cls.__name__,
                     "value": shown,
+                    "level": defining_globals.get("__pll_level__"),
                 })
                 if swapped:
                     _pll_add_facts(error, swapped_with=swapped)
@@ -306,18 +307,16 @@ def _pll_reword_warning(message, line=""):
     )
 
 
-def _pll_parse_and_instrument(code, filename):
-    """Parse `code`, adding runtime type checks when they are available.
-
-    Whether to check at all comes from `_PLL_TYPE_CHECK`, which
-    `_pll_apply_level` sets from the level before this is called.
+def _pll_parse_and_instrument(code, filename, level):
+    """Parse `code`, adding the runtime type checks of its `level` when they
+    are available.
 
     Instrumentation is attempted on a second parse and validated by
     compiling it, so anything typeguard cannot handle falls back to the
     plain tree rather than failing the run.
     """
     tree = _ast.parse(code, filename=filename, mode="exec")
-    if not _PLL_TYPE_CHECK or not _PLL_TYPEGUARD_READY:
+    if not _pll_checks_annotations(level) or not _PLL_TYPEGUARD_READY:
         return tree
     try:
         instrumented = _ast.parse(code, filename=filename, mode="exec")

@@ -372,7 +372,7 @@ export function explainTypeCheckError(
     owner: functionName ? `\`${functionName}\`` : "this function",
     named: parsed.name ? `\`${parsed.name}\`` : "a value",
     convert: conversionFor(parsed.expected, parsed.actual),
-    boolNote: boolAsNumberNote(parsed.expected, parsed.actual, level),
+    boolNote: boolAsNumberNote(parsed.expected, parsed.actual, parsed.level ?? level),
     annotation: parsed.expected.length === 1 ? cleanTypeName(parsed.expected[0]) : null,
   };
   return classGiven(c) ?? BY_KIND[parsed.kind](c);

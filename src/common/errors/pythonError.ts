@@ -1,3 +1,6 @@
+import type { StaticFinding } from "../fromPython";
+import type { Level } from "../level";
+
 /**
  * An exception, as Python describes it to the host.
  *
@@ -45,6 +48,17 @@ export interface ErrorFacts {
   assigned?: Record<string, { call: string; line: number }>;
   /** For a function annotated to return something that returned `None`: how it is built. */
   returnedNone?: ReturnedNone;
+  /**
+   * For `ChecksFailed`: the student's file that was not imported, its level,
+   * and what that level's checks found - its static errors, or a broken
+   * `#level` line.
+   */
+  checks?: {
+    file: string;
+    level: Level;
+    findings: StaticFinding[];
+    headerProblem: { line: number; message: string } | null;
+  };
 }
 
 /**
@@ -93,6 +107,8 @@ export interface TypeCheck {
   /** For "field": the class whose field it is, and the value it got. */
   owner?: string;
   value?: string;
+  /** The level of the code whose annotation it is, which may not be the run's. */
+  level?: Level;
 }
 
 export interface PythonError {

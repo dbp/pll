@@ -10,6 +10,7 @@
  */
 
 import type { ErrorFrame, PythonError, ReturnedNone, TypeCheck } from "./errors/pythonError";
+import { DEFAULT_LEVEL, isLevel } from "./level";
 import type {
   DisplayData,
   ExamplarBuildResult,
@@ -231,6 +232,14 @@ export function pythonErrorFrom(wire: Partial<WireError> | null | undefined): Py
       definitions: facts.definitions ?? undefined,
       assigned: facts.assigned ?? undefined,
       returnedNone: facts.returned_none ? returnedNoneFrom(facts.returned_none) : undefined,
+      checks: facts.checks
+        ? {
+            file: facts.checks.file,
+            level: isLevel(facts.checks.level) ? facts.checks.level : DEFAULT_LEVEL,
+            findings: staticFindingsFrom(facts.checks.findings),
+            headerProblem: facts.checks.header_problem ?? null,
+          }
+        : undefined,
     },
   };
 }
@@ -244,6 +253,7 @@ function typeCheckFrom(check: WireTypeCheck): TypeCheck {
     expected: check.expected ?? [],
     owner: check.owner ?? undefined,
     value: check.value ?? undefined,
+    level: check.level && isLevel(check.level) ? check.level : undefined,
   };
 }
 

@@ -796,6 +796,44 @@ _g = _pll_get_session("smoke-lib")
     expect(teaching.join() === "beginner,intermediate", `the teaching levels: ${teaching.join()}`);
   }
 
+  console.log("\n[22] correct programs are not stopped, and warnings stay warnings");
+  {
+    const ids = (code) => analyze(code, "beginner", "ok.py").map((f) => `${f.id}:${f.severity}`);
+    const clean = [
+      // An alias of their own is a type an annotation can name.
+      ["an alias", "Number = int | float\n\ndef double(n: Number) -> Number:\n    return n * 2\n"],
+      // A NamedTuple declares fields with annotations, and needs no @dataclass.
+      ["a NamedTuple", "from typing import NamedTuple\n\nclass Point(NamedTuple):\n    x: int\n    y: int\n"],
+      // A class compared with a class.
+      ["a class with a class", "class Boa:\n    pass\n\ndef same(kind: type) -> bool:\n    return kind == Boa\n"],
+      ["a value's class", "class Boa:\n    pass\n\ndef same(a: Boa) -> bool:\n    return a.__class__ == Boa\n"],
+      // A method with an assert that is called through its object.
+      ["a called method", "class A:\n    def check(self) -> None:\n        assert True\n\nA().check()\n"],
+      // A method read off a type is the function, on purpose.
+      ["str.upper", 't = table(["n"], [["a"]])\nprint(t.transform_column("n", str.upper))\n'],
+      // The same capture in two cases is bound once, by whichever runs.
+      ["a capture in two cases", "def f(a: int) -> int:\n    match a:\n        case 1 as n:\n            return n\n        case n:\n            return n\n"],
+      ["two handlers' names", "def f() -> int:\n    try:\n        return 1\n    except ValueError as e:\n        return 2\n    except KeyError as e:\n        return 3\n"],
+      // A property's setter is the property.
+      ["a setter", "class Box:\n    @property\n    def w(self) -> int:\n        return 1\n\n    @w.setter\n    def w(self, v: int) -> None:\n        pass\n"],
+    ];
+    for (const [label, code] of clean) {
+      const found = ids(code);
+      expect(found.length === 0, `${label}: nothing found, got ${found.join(" ")}`);
+    }
+    // What is still found.
+    expect(ids("class Song:\n    title: str\n").join() === "class-needs-dataclass:error", "a plain class with fields still needs @dataclass");
+    expect(ids("class Boa:\n    pass\n\ndef f(a: Boa) -> bool:\n    return a == Boa\n").join() === "compared-with-class:error", "a value with its class is still always False");
+    expect(ids("def f(x: string) -> int:\n    return 1\n").join() === "annotation-not-a-type:error", "a name that is not theirs is still not a type");
+    expect(ids("def f(n: int) -> int:\n    match n:\n        case len:\n            return len\n").join() === "shadowing-builtin:error", "a capture that shadows a built-in is found");
+    expect(ids("def f(n: int) -> int:\n    x = 1\n    match n:\n        case x:\n            return x\n").join() === "reassignment:error", "a capture rebinding a variable is a reassignment");
+    expect(
+      ids('print(table(["n"], [["a"]]).mean)\ndef helper() -> None:\n    assert True\n').join(" ") === "method-not-called:warning test-not-named:warning",
+      `the two warnings are warnings: ${ids('print(table(["n"], [["a"]]).mean)\ndef helper() -> None:\n    assert True\n').join(" ")}`,
+    );
+    if (passed()) console.log(`    ${clean.length} correct programs found clean`);
+  }
+
   fn.destroy?.();
 
   console.log(passed() ? "\nALL SMOKE TESTS PASSED" : "\nFAILED");

@@ -1067,7 +1067,8 @@ async function main() {
           swappedCheck.owner === "Song" &&
           swappedCheck.value === "1999" &&
           swappedCheck.actual === "int" &&
-          swappedCheck.expected.join() === "str",
+          swappedCheck.expected.join() === "str" &&
+          swappedCheck.level === "beginner",
         `the field check, in parts: ${JSON.stringify(swappedCheck)}`,
       );
 
@@ -1077,24 +1078,24 @@ async function main() {
       const typeguardShapes = [
         [
           'def f(x: int) -> int:\n    return x\n\nf("a")\n',
-          { kind: "argument", name: "x", element: null, actual: "str", expected: ["int"] },
+          { kind: "argument", name: "x", element: null, actual: "str", expected: ["int"], level: "beginner" },
         ],
         [
           'def f() -> int:\n    return "a"\n\nf()\n',
-          { kind: "return", name: null, element: null, actual: "str", expected: ["int"] },
+          { kind: "return", name: null, element: null, actual: "str", expected: ["int"], level: "beginner" },
         ],
-        ['x: int = "a"\n', { kind: "variable", name: "x", element: null, actual: "str", expected: ["int"] }],
+        ['x: int = "a"\n', { kind: "variable", name: "x", element: null, actual: "str", expected: ["int"], level: "beginner" }],
         [
           'def f(x: float) -> float:\n    return x\n\nf("a")\n',
-          { kind: "argument", name: "x", element: null, actual: "str", expected: ["float"] },
+          { kind: "argument", name: "x", element: null, actual: "str", expected: ["float"], level: "beginner" },
         ],
         [
           'def f(lst: list[float]) -> float:\n    return 0\n\nf(["1", 2.0])\n',
-          { kind: "argument", name: "lst", element: "item 0", actual: "list", expected: ["float"] },
+          { kind: "argument", name: "lst", element: "item 0", actual: "list", expected: ["float"], level: "beginner" },
         ],
         [
           'def f(d: dict[str, int]) -> int:\n    return 0\n\nf({"a": "1"})\n',
-          { kind: "argument", name: "d", element: "value of key 'a'", actual: "dict", expected: ["int"] },
+          { kind: "argument", name: "d", element: "value of key 'a'", actual: "dict", expected: ["int"], level: "beginner" },
         ],
       ];
       for (const [code, want] of typeguardShapes) {
@@ -1217,6 +1218,55 @@ async function main() {
         later.error_facts?.sequence === "xs" && later.error_facts?.length === 2,
         `and what is learned from it: ${JSON.stringify(later.error_facts)}`,
       );
+
+      // A file another imports is held to its own level: a grader at `raw`
+      // importing a student's beginner file gets the student's checks.
+      const graded = async (grader, student, name = "student.py") => {
+        await send({
+          type: "mountWorkspace",
+          files: [{ name: "grader.py", contents: grader }, { name, contents: student }],
+        });
+        return run(grader, { fileName: "grader.py", level: "raw" });
+      };
+      const refused = await graded("import student\n", "#level beginner\ntotal = 0\ntotal = 1\n");
+      const checks = refused.error_facts?.checks;
+      expect(refused.error_type === "ChecksFailed", `refused at the import: ${refused.error_type}`);
+      expect(
+        checks?.file === "student.py" && checks?.level === "beginner" &&
+          checks.findings.map((f) => f.id).join() === "reassignment" && checks.header_problem === null,
+        `with what its checks found: ${JSON.stringify(checks)}`,
+      );
+      const header = await graded("import student\n", "#level begginer\nx = 1\n");
+      expect(
+        header.error_type === "ChecksFailed" && header.error_facts?.checks?.header_problem?.line === 1,
+        `a broken #level line refuses it too: ${JSON.stringify(header.error_facts?.checks)}`,
+      );
+      const student = "#level beginner\ndef count(n: int) -> int:\n    return n\n\ndef dot() -> Image:\n    return circle(5, \"solid\", \"red\")\n";
+      const strict = await graded("from student import count\nprint(count(True))\n", student);
+      expect(
+        strict.error_type === "TypeCheckError" && strict.error_frames.at(-1)?.file === "student.py",
+        `checked at its level, in its file: ${strict.error_type} ${JSON.stringify(strict.error_frames.at(-1))}`,
+      );
+      expect(strict.error_facts?.check?.level === "beginner", `the check says whose level: ${JSON.stringify(strict.error_facts?.check)}`);
+      const strictFinding = findRuntimeFinding("from student import count\nprint(count(True))\n", "grader.py", "raw", pythonErrorFrom(strict));
+      expect(
+        strictFinding.howToFix.some((l) => /not accepted as numbers/.test(l)),
+        `explained at the student's level, not the grader's: ${JSON.stringify(strictFinding.howToFix)}`,
+      );
+      // A warning is said when the file runs, and does not stop an import.
+      const warned = await graded("import student\nprint(student.f())\n",
+        '#level beginner\ndef f() -> int:\n    print("a".upper)\n    return 1\n');
+      expect(warned.ok && /1\n$/.test(warned.stdout), `a warning does not refuse it: ${warned.error_message ?? warned.stdout}`);
+      const drawn = await graded("from student import dot\nprint(dot() is not None)\n", student);
+      expect(drawn.ok && drawn.stdout === "True\n", `with the names a run starts with: ${drawn.error_message ?? drawn.stdout}`);
+      // Its level, not the importer's: an advanced helper takes a bool.
+      const lenient = await graded("#level beginner\nfrom student import count\nprint(count(True))\n",
+        "#level advanced\ndef count(n: int) -> int:\n    return n\n");
+      expect(lenient.ok && lenient.stdout === "True\n", `an advanced file is advanced: ${lenient.error_message ?? lenient.stdout}`);
+      // And a file with no header is plain Python.
+      const plain = await graded("import student\nprint(student.f(\"x\"))\n", "def f(n: int) -> int:\n    return n\n\nf = f\n");
+      expect(plain.ok && plain.stdout === "x\n", `raw is unchecked: ${plain.error_message ?? plain.stdout}`);
+      await send({ type: "mountWorkspace", files: [] });
       await send({ type: "mountWorkspace", files: [] });
       console.log("    names, frames, columns, facts and messages, each from the exception itself");
     }

@@ -7,7 +7,7 @@ import type { BundleStore } from "./examplarSource";
 import { levelHasStaticChecks, parseLevel, type Level } from "./level";
 import { needsPackages } from "./packages";
 import type { ExecutionEvent, PythonRuntime } from "./types";
-import type { WorkspaceFile } from "./workspaceFilePolicy";
+import { leftOutNotes, type LeftOut, type Selection, type WorkspaceFile } from "./workspaceFilePolicy";
 import { errorText } from "./errorText";
 import { PythonLostError, StoppedError } from "./runtimeErrors";
 
@@ -40,10 +40,10 @@ export interface RunHost {
   status(text: string): void;
   /** Whether Stop was pressed during this run. */
   stopRequested(): boolean;
-  /** The files next to the program, to mount where it can open them. */
-  siblingFiles(): Promise<WorkspaceFile[]>;
-  /** Write back the files the program changed; returns the names written. */
-  writeBack(files: WorkspaceFile[]): Promise<string[]>;
+  /** The files next to the program, to mount where it can open them - and those the limits kept back. */
+  siblingFiles(): Promise<Selection>;
+  /** Write back the files the program changed: the names written, and those the limits kept back. */
+  writeBack(files: WorkspaceFile[]): Promise<{ written: string[]; leftOut: LeftOut[] }>;
   /** One card of the Examplar check's verdict. */
   examplarCard(entry: ExamplarEntry): void;
   /** Wraps running the program itself (the editor connects `input()` here). */
@@ -333,7 +333,11 @@ async function loadPackages(runtime: PythonRuntime, host: RunHost, code: string)
 async function mount(runtime: PythonRuntime, host: RunHost): Promise<boolean> {
   host.status("Loading files...");
   try {
-    await runtime.mountWorkspaceFiles(await host.siblingFiles());
+    const { files, leftOut } = await host.siblingFiles();
+    await runtime.mountWorkspaceFiles(files);
+    for (const note of leftOutNotes(leftOut, "loaded")) {
+      host.say(note, "note");
+    }
     return true;
   } catch (err) {
     host.say(`Could not load files next to this script (${errorText(err)}). open() may fail.`, "note");
@@ -347,9 +351,12 @@ async function writeBack(runtime: PythonRuntime, host: RunHost, fileName: string
     if (changed.length === 0) {
       return;
     }
-    const written = await host.writeBack(changed);
+    const { written, leftOut } = await host.writeBack(changed);
     if (written.length > 0) {
       host.say(`Saved ${written.join(", ")} next to ${fileName}.`, "note");
+    }
+    for (const note of leftOutNotes(leftOut, "saved")) {
+      host.say(note, "note");
     }
   } catch (err) {
     host.say(`Could not save files next to this script (${errorText(err)}).`, "note");

@@ -1,6 +1,7 @@
 import type { Level } from "../level";
 import type { PythonError } from "../errors/pythonError";
 import { nameErrorAnalyzer } from "./nameErrorAnalyzer";
+import { checksFailedAnalyzer } from "./checksFailedAnalyzer";
 import { analyzeRuntimeError } from "./runtimeErrorAnalyzer";
 import { stockMessageAnalyzer } from "./stockMessageAnalyzer";
 import { syntaxErrorAnalyzer } from "./syntaxErrorAnalyzer";
@@ -16,6 +17,7 @@ const analyzers: RuntimeAnalyzer[] = [
   nameErrorAnalyzer,
   typeCheckAnalyzer,
   syntaxErrorAnalyzer,
+  checksFailedAnalyzer,
   // Last before the catch-all: it only reaches an error no analyzer
   // above recognised, and claims it only if it can say something better
   // than Python did.

@@ -55,7 +55,9 @@ and a file it writes is not saved.
 
 Once you open a Python file, the panel shows that file's session instead.
 **PLL: Start REPL** switches back to the session with no file, which keeps
-what you typed in it until the window closes.
+what you typed in it until the window closes - or until you clear it
+(**Ctrl+L**, or the Clear button), which starts it afresh: nothing typed in
+it before is defined any more.
 
 ### Try things after a run
 
@@ -110,6 +112,14 @@ blank.
 
 The level is the only thing that decides what gets checked — there is no
 separate setting to keep in sync with it.
+
+Each file keeps its own level when another file imports it. If `main.py`
+does `from helper import half` and `helper.py` starts with `#level
+beginner`, then `helper.py` is checked as a beginner file, whatever level
+`main.py` has: if the checks find a problem in it, the import stops with a
+`ChecksFailed` error that lists each problem, and its annotations are
+checked as it runs. (So a grading script can import a student's file and
+get the student's level.)
 
 If your course sets `pll.newFileLevel`, every new `.py` file you create
 starts with that level line already written in, so you do not have to
@@ -510,6 +520,12 @@ in the editor. PLL does not overwrite your `.py` files.
 
 Untitled editors (not yet saved to a folder) have no sibling files to
 load or save.
+
+There are limits: at most 100 files are loaded, each at most 2 MB and 8 MB
+in all, and the same for the files saved afterwards. A file left out by a
+limit is named in the panel ("Not loaded: ... - at most 100 files next to a
+program are."), so a program that cannot open or import it is not left
+failing for no reason you can see.
 
 ## Friendlier errors
 
