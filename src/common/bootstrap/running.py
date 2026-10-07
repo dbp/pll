@@ -219,9 +219,6 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
     try:
         with _pll_as_main(main), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             exec(compiled, user_globals)
-            # Only once the program has finished: building a reactor and
-            # starting it further down is perfectly ordinary.
-            stderr.write(_pll_run_notes())
         result["ok"] = True
         finished = True
     except SystemExit as e:
@@ -239,6 +236,12 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
     if run_tests and finished:
         with _pll_as_main(main):
             result["tests"] = _pll_run_collected_tests(user_globals, tests_at, (filename, code))
+    if finished:
+        # Only once the program and its tests have finished: building a
+        # reactor and starting it further down is perfectly ordinary, and a
+        # test that steps one has used it.
+        stderr.write(_pll_run_notes())
+        _pll_with_output(result, stdout, stderr)
     return result
 
 

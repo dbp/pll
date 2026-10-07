@@ -532,7 +532,51 @@ async function main() {
       !/never started/.test(again.stderr ?? ""),
       `the last run's reactors are forgotten: ${JSON.stringify(again.stderr)}`,
     );
-    console.log("    noted when idle, silent when started, and reset each run");
+    // Used without being shown: tested with simulate_trace, or by the file's tests.
+    const traced = py(callRunFile, [`${draw}r = reactor(init=0, to_draw=draw, on_tick=lambda n: n + 1)\nprint(r.simulate_trace(3).get_trace())\n`, "rx4.py", SK]);
+    expect(traced.stdout === "[0, 1, 2, 3]\n", `its trace, oldest first: ${JSON.stringify(traced.stdout)}`);
+    expect(!/never started/.test(traced.stderr ?? ""), `a reactor tested is used: ${JSON.stringify(traced.stderr)}`);
+    const tested = py(callRunFile, [
+      `${draw}r = reactor(init=0, to_draw=draw, on_tick=lambda n: n + 1)\n\ndef test_ticks():\n    assert r.tick().get_value() == 1\n`,
+      "rx5.py", SK, "raw", true,
+    ]);
+    expect(tested.tests?.passed === 1, `its test runs: ${JSON.stringify(tested.tests)}`);
+    expect(!/never started/.test(tested.stderr ?? ""), `and is what used it: ${JSON.stringify(tested.stderr)}`);
+    console.log("    noted when idle, silent when started or tested, and reset each run");
+  }
+
+  console.log("\n[19b] a stopped world takes no more events, and a step that cannot send changes nothing");
+  {
+    const step = pyodide.globals.get("_pll_reactor_step");
+    const seek = pyodide.globals.get("_pll_reactor_seek");
+    const idOf = (result) => result.displays.find((d) => d.type === "reactor")?.id;
+    const draw = 'def draw(n):\n    return circle(5, "solid", "red")\n\n\n';
+    const stops = py(callRunFile, [
+      `${draw}reactor(init=0, to_draw=draw, on_tick=lambda n: n + 1, on_receive=lambda n, m: n + 100, stop_when=lambda n: n >= 1).interact()\n`,
+      "stops.py", SK,
+    ]);
+    const sid = idOf(stops);
+    const first = py(step, [sid, '{"kind": "tick"}']);
+    expect(first.stopped === true && first.value_repr === "1", `it stops at 1: ${JSON.stringify(first)}`);
+    for (const event of ['{"kind": "tick"}', '{"kind": "receive", "message": 5}']) {
+      const after = py(step, [sid, event]);
+      expect(after.value_repr === "1" && after.length === first.length && after.messages.length === 0,
+        `${event} changes nothing: ${JSON.stringify(after)}`);
+    }
+
+    const sends = py(callRunFile, [
+      `${draw}reactor(init=0, to_draw=draw, on_key=lambda n, k: package(n + 1, object())).interact()\n`,
+      "sends.py", SK,
+    ]);
+    const kid = idOf(sends);
+    const refused = py(step, [kid, '{"kind": "key", "key": "a"}']);
+    expect(refused.ok === false && refused.error_type === "TypeError" && /package\(\.\.\.\) can only send/.test(refused.error_message),
+      `the message is refused: ${JSON.stringify(refused.error_message)}`);
+    const where = py(seek, [kid, 0]);
+    expect(where.length === 1 && where.value_repr === "0", `and the reactor is where it was: ${JSON.stringify(where)}`);
+    step.destroy?.();
+    seek.destroy?.();
+    console.log("    a stopped world stays put; a message that cannot be sent leaves no frame");
   }
 
   console.log("\n[20] a misspelled colour is refused, with the name it meant");

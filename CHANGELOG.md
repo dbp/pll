@@ -96,6 +96,20 @@
 - **A test that needs another of the student's files** gets the hint that
   files are not there during the check, naming the line that needed one.
 
+- **A world's messages are not lost, and not applied to the past.** A
+  message from the universe server - or a key press, or a click - that
+  arrived while a step was being worked out was dropped. And one that
+  arrived while the card was rewound was applied to the frame on screen,
+  throwing away every frame after it; messages now wait until the card is
+  back on its newest frame.
+- **A world that has stopped stays stopped.** Once `stop_when` was true, a
+  message from the server still ran `on_receive`, changed the card, and sent
+  any reply.
+- **"A reactor was made but never started" is not said of one that was
+  used**, by `simulate_trace` or by the file's tests.
+- **`package(...)` with a value the server cannot read leaves the reactor
+  where it was**; it used to move on a frame and then report the error.
+
 ### Removed
 - **Two guesses about where an error came from.** A missing column is no
   longer blamed on an `add_column` whose result was thrown away somewhere

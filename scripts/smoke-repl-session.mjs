@@ -2950,6 +2950,71 @@ console.log("\n[74] prompt lines with no file open: a session of their own, at b
   repl.dispose();
 }
 
+console.log("\n[75] a world's messages wait for its newest frame, and none is lost");
+{
+  const received = (runtime) =>
+    runtime.calls.filter((c) => c[0] === "reactorStep").map((c) => JSON.parse(c[2])).filter((e) => e.kind !== "tick");
+  // Rewound: a message waits until the card is back on its newest frame.
+  {
+    let newest = false;
+    const { repl, view, runtime, doc, sockets } = await harness(
+      countingReactor({
+        event: { ticking: false, register: "ws://localhost:9999" },
+        script: {
+          reactorSeek: (_id, index) => ({
+            ok: true, frame: { data: "<svg/>", width: 10, height: 10 },
+            index, length: 2, at_end: newest, stopped: false, value_repr: String(index),
+          }),
+        },
+      }),
+    );
+    await repl.runFile("reactor(...)", "hello.py", doc);
+    await settle();
+    sockets[0].handlers.onOpen();
+    view.handlers.onReactorControl("r1", "back", 0);
+    await settle();
+    sockets[0].handlers.onMessage(JSON.stringify({ n: 1 }));
+    await settle();
+    expect(received(runtime).length === 0, `held while looking back: ${JSON.stringify(received(runtime))}`);
+    // The seek that comes back to the newest frame lets it in.
+    newest = true;
+    view.handlers.onReactorControl("r1", "seek", 1);
+    await settle();
+    expect(received(runtime).map((e) => e.message?.n).join() === "1", `then applied: ${JSON.stringify(received(runtime))}`);
+    repl.dispose();
+  }
+  // During a step: messages and key presses wait for it, rather than being dropped.
+  {
+    const { repl, view, runtime, doc, sockets } = await harness(
+      countingReactor({ event: { ticking: false, register: "ws://localhost:9999", wantsKeys: true } }),
+    );
+    await repl.runFile("reactor(...)", "hello.py", doc);
+    await settle();
+    sockets[0].handlers.onOpen();
+    // Back to back, so the second and third arrive while the first is in flight.
+    sockets[0].handlers.onMessage(JSON.stringify({ n: 1 }));
+    sockets[0].handlers.onMessage(JSON.stringify({ n: 2 }));
+    view.handlers.onReactorInput("r1", { kind: "key", key: "a" });
+    await settle();
+    await settle();
+    expect(received(runtime).length === 3, `all three applied: ${JSON.stringify(received(runtime))}`);
+    repl.dispose();
+  }
+  // A world that has stopped takes no more messages.
+  {
+    const { repl, runtime, doc, sockets } = await harness(
+      countingReactor({ event: { ticking: false, stopped: true, register: "ws://localhost:9999" } }),
+    );
+    await repl.runFile("reactor(...)", "hello.py", doc);
+    await settle();
+    sockets[0].handlers.onOpen();
+    sockets[0].handlers.onMessage(JSON.stringify({ n: 1 }));
+    await settle();
+    expect(received(runtime).length === 0, `a stopped world is not stepped: ${JSON.stringify(received(runtime))}`);
+    repl.dispose();
+  }
+}
+
 console.log(`\nsmoke-repl-session: ${passed() ? "ok" : "FAILED"}`);
 if (!passed()) {
   process.exit(1);

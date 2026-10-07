@@ -69,8 +69,18 @@ interface ReactorDriver<Owner> {
   /** Paused because its file is not the one on screen; plays again when it is. */
   suspended: boolean;
   stopped: boolean;
+  /** Whether the frame on screen is the newest one. */
+  atEnd: boolean;
   timer: ReturnType<typeof setInterval> | null;
   inFlight: boolean;
+  /** Key presses and mouse clicks waiting for the step in flight. */
+  pending: ReactorEvent[];
+  /**
+   * Messages from the server waiting for the card to be back on its newest
+   * frame. A message is what happened next, in real time - not an edit to
+   * whichever earlier frame the student is looking at.
+   */
+  held: ReactorEvent[];
 }
 
 /**
@@ -100,8 +110,11 @@ export class ReactorController<Owner> {
       playing: false,
       suspended: false,
       stopped: event.stopped,
+      atEnd: event.atEnd,
       timer: null,
       inFlight: false,
+      pending: [],
+      held: [],
       socket: null,
       status: "none",
       backlog: [],
@@ -138,11 +151,46 @@ export class ReactorController<Owner> {
     }
   }
 
-  /** From a card: a key press or mouse event over the picture. */
+  /**
+   * From a card: a key press or mouse event over the picture. A press or a
+   * click waits for a step in flight rather than being lost; a mouse move
+   * does not, since the next one says where the mouse is now.
+   */
   input(id: string, event: ReactorEvent): void {
     const driver = this.reactors.get(id);
     if (!driver || driver.stopped) return;
-    void this.react(driver, event);
+    if (event.kind === "mouse" && (event.event === "move" || event.event === "drag")) {
+      void this.react(driver, event);
+      return;
+    }
+    driver.pending.push(event);
+    this.pump(driver);
+  }
+
+  /** A message from the server: held until the card is on its newest frame. */
+  private receive(driver: ReactorDriver<Owner>, message: unknown): void {
+    if (driver.held.length < MAX_UNIVERSE_BACKLOG) {
+      driver.held.push({ kind: "receive", message });
+    }
+    this.pump(driver);
+  }
+
+  /**
+   * Apply the next waiting event, when nothing is in flight: a key or click
+   * first, then a held message - only at the newest frame, and never to a
+   * world that has stopped, which takes no more events.
+   */
+  private pump(driver: ReactorDriver<Owner>): void {
+    if (driver.inFlight || !this.reactors.has(driver.id)) return;
+    const next =
+      driver.pending.shift() ??
+      (driver.atEnd && !driver.stopped ? driver.held.shift() : undefined);
+    if (driver.atEnd && driver.stopped) {
+      driver.held = [];
+    }
+    if (next !== undefined) {
+      void this.react(driver, next);
+    }
   }
 
   /** Whether one of `owner`'s reactors is playing on its own clock. */
@@ -258,6 +306,7 @@ export class ReactorController<Owner> {
       this.host.append(driver.owner, { kind: "stderr", text: `Reactor error: ${errorText(err)}` });
     } finally {
       driver.inFlight = false;
+      this.pump(driver);
     }
   }
 
@@ -271,6 +320,8 @@ export class ReactorController<Owner> {
       if (err instanceof PythonLostError) return;
       this.host.append(driver.owner, { kind: "stderr", text: `Reactor error: ${errorText(err)}` });
     }
+    // Back at the newest frame, the messages held meanwhile can go in.
+    this.pump(driver);
   }
 
   private apply(driver: ReactorDriver<Owner>, result: ReactorStep): void {
@@ -304,6 +355,7 @@ export class ReactorController<Owner> {
     // reactor ever stopped. Going back from the stopped frame is going back
     // to one that can go on, and Play has to be able to.
     driver.stopped = result.stopped;
+    driver.atEnd = result.atEnd;
     if (driver.stopped) {
       this.pause(driver);
     }
@@ -335,7 +387,7 @@ export class ReactorController<Owner> {
           this.setStatus(driver, "error", "the server sent something that is not JSON");
           return;
         }
-        void this.react(driver, { kind: "receive", message });
+        this.receive(driver, message);
       },
       onClose: (reason: string) => this.setStatus(driver, "closed", reason),
       onError: (message: string) => this.setStatus(driver, "error", message),

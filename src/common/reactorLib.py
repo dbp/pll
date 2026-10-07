@@ -79,17 +79,23 @@ class Reactor:
     you - `r.react(...)` twice from the same `r` gives the same answer.
     """
 
-    __slots__ = ("_h", "_state", "_trace", "_tracing", "_outbox", "_shown")
+    __slots__ = ("_h", "_state", "_trace", "_tracing", "_outbox", "_shown", "_used")
 
-    def __init__(self, handlers, state, trace=None, tracing=False, outbox=()):
+    def __init__(self, handlers, state, trace=(0, None), tracing=False, outbox=()):
         self._h = handlers
         self._state = state
-        self._trace = list(trace) if trace else []
+        # The states recorded, newest first, as `(count, (state, older))`:
+        # shared between a reactor and the next, so a step adds one cell
+        # rather than copying the whole list.
+        self._trace = trace
         self._tracing = tracing
         self._outbox = tuple(outbox)
         # Set by `interact()` on the reactor it hands back, so a top-level
         # `big_bang(...)` shows its card and not also its repr.
         self._shown = False
+        # Set when any of its methods is called - a reactor tested with
+        # `simulate_trace` was used, though it was never shown.
+        self._used = False
 
     @property
     def _pll_already_displayed(self):
@@ -106,9 +112,8 @@ class Reactor:
     # -- plumbing -----------------------------------------------------
 
     def _next(self, state, messages=()):
-        trace = self._trace
-        if self._tracing and len(trace) < _PLL_MAX_TRACE:
-            trace = trace + [state]
+        count, cells = self._trace
+        trace = (count + 1, (state, cells)) if self._tracing and count < _PLL_MAX_TRACE else self._trace
         return Reactor(self._h, state, trace, self._tracing, messages)
 
     def _handler(self, name):
@@ -118,10 +123,12 @@ class Reactor:
 
     def get_value(self):
         """The current state."""
+        self._used = True
         return self._state
 
     def draw(self):
         """The image for the current state."""
+        self._used = True
         return self._h["to_draw"](self._state)
 
     def is_stopped(self):
@@ -179,6 +186,7 @@ class Reactor:
             args = (self._state, event.get("message"))
         else:
             raise ValueError("react: unknown event kind %r" % (kind,))
+        self._used = True
         if handler is None:
             return self
         state, messages = _pll_split_package(handler(*args))
@@ -192,15 +200,24 @@ class Reactor:
 
     def start_trace(self):
         """A new reactor that records every state it passes through."""
-        return Reactor(self._h, self._state, [self._state], True, self._outbox)
+        self._used = True
+        return Reactor(self._h, self._state, (1, (self._state, None)), True, self._outbox)
 
     def stop_trace(self):
         """A new reactor that stops recording, keeping what it has."""
+        self._used = True
         return Reactor(self._h, self._state, self._trace, False, self._outbox)
 
     def get_trace(self):
         """The states recorded so far, oldest first."""
-        return list(self._trace)
+        self._used = True
+        states = []
+        cells = self._trace[1]
+        while cells is not None:
+            state, cells = cells
+            states.append(state)
+        states.reverse()
+        return states
 
     def simulate_trace(self, limit):
         """Run up to `limit` ticks with tracing on, stopping at `stop_when`.
@@ -246,7 +263,7 @@ def _pll_reactor_note():
     until the program has finished, and nothing wrong with building a
     reactor and starting it later in the same program.
     """
-    idle = [r for r in _pll_made_reactors if not r._pll_already_displayed]
+    idle = [r for r in _pll_made_reactors if not r._pll_already_displayed and not r._used]
     if not idle:
         return ""
     if len(idle) == 1:
@@ -359,20 +376,27 @@ class _PllRunning:
         return self.current
 
     def step(self, event):
-        """Advance by one event. True if the frame was newly computed.
+        """Advance by one event; the messages to send, as JSON.
 
-        The return value matters for the universe client: a *replayed* frame
-        still carries the messages its handler produced the first time, and
+        None for a frame not newly computed. A *replayed* frame still
+        carries the messages its handler produced the first time, and
         re-sending them because the student dragged the slider back and
-        played forward would be wrong.
+        played forward would be wrong. And a stopped world takes no more
+        events, from the clock, the student, or the server.
+
+        The messages are encoded before the frame is kept, so one that
+        cannot be sent leaves the reactor where it was.
         """
         ahead = self.cursor + 1
         # Exact redo: the frame we already have came from this same event.
         if ahead < len(self.frames) and self.frames[ahead][1] == event:
             self.cursor = ahead
-            return False
-        del self.frames[ahead:]
+            return None
+        if self.current.is_stopped():
+            return None
         nxt = self.current.react(event)
+        messages = [_pll_encode_message(message) for message in nxt.outgoing()]
+        del self.frames[ahead:]
         self.frames.append((nxt, event))
         self.cursor = len(self.frames) - 1
         if len(self.frames) > _PLL_MAX_TRACE:
@@ -380,7 +404,18 @@ class _PllRunning:
             del self.frames[:drop]
             self.dropped += drop
             self.cursor -= drop
-        return True
+        return messages
+
+
+def _pll_encode_message(message):
+    """`message` as the server will get it."""
+    try:
+        return _rx_json.dumps(message)
+    except (TypeError, ValueError):
+        raise TypeError(
+            "package(...) can only send values the server can read: numbers, "
+            "strings, True/False, None, lists and dicts of those. Got %r." % (message,)
+        ) from None
 
 
 def _pll_reactor_frame(image):
@@ -453,24 +488,9 @@ def _pll_reactor_step(rid, event_json):
             _rx_contextlib.redirect_stdout(stdout),
             _rx_contextlib.redirect_stderr(stderr),
         ):
-            computed = running.step(event)
+            outgoing = running.step(event)
             view = _pll_reactor_view(rid, running)
-        outgoing = []
-        for message in running.current.outgoing() if computed else ():
-            try:
-                outgoing.append(_rx_json.dumps(message))
-            except (TypeError, ValueError):
-                return {
-                    "ok": False,
-                    "error_type": "TypeError",
-                    "error_message": (
-                        "package(...) can only send values the server can read: "
-                        "numbers, strings, True/False, None, lists and dicts of "
-                        "those. Got %r." % (message,)
-                    ),
-                    "traceback": "",
-                }
-        view["messages"] = outgoing
+        view["messages"] = outgoing or []
         return view
     except BaseException as e:
         return _pll_reactor_failure(e)

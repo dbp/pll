@@ -485,9 +485,19 @@ orders of magnitude of headroom at 28fps.
 
 Two details in the driver:
 
-- Frames are **dropped, not queued**, while a step is in flight
+- Ticks are **dropped, not queued**, while a step is in flight
   (`driver.inFlight`). A slow `to_draw` should make the animation choppy,
-  not build a backlog that outlives the program.
+  not build a backlog that outlives the program. So is a mouse move, which
+  the next one supersedes. A key press, a click and a message from the
+  server are not: each waits for the step (`pending`, `held`), since losing
+  one changes what the program does.
+- A message from the server is applied only at the newest frame. While the
+  student has rewound, messages are held, and go in, in order, once the
+  card is back there - a message is what happened next, not an edit to an
+  earlier frame. And a stopped world takes no more events at all, from the
+  clock, the student or the server: Python refuses them too (`step`), and
+  the host drops held messages once a stopped world is back at its newest
+  frame.
 - History is a list of `(reactor, event)` pairs with a cursor, not a list of
   states. Rewinding and playing forward again is therefore *replay* - the
   same values, not a recomputation that could drift if a handler is not
@@ -504,7 +514,9 @@ A top-level `big_bang(...)` would otherwise print the returned reactor's
 repr underneath its own card, so `interact()` marks the value it returns and
 `_pll_show_top_level` skips anything carrying `_pll_already_displayed`. A
 reactor that was *not* started still displays, as the picture for its
-current state, via the usual `_pll_image_data` duck-typing.
+current state, via the usual `_pll_image_data` duck-typing. One that was
+neither started nor used - none of its methods called, by the program or by
+its tests - gets a note once the tests have run, since it did nothing.
 
 ### Universe: the client only
 
