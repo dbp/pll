@@ -23,6 +23,20 @@
   none of the student's checks. An imported file also starts with the
   libraries' names, as it does when it is run.
 
+- **Files in folders inside the program's folder.** `open("data/2024.csv")`
+  and `import helpers.shapes` work, in the editor and on the command line,
+  and what a program writes into a folder is saved there. A file a program
+  deletes is deleted. `__file__` is set, so `Path(__file__).parent` finds
+  the files beside it.
+
+- **`@pytest.mark.skip`, `skipif` and `xfail`, and `pytest.xfail()`**, as
+  pytest has them: a skipped test is shown as skipped, with its reason, and
+  one expected to fail that does is too.
+
+- **`pll-python` is a command too**, beside `pll`, so `npx pll-python` and
+  an installed `pll-python` are the same thing (`npx pll` is someone else's
+  package). The package ships its licence.
+
 - **The command line takes options in the usual forms**: `--save-images=out`,
   `-qv`, and `--` before a file whose name starts with a dash. `examplar
   build` takes `--out` as well as `-o`.
@@ -122,6 +136,45 @@
 - **Before a file has run, its prompt uses the file's `#level` line**, where
   it was always `raw`.
 
+- **Files move as bytes.** A CSV saved as Latin-1, a `.dat` of packed
+  numbers and a picture arrive exactly as they are on disk, and what a
+  program writes is saved exactly as written; every kind of file is saved,
+  not only text.
+- **What is not saved is said, with why** ("Not saved: history.txt - it was
+  not loaded, ..."), and so is what was not loaded - in the editor, and on
+  the command line even with `-q`.
+- **Output appears as it is printed.** Each finished line is shown when the
+  program prints it, rather than with the next one; `flush=True` shows a
+  partial line at once.
+- **A Stop at `input()` stops the program**, raising `KeyboardInterrupt` as
+  Ctrl+C does in a terminal, in the editor and on the command line; it used
+  to end the input. So does a Stop during `time.sleep()`, at once.
+- **A Stop the program catches still ends the run**: its tests are not run,
+  and the command line exits 1. A `KeyboardInterrupt` a test raises itself
+  is that test's error, not a Stop.
+- **A `#level raw` file is Python**: a value on a line of its own is not
+  shown, as `python` shows none (`names.pop()` printed `'c'`). The student
+  levels - `beginner`, `intermediate`, `advanced` - show it as before. A file
+  with no `#level` line is `raw`.
+- **A student's own exception message is shown as they wrote it**, without
+  a period added: `ValueError: bad input`.
+- **An `OSError` says `[Errno 2]`**, as CPython does, not Pyodide's 44.
+- **The command line says less, and in the editor's words**: no "Loading
+  pytest, ..." on every run with tests (a first download says once that it
+  needs the network); "Tests: 1 failed, 1 error" as the editor's card has
+  it; a skipped test and a warning are not red; a broken `#level` line is
+  not shown as `[raw]`, and "The file was not run." follows it.
+- **A mistake in how `pll` was run is said in a line**, with a hint, rather
+  than the whole usage: the flag as typed (`--out needs a file`), "cannot
+  open hw.py: there is no such file", "hw.py is a folder, not a file".
+  `--save-images=` is refused, and `examplar` is only the subcommand where
+  it is one.
+- **`-V` is `--version`**, as in Python; `-v` is not an option.
+- **On the command line, a file's own tests run even when its Examplar
+  check says it does not yet define what it is checked for**, so whether the
+  bundle could be fetched no longer changes the exit status (an unfinished
+  file exited 0 with its tests silently left out).
+
 ### Removed
 - **Two guesses about where an error came from.** A missing column is no
   longer blamed on an `add_column` whose result was thrown away somewhere
@@ -132,6 +185,37 @@
   any such comparison or conversion.
 
 ### Fixed
+- **A file that was not loaded is no longer replaced** by what the program
+  wrote to it: a log over the size limit, appended to, was saved as just the
+  lines appended. Nor is a file that changed on disk while the program ran,
+  or one open in the editor with unsaved changes.
+- **A file is never read in full before the size limit applies**, so a
+  large file beside a program costs nothing.
+- **`sys.stdin.read()` reads all of its input** - it stopped at 8 KB - and
+  nothing is added to it: `printf 'a'` is `"a"`, not `"a\n"`.
+- **Python's `SyntaxWarning`s are said once**, in PLL's words, not up to
+  four times as Python printed them; one in an imported file names it.
+- **On the command line:** PLL's lines no longer run on from a program's
+  unfinished line; `pll hw.py | head` ends quietly (exit 141) rather than
+  with a stack trace; a passing test's output is shown, as in the editor;
+  table cells line up when they hold accents, CJK or emoji; a Ctrl+C while
+  Python starts ends at once, without a traceback; a Python that cannot
+  start is said once and exits 64, rather than 1 and four times, and one
+  that never starts (a damaged install) is given up on after two minutes
+  rather than waited for forever; a file saved with a byte-order mark runs,
+  and one not in UTF-8 is refused as `python` refuses it, unless its coding
+  line names its encoding; `sys.exit(2**53 + 1)` exits 1, as CPython does,
+  not 0; `posix._exit()` and `posix.abort()` end the program as `os`'s do; a
+  deep `RecursionError` is reported at once.
+- **Packages are kept in the user's cache when the install cannot be
+  written to** (`sudo npm i -g`, a Docker image), so numpy and pytest load
+  there at all.
+- **A page that is not an Examplar bundle never replaces the cached one**
+  (a login page served as 200), a cache that cannot be written is said, and
+  an empty or relative `PLL_CACHE_DIR` or `XDG_CACHE_HOME` is ignored rather
+  than putting the cache in the current folder.
+- **The command-line package no longer names source maps it does not ship**,
+  and an earlier version's tarball is not left beside it.
 - **An error points at the expression that failed**, as Python's own
   traceback does: `return 10 / n` is marked from `10 / n`, not as the whole
   line, and the command line gives the column (`at hello.py:2:12`). Only a

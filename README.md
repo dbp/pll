@@ -512,20 +512,33 @@ print("Hello,", name)
 ## Files next to your program
 
 `open("data.csv")` and `pd.read_csv("data.csv")` read files that sit in
-the **same folder** as the `.py` file you ran. That works in desktop
-VS Code and in the browser (including vscode.dev). After the program
-finishes, files it wrote or changed — for example `to_csv("out.csv")`
-or `open("out.csv", "w")` — show up in that folder. You can open them
-in the editor. PLL does not overwrite your `.py` files.
+the **same folder** as the `.py` file you ran, or in a folder inside it:
+`open("data/2024.csv")`. That works in desktop VS Code and in the browser
+(including vscode.dev). Files are read exactly as they are on disk, so a
+CSV saved in another encoding, or a picture, arrives intact.
 
-Untitled editors (not yet saved to a folder) have no sibling files to
+After the program finishes, files it wrote or changed — for example
+`to_csv("out.csv")` or `open("results/out.csv", "w")` — show up in that
+folder, and a file it deleted is deleted. You can open them in the editor.
+Some are never saved, and the panel names each one and why ("Not saved:
+..."):
+
+- your `.py` files, which PLL never overwrites or deletes;
+- a file the program was not given (too big, say) — saving what it wrote
+  would replace a file it never saw;
+- a file that changed while the program ran, or that is open in the
+  editor with changes you have not saved.
+
+Untitled editors (not yet saved to a folder) have no files around them to
 load or save.
 
 There are limits: at most 100 files are loaded, each at most 2 MB and 8 MB
-in all, and the same for the files saved afterwards. A file left out by a
-limit is named in the panel ("Not loaded: ... - at most 100 files next to a
-program are."), so a program that cannot open or import it is not left
-failing for no reason you can see.
+in all - those nearest the program first - and the same for the files
+saved afterwards. Hidden folders (`.git`) and tools' folders (`venv`,
+`node_modules`, `__pycache__`) are left out. A file left out by a limit is
+named in the panel ("Not loaded: ... - each file can be at most 2 MB."),
+so a program that cannot open or import it is not left failing for no
+reason you can see.
 
 ## Friendlier errors
 

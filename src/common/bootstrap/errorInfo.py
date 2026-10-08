@@ -214,20 +214,39 @@ def _pll_enrich_type_check(exc):
     _pll_add_facts(exc, element_value=_pll_describe(value))
 
 
+def _pll_innermost_tb(tb, count):
+    """`tb` from its innermost `count` frames on, and how many it skips.
+
+    A `RecursionError` under a raised `sys.setrecursionlimit` has tens of
+    thousands of frames, and reading each one's line takes seconds.
+    """
+    nodes = []
+    while tb is not None:
+        nodes.append(tb)
+        tb = tb.tb_next
+    if len(nodes) <= count:
+        return (nodes[0] if nodes else None), 0
+    return nodes[-count], len(nodes) - count
+
+
 def _pll_format_exception(exc):
-    """`format_exception`, minus frames inside the vendored type checker.
+    """`format_exception`, minus frames inside the vendored type checker,
+    and of a very deep traceback only the innermost frames.
 
     A typeguard failure otherwise ends in several frames of typeguard's
     own checker, burying the student's line under machinery they did not
     write. When nothing is dropped this returns the stdlib formatting
-    unchanged, so ordinary errors look exactly as they did before.
+    unchanged, so ordinary errors look exactly as Python shows them.
     """
     try:
-        frames = _tb_mod.extract_tb(exc.__traceback__)
+        tb, skipped = _pll_innermost_tb(exc.__traceback__, _PLL_MAX_FRAMES * 3)
+        frames = _tb_mod.extract_tb(tb)
         kept = [f for f in frames if not _pll_is_vendor_frame(f.filename, f.name)]
-        if len(kept) == len(frames):
+        if len(kept) == len(frames) and not skipped:
             return "".join(_tb_mod.format_exception(type(exc), exc, exc.__traceback__))
         parts = ["Traceback (most recent call last):\n"]
+        if skipped:
+            parts.append("  [%d earlier calls not shown]\n" % skipped)
         parts.extend(_tb_mod.StackSummary.from_list(kept).format())
         parts.extend(_tb_mod.format_exception_only(type(exc), exc))
         return "".join(parts)
@@ -305,14 +324,45 @@ def _pll_frame_column(summary, code, run):
     return start
 
 
+#: Linux's number for each error name: what CPython says in `[Errno 2]`.
+#: Pyodide's are Emscripten's, so the same missing file is `[Errno 44]`.
+_PLL_LINUX_ERRNO = {
+    "EPERM": 1, "ENOENT": 2, "EINTR": 4, "EIO": 5, "EBADF": 9, "EAGAIN": 11, "ENOMEM": 12,
+    "EACCES": 13, "EBUSY": 16, "EEXIST": 17, "EXDEV": 18, "ENOTDIR": 20, "EISDIR": 21,
+    "EINVAL": 22, "EMFILE": 24, "EFBIG": 27, "ENOSPC": 28, "ESPIPE": 29, "EROFS": 30,
+    "EPIPE": 32, "ERANGE": 34, "ENAMETOOLONG": 36, "ENOTEMPTY": 39, "ELOOP": 40,
+    "ECONNREFUSED": 111, "ETIMEDOUT": 110, "EHOSTUNREACH": 113,
+}
+
+
+def _pll_linux_errno(message, exc):
+    """`message` with an `OSError`'s `[Errno 44]` as CPython on Linux says it."""
+    number = getattr(exc, "errno", None)
+    if not isinstance(exc, OSError) or not isinstance(number, int):
+        return message
+    try:
+        import errno as _pll_errno
+
+        linux = _PLL_LINUX_ERRNO.get(_pll_errno.errorcode.get(number))
+    except Exception:
+        linux = None
+    if linux is None or linux == number:
+        return message
+    return message.replace("[Errno %d]" % number, "[Errno %d]" % linux, 1)
+
+
 def _pll_displayed_message(exc):
-    """The message as Python's traceback shows it.
+    """The message as Python's traceback shows it - as CPython would.
 
     Not always `str(exc)`: Python adds its suggestion ("Did you mean:
     'total'?") to a `NameError` or `AttributeError` only when it displays
     one, and a `SyntaxError`'s `str` carries the file and line, which the
-    display puts elsewhere.
+    display puts elsewhere. An `OSError`'s number is CPython's on Linux.
     """
+    return _pll_linux_errno(_pll_displayed_message_as_raised(exc), exc)
+
+
+def _pll_displayed_message_as_raised(exc):
     exc_type = type(exc)
     shown = exc_type.__qualname__
     if exc_type.__module__ not in ("__main__", "builtins"):
@@ -354,9 +404,12 @@ def _pll_error_info(exc, run=None):
     _pll_enrich_index_error(exc, run)
     # The same frames twice over: summaries for their lines, and the live
     # ones for the code they run.
+    # Read from far enough in that the vendored frames left out still leave
+    # `_PLL_MAX_FRAMES` of the rest.
+    tb, _skipped = _pll_innermost_tb(exc.__traceback__, _PLL_MAX_FRAMES * 3)
     entries = [
         (s, live.f_code)
-        for s, (live, _line) in zip(_tb_mod.extract_tb(exc.__traceback__), _tb_mod.walk_tb(exc.__traceback__))
+        for s, (live, _line) in zip(_tb_mod.extract_tb(tb), _tb_mod.walk_tb(tb))
         if not _pll_is_vendor_frame(s.filename, s.name)
     ][-_PLL_MAX_FRAMES:]
     frames = []

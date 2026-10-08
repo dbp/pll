@@ -181,7 +181,11 @@ export class ReplSession implements vscode.Disposable {
         if (session) this.deps.view.showSession(this.displayStateOf(session));
       },
     });
-    deps.runtime.setStdinHandler(() => this.provideStdin());
+    // A line typed is read as that line and its newline, as from a terminal.
+    deps.runtime.setStdinHandler(async () => {
+      const line = await this.provideStdin();
+      return line === null ? null : line + "\n";
+    });
     deps.runtime.setPythonLostHandler(() => this.handlePythonLost());
 
     // Keep the visible session in sync with the active editor.
@@ -442,7 +446,7 @@ export class ReplSession implements vscode.Disposable {
   /** The files a run of `session` sees: those beside its file, and none without one. */
   private filesBeside(session: Session): Promise<Selection> {
     return session.documentUri === null
-      ? Promise.resolve({ files: [], leftOut: [] })
+      ? Promise.resolve({ files: [], leftOut: [], loaded: {} })
       : collectSiblingFiles(session.documentUri);
   }
 
@@ -537,13 +541,16 @@ export class ReplSession implements vscode.Disposable {
   }
 
   private handleInterrupt(): void {
-    // Blocked in `input()`: cancelling the read is the interrupt.
-    if (this.isAwaitingInputOnActive()) {
-      this.fulfillStdin(null);
-      return;
-    }
     const session = this.activeSession();
     if (!session) {
+      return;
+    }
+    // Blocked in `input()`: a Stop there raises `KeyboardInterrupt` in the
+    // read, as Ctrl+C does in a terminal; the prompt is put away first, so
+    // the status left is the Stop's.
+    if (this.isAwaitingInputOnActive()) {
+      this.cancelStdin();
+      this.requestStop(session);
       return;
     }
     // A program is running: ask the interpreter to raise KeyboardInterrupt.
@@ -603,8 +610,7 @@ export class ReplSession implements vscode.Disposable {
   /**
    * Open a location an entry names. It belongs to the session showing it:
    * its own file, or one beside it - a helper module it imports. Resolved
-   * here rather than by bare name, which opened the wrong `main.py` when
-   * two folders had one.
+   * here rather than by bare name: two folders may each have a `main.py`.
    */
   private async openLocation(fileName: string, line: number, column: number | null): Promise<void> {
     const session = this.activeSession();
@@ -886,15 +892,17 @@ export class ReplSession implements vscode.Disposable {
       status: (text) => this.setSessionBusy(session, true, text),
       stopRequested: () => session.stopRequestedSeq === runSeq,
       siblingFiles: () => this.filesBeside(session),
-      writeBack: async (files) => {
+      writeBack: async (changes, loaded) => {
         if (session.documentUri !== null) {
-          return writeBackSiblingFiles(session.documentUri, files);
+          return writeBackSiblingFiles(session.documentUri, changes, loaded);
         }
-        entry({
-          kind: "banner",
-          text: `Not saved: ${files.map((f) => f.name).join(", ")}. With no file open, there is no folder to save it in.`,
-        });
-        return { written: [], leftOut: [] };
+        if (changes.files.length > 0) {
+          entry({
+            kind: "banner",
+            text: `Not saved: ${changes.files.map((f) => f.name).join(", ")}. With no file open, there is no folder to save it in.`,
+          });
+        }
+        return { written: [], deleted: [], leftOut: [] };
       },
       examplarCard: (card) => entry(card),
       aroundProgram: async (run) => {

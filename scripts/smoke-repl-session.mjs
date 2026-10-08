@@ -55,10 +55,15 @@ class Uri {
 /** In-memory folder contents, keyed by uri string. Tests drive this. */
 export const files = new Map();
 export const written = new Map();
+/** Uris deleted, in order. */
+export const removed = [];
+/** Each file's modification time, by uri; 1 when not set. A write moves it. */
+export const stamps = new Map();
+const bytesOf = (contents) => (typeof contents === "string" ? new TextEncoder().encode(contents) : contents);
 let activeEditorListener = null;
 let closeListener = null;
 
-export const FileType = { File: 1, Directory: 2 };
+export const FileType = { File: 1, Directory: 2, SymbolicLink: 64 };
 export const UIKind = { Desktop: 1, Web: 2 };
 export const ConfigurationTarget = { Global: 1, Workspace: 2 };
 export const DiagnosticSeverity = { Error: 0, Warning: 1, Information: 2 };
@@ -125,22 +130,34 @@ export const workspace = {
   fs: {
     async readDirectory(folder) {
       const prefix = folder.toString() + "/";
-      const out = [];
+      const out = new Map();
       for (const key of files.keys()) {
-        if (key.startsWith(prefix) && !key.slice(prefix.length).includes("/")) {
-          out.push([key.slice(prefix.length), FileType.File]);
-        }
+        if (!key.startsWith(prefix)) continue;
+        const rest = key.slice(prefix.length);
+        const slash = rest.indexOf("/");
+        out.set(slash === -1 ? rest : rest.slice(0, slash), slash === -1 ? FileType.File : FileType.Directory);
       }
-      return out;
+      return [...out];
+    },
+    async stat(uri) {
+      const found = files.get(uri.toString());
+      if (found === undefined) throw Object.assign(new Error("ENOENT " + uri.toString()), { code: "FileNotFound" });
+      return { type: FileType.File, size: bytesOf(found).byteLength, mtime: stamps.get(uri.toString()) ?? 1 };
     },
     async readFile(uri) {
       const found = files.get(uri.toString());
       if (found === undefined) throw new Error("ENOENT " + uri.toString());
-      return new TextEncoder().encode(found);
+      return bytesOf(found);
     },
     async writeFile(uri, data) {
       written.set(uri.toString(), new TextDecoder().decode(data));
       files.set(uri.toString(), new TextDecoder().decode(data));
+      stamps.set(uri.toString(), (stamps.get(uri.toString()) ?? 1) + 1);
+    },
+    async createDirectory() {},
+    async delete(uri) {
+      files.delete(uri.toString());
+      removed.push(uri.toString());
     },
   },
 };
@@ -200,7 +217,7 @@ const {
   vscodeStub,
   registerCommands,
 } = await load();
-const { Uri, __setActiveEditor, __closeDocument, files, written } = vscodeStub;
+const { Uri, __setActiveEditor, __closeDocument, files, written, removed, stamps, workspace } = vscodeStub;
 
 /* ---------------------------------------------------------------- */
 /* Recorders                                                        */
@@ -430,7 +447,7 @@ function makeRuntime(script = {}) {
     },
     async collectWorkspaceFiles() {
       calls.push(["collectWorkspaceFiles"]);
-      return script.changedFiles ?? [];
+      return { files: script.changedFiles ?? [], deleted: script.deletedFiles ?? [] };
     },
     setStdinHandler(handler) {
       stdinHandler = handler;
@@ -913,16 +930,32 @@ console.log("\n[14] sibling files are mounted before a run and written back afte
 {
   files.clear();
   written.clear();
+  removed.length = 0;
   files.set("file:/work/cars.csv", "name,mpg\nvw,29\n");
   // A picture is mounted too, for `load_image("cat.png")`.
   files.set("file:/work/photo.png", "binary-ish");
-  // ...but an executable is not.
+  // ...but an executable is not, nor a hidden folder's file.
   files.set("file:/work/tool.exe", "nope");
+  files.set("file:/work/.git/config", "nope");
+  files.set("file:/work/data/2024.csv", "year\n");
+  files.set("file:/work/notes.txt", "on disk\n");
+  files.set("file:/work/moved.csv", "before\n");
   const doc = makeDoc("files.py", "print(1)\n");
+  // Open with changes not saved: the run reads the buffer, and nothing is saved over it.
+  const notes = makeDoc("notes.txt", "in the editor\n");
+  notes.isDirty = true;
+  workspace.textDocuments.push(notes);
   const { repl, view, runtime } = await harness(
     {
       events: () => [{ kind: "done" }],
-      changedFiles: [{ name: "out.csv", contents: "a,b\n1,2\n" }],
+      mountWorkspaceFiles: () => stamps.set("file:/work/moved.csv", 50),
+      changedFiles: [
+        { name: "out.csv", contents: new TextEncoder().encode("a,b\n1,2\n") },
+        { name: "out/deep.txt", contents: new TextEncoder().encode("deep\n") },
+        { name: "notes.txt", contents: new TextEncoder().encode("mine\n") },
+        { name: "moved.csv", contents: new TextEncoder().encode("mine\n") },
+      ],
+      deletedFiles: ["photo.png"],
     },
     doc,
   );
@@ -931,20 +964,30 @@ console.log("\n[14] sibling files are mounted before a run and written back afte
   const mount = runtime.calls.find((c) => c[0] === "mountWorkspaceFiles");
   console.log(`    mounted: ${mount[1]}`);
   expect(
-    mount[1] === "cars.csv|photo.png",
-    "data files and pictures should be sent, and nothing else, got " + mount[1],
+    mount[1] === "cars.csv|moved.csv|notes.txt|photo.png|data/2024.csv",
+    "data files, pictures and subfolders' files should be sent, and nothing else, got " + mount[1],
   );
   expect(
-    written.get("file:/work/out.csv") === "a,b\n1,2\n",
-    "changed files should be written next to the script",
+    written.get("file:/work/out.csv") === "a,b\n1,2\n" && written.get("file:/work/out/deep.txt") === "deep\n",
+    `changed files should be written under the script's folder: ${[...written.keys()]}`,
   );
-  expect(
-    view.entries.some((e) => e.kind === "banner" && e.text === "Saved out.csv next to files.py."),
-    "a banner should name what was saved",
-  );
+  expect(files.get("file:/work/notes.txt") === "on disk\n", "an unsaved buffer is not saved over");
+  expect(files.get("file:/work/moved.csv") === "before\n", "nor a file changed on disk during the run");
+  expect(JSON.stringify(removed) === '["file:/work/photo.png"]', `a deletion is carried back: ${removed}`);
+  const banners = view.entries.filter((e) => e.kind === "banner").map((e) => e.text);
+  for (const expected of [
+    "Saved out.csv, out/deep.txt next to files.py.",
+    "Deleted photo.png next to files.py.",
+    "Not saved: moved.csv - it changed on disk while the program ran.",
+    "Not saved: notes.txt - it has unsaved changes in the editor; save it and run again.",
+  ]) {
+    expect(banners.includes(expected), `said: ${expected}\n      got: ${JSON.stringify(banners)}`);
+  }
+  workspace.textDocuments.length = 0;
   repl.dispose();
   files.clear();
   written.clear();
+  stamps.clear();
 }
 
 console.log("\n[15] an untitled buffer has no folder to sync");
@@ -995,7 +1038,7 @@ console.log("\n[16] input() shows the pending prompt and resumes on submit");
   await run;
   await settle();
   console.log(`    stdin resolved to ${JSON.stringify(resolved)}`);
-  expect(resolved === "Ada", "the submitted line should reach Python, got " + resolved);
+  expect(resolved === "Ada\n", "the submitted line should reach Python, with its newline, got " + JSON.stringify(resolved));
   expect(
     texts(view, "stdout").includes("Name: Ada"),
     "the prompt and the typed reply should read as one line, got " +
@@ -1005,7 +1048,7 @@ console.log("\n[16] input() shows the pending prompt and resumes on submit");
   repl.dispose();
 }
 
-console.log("\n[17] Ctrl+C while input() waits sends EOF");
+console.log("\n[17] Ctrl+C while input() waits is a Stop, and the prompt is put away");
 {
   let resolved = "unset";
   const doc = makeDoc("input.py", 'input("x")\n');
@@ -1025,7 +1068,11 @@ console.log("\n[17] Ctrl+C while input() waits sends EOF");
   view.handlers.onInterrupt();
   await run;
   await settle();
-  expect(resolved === null, "interrupting input() should deliver EOF, got " + resolved);
+  expect(runtime.calls.some((c) => c[0] === "interrupt"), "interrupting input() asks Python to stop");
+  // The runtime ends the read itself (see smoke-worker-protocol [7]); the
+  // panel's own wait is answered so the prompt goes away.
+  expect(resolved === null, "and the panel stops waiting for a line, got " + resolved);
+  expect(!view.awaitingInput, "the prompt is put away");
   repl.dispose();
 }
 
@@ -2199,6 +2246,31 @@ console.log("\n[51] a Stop before the program starts: nothing runs, and nothing 
     `banners: ${JSON.stringify(bannerTexts(view))}`,
   );
   console.log(`    ${bannerTexts(view)[0]}`);
+
+  // And when the Stop interrupts the mount itself: said as before the
+  // program, not as a Stop of it.
+  const mounting = makeGate();
+  const thrown = await harness(
+    {
+      events: () => [{ kind: "done" }],
+      mountWorkspaceFiles: async () => {
+        await mounting.promise;
+        throw new StoppedError("Traceback (most recent call last):\nKeyboardInterrupt");
+      },
+    },
+    doc,
+  );
+  const runThrown = thrown.repl.runFile(LOOPING_TESTS, "loops.py", doc);
+  await settle();
+  thrown.view.handlers.onInterrupt();
+  mounting.open();
+  await runThrown;
+  await settle();
+  expect(!called(thrown.runtime, "runFile"), "nothing may run");
+  expect(
+    bannerTexts(thrown.view).join("|") === "Stopped before the program started. Nothing was run.",
+    `a Stop thrown by the mount: ${JSON.stringify(bannerTexts(thrown.view))}`,
+  );
 
   // During the static checks, which the Stop interrupts: their failure is
   // the Stop, not a broken analyzer. (Only a level with checks has any.)

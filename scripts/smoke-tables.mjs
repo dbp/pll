@@ -15,7 +15,11 @@ const SK = "test:tables";
 async function main() {
   const pyodide = await bootPll();
 
-  const callRunFile = pyodide.globals.get("_pll_run_file");
+  const runFileAt = pyodide.globals.get("_pll_run_file");
+  // At a student level: `#level raw` is Python, which shows no top-level
+  // value, and these are about what is shown.
+  const callRunFile = (code, fileName, session, level = "advanced", ...rest) =>
+    runFileAt(code, fileName, session, level, ...rest);
   const callReplEval = pyodide.globals.get("_pll_repl_eval");
 
   const py = (fn, ...args) => {

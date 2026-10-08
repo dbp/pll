@@ -154,7 +154,34 @@ export async function loadBundle(
           error: `${url} is ${json.length} bytes, past the ${MAX_BUNDLE_BYTES}-byte limit`,
         };
   }
+  // A page that is not a bundle - a login page, a 404 served as 200 - is
+  // never cached: it would replace the good copy a student offline needs.
+  if (!looksLikeBundle(json)) {
+    return cached
+      ? { json: cached.json, fromCache: true, note: `${url} did not return a bundle; using the cached copy` }
+      : { fromCache: false, error: `${url} did not return an Examplar bundle` };
+  }
   const etag = response.headers.get("etag") ?? undefined;
-  await store.write(url, { json, etag }).catch(() => undefined);
+  try {
+    await store.write(url, { json, etag });
+  } catch (err) {
+    return { json, fromCache: false, note: `could not keep a copy for offline use (${errorText(err)})` };
+  }
   return { json, fromCache: false };
+}
+
+/** Whether `json` is shaped like what `pll examplar build` writes. */
+function looksLikeBundle(json: string): boolean {
+  try {
+    const bundle = JSON.parse(json) as Record<string, unknown> | null;
+    return (
+      typeof bundle === "object" &&
+      bundle !== null &&
+      "examplar" in bundle &&
+      Array.isArray(bundle.wheats) &&
+      Array.isArray(bundle.chaffs)
+    );
+  } catch {
+    return false;
+  }
 }

@@ -1,9 +1,8 @@
 import {
-  contentsByteLength,
-  isSafeBasename,
-  isWritebackName,
-  MAX_FILE_BYTES,
-  utf8ByteLength,
+  contentsBytes,
+  isSafePath,
+  isWalkedFolder,
+  type WorkspaceChanges,
   type WorkspaceFile,
 } from "./workspaceFilePolicy";
 
@@ -18,18 +17,20 @@ export interface MemFS {
   cwd(): string;
   chdir(path: string): void;
   mkdir(path: string): void;
+  rmdir(path: string): void;
   writeFile(path: string, data: string | Uint8Array): void;
   readFile(path: string, opts?: { encoding?: string }): string | Uint8Array;
   readdir(path: string): string[];
   stat(path: string): { mode: number; size: number; mtime?: Date | number };
   utime(path: string, atime: number, mtime: number): void;
   isFile(mode: number): boolean;
+  isDir(mode: number): boolean;
   unlink(path: string): void;
 }
 
+/** A file as it was mounted, to tell afterwards whether the program changed it. */
 interface MountSnapshot {
-  /** Bytes for a picture, text for everything else - as mounted. */
-  contents: string | Uint8Array;
+  bytes: Uint8Array;
   mtimeMs: number;
 }
 
@@ -43,11 +44,6 @@ function mtimeMs(stat: { mtime?: Date | number }): number {
   return typeof m === "number" ? m : Number.NaN;
 }
 
-function joinCwd(FS: MemFS, name: string): string {
-  const cwd = FS.cwd();
-  return cwd.endsWith("/") ? `${cwd}${name}` : `${cwd}/${name}`;
-}
-
 export function ensureWorkDir(FS: MemFS): void {
   try {
     FS.mkdir(PLL_WORK_DIR);
@@ -57,47 +53,79 @@ export function ensureWorkDir(FS: MemFS): void {
   FS.chdir(PLL_WORK_DIR);
 }
 
-function listRegularFiles(FS: MemFS): string[] {
+/** Every file under `dir`, as paths relative to it, tool folders left out. */
+function walk(FS: MemFS, dir: string, prefix = ""): string[] {
   const names: string[] = [];
-  for (const name of FS.readdir(FS.cwd())) {
-    if (name === "." || name === "..") {
+  for (const name of FS.readdir(dir)) {
+    if (name === "." || name === "..") continue;
+    const path = `${dir}/${name}`;
+    let stat;
+    try {
+      stat = FS.stat(path);
+    } catch {
       continue;
     }
-    try {
-      const stat = FS.stat(joinCwd(FS, name));
-      if (FS.isFile(stat.mode)) {
-        names.push(name);
-      }
-    } catch {
-      /* skip unreadable entries */
+    if (FS.isDir(stat.mode)) {
+      if (isWalkedFolder(name)) names.push(...walk(FS, path, `${prefix}${name}/`));
+    } else if (FS.isFile(stat.mode)) {
+      names.push(`${prefix}${name}`);
     }
   }
   return names;
 }
 
-function clearWorkDirFiles(FS: MemFS): void {
-  for (const name of listRegularFiles(FS)) {
+/** Empty the work dir, folders and all: the last run's files are not this one's. */
+function clearWorkDir(FS: MemFS, dir = PLL_WORK_DIR): void {
+  for (const name of FS.readdir(dir)) {
+    if (name === "." || name === "..") continue;
+    const path = `${dir}/${name}`;
     try {
-      FS.unlink(joinCwd(FS, name));
+      if (FS.isDir(FS.stat(path).mode)) {
+        clearWorkDir(FS, path);
+        FS.rmdir(path);
+      } else {
+        FS.unlink(path);
+      }
     } catch {
       /* ignore */
     }
   }
 }
 
+/** Make the folders `name` is in. */
+function makeFolders(FS: MemFS, name: string): void {
+  const parts = name.split("/").slice(0, -1);
+  let at = PLL_WORK_DIR;
+  for (const part of parts) {
+    at = `${at}/${part}`;
+    try {
+      FS.mkdir(at);
+    } catch {
+      /* already there */
+    }
+  }
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 export function mountWorkspaceFiles(FS: MemFS, files: WorkspaceFile[]): void {
   ensureWorkDir(FS);
-  clearWorkDirFiles(FS);
+  clearWorkDir(FS);
   lastMounted = new Map();
   for (const file of files) {
-    if (!isSafeBasename(file.name)) {
+    if (!isSafePath(file.name)) {
       continue;
     }
-    if (contentsByteLength(file.contents) > MAX_FILE_BYTES) {
-      continue;
-    }
-    const path = joinCwd(FS, file.name);
-    FS.writeFile(path, file.contents);
+    makeFolders(FS, file.name);
+    const path = `${PLL_WORK_DIR}/${file.name}`;
+    const bytes = contentsBytes(file.contents);
+    FS.writeFile(path, bytes);
     // Zero mtime so a later open("w") / to_csv is visible even when the
     // bytes are identical.
     try {
@@ -105,50 +133,36 @@ export function mountWorkspaceFiles(FS: MemFS, files: WorkspaceFile[]): void {
     } catch {
       /* keep the write-time mtime */
     }
-    lastMounted.set(file.name, {
-      contents: file.contents,
-      mtimeMs: mtimeMs(FS.stat(path)),
-    });
+    lastMounted.set(file.name, { bytes, mtimeMs: mtimeMs(FS.stat(path)) });
   }
 }
 
 /**
- * Files in the work dir that are eligible for writeback and are new,
- * rewritten (mtime changed), or different from the last mount snapshot.
+ * What the program did to the work dir since it was mounted: the files it
+ * made or rewrote (an mtime that moved counts, so rewriting a file with the
+ * same bytes is still a write), as bytes, and the mounted files it deleted.
  */
-export function collectChangedWorkspaceFiles(FS: MemFS): WorkspaceFile[] {
+export function collectChangedWorkspaceFiles(FS: MemFS): WorkspaceChanges {
   ensureWorkDir(FS);
-  const out: WorkspaceFile[] = [];
-  for (const name of listRegularFiles(FS)) {
-    if (!isWritebackName(name)) {
-      continue;
-    }
-    const path = joinCwd(FS, name);
-    let contents: string;
-    let stat: { mode: number; size: number; mtime?: Date | number };
+  const files: WorkspaceFile[] = [];
+  const present = new Set(walk(FS, PLL_WORK_DIR));
+  for (const name of present) {
+    if (name.endsWith(".pyc")) continue;
+    const path = `${PLL_WORK_DIR}/${name}`;
+    let bytes: Uint8Array;
+    let stat;
     try {
-      const raw = FS.readFile(path, { encoding: "utf8" });
-      contents = typeof raw === "string" ? raw : new TextDecoder().decode(raw);
+      bytes = FS.readFile(path) as Uint8Array;
       stat = FS.stat(path);
     } catch {
       continue;
     }
-    if (utf8ByteLength(contents) > MAX_FILE_BYTES) {
-      continue;
-    }
     const prev = lastMounted.get(name);
-    // `isWritebackName` already excluded every picture, so a snapshot
-    // reached here holds text; a byte snapshot would never compare equal
-    // and the file would be written back on every run.
-    if (
-      prev &&
-      typeof prev.contents === "string" &&
-      prev.contents === contents &&
-      prev.mtimeMs === mtimeMs(stat)
-    ) {
+    if (prev && prev.mtimeMs === mtimeMs(stat) && sameBytes(prev.bytes, bytes)) {
       continue;
     }
-    out.push({ name, contents });
+    files.push({ name, contents: bytes });
   }
-  return out;
+  const deleted = [...lastMounted.keys()].filter((name) => !present.has(name));
+  return { files, deleted };
 }

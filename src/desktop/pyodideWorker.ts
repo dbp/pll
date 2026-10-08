@@ -28,13 +28,16 @@ function ensureStdioFds(): void {
 const handle = createWorkerHost({
   post: (msg) => port.postMessage(msg),
   stdinUnavailableMessage: "input() is unavailable (SharedArrayBuffer was not provided).",
-  async loadPyodide(indexUrl) {
+  async loadPyodide(indexUrl, packageCacheDir) {
     ensureStdioFds();
     // Installed up front so the `pyodide-http` shim has an XMLHttpRequest to
     // patch if the program later reads a URL.
     installNodeXHR();
     const { loadPyodide } = await import("pyodide");
-    return (await loadPyodide({ indexURL: indexUrl })) as unknown as PyodideInstance;
+    return (await loadPyodide({
+      indexURL: indexUrl,
+      ...(packageCacheDir ? { packageCacheDir } : {}),
+    })) as unknown as PyodideInstance;
   },
 });
 

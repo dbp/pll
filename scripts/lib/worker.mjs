@@ -12,8 +12,9 @@ const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
  * Talk to a real worker the way the runtime does: `send` a request and get
  * its reply; `displays` is everything streamed live, in order.
  *
- * `onStdinRequest` answers a blocked `input()`; without it the request is
- * ignored, which is right for a test whose programs never read.
+ * `onStdinRequest(request)` answers a blocked read of stdin, with
+ * `writeStdin`; without it the request is ignored, which is right for a
+ * test whose programs never read.
  */
 export function talk(worker, { onStdinRequest } = {}) {
   let nextId = 1;
@@ -27,7 +28,7 @@ export function talk(worker, { onStdinRequest } = {}) {
     }
     if (msg.type === "stdinRequest") {
       stdinCalls += 1;
-      onStdinRequest?.();
+      onStdinRequest?.(msg.request);
       return;
     }
     const waiting = pending.get(msg.id);
@@ -48,7 +49,7 @@ export function talk(worker, { onStdinRequest } = {}) {
     get streamed() {
       return streamed();
     },
-    /** How many times the program asked for a line of input. */
+    /** How many times the program asked for more of stdin. */
     get stdinCalls() {
       return stdinCalls;
     },

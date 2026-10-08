@@ -48,6 +48,8 @@ export interface ErrorFacts {
   assigned?: Record<string, { call: string; line: number }>;
   /** For a function annotated to return something that returned `None`: how it is built. */
   returnedNone?: ReturnedNone;
+  /** For a `KeyboardInterrupt`: whether a Stop raised it, rather than the program. */
+  stop?: boolean;
   /**
    * For `ChecksFailed`: the student's file that was not imported, its level,
    * and what that level's checks found - its static errors, or a broken

@@ -29,8 +29,32 @@ const ESC = String.fromCharCode(27);
 
 export class CliView {
   private imageCount = 0;
+  /** Whether the program's last output on each stream left a line unfinished. */
+  private readonly midLine = { stdout: false, stderr: false };
 
   constructor(private readonly opts: ViewOptions) {}
+
+  /** The program's own output, as it wrote it. */
+  private program(stream: "stdout" | "stderr", text: string): void {
+    if (text === "") return;
+    process[stream].write(text);
+    this.midLine[stream] = !text.endsWith("\n");
+  }
+
+  /**
+   * PLL's own line, on a line of its own: after `print("Total:", end="")`
+   * it would otherwise run on from the program's. Both streams are one
+   * terminal when both are terminals.
+   */
+  private say(text: string): void {
+    const oneTerminal = process.stdout.isTTY === true && process.stderr.isTTY === true;
+    if (this.midLine.stderr || (oneTerminal && this.midLine.stdout)) {
+      process.stderr.write("\n");
+      this.midLine.stderr = false;
+      if (oneTerminal) this.midLine.stdout = false;
+    }
+    process.stderr.write(text + "\n");
+  }
 
   private paint(code: string, text: string): string {
     return this.opts.color ? `${ESC}[${code}m${text}${ESC}[0m` : text;
@@ -55,20 +79,21 @@ export class CliView {
   /** PLL's own commentary. Always stderr, silenced by --quiet. */
   note(text: string): void {
     if (!this.opts.quiet) {
-      process.stderr.write(text + "\n");
+      this.say(text);
     }
   }
 
   /** Something the user must see even under --quiet. */
   problem(text: string): void {
-    process.stderr.write(text + "\n");
+    this.say(text);
   }
 
   /** Static-analysis findings, in the same words the editor uses. */
   findings(findings: ReadonlyArray<AnalysisFinding>): void {
     for (const finding of findings) {
       const lines = formatFriendlyError(finding);
-      this.problem(this.red(lines[0]));
+      // A warning does not stop the run, and is not coloured as if it did.
+      this.problem(finding.severity === "warning" ? this.yellow(lines[0]) : this.red(lines[0]));
       for (const line of lines.slice(1)) {
         this.problem(line);
       }
@@ -88,21 +113,21 @@ export class CliView {
   handle(event: ExecutionEvent): void {
     switch (event.kind) {
       case "stdout":
-        process.stdout.write(event.text);
+        this.program("stdout", event.text);
         break;
       case "stderr":
-        process.stderr.write(event.text);
+        this.program("stderr", event.text);
         break;
       case "result":
         if (event.repr !== null && event.repr !== undefined) {
-          process.stdout.write(event.repr + "\n");
+          this.program("stdout", event.repr + "\n");
         }
         break;
       case "image":
         this.image(event.svg, event.width, event.height);
         break;
       case "table":
-        process.stdout.write(renderTable(event) + "\n");
+        this.program("stdout", renderTable(event) + "\n");
         break;
       case "reactor": {
         // Nothing drives the clock here, so it would never animate. Say so
@@ -169,35 +194,46 @@ export class CliView {
 
   private testReport(event: Extract<ExecutionEvent, { kind: "testReport" }>): void {
     const bad = event.failed + event.errors;
-    const summary =
-      `${event.passed} passed` +
-      (event.failed ? `, ${event.failed} failed` : "") +
-      (event.errors ? `, ${event.errors} errored` : "") +
-      (event.skipped ? `, ${event.skipped} skipped` : "") +
-      (event.stopped
-        ? event.stoppedIn
-          ? `, stopped during ${event.stoppedIn}`
-          : ", stopped before any test ran"
-        : "");
+    // Worded as the editor's card is.
+    const parts = [
+      ...(event.passed ? [`${event.passed} passed`] : []),
+      ...(event.failed ? [`${event.failed} failed`] : []),
+      ...(event.errors ? [`${event.errors} error${event.errors === 1 ? "" : "s"}`] : []),
+      ...(event.skipped ? [`${event.skipped} skipped`] : []),
+      ...(event.stopped
+        ? [event.stoppedIn ? `stopped during ${event.stoppedIn}` : "stopped before any test ran"]
+        : []),
+    ];
+    const summary = parts.length > 0 ? parts.join(", ") : "no tests collected";
     const label = event.stopped
-      ? this.yellow("tests: ")
+      ? this.yellow("Tests: ")
       : bad === 0
-        ? this.green("tests: ")
-        : this.red("tests: ");
+        ? this.green("Tests: ")
+        : this.red("Tests: ");
     this.problem(label + summary);
     for (const test of event.tests) {
+      const printed = (test.stdout ?? "").replace(/\s+$/, "");
+      const where = test.lineNumber === null ? "" : ` (line ${test.lineNumber})`;
       if (test.outcome === "passed") {
         this.note(this.dim(`  ok   ${test.name}`));
+        // As the editor's card shows it: a test may print what it checks.
+        for (const line of printed ? printed.split("\n") : []) {
+          this.note(this.dim("          " + line));
+        }
+        continue;
+      }
+      if (test.outcome === "skipped") {
+        // Not a failure: commentary, like a pass.
+        this.note(this.yellow(`  skip ${test.name}${where}`));
+        if (test.message) this.note(this.dim(`        ${test.message}`));
         continue;
       }
       if (test.outcome === "stopped") {
         // Where the Stop landed: not a failure, so not red, and with no
         // message - the test did nothing wrong.
-        const at = test.lineNumber === null ? "" : ` (line ${test.lineNumber})`;
-        this.problem(this.yellow(`  STOPPED ${test.name}${at}`));
+        this.problem(this.yellow(`  STOPPED ${test.name}${where}`));
         continue;
       }
-      const where = test.lineNumber === null ? "" : ` (line ${test.lineNumber})`;
       this.problem(this.red(`  ${test.outcome.toUpperCase()} ${test.name}${where}`));
       const body = test.finding ? findingLines(test.finding) : (test.message ?? "").split("\n");
       for (const line of body) {
@@ -205,11 +241,9 @@ export class CliView {
           this.problem("        " + line);
         }
       }
-      // What the test printed before it failed. The editor's card shows
-      // this, and a `print` put there to see what a function returned is
-      // the first debugging tool a beginner is taught - so leaving it out
-      // here quietly broke that lesson on the command line.
-      const printed = (test.stdout ?? "").replace(/\s+$/, "");
+      // What the test printed before it failed, as the editor's card shows
+      // it: a `print` put there to see what a function returned is the
+      // first debugging tool a beginner is taught.
       if (printed) {
         this.problem(this.dim("        output:"));
         for (const line of printed.split("\n")) {
@@ -244,10 +278,11 @@ export function renderTable(table: {
   truncated: boolean;
 }): string {
   const widths = table.columns.map((name, i) =>
-    Math.max(name.length, ...table.rows.map((row) => (row[i] ?? "").length), 0),
+    Math.max(displayWidth(name), ...table.rows.map((row) => displayWidth(row[i] ?? "")), 0),
   );
+  const pad = (cell: string, width: number) => cell + " ".repeat(Math.max(0, width - displayWidth(cell)));
   const line = (cells: string[]) =>
-    cells.map((cell, i) => cell.padEnd(widths[i])).join("  ").trimEnd();
+    cells.map((cell, i) => pad(cell, widths[i])).join("  ").trimEnd();
   const out = [
     line(table.columns),
     widths
@@ -264,4 +299,21 @@ export function renderTable(table: {
       : `(${table.rowCount} row${table.rowCount === 1 ? "" : "s"})`,
   );
   return out.join("\n");
+}
+
+/** Characters a terminal shows two columns wide: CJK, Hangul, full-width forms, emoji. */
+const WIDE =
+  /[\u1100-\u115f\u2e80-\u303e\u3041-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]|[\u{1f300}-\u{1faff}\u{20000}-\u{3fffd}]/u;
+
+/**
+ * How many columns `text` takes in a terminal: by character, not by UTF-16
+ * unit - "é" written as e and an accent is one, an emoji is two.
+ */
+export function displayWidth(text: string): number {
+  let width = 0;
+  for (const char of text) {
+    if (/\p{Mark}|\u200d|\ufe0f/u.test(char)) continue;
+    width += WIDE.test(char) ? 2 : 1;
+  }
+  return width;
 }

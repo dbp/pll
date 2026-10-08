@@ -138,6 +138,8 @@ const cliVersion = JSON.parse(
  */
 const cliOptions = {
   ...baseOptions,
+  // The maps are not in the package, so its files must not name them.
+  sourcemap: production ? false : "external",
   entryPoints: ["src/cli/bin.ts"],
   outfile: "dist-cli/cli.cjs",
   platform: "node",
@@ -151,6 +153,7 @@ const cliOptions = {
 /** The desktop worker verbatim; only its output path differs. */
 const cliWorkerOptions = {
   ...baseOptions,
+  sourcemap: production ? false : "external",
   entryPoints: ["src/desktop/pyodideWorker.ts"],
   outfile: "dist-cli/worker.cjs",
   platform: "node",
@@ -180,8 +183,10 @@ function writeCliPackage() {
     homepage: root.homepage,
     bugs: root.bugs,
     keywords: ["python", "education", "beginner", "pyodide", "cli", "htdp"],
-    bin: { pll: "./cli.cjs" },
-    files: ["cli.cjs", "worker.cjs", "README.md"],
+    // Both names: `pll` to type, and `pll-python` for `npx pll-python`,
+    // since `npx pll` would fetch a different package.
+    bin: { pll: "./cli.cjs", "pll-python": "./cli.cjs" },
+    files: ["cli.cjs", "worker.cjs", "README.md", "LICENSE"],
     // Node 22, not pyodide's own `>=18`: 18 and 20 are both past end of
     // life, so 22 is the oldest Node we could actually support. It also
     // matches the extension, which gets Node 22 via VS Code 1.101 - one
@@ -190,15 +195,20 @@ function writeCliPackage() {
     // Exact, not the `^` range this repo develops against. The extension
     // ships one specific Pyodide - vendored for desktop, named in the CDN
     // default for web - and `examplar build` compiles bytecode with
-    // whatever this package resolves. A caret range let a fresh install
-    // pull a newer patch than the extension has, which is how a bundle
-    // could come to be built by a different interpreter than the one that
-    // runs it. `built.magic` would catch that, but the point of building
-    // bundles with this tool is that it cannot arise.
+    // whatever this package resolves. A caret range would let a fresh
+    // install pull a newer patch than the extension has, and a bundle could
+    // then be built by a different interpreter than the one that runs it.
+    // `built.magic` would catch that, but the point of building bundles
+    // with this tool is that it cannot arise.
     dependencies: { pyodide: PYODIDE_VERSION },
   };
   const dest = path.join(process.cwd(), "dist-cli");
   fs.mkdirSync(dest, { recursive: true });
+  // `cli:pack` writes its tarball here; one from an earlier version would
+  // sit beside the next.
+  for (const name of fs.readdirSync(dest)) {
+    if (name.endsWith(".tgz")) fs.rmSync(path.join(dest, name));
+  }
   fs.writeFileSync(
     path.join(dest, "package.json"),
     JSON.stringify(manifest, null, 2) + "\n",
@@ -207,6 +217,7 @@ function writeCliPackage() {
     path.join(process.cwd(), "src", "cli", "README.md"),
     path.join(dest, "README.md"),
   );
+  fs.copyFileSync(path.join(process.cwd(), "LICENSE"), path.join(dest, "LICENSE"));
   fs.chmodSync(path.join(dest, "cli.cjs"), 0o755);
   console.log(`[esbuild] assembled dist-cli/ for pll-python@${manifest.version}`);
 }

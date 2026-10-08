@@ -2,9 +2,9 @@
 /**
  * Smoke test for input() + live display emit.
  *
- * Boots Pyodide in Node (no SAB / UI). Uses Pyodide's setStdin with a
- * queue of lines and autoEOF:true — the same primitive the web worker
- * uses, except the callback returns immediately instead of blocking.
+ * Boots Pyodide in Node (no SAB / UI). Gives stdin through Pyodide's
+ * `setStdin({ read })` from a queue of chunks - the same primitive the
+ * worker uses, except the chunks are there at once instead of waited for.
  *
  * Also checks that `_pll_live_emit` fires once per stdout write so the
  * interactions view can show a prompt before input() waits.
@@ -33,21 +33,31 @@ async function main() {
   const pyodide = await bootPll();
 
   const runFile = pyodide.globals.get("_pll_run_file");
-  const lines = ["Ada", "1"];
+  // Each entry is the next chunk of stdin: a line typed is that line and
+  // its newline. Empty is the end of stdin.
+  const lines = [];
   let stdinCalls = 0;
+  let carry = new Uint8Array(0);
   pyodide.setStdin({
-    stdin: () => {
-      stdinCalls += 1;
-      return lines.shift() ?? null;
+    read: (buffer) => {
+      if (carry.length === 0) {
+        stdinCalls += 1;
+        const next = lines.shift();
+        if (next === undefined) return 0;
+        carry = typeof next === "string" ? new TextEncoder().encode(next) : next;
+      }
+      const n = Math.min(buffer.length, carry.length);
+      buffer.set(carry.subarray(0, n));
+      carry = carry.subarray(n);
+      return n;
     },
-    autoEOF: true,
   });
 
-  console.log("\n[1] one input() call → one stdin callback (autoEOF:true)");
+  console.log("\n[1] one input() call → one stdin read");
   {
     stdinCalls = 0;
     lines.length = 0;
-    lines.push("Ada");
+    lines.push("Ada\n");
     const result = call(runFile, [
       'name = input("Name: ")\nprint("hi", name)\n',
       "input.py",
@@ -61,11 +71,11 @@ async function main() {
     expect(texts[0] === "Name: ", "first write should be the input prompt");
   }
 
-  console.log("\n[2] two input() calls → two stdin callbacks");
+  console.log("\n[2] two input() calls → two stdin reads");
   {
     stdinCalls = 0;
     lines.length = 0;
-    lines.push("1", "quit");
+    lines.push("1\n", "quit\n");
     const result = call(runFile, [
       [
         "a = input('Choice: ')",
@@ -92,7 +102,7 @@ async function main() {
     });
     stdinCalls = 0;
     lines.length = 0;
-    lines.push("ok");
+    lines.push("ok\n");
     const result = call(runFile, [
       'x = input("Q: ")\nprint(x)\n',
       "live.py",
@@ -115,6 +125,20 @@ async function main() {
     console.log(`    ok=${result.ok} error=${result.error_type}`);
     expect(result.ok === false, "EOF should fail the run");
     expect(result.error_type === "EOFError", "expected EOFError, got " + result.error_type);
+  }
+
+  console.log("\n[5] sys.stdin reads exactly what was given");
+  {
+    lines.length = 0;
+    // No newline at the end, more than one buffer's worth, and a line that
+    // is not the end of what was given.
+    lines.push("x".repeat(20000) + "\nlast", "");
+    const whole = call(runFile, ["import sys\ndata = sys.stdin.read()\nprint(len(data), repr(data[-6:]))\n", "all.py", "s5"]);
+    expect(whole.stdout === "20005 'x\\nlast'\n", `all of it, and nothing added: ${JSON.stringify(whole.stdout)}`);
+    lines.length = 0;
+    lines.push(new Uint8Array([0x63, 0x61, 0x66, 0xc3, 0xa9, 0x0a]));
+    const bytes = call(runFile, ["import sys\nprint(sys.stdin.buffer.read())\n", "bytes.py", "s5b"]);
+    expect(bytes.stdout === "b'caf\\xc3\\xa9\\n'\n", `bytes as given: ${JSON.stringify(bytes.stdout)}`);
   }
 
   if (!passed()) {

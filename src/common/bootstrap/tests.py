@@ -17,7 +17,8 @@ def _pll_has_tests(code):
     pytest for files that have no tests.
     """
     try:
-        tree = _ast.parse(code)
+        with _pll_without_syntax_warnings():
+            tree = _ast.parse(code)
     except (SyntaxError, ValueError):
         return False
     for node in tree.body:
@@ -149,16 +150,69 @@ def _pll_is_async(fn):
         return False
 
 
+def _pll_marks(fn):
+    """The pytest marks on a test: `[(name, args, kwargs)]`."""
+    marks = []
+    for mark in getattr(fn, "pytestmark", None) or []:
+        name = getattr(mark, "name", None)
+        if isinstance(name, str):
+            marks.append((name, tuple(getattr(mark, "args", ())), dict(getattr(mark, "kwargs", {}))))
+    return marks
+
+
+def _pll_mark_condition(args, kwargs, fn):
+    """Whether a `skipif` / `xfail` mark's condition holds: none is true; a
+    string is evaluated in the test's module, as pytest does. A method's
+    module is the one `_pll_iter_tests` noted."""
+    conditions = args if args else ((kwargs["condition"],) if "condition" in kwargs else ())
+    if not conditions:
+        return True
+    for condition in conditions:
+        if isinstance(condition, str):
+            try:
+                module = getattr(fn, "pll_module", None) or getattr(fn, "__globals__", {})
+                condition = eval(condition, module)
+            except Exception:
+                condition = False
+        if condition:
+            return True
+    return False
+
+
 def _pll_call_test(fn, run=None):
-    """Run one test function.
+    """Run one test function, as pytest would - its `skip`, `skipif` and
+    `xfail` marks included.
 
     Returns `(outcome, message, stdout, error)`. `error` is the
     `_pll_error_info` of a test that raised, for the host's explanations;
-    the message is the one line a report has room for.
+    the message is the one line a report has room for. A test expected to
+    fail that does is "skipped", saying so; one that passes anyway passes,
+    unless its mark is `strict`.
     """
+    expected_failure = None
+    for name, args, kwargs in _pll_marks(fn):
+        reason = kwargs.get("reason") or (args[0] if name == "skip" and args else None)
+        if name == "skip" or (name == "skipif" and _pll_mark_condition(args, kwargs, fn)):
+            return ("skipped", reason if isinstance(reason, str) and reason else None, None, None)
+        if name == "xfail" and _pll_mark_condition(args, kwargs, fn):
+            expected_failure = (reason if isinstance(reason, str) else "", bool(kwargs.get("strict")))
+    outcome = _pll_call_test_body(fn, run)
+    if expected_failure is not None:
+        reason, strict = expected_failure
+        if outcome[0] in ("failed", "error"):
+            said = "expected to fail" + (": " + reason if reason else "") + ", and did."
+            return ("skipped", said, outcome[2], None)
+        if outcome[0] == "passed" and strict:
+            said = "expected to fail" + (": " + reason if reason else "") + ", but passed."
+            return ("failed", said, outcome[2], None)
+    return outcome
+
+
+def _pll_call_test_body(fn, run):
     import io
 
     buf = io.StringIO()
+    stops = _pll_stops_delivered
     try:
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             if _pll_is_async(fn):
@@ -170,10 +224,13 @@ def _pll_call_test(fn, run=None):
                 )
             fn()
         return ("passed", None, buf.getvalue().strip() or None, None)
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as e:
         # A Stop, not something this test did wrong: it ends the tests, so
-        # it is not recorded as this one's error and passed over.
-        raise
+        # it is not recorded as this one's error and passed over. One the
+        # test raised itself is its error, like any other.
+        if _pll_stops_delivered != stops:
+            raise
+        return _pll_test_error(e, buf, run)
     except AssertionError as e:
         tb_text = "".join(_tb_mod.format_exception(type(e), e, e.__traceback__))
         return (
@@ -191,12 +248,26 @@ def _pll_call_test(fn, run=None):
                 buf.getvalue().strip() or None,
                 None,
             )
-        return (
-            "error",
-            name + ": " + (str(e) or "this test raised an exception."),
-            buf.getvalue().strip() or None,
-            _pll_error_info(e, run),
-        )
+        if name == "XFailed":
+            # `pytest.xfail("reason")`: the test says it is expected to fail.
+            reason = str(e).strip()
+            return (
+                "skipped",
+                "expected to fail" + (": " + reason if reason else "") + ".",
+                buf.getvalue().strip() or None,
+                None,
+            )
+        return _pll_test_error(e, buf, run)
+
+
+def _pll_test_error(e, buf, run):
+    """The outcome of a test that raised `e`, which was not an assertion."""
+    return (
+        "error",
+        type(e).__name__ + ": " + (_pll_linux_errno(str(e), e) or "this test raised an exception."),
+        buf.getvalue().strip() or None,
+        _pll_error_info(e, run),
+    )
 
 
 def _pll_iter_tests(ns):
@@ -223,6 +294,11 @@ def _pll_iter_tests(ns):
             def _bound(cls=obj, method=meth_name):
                 return getattr(cls(), method)()
 
+            # pytest reads marks from the method and from its class.
+            _bound.pytestmark = list(getattr(attr, "pytestmark", None) or []) + list(
+                getattr(obj, "pytestmark", None) or []
+            )
+            _bound.pll_module = getattr(attr, "__globals__", None)
             yield name + "::" + meth_name, _bound
 
 

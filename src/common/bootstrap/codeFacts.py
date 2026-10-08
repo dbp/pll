@@ -214,7 +214,8 @@ def _pll_tree_of(code, run):
     if not source:
         return None, ""
     try:
-        return _ast.parse(source), source
+        with _pll_without_syntax_warnings():
+            return _ast.parse(source), source
     except (SyntaxError, ValueError):
         return None, source
 

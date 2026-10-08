@@ -19,13 +19,13 @@ stderr:
 === key-error-sentence (exit 1)
 stderr:
   student.py [raw]
-  KeyError: no such thing here.
+  KeyError: no such thing here
     at student.py:1
 
 === value-error-own (exit 1)
 stderr:
   student.py [raw]
-  ValueError: bad value.
+  ValueError: bad value
     at student.py:1
 
 === runtime-no-message (exit 1)
@@ -558,11 +558,6 @@ stderr:
     - Check that there is a case that returns without calling again, and that it is reached.
 
 === discarded-add-column (exit 1)
-stdout:
-  name  hours  pay
-  ----  -----  ---
-  a     10     150
-  (1 row)
 stderr:
   student.py [raw]
   KeyError: the table has no column "pay" (it has: name, hours).
@@ -1083,47 +1078,46 @@ stderr:
 
 === header-misspelled (exit 2)
 stderr:
-  student.py [raw]
   Level: `begginer` is not a level. Did you mean `beginner`?
     at student.py:1
   
   How to fix:
     - Write `#level beginner` on the first line, in lower case.
   
+  The file was not run.
 
 === header-capital (exit 2)
 stderr:
-  student.py [raw]
   Level: `Beginner` is not a level. Did you mean `beginner`?
     at student.py:1
   
   How to fix:
     - Write `#level beginner` on the first line, in lower case.
   
+  The file was not run.
 
 === header-bare (exit 2)
 stderr:
-  student.py [raw]
   Level: `#level` needs a level after it: `raw`, `beginner`, `intermediate`, `advanced`.
     at student.py:1
   
   How to fix:
     - Name one of `raw`, `beginner`, `intermediate`, `advanced`, or leave the line out.
   
+  The file was not run.
 
 === header-no-space (exit 2)
 stderr:
-  student.py [raw]
   Level: `#level` needs a space before `beginner`: `#level beginner`.
     at student.py:1
   
   How to fix:
     - Write it as `#level beginner`, with a space.
   
+  The file was not run.
 
 === header-not-first (exit 2)
 stderr:
-  student.py [raw]
   Level: `#level beginner` only counts on the first line, so none of its checks ran.
     at student.py:2
   
@@ -1131,10 +1125,10 @@ stderr:
     - Move it to the very first line of the file, above the code.
     - Leave the line out altogether to run the file as ordinary Python.
   
+  The file was not run.
 
 === header-under-comment (exit 2)
 stderr:
-  student.py [raw]
   Level: `#level beginner` only counts on the first line, so none of its checks ran.
     at student.py:2
   
@@ -1142,6 +1136,7 @@ stderr:
     - Move it to the very top of the file, above the comments.
     - Leave the line out altogether to run the file as ordinary Python.
   
+  The file was not run.
 
 === header-in-docstring (exit 0)
 stdout:
@@ -1151,13 +1146,13 @@ stderr:
 
 === header-unknown-word (exit 2)
 stderr:
-  student.py [raw]
   Level: `easy` is not a level. The levels are `raw`, `beginner`, `intermediate`, `advanced`.
     at student.py:1
   
   How to fix:
     - Name one of `raw`, `beginner`, `intermediate`, `advanced`, or leave the line out.
   
+  The file was not run.
 
 === st-reassignment (exit 2)
 stderr:
@@ -1679,25 +1674,19 @@ stderr:
 === tbl-ok (exit 0)
 stdout:
   26.666666666666668
-  name   mpg
-  -----  ---
-  vw     29
-  honda  33
-  ford   18
-  (3 rows)
 stderr:
   student.py [raw]
 
 === test-pass (exit 0)
 stderr:
   student.py [raw]
-  tests: 1 passed
+  Tests: 1 passed
     ok   test_double
 
 === test-fail (exit 3)
 stderr:
   student.py [raw]
-  tests: 0 passed, 1 failed
+  Tests: 1 failed
     FAILED test_double (line 4)
           assert 6 == 4
           where 6 = double(2)
@@ -1705,7 +1694,7 @@ stderr:
 === test-float (exit 3)
 stderr:
   student.py [raw]
-  tests: 0 passed, 1 failed
+  Tests: 1 failed
     FAILED test_tax (line 4)
           assert 0.9299999999999999 == 0.93
           where 0.9299999999999999 = tax(3)
@@ -1714,7 +1703,7 @@ stderr:
 === test-print-shown (exit 3)
 stderr:
   student.py [beginner]
-  tests: 0 passed, 1 errored
+  Tests: 1 error
     ERROR test_shout (line 5)
           TypeMismatch: `shout` returns `None` on this line, but it should return a string (`str`).
           at student.py:3
@@ -1725,7 +1714,7 @@ stderr:
 === test-error-concat (exit 3)
 stderr:
   student.py [raw]
-  tests: 0 passed, 1 errored
+  Tests: 1 error
     ERROR test_add (line 4)
           TypeError: A list and a string cannot be added together.
           at student.py:2:12
@@ -1735,7 +1724,7 @@ stderr:
 === test-error-typecheck (exit 3)
 stderr:
   student.py [beginner]
-  tests: 0 passed, 1 errored
+  Tests: 1 error
     ERROR test_shout (line 5)
           TypeMismatch: `shout` expects `word` to be a string (`str`), but got a whole number (`int`).
           at student.py:6
@@ -1746,7 +1735,7 @@ stderr:
 === test-error-name (exit 3)
 stderr:
   student.py [raw]
-  tests: 0 passed, 1 errored
+  Tests: 1 error
     ERROR test_x (line 1)
           NameError: Python doesn't know what `totl` means.
           at student.py:2:12
@@ -1757,7 +1746,7 @@ stderr:
 === test-error-index (exit 3)
 stderr:
   student.py [raw]
-  tests: 0 passed, 1 errored
+  Tests: 1 error
     ERROR test_third (line 4)
           IndexError: `xs` has no item at that position.
           at student.py:2:12
@@ -1766,7 +1755,7 @@ stderr:
 === test-error-key (exit 3)
 stderr:
   student.py [raw]
-  tests: 0 passed, 1 errored
+  Tests: 1 error
     ERROR test_d (line 1)
           KeyError: 'b'
           at student.py:3:12
@@ -1774,7 +1763,7 @@ stderr:
 === test-error-recursion (exit 3)
 stderr:
   student.py [raw]
-  tests: 0 passed, 1 errored
+  Tests: 1 error
     ERROR test_f (line 4)
           RecursionError: `f` kept calling itself and never stopped.
           at student.py:2:12
@@ -1784,7 +1773,7 @@ stderr:
 === test-params (exit 3)
 stderr:
   student.py [raw]
-  tests: 0 passed, 1 errored
+  Tests: 1 error
     ERROR test_pen_cost (line 4)
           TypeError: `test_pen_cost` is a test, so it cannot take any parameters.
           - Write `def test_pen_cost():` with nothing in the brackets, and make the values it needs inside it.
@@ -1792,14 +1781,14 @@ stderr:
 === test-async (exit 3)
 stderr:
   student.py [raw]
-  tests: 0 passed, 1 errored
+  Tests: 1 error
     ERROR test_a (line 1)
           async tests are not supported.
 
 === test-class (exit 3)
 stderr:
   student.py [raw]
-  tests: 0 passed, 1 failed
+  Tests: 1 failed
     FAILED TestThings::test_one (line 2)
           assert 1 == 2
 
@@ -1825,27 +1814,23 @@ stderr:
 === test-skip (exit 0)
 stderr:
   student.py [raw]
-  pytest already loaded from default channel
-  No new packages to load
-  tests: 0 passed, 1 skipped
-    SKIPPED test_s (line 3)
+  Tests: 1 skipped
+    skip test_s (line 3)
           later
 
 === test-approx (exit 0)
 stderr:
   student.py [raw]
-  pytest already loaded from default channel
-  No new packages to load
-  tests: 1 passed
+  Tests: 1 passed
     ok   test_a
 
 === test-forward-ref (exit 0)
 stderr:
   student.py [raw]
-  tests: 1 passed
+  Tests: 1 passed
     ok   test_n
 
-=== ex-tests-first (exit 0)
+=== ex-tests-first (exit 3)
 stderr:
   student.py [beginner]
   examplar: initials
@@ -1854,8 +1839,21 @@ stderr:
   examplar: longest
     Against correct implementations: your test passes.
     Against buggy implementations: caught 1 of 3 - missed 1, 2.
+  Tests: 2 errors
+    ERROR test_initials_two_names (line 4)
+          NameError: Python doesn't know what `initials` means.
+          at student.py:5:12
+          - Check the spelling of `initials` (Python is case-sensitive).
+          - Make sure `initials` is defined before this line runs.
+          - If `initials` should be text, put it in quotes: `"initials"`.
+    ERROR test_longest_picks_the_longest (line 7)
+          NameError: Python doesn't know what `longest` means.
+          at student.py:8:12
+          - Check the spelling of `longest` (Python is case-sensitive).
+          - Make sure `longest` is defined before this line runs.
+          - If `longest` should be text, put it in quotes: `"longest"`.
 
-=== ex-wrong-expectation (exit 0)
+=== ex-wrong-expectation (exit 3)
 stderr:
   student.py [beginner]
   examplar: initials
@@ -1865,8 +1863,21 @@ stderr:
   examplar: longest
     Against correct implementations: your test passes.
     Against buggy implementations: caught 1 of 3 - missed 1, 2.
+  Tests: 2 errors
+    ERROR test_initials_lower (line 4)
+          NameError: Python doesn't know what `initials` means.
+          at student.py:5:12
+          - Check the spelling of `initials` (Python is case-sensitive).
+          - Make sure `initials` is defined before this line runs.
+          - If `initials` should be text, put it in quotes: `"initials"`.
+    ERROR test_longest (line 7)
+          NameError: Python doesn't know what `longest` means.
+          at student.py:8:12
+          - Check the spelling of `longest` (Python is case-sensitive).
+          - Make sure `longest` is defined before this line runs.
+          - If `longest` should be text, put it in quotes: `"longest"`.
 
-=== ex-test-raises (exit 0)
+=== ex-test-raises (exit 3)
 stderr:
   student.py [beginner]
   examplar: initials
@@ -1878,8 +1889,21 @@ stderr:
   examplar: longest
     Against correct implementations: your test passes.
     Against buggy implementations: caught 1 of 3 - missed 1, 2.
+  Tests: 2 errors
+    ERROR test_initials_from_file (line 4)
+          NameError: Python doesn't know what `initials` means.
+          at student.py:6:12
+          - Check the spelling of `initials` (Python is case-sensitive).
+          - Make sure `initials` is defined before this line runs.
+          - If `initials` should be text, put it in quotes: `"initials"`.
+    ERROR test_longest (line 8)
+          NameError: Python doesn't know what `longest` means.
+          at student.py:9:12
+          - Check the spelling of `longest` (Python is case-sensitive).
+          - Make sure `longest` is defined before this line runs.
+          - If `longest` should be text, put it in quotes: `"longest"`.
 
-=== ex-thorough (exit 0)
+=== ex-thorough (exit 3)
 stderr:
   student.py [beginner]
   examplar: initials
@@ -1888,6 +1912,19 @@ stderr:
   examplar: longest
     Against correct implementations: your test passes.
     Against buggy implementations: caught all 3.
+  Tests: 2 errors
+    ERROR test_initials (line 4)
+          NameError: Python doesn't know what `initials` means.
+          at student.py:5:12
+          - Check the spelling of `initials` (Python is case-sensitive).
+          - Make sure `initials` is defined before this line runs.
+          - If `initials` should be text, put it in quotes: `"initials"`.
+    ERROR test_longest (line 10)
+          NameError: Python doesn't know what `longest` means.
+          at student.py:11:12
+          - Check the spelling of `longest` (Python is case-sensitive).
+          - Make sure `longest` is defined before this line runs.
+          - If `longest` should be text, put it in quotes: `"longest"`.
 
 === ex-with-own-code (exit 0)
 stdout:
@@ -1900,7 +1937,7 @@ stderr:
   examplar: longest
     Against correct implementations: your test passes.
     Against buggy implementations: caught 1 of 3 - missed 1, 2.
-  tests: 2 passed
+  Tests: 2 passed
     ok   test_initials
     ok   test_longest
 
@@ -1918,21 +1955,21 @@ stderr:
 stderr:
   student.py [beginner]
   Line 2: `http://example.com/hw.json` must use https (plain http is only allowed for localhost).
-  tests: 1 passed
+  Tests: 1 passed
     ok   test_a
 
 === ex-unreachable (exit 0)
 stderr:
   student.py [beginner]
   Could not load the known implementations from http://localhost:9/hw.json: could not reach http://localhost:9/hw.json (fetch failed), and nothing is cached
-  tests: 1 passed
+  Tests: 1 passed
     ok   test_a
 
 === ex-two-directives (exit 0)
 stderr:
   student.py [beginner]
   Line 3: there is more than one `#examplar` line (lines 2 and 3). Keep the one you want.
-  tests: 1 passed
+  Tests: 1 passed
     ok   test_a
 
 === input-ok (exit 0)

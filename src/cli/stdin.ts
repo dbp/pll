@@ -1,57 +1,65 @@
-import * as readline from "node:readline";
-
 /**
- * Line reader for `input()`.
+ * The program's stdin, for `input()` and `sys.stdin.read()`.
  *
- * The Pyodide worker blocks on a SharedArrayBuffer while this resolves, so
- * it behaves the same as the interactions panel: the prompt has already been
- * printed by the time we are asked for a line. Returning null is EOF, which
- * Python turns into `EOFError` - which is what a piped stdin running dry
- * should do, and what Ctrl+D does interactively.
+ * Read as it comes - bytes, not lines - so a program reads exactly what it
+ * was given: `printf 'a'` is "a", with no newline added; a file piped in is
+ * all of it. The Pyodide worker blocks on a SharedArrayBuffer while this
+ * resolves, so the prompt has already been printed by the time we are
+ * asked. Null is the end of stdin, which Python turns into `EOFError` in
+ * `input()` - what a piped stdin running dry should do, and what Ctrl+D does
+ * interactively.
  */
-export interface LineReader {
-  read(): Promise<string | null>;
+export interface StdinReader {
+  read(): Promise<Uint8Array | null>;
   close(): void;
 }
 
-export function createLineReader(): LineReader {
-  let rl: readline.Interface | null = null;
-  let closed = false;
-  const pending: ((line: string | null) => void)[] = [];
-  const buffered: string[] = [];
+export function createStdinReader(): StdinReader {
+  let started = false;
+  let ended = false;
+  const waiting: ((chunk: Uint8Array | null) => void)[] = [];
+  const buffered: Uint8Array[] = [];
 
-  function ensure(): readline.Interface {
-    if (rl) return rl;
-    rl = readline.createInterface({ input: process.stdin, terminal: false });
-    rl.on("line", (line) => {
-      const next = pending.shift();
-      if (next) next(line);
-      else buffered.push(line);
-    });
-    const finish = () => {
-      closed = true;
-      while (pending.length > 0) pending.shift()?.(null);
-    };
-    rl.on("close", finish);
-    process.stdin.on("end", finish);
-    return rl;
+  const onData = (chunk: Buffer) => {
+    const next = waiting.shift();
+    if (next) next(chunk);
+    else buffered.push(chunk);
+  };
+  const onEnd = () => {
+    ended = true;
+    while (waiting.length > 0) waiting.shift()?.(null);
+  };
+
+  // Only once the program reads: a program that never does must not hold
+  // the terminal's stdin open, or keep Node running after it.
+  function start(): void {
+    if (started) return;
+    started = true;
+    process.stdin.on("data", onData);
+    process.stdin.on("end", onEnd);
+    process.stdin.on("error", onEnd);
   }
 
   return {
     read() {
-      if (buffered.length > 0) {
-        return Promise.resolve(buffered.shift() ?? null);
+      const chunk = buffered.shift();
+      if (chunk) {
+        return Promise.resolve(chunk);
       }
-      if (closed) {
+      if (ended) {
         return Promise.resolve(null);
       }
-      ensure();
-      return new Promise<string | null>((resolve) => pending.push(resolve));
+      start();
+      return new Promise<Uint8Array | null>((resolve) => waiting.push(resolve));
     },
     close() {
-      closed = true;
-      rl?.close();
-      rl = null;
+      ended = true;
+      if (started) {
+        process.stdin.off("data", onData);
+        process.stdin.off("end", onEnd);
+        process.stdin.off("error", onEnd);
+        process.stdin.pause();
+      }
     },
   };
 }

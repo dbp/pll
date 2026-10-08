@@ -8,7 +8,7 @@ import type {
   ReactorStep,
   StaticFinding,
 } from "./fromPython";
-import type { WorkspaceFile } from "./workspaceFilePolicy";
+import type { WorkspaceChanges, WorkspaceFile } from "./workspaceFilePolicy";
 
 export interface ExecutionStdoutChunk {
   kind: "stdout";
@@ -87,6 +87,8 @@ export interface ExecutionDoneChunk {
    * `sys.exit()` 0 - or absent when it simply finished.
    */
   exitCode?: number;
+  /** A Stop reached the program, even one it caught: the run is stopped. */
+  stopped?: boolean;
 }
 
 export interface ExecutionTestReportChunk {
@@ -200,16 +202,13 @@ export interface PythonRuntime {
    */
   staticAnalyze(request: StaticAnalyzeRequest): Promise<StaticFinding[]>;
   /**
-   * Copy sibling workspace files into Pyodide's work directory so
-   * `open("data.csv")` / `pd.read_csv("data.csv")` see them. Replaces any
-   * files from a previous mount.
+   * Copy the files under the program's folder into Pyodide's work directory
+   * so `open("data/cars.csv")` / `pd.read_csv("cars.csv")` see them.
+   * Replaces any files from a previous mount.
    */
   mountWorkspaceFiles(files: WorkspaceFile[]): Promise<void>;
-  /**
-   * Data files Python created or changed since the last mount, to write
-   * back next to the running script.
-   */
-  collectWorkspaceFiles(): Promise<WorkspaceFile[]>;
+  /** What Python made, changed and deleted in the work directory since the last mount. */
+  collectWorkspaceFiles(): Promise<WorkspaceChanges>;
   /**
    * Compile Examplar wheats and chaffs into a bundle. `sources` is the JSON
    * of `{wheats: {id: source}, chaffs: {id: source}}`. Authoring only; the
@@ -248,11 +247,14 @@ export interface PythonRuntime {
    */
   interrupt(): boolean;
   /**
-   * Register the handler used when a running program calls `input()`.
-   * Both hosts block the Pyodide worker until this resolves with a line
-   * (no trailing newline) or `null` (EOF / cancel).
+   * Register the handler asked for the next of stdin when a running program
+   * reads it - `input()`, `sys.stdin.read()`. It resolves with the next text
+   * or bytes, exactly as the program should read them (a line typed is that
+   * line and its newline), or `null` at the end of stdin. The worker waits
+   * until it does, or until a Stop, which raises `KeyboardInterrupt` in the
+   * read.
    */
-  setStdinHandler(handler: (() => Promise<string | null>) | null): void;
+  setStdinHandler(handler: (() => Promise<string | Uint8Array | null>) | null): void;
   /**
    * Who hears what Pyodide says while it loads a package: "Loading pytest,
    * ..." or, `failed`, why it could not. Without one, the host's log.

@@ -13,13 +13,13 @@
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { expect, passed } from "./lib/check.mjs";
 import { importSource } from "./lib/bundle.mjs";
 
 async function load() {
   const mod = await importSource(`export * from "./src/common/examplarSource";
-export { createFileStore } from "./src/cli/bundleStore";
+export { cacheDir, createFileStore } from "./src/cli/bundleStore";
 `);
   return mod;
 }
@@ -107,7 +107,7 @@ async function main() {
   }
 
   const work = mkdtempSync(join(tmpdir(), "pll-examplar-"));
-  let payload = JSON.stringify({ examplar: 1, provides: ["shout"] });
+  let payload = JSON.stringify({ examplar: 1, provides: ["shout"], wheats: [], chaffs: [] });
   const srv = await startServer(() => payload);
 
   console.log("\n[3] first fetch stores it; the second is conditional");
@@ -128,7 +128,7 @@ async function main() {
   console.log("\n[4] a new ETag replaces the cached copy");
   {
     const store = createFileStore(join(work, "cache"));
-    payload = JSON.stringify({ examplar: 1, provides: ["shout", "total"] });
+    payload = JSON.stringify({ examplar: 1, provides: ["shout", "total"], wheats: [], chaffs: [] });
     srv.bump('"v2"');
     const fresh = await loadBundle(`${srv.base}/hw.json`, store);
     expect(fresh.fromCache === false, "a changed bundle is a fresh fetch");
@@ -136,6 +136,51 @@ async function main() {
     const again = await loadBundle(`${srv.base}/hw.json`, store);
     expect(again.fromCache === true && again.json === payload, "then caches under the new etag");
     console.log("    updated, then cached again");
+  }
+
+  console.log("\n[4b] a page that is not a bundle never replaces the cached copy");
+  {
+    const store = createFileStore(join(work, "cache"));
+    const good = payload;
+    // A login page, served 200 under a new ETag.
+    payload = "<html><body>Please sign in</body></html>";
+    srv.bump('"v3"');
+    const page = await loadBundle(`${srv.base}/hw.json`, store);
+    expect(page.json === good && page.fromCache === true, `the cached copy is used: ${page.error ?? page.note}`);
+    expect(/did not return a bundle/.test(page.note ?? ""), `and it says why: ${page.note}`);
+    payload = good;
+    srv.bump('"v2"');
+    const fresh = await loadBundle(`${srv.base}/hw.json`, createFileStore(join(work, "cache-page")));
+    expect(fresh.json === good, "a good bundle still loads");
+    const cold = await loadBundle(
+      `${srv.base}/hw.json`,
+      createFileStore(join(work, "cache-cold")),
+      async () => ({ ok: true, status: 200, headers: { get: () => null }, text: async () => "<html></html>" }),
+    );
+    expect(cold.json === undefined && /did not return an Examplar bundle/.test(cold.error ?? ""), `with nothing cached, an error: ${cold.error}`);
+    const unwritable = await loadBundle(`${srv.base}/hw.json`, {
+      read: async () => undefined,
+      write: async () => {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      },
+    });
+    expect(unwritable.json === good && /could not keep a copy for offline use/.test(unwritable.note ?? ""), `an unwritable cache is said: ${unwritable.note}`);
+    console.log(`    ${page.note}`);
+  }
+
+  console.log("\n[4c] a cache variable that is empty or relative is ignored");
+  {
+    const saved = { PLL_CACHE_DIR: process.env.PLL_CACHE_DIR, XDG_CACHE_HOME: process.env.XDG_CACHE_HOME };
+    process.env.PLL_CACHE_DIR = "";
+    process.env.XDG_CACHE_HOME = "relative/cache";
+    const dir = mod.cacheDir();
+    expect(isAbsolute(dir) && dir.endsWith(join(".cache", "pll-python", "examplar")), `not under the current folder: ${dir}`);
+    process.env.XDG_CACHE_HOME = join(work, "xdg");
+    expect(mod.cacheDir() === join(work, "xdg", "pll-python", "examplar"), `an absolute one is used: ${mod.cacheDir()}`);
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   }
 
   console.log("\n[5] a missing bundle is an error, not a silent pass");

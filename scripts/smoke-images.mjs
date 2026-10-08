@@ -20,7 +20,11 @@ function readPy(rel) {
 async function main() {
   const pyodide = await bootPll();
 
-  const callRunFile = pyodide.globals.get("_pll_run_file");
+  const runFileAt = pyodide.globals.get("_pll_run_file");
+  // At a student level: `#level raw` is Python, which shows no top-level
+  // value, and these are about what is shown. A level given is kept.
+  const callRunFile = (code, fileName, session, level = "advanced", ...rest) =>
+    runFileAt(code, fileName, session, level, ...rest);
   const callReplEval = pyodide.globals.get("_pll_repl_eval");
   const py = (fn, args) => {
     const proxy = fn(...args);
@@ -88,11 +92,16 @@ async function main() {
     expect(result.stdout === "", `expected no stdout for docstring, got ${JSON.stringify(result.stdout)}`);
   }
 
-  console.log("\n[5] run-file: bare 1+2 prints 3 (HtDP-style)");
+  console.log("\n[5] run-file: bare 1+2 prints 3 (HtDP-style) - but not at #level raw");
   {
     const result = py(callRunFile, [`1 + 2\n`, "expr.py", SK]);
     expect(result.ok, "bare expression file runs");
     expect(result.stdout.trim() === "3", `expected stdout '3', got ${JSON.stringify(result.stdout)}`);
+    const raw = py(callRunFile, [`1 + 2\ncircle(5, "solid", "red")\n`, "expr.py", SK, "raw"]);
+    expect(
+      raw.ok && raw.stdout === "" && imagesOf(raw).length === 0,
+      `at raw, as in Python, nothing: ${JSON.stringify(raw.stdout)} ${imagesOf(raw).length} images`,
+    );
   }
 
   console.log("\n[6] beside + above produce composed bounding boxes");

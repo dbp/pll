@@ -23,7 +23,7 @@ export function analyzeRuntimeError(input: RuntimeAnalyzerInput): AnalysisFindin
   const row = inRunFile(input, place) ? rowLine(input.source, place.lineNumber, error.message) : null;
   return runtimeFindingFor(input, {
     id: "runtime-error",
-    headline: headlineFor(error.errorType, error.message),
+    headline: headlineFor(error.errorType, error.message, error.facts?.stop === true, raisedByStudent(input)),
     // Deliberately empty. A generic error has no generic remedy, and
     // inventing one would be worse than the message itself.
     howToFix: [],
@@ -51,30 +51,41 @@ function rowLine(source: string, callLine: number | null, message: string): numb
   return tableRowLine(source, callLine, Number(ordinal[1]) - 1);
 }
 
-/** The message as a sentence a student can read. */
-function headlineFor(errorType: string, message: string): string {
+/**
+ * Whether the error is one the student raised themselves - its innermost
+ * frame is theirs, at a `raise` - so its message is theirs too.
+ */
+function raisedByStudent(input: RuntimeAnalyzerInput): boolean {
+  const innermost = input.error.frames[input.error.frames.length - 1];
+  return innermost?.user === true && /^\s*raise\b/.test(innermost.text ?? "");
+}
+
+/** The message as a sentence a student can read - or, theirs, as they wrote it. */
+function headlineFor(errorType: string, message: string, stop: boolean, theirs: boolean): string {
   const text = message.trim();
   // A Stop, which the student asked for: not something their code did
-  // wrong, and "KeyboardInterrupt while running your program" read as one.
-  if (errorType === "KeyboardInterrupt") {
+  // wrong, and "KeyboardInterrupt while running your program" would read
+  // as one. A `KeyboardInterrupt` the program raised itself is its error.
+  if (errorType === "KeyboardInterrupt" && stop) {
     return "The program was stopped.";
   }
   if (!text) {
     return `${errorType} while running your program.`;
   }
+  // A message the student wrote is given as they wrote it, without a
+  // period added.
+  const finish = theirs ? (sentence: string) => sentence : punctuated;
   if (errorType === "KeyError") {
     // `str(KeyError(x))` is the *repr* of x, so a message that was written
     // as a sentence arrives wrapped in quotes: unwrap that one. A plain
-    // missing key arrives the same way (`'rider'`) but is not a sentence,
-    // and unwrapping it produced `KeyError: rider.` - which reads like
-    // prose and says less than Python did. Leave that exactly as Python
-    // wrote it; giving it real wording needs to know it came from a table
-    // row, which belongs with the row-specific work, not here.
+    // missing key arrives the same way (`'rider'`) but is not a sentence:
+    // unwrapped, `KeyError: rider.` would read like prose and say less
+    // than Python did, so it is left exactly as Python wrote it.
     const unquoted = text.match(/^'([\s\S]*)'$/) ?? text.match(/^"([\s\S]*)"$/);
     if (unquoted === null || !/\s/.test(unquoted[1])) {
       return text;
     }
-    return punctuated(unquoted[1]);
+    return finish(unquoted[1]);
   }
-  return punctuated(text);
+  return finish(text);
 }

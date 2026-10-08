@@ -49,6 +49,8 @@ export interface WireFacts {
     match: WireTrailingMatch | null;
     printed: { line: number; expression: string | null } | null;
   };
+  /** For a `KeyboardInterrupt` a Stop raised. */
+  stop?: boolean;
   /** For `ChecksFailed`: the imported file, and what its level's checks found. */
   checks?: {
     file: string;
@@ -104,6 +106,8 @@ export interface RunResult extends WireError {
   displays: DisplayData[];
   /** The status the program ended itself with (`sys.exit(3)`), if it did. */
   exit_code?: number | null;
+  /** Whether a Stop reached the program, even one it caught. */
+  stopped?: boolean;
   /** Its tests, when they were asked for and the program finished. */
   tests?: TestRunResult | null;
 }

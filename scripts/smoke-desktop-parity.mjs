@@ -13,7 +13,7 @@ import { INDEX_URL } from "./lib/pyodide.mjs";
 import { startWorker, talk } from "./lib/worker.mjs";
 
 // The real layout, so the test cannot agree with itself and not the worker.
-const { STDIN_SAB_BYTES, writeStdinLine } = await importSource('export * from "./src/common/stdinBuffer";\n');
+const { STDIN_SAB_BYTES, writeStdin } = await importSource('export * from "./src/common/stdinBuffer";\n');
 
 const CARS_CSV = "name,mpg\nvw,29\nhonda,33\nford,18\n";
 
@@ -42,7 +42,10 @@ async function main() {
   const stdinLines = { queue: [] };
   const worker = startWorker();
   const session = talk(worker, {
-    onStdinRequest: () => writeStdinLine(sab, stdinLines.queue.shift() ?? null),
+    onStdinRequest: (request) => {
+      const line = stdinLines.queue.shift();
+      writeStdin(sab, request, line === undefined ? null : new TextEncoder().encode(line + "\n"));
+    },
   });
 
   try {
@@ -136,14 +139,14 @@ async function main() {
     );
 
     const collected = await session.send({ type: "collectWorkspace" });
-    const collectedNames = (collected.files ?? []).map((f) => f.name).sort();
+    const collectedNames = collected.changes.files.map((f) => f.name).sort();
     console.log(`    collected=${JSON.stringify(collectedNames)}`);
     expect(collectedNames.includes("home_loans.csv"), "new csv should be collected");
     expect(!collectedNames.includes("cars.csv"), "unchanged cars.csv should not be collected");
     expect(!collectedNames.includes("escape.csv"), "rejected path must not appear");
-    const homeLoans = (collected.files ?? []).find((f) => f.name === "home_loans.csv");
+    const homeLoans = collected.changes.files.find((f) => f.name === "home_loans.csv");
     expect(
-      homeLoans !== undefined && homeLoans.contents.includes("Dune,40"),
+      homeLoans !== undefined && new TextDecoder().decode(homeLoans.contents).includes("Dune,40"),
       "home_loans.csv should contain the written row",
     );
 
@@ -169,10 +172,10 @@ async function main() {
       "local pd.read_csv should succeed: " + (pandasReply.result.error_message || ""),
     );
     const pandasCollected = await session.send({ type: "collectWorkspace" });
-    const pandasFile = (pandasCollected.files ?? []).find((f) => f.name === "efficient_pandas.csv");
+    const pandasFile = pandasCollected.changes.files.find((f) => f.name === "efficient_pandas.csv");
     expect(!!pandasFile, "to_csv should be collected from the desktop worker");
     expect(
-      pandasFile !== undefined && pandasFile.contents.includes("honda"),
+      pandasFile !== undefined && new TextDecoder().decode(pandasFile.contents).includes("honda"),
       "efficient_pandas.csv should contain honda",
     );
 
@@ -304,14 +307,15 @@ async function main() {
       expect(finished.result.exit_code == null, `a program that just finishes has none: ${finished.result.exit_code}`);
       const after = await run('print("still here")\n', "another");
       expect(after.result.stdout === "still here\n", `and Python carries on: ${JSON.stringify(after.result.stdout)}`);
-      // The real abort, which nothing can survive: the reply says so, so the
-      // host can start a new Python rather than fail every run after this.
-      const fatal = await run("import posix\nposix.abort()\n").then(
+      // A real abort, in C, which nothing can survive: the reply says so, so
+      // the host can start a new Python rather than fail every run after
+      // this. (`os.abort` and `posix.abort` only end the program.)
+      const fatal = await run("import faulthandler\nfaulthandler._sigabrt()\n").then(
         () => null,
         (err) => err.reply,
       );
       expect(fatal?.kind === "finished", `a fatal error is marked finished: ${JSON.stringify(fatal)}`);
-      console.log(`    os._exit and os.abort end the program; posix.abort -> ${fatal?.kind}`);
+      console.log(`    os._exit and os.abort end the program; a C abort -> ${fatal?.kind}`);
     }
   } finally {
     await worker.terminate();

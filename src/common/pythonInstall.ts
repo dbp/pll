@@ -1,3 +1,4 @@
+import { INTERRUPT_SIGINT } from "./interruptBuffer";
 import { ensureWorkDir, type MemFS } from "./memfsWorkspace";
 import {
   PLL_BOOTSTRAP_PY,
@@ -47,7 +48,9 @@ export function installPll(
   if (interruptBuffer) {
     // PLL's SIGINT handler acknowledges a delivered Stop here, so the host
     // knows to stop re-asserting it (see interruptBuffer.ts).
-    instance.globals.set("_pll_interrupt_view", new Uint8Array(interruptBuffer));
+    const view = new Uint8Array(interruptBuffer);
+    instance.globals.set("_pll_interrupt_view", view);
+    instance.globals.set("_pll_wait_for_stop", waitForStop(view));
   }
   run(instance, PLL_IMAGE_LIB_PY);
   run(instance, PLL_TABLE_LIB_PY);
@@ -102,4 +105,23 @@ function enableTypeChecking(instance: PyodideCore): void {
   } catch {
     /* type checking stays off */
   }
+}
+
+/**
+ * Wait up to `seconds`, or until a Stop is pressed: true if one was. For
+ * `time.sleep`, which otherwise runs no bytecode for Pyodide to see a Stop
+ * between. Waits in short slices, since the host does not wake this thread
+ * when it stores a Stop.
+ */
+function waitForStop(view: Uint8Array): (seconds: number) => boolean {
+  const cell = new Int32Array(new SharedArrayBuffer(4));
+  return (seconds) => {
+    const end = Date.now() + seconds * 1000;
+    for (;;) {
+      if (view[0] === INTERRUPT_SIGINT) return true;
+      const left = end - Date.now();
+      if (left <= 0) return false;
+      Atomics.wait(cell, 0, 0, Math.min(left, 20));
+    }
+  };
 }

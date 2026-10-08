@@ -8,13 +8,15 @@ import type {
   RunResult,
 } from "./wire";
 import type { Level } from "./level";
-import type { WorkspaceFile } from "./workspaceFilePolicy";
+import type { WorkspaceChanges, WorkspaceFile } from "./workspaceFilePolicy";
 
 export type WorkerInbound =
   | {
       id: number;
       type: "init";
       indexUrl: string;
+      /** Node only: where downloaded packages are kept, when not beside Pyodide. */
+      packageCacheDir?: string;
       stdinBuffer?: SharedArrayBuffer;
       interruptBuffer?: SharedArrayBuffer;
     }
@@ -64,7 +66,7 @@ export type WorkerOutbound =
   | { id: number; type: "pytestReady" }
   | { id: number; type: "static"; result: RawStaticFinding[] }
   | { id: number; type: "workspaceReady" }
-  | { id: number; type: "workspaceFiles"; files: WorkspaceFile[] }
+  | { id: number; type: "workspaceFiles"; changes: WorkspaceChanges }
   | { id: number; type: "reactorFrame"; result: ReactorStepResult }
   | { id: number; type: "reactorDisposed" }
   | { id: number; type: "sessionEnded" }
@@ -75,7 +77,8 @@ export type WorkerOutbound =
   | { type: "display"; requestId: number; payload: DisplayData }
   /** Pyodide saying what it is loading - or, `failed`, what went wrong. */
   | { type: "packageNote"; text: string; failed: boolean }
-  | { type: "stdinRequest" };
+  /** Python is waiting for stdin: `request` is the number to answer it with. */
+  | { type: "stdinRequest"; request: number };
 
 /**
  * Why a request failed. `interrupted`: a Stop ended it. `finished`: the

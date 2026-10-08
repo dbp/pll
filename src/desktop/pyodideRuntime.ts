@@ -15,6 +15,13 @@ export interface NodeRuntimePaths {
   workerPath: string;
   /** Shown when no candidate holds the assets. */
   missingAssetsHint: string;
+  /** Longest Python may take to start; no limit when absent. */
+  startTimeoutMs?: number;
+  /**
+   * Where downloaded packages are kept, given where Pyodide's assets are;
+   * beside them when absent, or when this gives nothing.
+   */
+  packageCacheDir?: (indexUrl: string) => string | undefined;
 }
 
 /**
@@ -29,6 +36,7 @@ export interface NodeRuntimePaths {
 export class DesktopPyodideRuntime extends WorkerPythonRuntime {
   constructor(private readonly paths: NodeRuntimePaths) {
     super();
+    this.startTimeoutMs = paths.startTimeoutMs ?? null;
   }
 
   protected resolveIndexUrl(): string {
@@ -39,6 +47,10 @@ export class DesktopPyodideRuntime extends WorkerPythonRuntime {
       throw new Error(this.paths.missingAssetsHint);
     }
     return found;
+  }
+
+  protected resolvePackageCacheDir(indexUrl: string): string | null {
+    return this.paths.packageCacheDir?.(indexUrl) ?? null;
   }
 
   protected spawn(handlers: WorkerHandlers): WorkerHandle {

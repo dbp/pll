@@ -7,7 +7,12 @@ import type { BundleStore } from "./examplarSource";
 import { levelHasStaticChecks, parseLevel, type Level } from "./level";
 import { needsPackages } from "./packages";
 import type { ExecutionEvent, PythonRuntime } from "./types";
-import { leftOutNotes, type LeftOut, type Selection, type WorkspaceFile } from "./workspaceFilePolicy";
+import {
+  leftOutNotes,
+  type Selection,
+  type WorkspaceChanges,
+  type WriteBackResult,
+} from "./workspaceFilePolicy";
 import { errorText } from "./errorText";
 import { PythonLostError, StoppedError } from "./runtimeErrors";
 
@@ -40,10 +45,10 @@ export interface RunHost {
   status(text: string): void;
   /** Whether Stop was pressed during this run. */
   stopRequested(): boolean;
-  /** The files next to the program, to mount where it can open them - and those the limits kept back. */
+  /** The files under the program's folder, to mount where it can open them, and those the limits kept back. */
   siblingFiles(): Promise<Selection>;
-  /** Write back the files the program changed: the names written, and those the limits kept back. */
-  writeBack(files: WorkspaceFile[]): Promise<{ written: string[]; leftOut: LeftOut[] }>;
+  /** Save what the program changed, given what it was given (`siblingFiles`'s `loaded`). */
+  writeBack(changes: WorkspaceChanges, loaded: Selection["loaded"]): Promise<WriteBackResult>;
   /** One card of the Examplar check's verdict. */
   examplarCard(entry: ExamplarEntry): void;
   /** Wraps running the program itself (the editor connects `input()` here). */
@@ -56,6 +61,13 @@ export interface FilePlan {
   sessionKey: string;
   /** Run the file's `test_*` functions after it. */
   runTests: boolean;
+  /**
+   * Run them even when the Examplar check says the file does not yet define
+   * what it is checked for. The panel leaves them out - each would only say
+   * a function is missing, under the verdict - but an exit status must not
+   * depend on whether the bundle could be fetched.
+   */
+  testsOfIncompleteFile?: boolean;
   /** Where fetched Examplar bundles are cached, for a file with `#examplar`. */
   bundles: BundleStore;
 }
@@ -100,20 +112,23 @@ export async function runFilePlan(
 ): Promise<RunSummary> {
   const { code, fileName, sessionKey } = plan;
   const level = parseLevel(code);
-  host.level(level);
   const tally = new Tally();
   // Checked at every level: a broken `#level` line means the file asked
-  // for checks and got none, so the level it fell back to is the symptom.
+  // for checks and got none, so the level it fell back to is the symptom -
+  // and not one to show as the file's.
   const header = levelHeaderFinding(code, fileName, level);
   if (header !== null) {
     host.staticFindings([header]);
+    host.say("The file was not run.", "problem");
     return tally.summary("blocked");
   }
+  host.level(level);
   const checked = await staticChecks(runtime, host, code, fileName, level, null);
   if (checked !== "passed") {
     return tally.summary(checked);
   }
-  const outcome = await withFiles(runtime, host, fileName, async (mountFiles) => {
+  const beforeStart = STOPPED.beforeStart;
+  const outcome = await withFiles(runtime, host, fileName, beforeStart, async (mountFiles, starting) => {
     await loadPackages(runtime, host, code);
     if (stopped(host, STOPPED.beforeStart)) {
       return "stopped";
@@ -127,14 +142,18 @@ export async function runFilePlan(
     const beforeProgram = complete === null ? STOPPED.beforeStart : STOPPED.afterChecking;
     await mountFiles();
     // With an Examplar check, the file's own tests run only once the file
-    // defines everything the check provides: against missing functions every
-    // test would report a NameError under a perfectly good verdict.
+    // defines everything the check provides - against missing functions
+    // every test would report a NameError under a perfectly good verdict -
+    // unless the host wants them regardless (`testsOfIncompleteFile`).
     const withTests =
-      plan.runTests && complete !== false && (await testsToRun(runtime, host, code));
+      plan.runTests &&
+      (complete !== false || plan.testsOfIncompleteFile === true) &&
+      (await testsToRun(runtime, host, code));
     if (stopped(host, beforeProgram)) {
       return "stopped";
     }
     host.status("Running...");
+    starting();
     const onEvent = tally.counting(programEvents(host, code, fileName, level));
     const program = () =>
       runtime.runFile({ code, fileName, sessionKey, level, withTests }, onEvent);
@@ -142,9 +161,11 @@ export async function runFilePlan(
     if (withTests) {
       sayWhyTestsStopped(host, tally);
     }
-    // Stopped only if the Stop ended something: one that arrives as the
-    // last test finishes stops nothing.
-    return tally.testsStopped || (tally.raised && host.stopRequested()) ? "stopped" : "ran";
+    // Stopped if a Stop reached the program, even one it caught - which
+    // still ends the run, before its tests. One that arrives as the last
+    // test finishes stops nothing.
+    const stopEnded = tally.testsStopped || tally.stopReached || (tally.raised && host.stopRequested());
+    return stopEnded ? "stopped" : "ran";
   });
   return tally.summary(outcome);
 }
@@ -162,12 +183,13 @@ export async function runInputPlan(
   if (checked !== "passed") {
     return tally.summary(checked);
   }
-  const outcome = await withFiles(runtime, host, fileName, async (mountFiles) => {
+  const outcome = await withFiles(runtime, host, fileName, STOPPED.input, async (mountFiles, starting) => {
     await loadPackages(runtime, host, code);
     await mountFiles();
     if (stopped(host, STOPPED.input)) {
       return "stopped";
     }
+    starting();
     const onEvent = tally.counting(programEvents(host, code, fileName, level));
     await runtime.replEval({ code, sessionKey, level }, onEvent);
     return "ran";
@@ -182,6 +204,7 @@ class Tally {
   exitCode: number | null = null;
   testsRan = false;
   testsStopped = false;
+  stopReached = false;
 
   counting(onEvent: (event: ExecutionEvent) => void): (event: ExecutionEvent) => void {
     return (event) => {
@@ -191,8 +214,9 @@ class Tally {
         this.testsRan = true;
         this.testsStopped = event.stopped === true;
         this.testFailures += event.failed + event.errors;
-      } else if (event.kind === "done" && event.exitCode !== undefined) {
-        this.exitCode = event.exitCode;
+      } else if (event.kind === "done") {
+        if (event.exitCode !== undefined) this.exitCode = event.exitCode;
+        if (event.stopped) this.stopReached = true;
       }
       onEvent(event);
     };
@@ -280,33 +304,41 @@ async function staticChecks(
 }
 
 /**
- * `run`, given a way to mount the files next to the program, and then the
- * files it changed written back - if they were mounted, and Python is still
- * there to ask. An error `run` throws because of a Stop is reported as the
- * Stop; any other error is the host's to report.
+ * `run`, given a way to mount the files next to the program and a way to
+ * say the program is starting, and then the files it changed written back
+ * - if they were mounted, and Python is still there to ask. An error `run`
+ * throws because of a Stop is reported as the Stop - `beforeStart` if the
+ * program had not started; any other error is the host's to report.
  */
 async function withFiles(
   runtime: PythonRuntime,
   host: RunHost,
   fileName: string,
-  run: (mountFiles: () => Promise<void>) => Promise<Outcome>,
+  beforeStart: string,
+  run: (mountFiles: () => Promise<void>, starting: () => void) => Promise<Outcome>,
 ): Promise<Outcome> {
-  let mounted = false;
+  let mounted: Selection | null = null;
+  let started = false;
   let lost = false;
   try {
-    return await run(async () => {
-      mounted = await mount(runtime, host);
-    });
+    return await run(
+      async () => {
+        mounted = await mount(runtime, host);
+      },
+      () => {
+        started = true;
+      },
+    );
   } catch (err) {
     lost = err instanceof PythonLostError;
     if (err instanceof StoppedError) {
-      host.say(STOPPED.thrown, "problem");
+      host.say(started ? STOPPED.thrown : beforeStart, "problem");
       return "stopped";
     }
     throw err;
   } finally {
-    if (mounted && !lost) {
-      await writeBack(runtime, host, fileName);
+    if (mounted !== null && !lost) {
+      await writeBack(runtime, host, fileName, mounted);
     }
   }
 }
@@ -330,36 +362,49 @@ async function loadPackages(runtime: PythonRuntime, host: RunHost, code: string)
  * Mount the files next to the program. Always, even with none to mount,
  * so a previous program's files do not leak into this run.
  */
-async function mount(runtime: PythonRuntime, host: RunHost): Promise<boolean> {
+async function mount(runtime: PythonRuntime, host: RunHost): Promise<Selection | null> {
   host.status("Loading files...");
   try {
-    const { files, leftOut } = await host.siblingFiles();
-    await runtime.mountWorkspaceFiles(files);
-    for (const note of leftOutNotes(leftOut, "loaded")) {
-      host.say(note, "note");
+    const selection = await host.siblingFiles();
+    await runtime.mountWorkspaceFiles(selection.files);
+    // A problem, not a note: a program that opens one fails, and this is why.
+    for (const note of leftOutNotes(selection.leftOut, "loaded")) {
+      host.say(note, "problem");
     }
-    return true;
+    return selection;
   } catch (err) {
+    if (err instanceof StoppedError) {
+      throw err;
+    }
     host.say(`Could not load files next to this script (${errorText(err)}). open() may fail.`, "note");
-    return false;
+    return null;
   }
 }
 
-async function writeBack(runtime: PythonRuntime, host: RunHost, fileName: string): Promise<void> {
+async function writeBack(
+  runtime: PythonRuntime,
+  host: RunHost,
+  fileName: string,
+  mounted: Selection,
+): Promise<void> {
   try {
-    const changed = await runtime.collectWorkspaceFiles();
-    if (changed.length === 0) {
+    const changes = await runtime.collectWorkspaceFiles();
+    if (changes.files.length === 0 && changes.deleted.length === 0) {
       return;
     }
-    const { written, leftOut } = await host.writeBack(changed);
+    const { written, deleted, leftOut } = await host.writeBack(changes, mounted.loaded);
     if (written.length > 0) {
       host.say(`Saved ${written.join(", ")} next to ${fileName}.`, "note");
     }
+    if (deleted.length > 0) {
+      host.say(`Deleted ${deleted.join(", ")} next to ${fileName}.`, "note");
+    }
+    // A problem: what the program wrote is not where it wrote it.
     for (const note of leftOutNotes(leftOut, "saved")) {
-      host.say(note, "note");
+      host.say(note, "problem");
     }
   } catch (err) {
-    host.say(`Could not save files next to this script (${errorText(err)}).`, "note");
+    host.say(`Could not save files next to this script (${errorText(err)}).`, "problem");
   }
 }
 

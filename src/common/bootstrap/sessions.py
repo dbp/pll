@@ -72,6 +72,8 @@ _pll_displays = []
 # lets an interactive program print a prompt before input() blocks.
 # Left as None during REPL/tests, where output is delivered in one batch.
 _pll_live_emit = None
+#: Posts what `_pll_live_emit` is holding back, set beside it.
+_pll_live_flush = None
 
 
 def _pll_push(payload):
@@ -80,9 +82,8 @@ def _pll_push(payload):
     Exactly one of the two: when a live hook is installed the host streams
     each payload as it happens and then discards `result["displays"]`
     (see `withLiveEmit` / the `runFile` case in workerHost.ts), so also
-    accumulating them costs memory and a large FFI conversion for a list
-    nobody reads. A program printing in a loop built a multi-million entry
-    list that was copied and converted to JS purely to be dropped.
+    accumulating them would cost memory and a large FFI conversion for a
+    list nobody reads - a multi-million entry one, for a print loop.
     """
     emit = _pll_live_emit
     if emit is None:
@@ -123,7 +124,14 @@ class _PllStream:
             self.write(line)
 
     def flush(self):
-        pass
+        # `print(..., flush=True)` and `sys.stdout.flush()`: a partial line,
+        # a progress dot, is shown now rather than with the next line.
+        flush = _pll_live_flush
+        if flush is not None:
+            try:
+                flush()
+            except Exception:
+                pass
 
     def isatty(self):
         return False
@@ -152,8 +160,8 @@ def _pll_extract_display(value):
             data = value._pll_image_data()
         except Exception:
             return None
-        # _pll_image_data historically uses {"type": "svg", ...}
-        # internally; promote to the unified outer type.
+        # _pll_image_data says {"type": "svg", ...}; promote it to the
+        # outer type.
         if isinstance(data, dict):
             payload = dict(data)
             payload["type"] = "image"

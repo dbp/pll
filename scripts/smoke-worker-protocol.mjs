@@ -330,32 +330,107 @@ console.log("\n[6] a failed run becomes an error event, then done");
   expect(events[0].fileName === "<repl>", "replEval should label events <repl>");
 }
 
-console.log("\n[7] stdinRequest asks the host and writes the line into the SAB");
+console.log("\n[7] stdinRequest asks the host and writes the bytes into the SAB");
 {
   const h = makeRuntime(autoInit());
   await h.runtime.initialize();
   const sab = h.sent.find((m) => m.type === "init").stdinBuffer;
   const state = new Int32Array(sab);
+  /** Stand in for the worker: start request `n`, as `waitForStdin` does. */
+  const waitAs = (n) => {
+    Atomics.store(state, stdin.STDIN_REQUEST_INDEX, n);
+    Atomics.store(state, stdin.STDIN_STATE_INDEX, stdin.STDIN_STATE_WAITING);
+    h.reply({ type: "stdinRequest", request: n });
+  };
+  const payload = () => {
+    const n = Atomics.load(state, stdin.STDIN_LENGTH_INDEX);
+    const bytes = new Uint8Array(n);
+    bytes.set(new Uint8Array(sab, stdin.STDIN_PAYLOAD_OFFSET, n));
+    return bytes;
+  };
 
-  h.runtime.setStdinHandler(async () => "Ada");
-  h.reply({ type: "stdinRequest" });
+  h.runtime.setStdinHandler(async () => "Ada\n");
+  waitAs(1);
   await tick();
   expect(
-    Atomics.load(state, stdin.STDIN_STATE_INDEX) === stdin.STDIN_STATE_LINE,
-    "answering input() should store the LINE state",
+    Atomics.load(state, stdin.STDIN_STATE_INDEX) === stdin.STDIN_STATE_DATA,
+    "answering a read should store the DATA state",
   );
-  const n = Atomics.load(state, stdin.STDIN_LENGTH_INDEX);
-  const bytes = new Uint8Array(n);
-  bytes.set(new Uint8Array(sab, stdin.STDIN_PAYLOAD_OFFSET, n));
-  const line = new TextDecoder().decode(bytes);
+  const line = new TextDecoder().decode(payload());
   console.log(`    line=${JSON.stringify(line)}`);
-  expect(line === "Ada", "the submitted line should land in the buffer, got " + line);
+  expect(line === "Ada\n", "the text should land in the buffer exactly, got " + JSON.stringify(line));
+
+  // Bytes too: what a program reads is what it was given.
+  h.runtime.setStdinHandler(async () => new Uint8Array([0xff, 0x00, 0x41]));
+  waitAs(2);
+  await tick();
+  expect(payload().join() === "255,0,65", `bytes are given as they are: ${payload()}`);
+
+  // More than the buffer holds is given over several requests, all of it.
+  const big = new Uint8Array(stdin.STDIN_SAB_BYTES * 2 + 5).fill(0x61);
+  let asked = 0;
+  h.runtime.setStdinHandler(async () => (asked++ === 0 ? big : null));
+  let received = 0;
+  for (let n = 3; n < 10; n++) {
+    waitAs(n);
+    await tick();
+    if (Atomics.load(state, stdin.STDIN_STATE_INDEX) === stdin.STDIN_STATE_EOF) break;
+    received += payload().length;
+  }
+  expect(received === big.length && asked === 2, `a big chunk is given whole, in pieces: ${received} of ${big.length}`);
+
+  // A Stop while the host waits ends the read; what comes after is kept
+  // for the next one, as a terminal keeps a line typed after Ctrl+C.
+  let answer;
+  h.runtime.setStdinHandler(() => new Promise((resolve) => (answer = resolve)));
+  waitAs(20);
+  await tick();
+  h.runtime.interrupt();
+  expect(
+    Atomics.load(state, stdin.STDIN_STATE_INDEX) === stdin.STDIN_STATE_INTERRUPTED,
+    "a Stop during a read ends it as interrupted",
+  );
+  answer("late\n");
+  await tick();
+  expect(
+    Atomics.load(state, stdin.STDIN_STATE_INDEX) === stdin.STDIN_STATE_INTERRUPTED,
+    "an answer to a read a Stop ended is not given to it",
+  );
+  waitAs(21);
+  await tick();
+  expect(new TextDecoder().decode(payload()) === "late\n", "but to the next read");
+
+  // A program that caught the Stop and asks again: the read still waiting
+  // answers that request, and nothing is held for the one after.
+  let answerAgain;
+  let asks = 0;
+  h.runtime.setStdinHandler(() => {
+    asks++;
+    return new Promise((resolve) => (answerAgain = resolve));
+  });
+  waitAs(30);
+  await tick();
+  h.runtime.interrupt();
+  waitAs(31);
+  await tick();
+  answerAgain("again\n");
+  await tick();
+  expect(
+    Atomics.load(state, stdin.STDIN_STATE_INDEX) === stdin.STDIN_STATE_DATA &&
+      new TextDecoder().decode(payload()) === "again\n" &&
+      asks === 1,
+    `the line answers the read asked since: ${new TextDecoder().decode(payload())}, ${asks} asks`,
+  );
+  h.runtime.setStdinHandler(async () => "fresh\n");
+  waitAs(32);
+  await tick();
+  expect(new TextDecoder().decode(payload()) === "fresh\n", "and is not given twice");
 
   // A handler that throws must still unblock the worker, with EOF.
   h.runtime.setStdinHandler(async () => {
     throw new Error("cancelled");
   });
-  h.reply({ type: "stdinRequest" });
+  waitAs(22);
   await tick();
   expect(
     Atomics.load(state, stdin.STDIN_STATE_INDEX) === stdin.STDIN_STATE_EOF,
@@ -364,13 +439,30 @@ console.log("\n[7] stdinRequest asks the host and writes the line into the SAB")
 
   // So must no handler at all.
   h.runtime.setStdinHandler(null);
-  Atomics.store(state, stdin.STDIN_STATE_INDEX, stdin.STDIN_STATE_WAITING);
-  h.reply({ type: "stdinRequest" });
+  waitAs(23);
   await tick();
   expect(
     Atomics.load(state, stdin.STDIN_STATE_INDEX) === stdin.STDIN_STATE_EOF,
     "no stdin handler should send EOF",
   );
+}
+
+console.log("\n[7b] a Python that never starts is given up on, if the host sets a limit");
+{
+  // Pyodide failing to load can report it and never settle.
+  const h = makeRuntime(() => {});
+  h.runtime.startTimeoutMs = 50;
+  let failure = null;
+  await h.runtime.initialize().catch((err) => (failure = err));
+  expect(/did not start within/.test(failure?.message ?? ""), `the start fails, and says why: ${failure?.message}`);
+  expect(h.terminated, "and the worker is ended");
+  // Without a limit, it waits: the editor, where Stop is there to press.
+  const patient = makeRuntime(() => {});
+  let settled = false;
+  patient.runtime.initialize().then(() => (settled = true), () => (settled = true));
+  await new Promise((r) => setTimeout(r, 100));
+  expect(!settled, "with no limit, a start is waited for");
+  patient.runtime.dispose();
 }
 
 console.log("\n[8] worker failure and dispose reject in-flight requests");

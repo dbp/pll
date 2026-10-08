@@ -42,6 +42,10 @@ bundles with this tool rather than a local python.
                     wrong fails on everything.
 `;
 
+/** Said after a mistake in how it was run, rather than all of the usage. */
+const EXAMPLAR_USAGE_HINT =
+  "Usage: pll examplar build <dir> [-o bundle.json] [--verify tests.py]. `pll examplar --help` says more.";
+
 interface BuildArgs {
   dir?: string;
   out?: string;
@@ -159,7 +163,7 @@ export async function runExamplar(
     return EXIT.ok;
   }
   if (args.error !== undefined) {
-    process.stderr.write(`pll: ${args.error}\n\n${EXAMPLAR_USAGE}`);
+    process.stderr.write(`pll: ${args.error}\n${EXAMPLAR_USAGE_HINT}\n`);
     return EXIT.usage;
   }
 

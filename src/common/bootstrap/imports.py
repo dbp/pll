@@ -12,13 +12,13 @@
 import importlib.machinery as _pll_machinery
 import importlib.util as _pll_import_util
 import json as _pll_json
-import os as _pll_os
 import sys as _pll_import_sys
 
 #: Each mounted `.py` file's level, as the host read it from its `#level`
-#: line (`level.ts`): name -> (level, header problem `{line, message}` or
-#: None). A file not in it - one a program wrote and then imported - has no
-#: level the host read, and imports as `raw`.
+#: line (`level.ts`): path under the work directory (`helpers/shapes.py`)
+#: -> (level, header problem `{line, message}` or None). A file not in it -
+#: one a program wrote and then imported - has no level the host read, and
+#: imports as `raw`.
 _pll_file_levels = {}
 
 #: A module's own identity, which a copy of `_pll_initial_globals` must not
@@ -38,8 +38,17 @@ class ChecksFailed(ImportError):
     it was not imported."""
 
 
+def _pll_student_path(path):
+    """`path` under the work directory, as the host names it, or None for a
+    file that is not the student's."""
+    prefix = _PLL_WORK_DIR + "/"
+    if isinstance(path, str) and path.startswith(prefix) and path.endswith(".py"):
+        return path[len(prefix) :]
+    return None
+
+
 def _pll_level_of_file(path):
-    return _pll_file_levels.get(_pll_os.path.basename(path), (_PLL_LEVEL_RAW, None))
+    return _pll_file_levels.get(_pll_student_path(path), (_PLL_LEVEL_RAW, None))
 
 
 class _PllStudentLoader(_pll_machinery.SourceFileLoader):
@@ -53,7 +62,7 @@ class _PllStudentLoader(_pll_machinery.SourceFileLoader):
         path = self.get_filename(fullname)
         source = _pll_import_util.decode_source(self.get_data(path))
         level, problem = _pll_level_of_file(path)
-        name = _pll_os.path.basename(path)
+        name = _pll_student_path(path)
         blocking = []
         if problem is None:
             blocking = [f for f in _pll_static_analyze(source, level, path) if f["severity"] == "error"]
@@ -69,7 +78,8 @@ class _PllStudentLoader(_pll_machinery.SourceFileLoader):
             })
             raise error
         tree = _pll_parse_and_instrument(source, path, level)
-        return compile(tree, path, "exec", dont_inherit=True)
+        with _pll_recording_compile_warnings():
+            return compile(tree, path, "exec", dont_inherit=True)
 
     def exec_module(self, module):
         own = module.__dict__
@@ -82,19 +92,17 @@ class _PllStudentLoader(_pll_machinery.SourceFileLoader):
 
 class _PllStudentFinder:
     """Finds the student's files for `_PllStudentLoader`, by the search
-    Python itself makes: a file next to the program is theirs only when
-    nothing earlier on `sys.path` has its name (`_pll_protect_import_path`).
+    Python itself makes: a file under the program's folder is theirs only
+    when nothing earlier on `sys.path` has its name
+    (`_pll_protect_import_path`) - `helpers/shapes.py` as `helpers.shapes`
+    too.
     """
 
     @classmethod
     def find_spec(cls, fullname, path=None, target=None):
         spec = _pll_machinery.PathFinder.find_spec(fullname, path, target)
         origin = getattr(spec, "origin", None)
-        if (
-            isinstance(origin, str)
-            and origin.endswith(".py")
-            and _pll_os.path.dirname(origin) == _PLL_WORK_DIR
-        ):
+        if _pll_student_path(origin) is not None:
             spec.loader = _PllStudentLoader(fullname, origin)
         return spec
 

@@ -217,9 +217,10 @@ async function main() {
       noisy.result.stdout.includes("hello"),
       "the loop's output should still be captured",
     );
-    // One second of output at a 50ms flush cadence is ~20 messages. Allow
-    // generous slack; the point is that it is bounded by time, not by how
-    // fast Python can print.
+    // One second of output is at most about 110 messages: a line each, up to
+    // `LIVE_LINES_PER_SECOND` (100) and a burst of 10, then one per 50ms.
+    // Allow slack; the point is that it is bounded by time, not by how fast
+    // Python can print.
     expect(
       duringSecond <= 200,
       `one second of printing should coalesce into few messages, got ${duringSecond}`,

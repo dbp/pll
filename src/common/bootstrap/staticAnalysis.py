@@ -778,7 +778,8 @@ def _pll_static_analyze(code, level, filename, session_key=None):
     if level not in _PLL_TEACHING_LEVELS:
         return []
     try:
-        tree = _ast.parse(code, filename=filename)
+        with _pll_without_syntax_warnings():
+            tree = _ast.parse(code, filename=filename)
     except SyntaxError:
         # Let the runtime path surface SyntaxErrors with their normal flow.
         return []

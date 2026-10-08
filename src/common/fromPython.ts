@@ -110,7 +110,11 @@ export function deliverRunResult(
     onEvent(testReportFrom(result.tests, fileName));
   }
   const exitCode = result.exit_code;
-  onEvent(typeof exitCode === "number" ? { kind: "done", exitCode } : { kind: "done" });
+  onEvent({
+    kind: "done",
+    ...(typeof exitCode === "number" ? { exitCode } : {}),
+    ...(result.stopped ? { stopped: true } : {}),
+  });
 }
 
 /**
@@ -232,6 +236,7 @@ export function pythonErrorFrom(wire: Partial<WireError> | null | undefined): Py
       definitions: facts.definitions ?? undefined,
       assigned: facts.assigned ?? undefined,
       returnedNone: facts.returned_none ? returnedNoneFrom(facts.returned_none) : undefined,
+      stop: facts.stop === true ? true : undefined,
       checks: facts.checks
         ? {
             file: facts.checks.file,

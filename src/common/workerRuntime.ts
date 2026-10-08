@@ -11,7 +11,7 @@ import {
   type StaticFinding,
 } from "./fromPython";
 import { requestInterrupt, tryCreateInterruptBuffer } from "./interruptBuffer";
-import { tryCreateStdinBuffer, writeStdinLine } from "./stdinBuffer";
+import { interruptStdin, tryCreateStdinBuffer, writeStdin } from "./stdinBuffer";
 import type {
   ExecutionEventHandler,
   PythonRuntime,
@@ -28,7 +28,7 @@ import {
   type WorkerReply,
 } from "./workerProtocol";
 import { PythonLostError, StoppedError } from "./runtimeErrors";
-import type { WorkspaceFile } from "./workspaceFilePolicy";
+import type { WorkspaceChanges, WorkspaceFile } from "./workspaceFilePolicy";
 
 /** Why a request could not be sent: there is no Python to send it to. */
 const NOT_RUNNING = "Python is not running.";
@@ -82,14 +82,31 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
   private initPromise: Promise<void> | null = null;
   private stdinBuffer: SharedArrayBuffer | null = null;
   private interruptBuffer: SharedArrayBuffer | null = null;
-  private stdinHandler: (() => Promise<string | null>) | null = null;
+  private stdinHandler: (() => Promise<string | Uint8Array | null>) | null = null;
+  /** The stdin request being answered, or null; a Stop ends it. */
+  private stdinRequest: number | null = null;
+  /** Stdin read but not yet given: what did not fit, or what came after a Stop. */
+  private stdinCarry: Uint8Array = new Uint8Array(0);
+  /** The handler's answer being waited for, which the next request shares. */
+  private stdinNext: Promise<Uint8Array | null> | null = null;
   private packageNoteHandler: ((text: string, failed: boolean) => void) | null = null;
   private pythonLostHandler: (() => void) | null = null;
+  /**
+   * Longest Python may take to start, or null for no limit. Pyodide that
+   * fails to load can report it and never settle; a host with no one to
+   * press Stop - an autograder - sets one.
+   */
+  protected startTimeoutMs: number | null = null;
 
   /** Start the worker and wire it to the given handlers. */
   protected abstract spawn(handlers: WorkerHandlers): WorkerHandle;
   /** Base URL / directory Pyodide loads its assets from. */
   protected abstract resolveIndexUrl(): string;
+
+  /** Where downloaded packages are kept, if not beside Pyodide's assets. */
+  protected resolvePackageCacheDir(_indexUrl: string): string | null {
+    return null;
+  }
 
   /** Start the worker, once - or again, if the last attempt failed. */
   async initialize(): Promise<void> {
@@ -116,12 +133,31 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     this.worker = worker;
     this.stdinBuffer = tryCreateStdinBuffer();
     this.interruptBuffer = tryCreateInterruptBuffer();
-    await this.request({
+    const packageCacheDir = this.resolvePackageCacheDir(indexUrl);
+    const started = this.request({
       type: "init",
       indexUrl,
+      ...(packageCacheDir ? { packageCacheDir } : {}),
       ...(this.stdinBuffer ? { stdinBuffer: this.stdinBuffer } : {}),
       ...(this.interruptBuffer ? { interruptBuffer: this.interruptBuffer } : {}),
     });
+    const limit = this.startTimeoutMs;
+    if (limit === null) {
+      await started;
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Python did not start within ${Math.round(limit / 1000)} seconds`)),
+        limit,
+      );
+    });
+    try {
+      await Promise.race([started, timedOut]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async runFile(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void> {
@@ -170,10 +206,10 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     await this.request({ type: "mountWorkspace", files });
   }
 
-  async collectWorkspaceFiles(): Promise<WorkspaceFile[]> {
+  async collectWorkspaceFiles(): Promise<WorkspaceChanges> {
     await this.initialize();
-    const { files } = await this.request({ type: "collectWorkspace" });
-    return files;
+    const { changes } = await this.request({ type: "collectWorkspace" });
+    return changes;
   }
 
   async examplarBuild(sources: string): Promise<ExamplarBuildResult> {
@@ -218,6 +254,12 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     if (!this.interruptBuffer) {
       return false;
     }
+    // A program waiting for stdin runs no bytecode to see the Stop: end
+    // the wait, and the read raises it.
+    if (this.stdinBuffer && this.stdinRequest !== null) {
+      this.stdinRequest = null;
+      interruptStdin(this.stdinBuffer);
+    }
     // Retried until Python acknowledges it, but only while the requests
     // that were running when Stop was pressed are still running - so a
     // retry cannot carry over into whatever runs next.
@@ -239,7 +281,7 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     this.packageNoteHandler = handler;
   }
 
-  setStdinHandler(handler: (() => Promise<string | null>) | null): void {
+  setStdinHandler(handler: (() => Promise<string | Uint8Array | null>) | null): void {
     this.stdinHandler = handler;
   }
 
@@ -287,7 +329,7 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
       return;
     }
     if (msg.type === "stdinRequest") {
-      void this.handleStdinRequest();
+      void this.handleStdinRequest(msg.request);
       return;
     }
     if (msg.type === "packageNote") {
@@ -339,15 +381,62 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     this.pending.clear();
   }
 
-  private async handleStdinRequest(): Promise<void> {
-    let line: string | null = null;
-    try {
-      line = this.stdinHandler ? await this.stdinHandler() : null;
-    } catch {
-      line = null;
+  /**
+   * The next of stdin from the handler. One call at a time: a request a
+   * Stop ended leaves its call waiting, and the next request - a program
+   * that caught the `KeyboardInterrupt` and asked again - shares it, so
+   * the line typed answers that one.
+   */
+  private nextStdin(): Promise<Uint8Array | null> {
+    if (this.stdinNext === null) {
+      const call = (async () => {
+        try {
+          const next = this.stdinHandler ? await this.stdinHandler() : null;
+          return typeof next === "string" ? new TextEncoder().encode(next) : next;
+        } catch {
+          return null;
+        }
+      })();
+      this.stdinNext = call;
+      void call.then(() => {
+        if (this.stdinNext === call) this.stdinNext = null;
+      });
     }
-    if (this.stdinBuffer) {
-      writeStdinLine(this.stdinBuffer, line);
+    return this.stdinNext;
+  }
+
+  private async handleStdinRequest(request: number): Promise<void> {
+    this.stdinRequest = request;
+    let bytes: Uint8Array | null = this.stdinCarry;
+    if (bytes.length === 0) {
+      bytes = await this.nextStdin();
+      if (this.stdinRequest !== request) {
+        // A Stop ended the wait. A request since then shares this answer;
+        // with none, it is the next of stdin, as a line typed after Ctrl+C
+        // is in a terminal.
+        if (bytes !== null && this.stdinRequest === null) {
+          this.stdinCarry = concatBytes(this.stdinCarry, bytes);
+        }
+        return;
+      }
+    }
+    this.stdinRequest = null;
+    if (!this.stdinBuffer) {
+      return;
+    }
+    const given = writeStdin(this.stdinBuffer, request, bytes);
+    if (bytes === null) {
+      this.stdinCarry = new Uint8Array(0);
+    } else {
+      // What did not fit - or, when the wait had ended, all of it.
+      this.stdinCarry = bytes.subarray(Math.max(given, 0));
     }
   }
+}
+
+function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a);
+  out.set(b, a.length);
+  return out;
 }

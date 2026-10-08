@@ -13,7 +13,7 @@ import type {
   RunResult,
 } from "./wire";
 import { clearInterrupt } from "./interruptBuffer";
-import { waitForStdinLine } from "./stdinBuffer";
+import { waitForStdin } from "./stdinBuffer";
 import type { ReplyFor, WorkerErrorKind, WorkerInbound, WorkerOutbound } from "./workerProtocol";
 import { errorText } from "./errorText";
 import { DEFAULT_LEVEL, levelHeaderProblem, parseLevel } from "./level";
@@ -28,11 +28,7 @@ export interface PackageLoadOptions {
 export interface PyodideInstance extends PyodideCore {
   loadPackage(names: string | string[], options?: PackageLoadOptions): Promise<unknown>;
   loadPackagesFromImports(code: string, options?: PackageLoadOptions): Promise<unknown>;
-  setStdin(options: {
-    stdin?: () => string | null | undefined;
-    autoEOF?: boolean;
-    isatty?: boolean;
-  }): void;
+  setStdin(options: { read: (buffer: Uint8Array) => number; isatty?: boolean }): void;
   /** Poll this buffer for pending signals; a 2 raises `KeyboardInterrupt`. */
   setInterruptBuffer(buffer: Uint8Array): void;
 }
@@ -42,7 +38,7 @@ export interface WorkerHostAdapter {
   /** Send a message back to the extension host. */
   post(msg: WorkerOutbound): void;
   /** Boot Pyodide (importScripts in the browser, `import("pyodide")` on Node). */
-  loadPyodide(indexUrl: string): Promise<PyodideInstance>;
+  loadPyodide(indexUrl: string, packageCacheDir?: string): Promise<PyodideInstance>;
   /** Raised by `input()` when the host could not provide a SharedArrayBuffer. */
   stdinUnavailableMessage: string;
 }
@@ -93,6 +89,16 @@ type Reply<T extends WorkerInbound["type"]> = Omit<ReplyFor<T>, "id">;
 const LIVE_FLUSH_MS = 50;
 
 /**
+ * How many finished lines may be posted at once, each as it is printed,
+ * and how many a second after that. A program that prints now and then
+ * has each line shown as it prints it, however long it computes after; a
+ * print loop gets `LIVE_LINES_PER_SECOND` posts, each of every line since
+ * the last.
+ */
+const LIVE_LINE_BURST = 10;
+const LIVE_LINES_PER_SECOND = 100;
+
+/**
  * Worker side of the Pyodide protocol, shared by the desktop
  * (`worker_threads`) and web (browser `Worker`) hosts. Returns the message
  * handler each host wires to its own message source.
@@ -106,11 +112,15 @@ export function createWorkerHost(
   let pyodide: PyodideInstance | null = null;
   /** Where `init` said Pyodide's assets are; read by the first successful start. */
   let indexUrl = "";
+  let packageCacheDir: string | undefined;
   let stdinBuffer: SharedArrayBuffer | null = null;
   let interruptBuffer: SharedArrayBuffer | null = null;
   /** Buffered live stream text, waiting to be posted as one message. */
   let livePending: { type: "stdout" | "stderr"; text: string } | null = null;
   let liveLastPost = 0;
+  /** Lines that may be posted now, as they are printed (`LIVE_LINE_BURST`). */
+  let liveLineTokens = LIVE_LINE_BURST;
+  let liveTokensAt = 0;
   /** The request whose output is being streamed. */
   let liveRequest = 0;
 
@@ -135,16 +145,31 @@ export function createWorkerHost(
     adapter.post({ type: "display", requestId: liveRequest, payload });
   }
 
+  /** Whether a finished line may be posted now, using up one if so. */
+  function takeLineToken(): boolean {
+    const now = Date.now();
+    const earned = ((now - liveTokensAt) * LIVE_LINES_PER_SECOND) / 1000;
+    liveLineTokens = Math.min(LIVE_LINE_BURST, liveLineTokens + earned);
+    liveTokensAt = now;
+    if (liveLineTokens < 1) {
+      return false;
+    }
+    liveLineTokens -= 1;
+    return true;
+  }
+
   /**
-   * Stream one display to the host, coalescing consecutive stdout/stderr
-   * writes into at most one message per `LIVE_FLUSH_MS`.
+   * Stream one display to the host. Text is posted when a line is finished,
+   * as long as lines are not coming faster than `LIVE_LINES_PER_SECOND`,
+   * and otherwise at most once per `LIVE_FLUSH_MS`; a partial line waits
+   * for the rest, a `flush()`, an `input()` or the end of the run.
    *
-   * Without this, `while True: print("hello")` posts a few hundred thousand
-   * messages per second. The extension host cannot drain them faster than
-   * the worker produces them, so its queue grows without bound and the Stop
-   * the student presses is never processed - the one moment it has to work.
-   * Images and tables flush the pending text first so the interleaved order
-   * of output and cards is preserved exactly.
+   * Without the limit, `while True: print("hello")` posts a few hundred
+   * thousand messages per second. The extension host cannot drain them
+   * faster than the worker produces them, so its queue grows without bound
+   * and the Stop the student presses is never processed - the one moment it
+   * has to work. Images and tables flush the pending text first so the
+   * interleaved order of output and cards is preserved exactly.
    */
   function emitDisplay(json: string): void {
     let payload: DisplayData;
@@ -161,7 +186,7 @@ export function createWorkerHost(
         flushLive();
         livePending = { type: payload.type, text: payload.text };
       }
-      if (Date.now() - liveLastPost >= LIVE_FLUSH_MS) {
+      if ((payload.text.includes("\n") && takeLineToken()) || Date.now() - liveLastPost >= LIVE_FLUSH_MS) {
         flushLive();
       }
       return;
@@ -170,20 +195,42 @@ export function createWorkerHost(
     adapter.post({ type: "display", requestId: liveRequest, payload });
   }
 
-  function readStdin(): string | null {
-    if (!stdinBuffer) {
-      throw new Error(adapter.stdinUnavailableMessage);
+  /** Bytes of stdin the host gave that Python has not read yet. */
+  let stdinCarry: Uint8Array = new Uint8Array(0);
+
+  /**
+   * Python reading its stdin (fd 0): fill `buffer` with what the host gives,
+   * exactly - nothing added, nothing cut off - and 0 at its end.
+   */
+  function readStdin(buffer: Uint8Array): number {
+    if (stdinCarry.length === 0) {
+      if (!stdinBuffer) {
+        throw new Error(adapter.stdinUnavailableMessage);
+      }
+      // The prompt of `input("Choice: ")` is unflushed stdout. It has to
+      // reach the host before this thread parks, or the student is asked
+      // for a line with nothing on screen telling them what for.
+      flushLive();
+      const got = waitForStdin(stdinBuffer, (request) => adapter.post({ type: "stdinRequest", request }));
+      if (got === "interrupted") {
+        // An interrupted read: Python checks for the Stop - pending in the
+        // interrupt buffer - and raises `KeyboardInterrupt` in `input()`.
+        throw Object.assign(new Error("interrupted"), { code: "EINTR" });
+      }
+      if (got === null) {
+        return 0;
+      }
+      stdinCarry = got;
     }
-    // The prompt of `input("Choice: ")` is unflushed stdout. It has to reach
-    // the host before this thread parks, or the student is asked for a line
-    // with nothing on screen telling them what for.
-    flushLive();
-    return waitForStdinLine(stdinBuffer, () => adapter.post({ type: "stdinRequest" }));
+    const n = Math.min(buffer.length, stdinCarry.length);
+    buffer.set(stdinCarry.subarray(0, n));
+    stdinCarry = stdinCarry.subarray(n);
+    return n;
   }
 
   const ensurePyodide = onceSuccessful(async (): Promise<PyodideInstance> => {
-    const instance = await adapter.loadPyodide(indexUrl);
-    instance.setStdin({ stdin: readStdin, autoEOF: true });
+    const instance = await adapter.loadPyodide(indexUrl, packageCacheDir);
+    instance.setStdin({ read: readStdin });
     if (interruptBuffer) {
       instance.setInterruptBuffer(new Uint8Array(interruptBuffer));
     }
@@ -256,16 +303,19 @@ export function createWorkerHost(
   function withLiveEmit<T>(requestId: number, run: () => T): T {
     liveRequest = requestId;
     ready().globals.set("_pll_live_emit", emitDisplay);
+    ready().globals.set("_pll_live_flush", flushLive);
     livePending = null;
     // Zero, not `Date.now()`, so a run's first output is posted immediately.
     liveLastPost = 0;
+    liveLineTokens = LIVE_LINE_BURST;
+    liveTokensAt = Date.now();
     try {
       return run();
     } finally {
       // The result's own `displays` are dropped by the caller, so anything
       // still buffered here is the only copy of the tail of the output.
       flushLive();
-      ready().runPython("_pll_live_emit = None");
+      ready().runPython("_pll_live_emit = None\n_pll_live_flush = None");
     }
   }
 
@@ -282,6 +332,7 @@ export function createWorkerHost(
       stdinBuffer = data.stdinBuffer ?? null;
       interruptBuffer = data.interruptBuffer ?? null;
       indexUrl = data.indexUrl;
+      packageCacheDir = data.packageCacheDir;
       await ensurePyodide();
       return { type: "ready" };
     },
@@ -385,8 +436,7 @@ export function createWorkerHost(
       return { type: "workspaceReady" };
     },
     collectWorkspace() {
-      const files = collectChangedWorkspaceFiles(ready().FS);
-      return { type: "workspaceFiles", files };
+      return { type: "workspaceFiles", changes: collectChangedWorkspaceFiles(ready().FS) };
     },
   };
 
@@ -417,15 +467,17 @@ export function createWorkerHost(
 /**
  * Each Python file's level, read from its `#level` line as a run of it
  * would read it - and what is wrong with the line, if anything - so that
- * Python can hold the file to it when another file imports it.
+ * Python can hold the file to it when another file imports it. Keyed by
+ * the file's path under the work directory: `helpers/shapes.py`.
  */
 function levelsOf(files: WorkspaceFile[]): Record<string, [string, { line: number; message: string } | null]> {
   const levels: Record<string, [string, { line: number; message: string } | null]> = {};
+  const decoder = new TextDecoder();
   for (const file of files) {
-    if (file.name.endsWith(".py") && typeof file.contents === "string") {
-      const problem = levelHeaderProblem(file.contents);
-      levels[file.name] = [parseLevel(file.contents), problem && { line: problem.line, message: problem.message }];
-    }
+    if (!file.name.endsWith(".py")) continue;
+    const text = typeof file.contents === "string" ? file.contents : decoder.decode(file.contents);
+    const problem = levelHeaderProblem(text);
+    levels[file.name] = [parseLevel(text), problem && { line: problem.line, message: problem.message }];
   }
   return levels;
 }

@@ -101,7 +101,7 @@ writeFileSync(
   ].join("\n"),
 );
 writeFileSync(join(work, "exits.py"), 'import os\nprint("before", 1)\nos._exit(0)\nprint("after", 1)\n');
-writeFileSync(join(work, "fatal.py"), "import posix\nposix.abort()\n");
+writeFileSync(join(work, "fatal.py"), "import faulthandler\nfaulthandler._sigabrt()\n");
 writeFileSync(join(work, "again.py"), 'print("again", 1 + 1)\n');
 // Its own file: one that already ran still shows that output, which a wait
 // for the new run's line would find before the new run has started.

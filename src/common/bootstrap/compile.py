@@ -226,15 +226,15 @@ _pll_compile_warnings = []
 
 @contextlib.contextmanager
 def _pll_recording_compile_warnings():
-    """Record `SyntaxWarning`s from PLL's own compiles instead of printing them.
+    """Record `SyntaxWarning`s from PLL's own parses and compiles instead
+    of printing them.
 
-    Every phase compiles the file more than once - the type-check
+    A run parses and compiles the file more than once - the type-check
     instrumentation is validated by compiling it, then the real compile
-    follows, and the test phase does both again - and Python prints a
-    `SyntaxWarning` on every one. A missing comma between two table rows
-    came out four times, beside a finding that already explained it.
+    follows - and so does importing one of the student's files, and Python
+    prints a `SyntaxWarning` on every one.
 
-    Recorded here and said once, after the run, by
+    Recorded here, by file and line, and said once, after the run, by
     `_pll_say_compile_warnings`. Any other kind of warning is not PLL's to
     swallow, and is issued again exactly as it was.
     """
@@ -251,7 +251,7 @@ def _pll_recording_compile_warnings():
     finally:
         for warning in caught:
             if issubclass(warning.category, SyntaxWarning):
-                entry = (warning.lineno, str(warning.message))
+                entry = (warning.filename, warning.lineno, str(warning.message))
                 if entry not in _pll_compile_warnings:
                     _pll_compile_warnings.append(entry)
             else:
@@ -260,7 +260,16 @@ def _pll_recording_compile_warnings():
                 )
 
 
-def _pll_say_compile_warnings(stream, error_message, source=""):
+@contextlib.contextmanager
+def _pll_without_syntax_warnings():
+    """For a parse of a file that a run parses too - the static checks',
+    the test finder's - which the run's own warnings already cover."""
+    with _pll_warnings.catch_warnings():
+        _pll_warnings.simplefilter("ignore", SyntaxWarning)
+        yield
+
+
+def _pll_say_compile_warnings(stream, error_message, source="", filename=None):
     """Say each recorded warning once - unless the run's error already did.
 
     A warning that predicts the error the run then raised (`'int' object is
@@ -268,13 +277,21 @@ def _pll_say_compile_warnings(stream, error_message, source=""):
     object is not callable`) is covered by the finding for that error, and
     printing it beside the finding says the same thing worse. One whose
     line never ran is the only sign of the mistake, so that one is said.
+
+    `source` is the text of `filename`, the file run; a warning about a
+    file it imported names that file.
     """
     lines = source.split("\n") if source else []
-    for lineno, message in _pll_compile_warnings:
+    for where, lineno, message in _pll_compile_warnings:
         if error_message and message.startswith(error_message):
             continue
-        text = lines[lineno - 1] if isinstance(lineno, int) and 0 < lineno <= len(lines) else ""
-        stream.write("warning: line %s: %s\n" % (lineno, _pll_reword_warning(message, text)))
+        if filename is None or where == filename:
+            text = lines[lineno - 1] if isinstance(lineno, int) and 0 < lineno <= len(lines) else ""
+            stream.write("warning: line %s: %s\n" % (lineno, _pll_reword_warning(message, text)))
+        else:
+            stream.write(
+                "warning: %s, line %s: %s\n" % (_pll_shown_file(where), lineno, _pll_reword_warning(message))
+            )
     del _pll_compile_warnings[:]
 
 
@@ -315,20 +332,20 @@ def _pll_parse_and_instrument(code, filename, level):
     compiling it, so anything typeguard cannot handle falls back to the
     plain tree rather than failing the run.
     """
-    tree = _ast.parse(code, filename=filename, mode="exec")
-    if not _pll_checks_annotations(level) or not _PLL_TYPEGUARD_READY:
-        return tree
-    try:
-        instrumented = _ast.parse(code, filename=filename, mode="exec")
-        _pll_typeguard_transformer().visit(instrumented)
-        _PllTopLevelAnnAssign().visit(instrumented)
-        _PllDataclassChecks().visit(instrumented)
-        _ast.fix_missing_locations(instrumented)
-        with _pll_recording_compile_warnings():
+    with _pll_recording_compile_warnings():
+        tree = _ast.parse(code, filename=filename, mode="exec")
+        if not _pll_checks_annotations(level) or not _PLL_TYPEGUARD_READY:
+            return tree
+        try:
+            instrumented = _ast.parse(code, filename=filename, mode="exec")
+            _pll_typeguard_transformer().visit(instrumented)
+            _PllTopLevelAnnAssign().visit(instrumented)
+            _PllDataclassChecks().visit(instrumented)
+            _ast.fix_missing_locations(instrumented)
             compile(instrumented, filename, "exec")
-        return instrumented
-    except BaseException:
-        return tree
+            return instrumented
+        except BaseException:
+            return tree
 
 
 class _PllTopLevelExprWrapper(_ast.NodeTransformer):

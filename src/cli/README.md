@@ -11,11 +11,13 @@ Needs **Node 22 or newer** (the oldest Node still receiving support).
 npx pll-python hw.py
 ```
 
+(Not `npx pll`, which is a different package.)
+
 Or install it:
 
 ```bash
 npm install -g pll-python
-pll hw.py
+pll hw.py            # or: pll-python hw.py
 ```
 
 ## Language levels
@@ -42,7 +44,9 @@ same way everywhere, which is the point of putting it in the file.
 ## Tests
 
 `test_*` functions in the same file run once the program finishes, against
-what it defined, as they do in the editor:
+what it defined, as they do in the editor. A test that prints shows what it
+printed under its result; `@pytest.mark.skip`, `skipif` and `xfail` work as
+in pytest:
 
 ```bash
 pll hw.py            # the program, then its tests
@@ -52,13 +56,17 @@ pll hw.py --no-tests # just the program
 ## Options
 
 ```
---no-tests           do not run the file's test_* functions first
+--no-tests           do not run the file's test_* functions, which
+                     otherwise run once the program finishes
 --save-images <dir>  write pictures there as .svg
--q, --quiet          only the program's own output
+-q, --quiet          only the program's own output and what went wrong:
+                     errors, failed tests, files not loaded or not saved
 --no-color           never use ANSI colour
 -h, --help
--v, --version
+-V, --version
 ```
+
+`-v` is not an option: Python's `-v` means something else entirely.
 
 ## Authoring Examplar bundles
 
@@ -193,10 +201,13 @@ be fast and honest rather than secret.
 | Code | Meaning |
 | --- | --- |
 | 0 | Ran, and any tests passed |
-| 1 | The program raised, or Ctrl+C stopped it |
+| 1 | The program raised, or Ctrl+C stopped it (even if it caught the `KeyboardInterrupt`; its tests are then not run) |
 | 2 | Level checks found problems, so it was not run |
 | 3 | A test failed |
-| 64 | Bad usage, or PLL could not start |
+| 64 | Bad usage, or Python could not start (it is given two minutes) |
+| 130 | A second Ctrl+C gave up waiting for the program to stop |
+| 141 | Its output could no longer be read - `pll hw.py \| head` |
+| 143 | It was ended by SIGTERM |
 
 Distinct codes so an autograder can tell "the level rejected this" from
 "the tests failed" from "it crashed".
@@ -216,11 +227,15 @@ goes to stderr. So this captures exactly what the program printed:
 pll hw.py > output.txt
 ```
 
-`input()` reads stdin, so piping works too:
+`input()` and `sys.stdin.read()` read stdin, exactly as given, so piping
+works too:
 
 ```bash
 printf 'Ada\n' | pll greet.py
 ```
+
+Ctrl+C stops the program wherever it is - waiting for input, or in
+`time.sleep` - as it would under `python`.
 
 ## What differs from the editor
 
@@ -239,8 +254,26 @@ libraries, the same analyzers and the same wording for errors.
 ## Files next to your program
 
 `open("data.csv")` and `pd.read_csv("data.csv")` read files in the same
-folder as the script, and files the program writes appear there afterwards —
-the same as in the editor.
+folder as the script or a folder inside it (`open("data/2024.csv")`), and
+`__file__` is set, so `Path(__file__).parent` works. Files the program
+writes appear there afterwards, and files it deletes are deleted — the same
+as in the editor, with the same limits: at most 100 files, each at most
+2 MB and 8 MB in all, nearest first; hidden and tools' folders (`.git`,
+`venv`, `node_modules`) are left out. Files move as bytes, so a CSV in
+another encoding or a picture arrives exactly as it is.
+
+What is not loaded or not saved is said, even with `-q`, with why. A
+file is never saved over when the program was not given it (it was over a
+limit, say: saving would replace it with only what the program wrote), when
+it changed on disk while the program ran, or when it is an existing `.py`.
+
+## Packages
+
+`import pandas`, `numpy`, `matplotlib` and pytest (for the tests) are
+downloaded the first time they are used, which needs the network; `pll`
+says so. They are kept beside Pyodide in the install, or in your cache
+(`$XDG_CACHE_HOME/pll-python` or `~/.cache/pll-python`) when the install
+cannot be written to.
 
 ## Licence
 

@@ -398,12 +398,13 @@ async function main() {
       "def test_number():",
       '    assert int(shout("x")) == 1',
     );
-    const card = rejected.stderr.slice(rejected.stderr.indexOf("examplar: shout"), rejected.stderr.indexOf("tests:"));
+    // Up to the file's own tests, which run after the check, and say what they printed.
+    const card = rejected.stderr.slice(rejected.stderr.indexOf("examplar: shout"), rejected.stderr.indexOf("Tests:"));
     expect(/expects? the wrong answer:\n    test_empty\n/.test(card), `a disagreement, by name: ${card}`);
     expect(!/shout needs|X!/.test(card), `nothing the implementation said or gave back: ${card}`);
     expect(/could not run here:\n    test_number\n      ValueError\n/.test(card), `an error of their own, by its type: ${card}`);
     expect(!/test_main/.test(card), `the check is __main__: ${card}`);
-    expect(!/checking hi/.test(rejected.stdout + rejected.stderr), `and what it printed is dropped: ${rejected.stdout}`);
+    expect(!/checking hi/.test(rejected.stdout + card), `and what it printed is dropped: ${rejected.stdout}${card}`);
 
     // A buggy implementation that never finishes stops the check.
     await bundle("loops", SHOUT, { "shout/1": ['def shout(s):', '    while True:', '        pass'] });

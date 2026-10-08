@@ -16,8 +16,8 @@ class _PllExit(SystemExit):
 
     In CPython each ends the whole process at once. Here the process is the
     one interpreter every open file's session shares, and Pyodide does not
-    recover from it: every later run, of any file, failed with "Pyodide
-    already exited" until the window was reloaded. Raised instead, they end
+    recover from it: every later run, of any file, would fail with "Pyodide
+    already exited" until the window is reloaded. Raised instead, they end
     the program the way `sys.exit()` does, and Python carries on.
     """
 
@@ -43,7 +43,13 @@ def _pll_exit_status(exc, stderr):
     if isinstance(code, int):
         # `int`, so `SystemExit(True)` is 1 rather than crossing to the host
         # as a boolean.
-        return int(code)
+        code = int(code)
+        if not -(2**63) <= code < 2**63:
+            # Too big for the C long CPython gives `exit()`.
+            return 255
+        # The low byte, which is the status, once it is too big to cross to
+        # the host as a number.
+        return code if abs(code) < 2**53 else code & 0xFF
     stderr.write("%s\n" % (code,))
     return 1
 
@@ -53,6 +59,11 @@ _pll_os_exit.__name__ = _pll_os_exit.__qualname__ = "_exit"
 _pll_os_abort.__name__ = _pll_os_abort.__qualname__ = "abort"
 _pll_os._exit = _pll_os_exit
 _pll_os.abort = _pll_os_abort
+# `os` takes both from `posix`, which a program can call directly.
+import posix as _pll_posix
+
+_pll_posix._exit = _pll_os_exit
+_pll_posix.abort = _pll_os_abort
 
 # -----------------------------------------------------------------------------
 # REPL syntax check (codeop.compile_command in 'single' mode)
@@ -131,7 +142,8 @@ def _pll_run_result():
     """A file run's or prompt line's result, before anything has happened.
 
     `exit_code` is set only when the program ended itself, with `sys.exit`;
-    `tests` only when its tests were asked for and it finished, so they ran.
+    `tests` only when its tests were asked for and it finished, so they ran;
+    `stopped` when a Stop reached it, even one it caught.
     """
     result = {
         "ok": False,
@@ -141,6 +153,7 @@ def _pll_run_result():
         "displays": [],
         "exit_code": None,
         "tests": None,
+        "stopped": False,
     }
     result.update(_pll_no_error())
     return result
@@ -200,6 +213,9 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
     # exploration since then.
     _pll_protect_import_path()
     user_globals = _pll_reset_session(session_key, level)
+    # Where the file is beside the files it was given, so
+    # `os.path.dirname(__file__)` finds them.
+    user_globals["__file__"] = _PLL_WORK_DIR + "/" + filename
     main = _pll_session_module(session_key)
     _pll_displays.clear()
     _pll_reset_notes()
@@ -208,7 +224,10 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
         tree = _pll_parse_and_instrument(code, filename, level)
         # Where each test is, read before anything is added to the tree.
         tests_at = _pll_test_locations(tree) if run_tests else None
-        _PllTopLevelExprWrapper().visit(tree)
+        # The levels students write show a top-level expression's value;
+        # `raw` is Python, which does not.
+        if level != _PLL_LEVEL_RAW:
+            _PllTopLevelExprWrapper().visit(tree)
         _ast.fix_missing_locations(tree)
         if run_tests:
             _pll_rewrite_asserts(tree, code, filename)
@@ -219,6 +238,7 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
         return _pll_with_output(result, stdout, stderr)
 
     finished = False
+    stops = _pll_stops_delivered
     try:
         with _pll_as_main(main), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             exec(compiled, user_globals)
@@ -232,13 +252,15 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
     finally:
         # After the run, so a warning the run's own error explains can be
         # left out, and one about a line that never ran can be said.
-        _pll_say_compile_warnings(stderr, result["error_message"], code)
+        _pll_say_compile_warnings(stderr, result["error_message"], code, filename)
         _pll_with_output(result, stdout, stderr)
     # A program that raised, stopped or exited did not get to the end, and
-    # neither do its tests: the host says they were not run, and why.
-    if run_tests and finished:
+    # neither do its tests: the host says they were not run, and why. A Stop
+    # the program caught still ends the run.
+    if run_tests and finished and _pll_stops_delivered == stops:
         with _pll_as_main(main):
             result["tests"] = _pll_run_collected_tests(user_globals, tests_at, (filename, code))
+    result["stopped"] = _pll_stops_delivered != stops
     if finished:
         # Only once the program and its tests have finished: building a
         # reactor and starting it further down is perfectly ordinary, and a
@@ -301,6 +323,6 @@ def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
     except BaseException as e:
         result.update(_pll_error_info(e))
     finally:
-        _pll_say_compile_warnings(stderr, result["error_message"], code)
+        _pll_say_compile_warnings(stderr, result["error_message"], code, filename)
         _pll_with_output(result, stdout, stderr)
     return result

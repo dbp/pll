@@ -44,7 +44,7 @@ src/
     │                              interpreter + the message dispatch
     ├── stdinBuffer.ts             SharedArrayBuffer protocol for input()
     ├── interruptBuffer.ts         SharedArrayBuffer protocol for Stop
-    ├── workspaceFilePolicy.ts     Which sibling files to mount / write back
+    ├── workspaceFilePolicy.ts     Which files under the program's folder to mount / save
     ├── workspaceFiles.ts          vscode.workspace.fs snapshot + writeback
     ├── memfsWorkspace.ts          Pyodide MEMFS mount / collect helpers
     ├── commands.ts                Run File / Show Interactions / Start REPL /
@@ -565,29 +565,60 @@ unless PLL copies them in. Both hosts already have
 not mount Node `fs` or a browser File System Access tree.
 
 Before a file run (after static checks, before tests) and before each
-REPL evaluation, `replSession` lists **regular files in the same folder**
-as the script, prefers unsaved editor buffers, and sends text files
-(`.csv`, `.txt`, `.tsv`, `.json`, `.md`, `.dat`, `.xml`, `.py`) to the
-worker. The worker writes them into `/home/pyodide/pll_workspace` and
-`chdir`s there so `open("library_loans.csv")` and
-`pd.read_csv("library_loans.csv")` work. Names with `/`, `..`, or a
-leading dot are rejected. Size caps: 2 MiB per file, 8 MiB total, 50
-files. Untitled editors have no folder; the work dir is still cleared
-so a previous run's files do not leak across.
+REPL evaluation, the run plan asks its host for the files under the
+program's folder - the editor through `workspace.fs`, the command line
+through Node's `fs` - and `workspaceFilePolicy.ts` decides, the same for
+both, which are given to the program:
 
-After the run (or REPL line), the worker reports data files that are
-new or were written (mtime changed, even if the bytes match — so two
-functions that write the same CSV both count). PLL writes those back
-with `workspace.fs.writeFile` so students can open `home_loans.csv` in
-the explorer. `.py` files are mounted for `open` and for sibling imports
+- **Which.** Data, text and picture files (`.csv`, `.tsv`, `.txt`,
+  `.json`, `.md`, `.dat`, `.xml`, `.html`, `.log`, `.yaml`, `.toml`,
+  `.ini`, `.cfg`, `.py`, `.svg`, `.png`, `.jpg`, `.gif`, `.webp`, ...)
+  beside the program and in its subfolders, so `open("data/2024.csv")`
+  works. Hidden files and folders, and tools' folders (`__pycache__`,
+  `node_modules`, `venv`), are left out. The editor prefers an unsaved
+  buffer to the file on disk.
+- **As bytes.** A Latin-1 CSV, a `.dat` of packed integers or a PNG
+  arrives exactly as it is on disk, and what the program writes is saved
+  exactly as written.
+- **Limits.** At most 100 files, each at most 2 MB, 8 MB in all - nearest
+  first, so a limit keeps back what is furthest away. A size the listing
+  shows is too big is never read. Every file kept back is named, as a
+  problem ("Not loaded: ... - each file can be at most 2 MB."), so a
+  program that cannot open one is never left without a reason.
+
+The worker writes them into `/home/pyodide/pll_workspace` and `chdir`s
+there, and `__file__` is the program's path in it, so
+`os.path.dirname(__file__)` finds them too. The host remembers each
+file's size and modification time as it was loaded. Untitled editors
+have no folder; the work dir is still cleared so a previous run's files
+do not leak across.
+
+After the run (or REPL line), the worker reports what the program did:
+files it made or wrote (an mtime that moved counts, even if the bytes
+match - so two functions that write the same CSV both count), and files
+it was given and deleted. The host saves them, subfolders included, and
+deletes what was deleted - except where that is not safe, which is named
+with why ("Not saved: ..."):
+
+- a file that is on disk but was **not loaded** (over a limit, say): the
+  program never saw it, so what it wrote would replace it - an appended
+  log would become just the lines appended;
+- a file that **changed on disk** while the program ran - another run, or
+  an edit;
+- an existing **`.py`** - never overwritten or deleted (a new one is
+  saved);
+- a file open in the editor with **unsaved changes**;
+- anything in a **hidden folder**, and past the same limits as loading.
+
+`.py` files are mounted for `open` and for the program's own imports
 whose names are not already installed (a local `helper.py` still
-imports; a local `pandas.py` must not win over the real package). They
-are **not** written back. A short interactions banner lists what was
-saved. The work dir is cwd, so PLL drops `''` from `sys.path` and
-appends the work dir after site-packages.
+imports, and `helpers/shapes.py` as `helpers.shapes`; a local
+`pandas.py` must not win over the real package). The work dir is cwd, so
+PLL drops `''` from `sys.path` and appends the work dir after
+site-packages.
 
 This is a snapshot around the run, not a live VFS: inspect output after
-the program finishes. Binary files and subdirectories are ignored.
+the program finishes.
 
 ## Interactive `input()`
 
@@ -1046,22 +1077,28 @@ things:
 | Editor | Command line |
 | --- | --- |
 | `interactionsView.ts` (webview) | `cli/view.ts` (text on stdout/stderr) |
-| `workspaceFiles.ts` (`vscode.workspace.fs`) | `cli/files.ts` (`node:fs`) |
+| `workspaceFiles.ts` (`vscode.workspace.fs`) | `cli/files.ts` (`node:fs`); which files, and what may be saved, is `workspaceFilePolicy.ts` for both |
 | `ReplSession` (sessions, exec chain) and `ReactorController` | `cli/run.ts` (one linear run) |
 
 The run itself is shared, not copied: `runPlan.ts` holds the steps - the
 `#level` line, static checks, libraries, files, Examplar, tests, the
 program, write back - and each host supplies a `RunHost` saying how to show
-a finding, a banner, a status, an event. The two used to each write the
-sequence out, and drifted: they worded the same failures differently, the
-CLI wrote files back after a failed mount, and the editor reported a
-top-level error in a file with tests twice, and only the editor ran the
-Examplar check; the CLI prints the same cards, from the same lines
-(`examplarPhase.ts` words them; the panel and the terminal only draw
-them). `DesktopPyodideRuntime` now takes its
-asset and worker paths instead of deriving them, so both Node hosts share
-the spawn; `desktop/pyodideWorker.ts` is reused **verbatim**, only bundled
-to a second output path.
+a finding, a banner, a status, an event. Two copies of the sequence would
+drift: word the same failures differently, or run a step in one host and
+not the other. Both run the Examplar check, and the CLI prints the same
+cards, from the same lines (`examplarPhase.ts` words them; the panel and
+the terminal only draw them). `DesktopPyodideRuntime` takes its asset and
+worker paths, a start time limit and where to keep downloaded packages,
+instead of deriving them, so both Node hosts share the spawn;
+`desktop/pyodideWorker.ts` is reused **verbatim**, only bundled to a
+second output path.
+
+The CLI starts Python itself before the plan, so a Python that cannot
+start is said once, with exit 64, and a Ctrl+C while it loads need not
+wait for it; the limit (two minutes) is there because a Pyodide that
+fails to load can report it and never settle. Downloaded packages are
+kept beside Pyodide, or - when that folder cannot be written, as in a
+`sudo npm i -g` install - in the user's cache, `pll-python/pyodide-<version>`.
 
 ### Behaviour that differs, and why
 
@@ -1076,24 +1113,49 @@ to a second output path.
 - **There is no `--level` flag.** The level lives in the file, so a file
   behaves the same everywhere; a flag would be exactly the fragmentation
   the level mechanism exists to avoid.
+- **A file's own tests always run** after its program, even when its
+  Examplar check says it does not yet define what it is checked for. The
+  panel leaves them out there - each would only say a function is
+  missing - but an exit status must not depend on whether the bundle
+  could be fetched.
 
 ### Streams and exit codes
 
 The program's own stdout is the only thing on stdout; everything PLL says
 *about* the run goes to stderr. So `pll hw.py > out.txt` captures exactly
 what the program printed. Exit codes are distinct so an autograder can tell
-the cases apart: `0` ok, `1` the program raised (or Ctrl+C stopped it), `2`
-level checks blocked it, `3` a test failed, `64` bad usage. A program that
-ends itself with `sys.exit(n)` exits with `n`, as CPython would: Python
-records the status in the result's `exit_code` (`_pll_exit_status`), the
+the cases apart: `0` ok, `1` the program raised (or a Stop - Ctrl+C -
+reached it, even one it caught), `2` level checks blocked it, `3` a test
+failed, `64` bad usage or Python could not start. `130` is a second Ctrl+C
+giving up, `141` a closed stdout (`| head`, quietly, as SIGPIPE would) and
+`143` SIGTERM. A program that ends itself with `sys.exit(n)` exits with
+`n`, as CPython would: Python records the status in the result's
+`exit_code` (`_pll_exit_status`, which also takes the low byte of one too
+big to cross as a number, and 255 for one too big for a C long), the
 `done` event carries it, and `runFile` returns it ahead of a test failure.
+
+PLL's own lines start on a line of their own: after a program's unfinished
+line (`print("Total:", end="")`) on a terminal, `CliView` ends it first.
+Output appears as the program prints it - each finished line, up to 100 a
+second, then batched - and `flush()` posts a partial one.
+
+Stdin is a stream of bytes (`stdinBuffer.ts`), read as it comes: `printf
+'a' | pll prog.py` gives `sys.stdin.read()` exactly `"a"`, and a file piped
+in arrives whole, however long. A Ctrl+C while the program waits for input
+ends the wait, and `input()` raises `KeyboardInterrupt`, as in CPython; so
+does one during `time.sleep`, which PLL replaces with a sleep that wakes
+for a Stop. A source file is read as Python reads one: UTF-8, a byte-order
+mark dropped, or the encoding its coding line names - otherwise refused.
 
 ### Packaging
 
-`pnpm run build` also assembles `dist-cli/`: two bundles, a generated
-`package.json` (name, version and links derived from the extension's, so
-they cannot drift), and the CLI readme. `pnpm run cli:pack` produces the
-tarball; `cli:publish` publishes it. There is no second source tree and no
+`pnpm run build` also assembles `dist-cli/`: two bundles (their maps, in a
+development build, are written but not named in them, since they are not
+shipped), a generated `package.json` (name, version and links derived from
+the extension's, so they cannot drift; the commands `pll` and
+`pll-python`, since `npx pll` would fetch another package), the CLI readme
+and the licence. An earlier tarball is removed. `pnpm run cli:pack`
+produces the tarball; `cli:publish` publishes it. There is no second source tree and no
 monorepo - the npm package is a build artifact.
 
 `cli:publish` goes through `scripts/publish-cli.mjs`, which checks
@@ -1117,8 +1179,9 @@ from VS Code 1.101. One floor for the project instead of two.
 `pyodide` is a real dependency rather than bundled, since the package needs
 its `.wasm` and stdlib assets anyway; `require.resolve("pyodide")` finds
 them at run time. That keeps the tarball at about 134 kB. Pyodide's Node
-loader caches any wheels it downloads into that directory, so the first
-`import pandas` needs the network and later ones do not.
+loader caches any wheels it downloads into that directory - or the user's
+cache, when it cannot be written - so the first `import pandas` needs the
+network (which `pll` says, once) and later ones do not.
 
 ## Examplar (wheats and chaffs)
 

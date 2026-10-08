@@ -12,11 +12,22 @@ import type { BundleStore, CachedBundle } from "../common/examplarSource";
  * is not a safe filename, and two assignments can share a basename.
  */
 export function cacheDir(): string {
+  return path.join(cacheRoot(), "examplar");
+}
+
+/**
+ * Where `pll` keeps what it fetches: `$PLL_CACHE_DIR/pll-python`, else
+ * under `$XDG_CACHE_HOME`, else `~/.cache`. A variable that is empty or not
+ * an absolute path is ignored, as the XDG spec says - either would put the
+ * cache in whatever folder `pll` was run from.
+ */
+export function cacheRoot(): string {
+  const usable = (dir: string | undefined) => (dir && path.isAbsolute(dir) ? dir : undefined);
   const base =
-    process.env.PLL_CACHE_DIR ??
-    process.env.XDG_CACHE_HOME ??
+    usable(process.env.PLL_CACHE_DIR) ??
+    usable(process.env.XDG_CACHE_HOME) ??
     (homedir() ? path.join(homedir(), ".cache") : tmpdir());
-  return path.join(base, "pll-python", "examplar");
+  return path.join(base, "pll-python");
 }
 
 export function createFileStore(dir: string = cacheDir()): BundleStore {
