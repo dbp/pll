@@ -71,7 +71,7 @@ def _pll_type_check_parts(message):
         return parts
     actual = _PLL_TC_ACTUAL_RE.match(subject)
     if actual:
-        subject, parts["actual"] = actual.group(1), actual.group(2)
+        subject, parts["actual"] = actual.group(1), _pll_course_type_name(actual.group(2))
     element = _PLL_TC_ELEMENT_RE.match(subject)
     if element:
         parts["element"], subject = element.group(1), element.group(2)
@@ -84,6 +84,16 @@ def _pll_type_check_parts(message):
     elif assigned:
         parts["kind"], parts["name"] = "variable", assigned.group(1)
     return parts
+
+
+def _pll_course_type_name(name):
+    """`Image` for any of the image library's own classes - `_Circle`, a
+    chart - which a student has never seen; any other name as it is."""
+    found = globals().get(name.rsplit(".", 1)[-1])
+    image = globals().get("Image")
+    if isinstance(found, type) and isinstance(image, type) and issubclass(found, image):
+        return "Image"
+    return name
 
 
 def _pll_add_facts(exc, **facts):
@@ -170,7 +180,24 @@ def _pll_enrich_index_error(exc, run):
             return
 
 
-def _pll_enrich_type_check(exc):
+def _pll_return_annotation(frame, run):
+    """The return annotation of the function `frame` runs, as written."""
+    code = frame.f_code
+    try:
+        source = _pll_source_of(code, run)
+        with _pll_without_syntax_warnings():
+            tree = _ast.parse(source)
+    except (SyntaxError, ValueError):
+        return None
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == code.co_name:
+            starts = [node.lineno] + [d.lineno for d in node.decorator_list]
+            if code.co_firstlineno in starts and node.returns is not None:
+                return _ast.get_source_segment(source, node.returns)
+    return None
+
+
+def _pll_enrich_type_check(exc, run=None):
     """Record what failed its annotation, as parts (`check`) - and, for an
     element of an argument, what the element actually is.
 
@@ -193,25 +220,42 @@ def _pll_enrich_type_check(exc):
         # argument is checked in the function it is passed to.
         frames = _pll_student_frames(exc)
         check["level"] = frames[-1][0].f_globals.get("__pll_level__") if frames else None
+        if check["kind"] == "return" and frames:
+            check["annotation"] = _pll_return_annotation(frames[-1][0], run)
         _pll_add_facts(exc, check=check)
     element, name = check.get("element"), check.get("name")
-    if check["kind"] != "argument" or element is None:
+    if check["kind"] not in ("argument", "return") or element is None:
         return
     item = _pll_src_re.match(r"^item (\d+)$", element)
     keyed = _pll_src_re.match(r"^value of key (.+)$", element)
     if item is None and keyed is None:
         return
-    for frame, _line in reversed(_pll_student_frames(exc)):
-        if name in frame.f_locals:
-            container = frame.f_locals[name]
-            break
+    if check["kind"] == "return":
+        # The value returned is a local of typeguard's own checker.
+        tb = exc.__traceback__
+        container = None
+        while tb is not None:
+            if tb.tb_frame.f_code.co_name == "check_return_type_internal":
+                container = tb.tb_frame.f_locals.get("retval")
+            tb = tb.tb_next
+        if container is None:
+            return
     else:
-        return
+        for frame, _line in reversed(_pll_student_frames(exc)):
+            if name in frame.f_locals:
+                container = frame.f_locals[name]
+                break
+        else:
+            return
     try:
         value = container[int(item.group(1))] if item else container[_ast.literal_eval(keyed.group(1))]
     except Exception:
         return
-    _pll_add_facts(exc, element_value=_pll_describe(value))
+    _pll_add_facts(
+        exc,
+        element_value=_pll_describe(value),
+        element_type=_pll_course_type_name(type(value).__name__),
+    )
 
 
 def _pll_innermost_tb(tb, count):
@@ -400,8 +444,9 @@ def _pll_error_info(exc, run=None):
       `NameError` is about, a sequence's real length, the value that failed
       its annotation, a swapped field - and from the code (`_pll_code_facts`).
     """
-    _pll_enrich_type_check(exc)
+    _pll_enrich_type_check(exc, run)
     _pll_enrich_index_error(exc, run)
+    _pll_enrich_module_not_found(exc)
     # The same frames twice over: summaries for their lines, and the live
     # ones for the code they run.
     # Read from far enough in that the vendored frames left out still leave

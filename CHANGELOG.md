@@ -3,6 +3,27 @@
 ## Unreleased
 
 ### Added
+- **Pictures compare with `==`** by what they draw: the same shapes, in the
+  same places, in the same colours, to a hundredth of a pixel - however they
+  were built, and `"red"` is `(255, 0, 0)`. So `assert dot(3) ==
+  circle(3, "solid", "red")` passes, as `check-expect` would; before, every
+  test of a picture failed, comparing two objects by identity. They work in
+  sets and as dictionary keys too.
+- **matplotlib draws in the panel.** `plt.show()` shows each figure as a
+  picture, and so does a figure on a line of its own at a student level; on
+  the command line it is a picture like any other. Before, `plt.plot`
+  failed with "cannot import name 'document' from 'js'". The text and lines
+  `plt.title(...)` and `plt.plot(...)` give back are not printed.
+- **`t.add_row(row)`**, and **`Row`** is a name: `def first(t: Table) ->
+  Row:`, `from pll.table import Row`.
+- **A missing module says why**: Pyodide has no such package (`flask`), the
+  file of yours it may be a misspelling of, a file of yours kept back by a
+  limit, a package that could not be downloaded, or an import PLL could not
+  see before the run.
+- **A failed `assert` between two tables says where they differ** - the
+  first row that does, the columns, or the lengths - where both showed the
+  same first six rows.
+
 - **The command line runs the Examplar check.** A file with an `#examplar`
   line gets the same cards on `pll hw.py` as in the editor - the same lines,
   naming tests and buggy implementations by name and id only - before the
@@ -42,6 +63,48 @@
   build` takes `--out` as well as `-o`.
 
 ### Changed
+- **The shapes are 2htdp/image's.** An outline is a 1-pixel pen inside the
+  shape, at any scale - a circle's is round all the way, and two squares
+  side by side keep their own edges. `rotate`'s box is the turned shapes'
+  own, so a circle turned is as wide as it was and turning again and again
+  does not grow it. Stars are true star polygons, and `right_triangle`'s
+  right angle is at the bottom left. Text is set in a monospace font held to
+  its width, so its size is exact - `"WWW"` no longer runs over the next
+  picture - and its spaces are kept.
+- **A table shows a number as Python prints it**, every digit: `12999.99`,
+  not `13000`, and `2.0`. Columns of numbers line up on the right by what
+  they hold, so numbers still text from a CSV stay on the left. **Save CSV**
+  saves the whole table, every row and every digit; it saved the rounded
+  cells of the first 200 rows.
+- **Charts are pictures**: `above(title, chart)` works, and `-> Image` fits
+  one.
+- **`sum` of whole numbers is a whole number**, exactly (`10**17 + 1`); it
+  was a float. At `beginner` and `intermediate`, `sum` and `mean` refuse
+  `True` and `False`.
+- **`min`, `max` and `order_by` refuse numbers left as text** when comparing
+  them as text would give another answer - `max` of "9", "100", "41" was
+  "9" - and say to convert the column. NaN sorts last, and `mean` or a chart
+  of a column with NaN or infinity names the row.
+- **Excel's CSVs load**: the BOM of "CSV UTF-8" is dropped (it became part
+  of the first column's name), and a plain "CSV" in Windows-1252 is read,
+  with a note, where it was refused as not text.
+- **`transform_column` leaves an error in the student's own function as it
+  was raised**, with its line and its own words; only a conversion like
+  `int` failing on a cell is reworded with the row.
+- **Packages are found wherever they are imported**: in a file of the
+  student's the program imports, after a `;`, second in an `import` line,
+  or named to `importlib.import_module`. A file of theirs called `test.py`
+  is theirs (Pyodide's `test` package was loaded and won).
+- **Reading a URL on the desktop and the command line** gives the bytes as
+  sent - `Zürich` in a CSV raised `UnicodeEncodeError`, and pictures came
+  back wrong - honours a `timeout`, gives up after 60 seconds when none is
+  given, and can be stopped. `urlopen` and `pd.read_csv` raise `HTTPError`
+  for an error page, where pandas read a 404's HTML as a table, and an
+  address that does not answer is `URLError` or requests' `ConnectionError`
+  with what went wrong, where it printed the fetching script's own stack.
+- **PLL's own names are no longer in the student's namespace**: `dir()`
+  lists only theirs, and assigning `_pll_show_top_level` breaks nothing.
+
 - **A file runs once, and its tests run after it.** The tests see what the
   program defined, and their card comes after what it printed. Before, the
   file was run once to find its tests and again as the program, so
@@ -185,6 +248,61 @@
   any such comparison or conversion.
 
 ### Fixed
+- **Pictures built in long loops** - a row of 500 `beside`s, a scene of 1000
+  `place_image`s - no longer fail with a RecursionError said to be
+  recursion in the student's code, and draw as fast as any other; nested
+  `rotate`s took exponential time, and a reactor turning its picture each
+  tick froze.
+- **A colour string can carry nothing into the SVG**: `"rgb(...)"` and
+  `"hsl(...)"` are read number by number, and every colour is written by
+  PLL, so a saved picture cannot run a script or a `<style>` restyle the
+  panel. `"rgb(banana)"` is an error, where it drew an invisible shape. A
+  list of numbers changed after the shape is made changes nothing, and a
+  fourth number is opacity by its type: 0-255 as a whole number, 0.0-1.0 as
+  a fraction.
+- **Image arguments are refused in PLL's words**: NaN, infinities and
+  numbers too big to draw with; `regular_polygon(20, 4.0, ...)` ("write
+  4"); a star with too few points or too large a step; numpy's numbers are
+  numbers. `star`'s messages name `star`; an alignment left out or
+  misspelt says so, with a suggestion; `underlay()` names `underlay`;
+  `"light blue"` suggests `lightblue`; `Image()` says what `Image` is for;
+  `right_triangle` checks its mode and colour.
+- **`load_image` of an SVG** reads its size from its own `<svg>` tag, in
+  any unit; the 2 MB limit holds for an address too; a picture used many
+  times is embedded once.
+- **`load_table`** gives a record's line in the file; keeps a row of blank
+  cells, and an empty cell in a one-column file; refuses a quote never
+  closed, which took the rest of the file into one cell; knows a web page
+  that starts with a BOM or a comment; and says a file kept back for its
+  size was, rather than that there is no such file.
+- **Table and chart mistakes are refused, with the fix**: a column name
+  that is not a string (which crashed the command line's table text);
+  `select_columns` naming one twice; `head(-1)`; `row(1.0)`; `add_column`
+  given a number; a list where a column name goes; a misspelt key in a dict
+  row (which became `None`); `table_from_columns` given a list, a string or
+  uneven columns; `histogram(bins=2.5)`; `t["age"]`, `t[0]`, `for r in t`,
+  `t.age`, and a misspelt method (with the nearest one). Empty
+  tables, pie charts and `scatter_plot` say so in their own words.
+- **Charts**: `histogram(bin_width=)` uses the width; `freq_bar_chart` puts
+  numbers in order of size; `function_plot` leaves a gap where its function
+  has no value (1/x at 0, a square root below 0) rather than failing or
+  drawing through it, and checks it was given a function.
+- **The command line's table text** writes a tab, a new line or an escape
+  in a cell as `\t`, `\n`, `\x1b`.
+- **Explanations**: a function annotated `-> list[int]` that returns words
+  is told about the item, and how to change the annotation, not to return
+  an `int`; `_Circle` and `_PllChart` are `Image`; the "hides a library
+  name" finding says to import under another name for an import, to rename
+  a parameter for a parameter, and that a loop variable further down shares
+  the name rather than was "already defined"; `load-table(...)` and
+  `image-width(...)` are told a name has `_`, not `-`, and
+  `order_by(people, ...)` and `sum(people, "age")` that a table does it
+  itself; `for p in
+  people.rows:` and `people.rows[0]` are told to call the method; `assert x
+  is 60.5` is a finding at the teaching levels; a failed `pytest.approx`
+  names it as written, not `<function approx at 0x...>`.
+- **`help(circle)`** says `pll.image`, not `__main__`.
+
 - **A file that was not loaded is no longer replaced** by what the program
   wrote to it: a log over the size limit, appended to, was saved as just the
   lines appended. Nor is a file that changed on disk while the program ran,

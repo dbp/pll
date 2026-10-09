@@ -648,6 +648,255 @@ table(["i"], [[i] for i in range(500)])
     console.log("    and a row is still a dict: equal, keyed and ordered the same");
   }
 
+  console.log("\n[16] a float is shown as Python prints it, and Save CSV has the whole table");
+  {
+    const rows = Array.from({ length: 250 }, (_, i) => `[${i}, ${i}.25]`).join(", ");
+    const result = py(
+      callRunFile,
+      [
+        `t = table(["n", "x"], [${rows}])`,
+        `money = table(["amount", "flag", "missing"], [[12999.99, True, None], [1234567.89, False, 2.0]])`,
+        "money",
+        "t",
+        'load_table_text = table(["code"], [["9"], ["100"]])',
+        "load_table_text",
+      ].join("\n"),
+      "floats.py",
+      SK,
+    );
+    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    const [money, big, text] = result.displays.filter((d) => d.type === "table");
+    expect(
+      JSON.stringify(money.rows) === JSON.stringify([["12999.99", "True", ""], ["1234567.89", "False", "2.0"]]),
+      `every digit, as Python prints it: ${JSON.stringify(money.rows)}`,
+    );
+    // Only columns of numbers - as Python holds them - line up on the right.
+    expect(JSON.stringify(money.numeric) === "[true,false,true]", `numeric columns: ${JSON.stringify(money.numeric)}`);
+    expect(JSON.stringify(text.numeric) === "[false]", `text that looks like a number is text: ${JSON.stringify(text.numeric)}`);
+    expect(big.shown_count === 200 && big.truncated === true, `the card shows 200: ${big.shown_count}`);
+    const csv = big.csv.trim().split("\n");
+    expect(csv.length === 251 && csv[0] === "n,x" && csv[250] === "249,249.25" && big.csv_rows === 250,
+      `Save CSV: every row, every digit: ${csv.length} lines, last ${csv[250]}`);
+    expect(money.csv === "amount,flag,missing\n12999.99,True,\n1234567.89,False,2.0\n", `CSV of the values: ${JSON.stringify(money.csv)}`);
+    console.log("    repr in the cells, numbers on the right by type, the whole table in the CSV");
+  }
+
+  console.log("\n[17] Excel's CSVs: a BOM is dropped, Windows-1252 is read and said once");
+  {
+    const code = [
+      'with open("bom.csv", "wb") as f:',
+      '    f.write("\\ufeffname,age\\nAda,36\\n".encode("utf-8"))',
+      'with open("excel.csv", "wb") as f:',
+      '    f.write("city,pop\\nZürich,400000\\nKöln,1\\n".encode("cp1252"))',
+      'print(load_table("bom.csv").columns())',
+      'print(load_table("excel.csv").column("city"))',
+      'print(load_table("excel.csv").length())',
+    ].join("\n");
+    const result = py(callRunFile, code, "excel.py", SK);
+    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    const out = result.stdout.trim().split("\n");
+    expect(out[0] === "['name', 'age']", `no BOM on the first name: ${out[0]}`);
+    expect(out[1] === "['Zürich', 'Köln']", `Windows-1252 read: ${out[1]}`);
+    const notes = (result.stderr.match(/note: excel\.csv is not UTF-8/g) ?? []).length;
+    expect(notes === 1, `said once, though read twice: ${JSON.stringify(result.stderr)}`);
+    const again = py(callRunFile, 'load_table("excel.csv")', "excel.py", SK);
+    expect(/note: excel\.csv is not UTF-8/.test(again.stderr ?? ""), `and again in the next run: ${JSON.stringify(again.stderr)}`);
+    const binary = py(callRunFile, 'with open("p.csv", "wb") as f:\n    f.write(b"\\x89PNG\\x00\\x00")\nload_table("p.csv")', "bin.py", SK);
+    expect(/does not look like a text file/.test(binary.error_message ?? ""), `a binary file is still refused: ${binary.error_message}`);
+    console.log("    BOM gone, cp1252 read with one note, binary still refused");
+  }
+
+  console.log("\n[18] load_table counts file lines, keeps blank cells, and refuses a quote left open");
+  {
+    const write = (name, body) => [`with open("${name}", "w") as f:`, `    f.write(${JSON.stringify(body)})`, ""].join("\n");
+    const cases = [
+      [write("lines.csv", 'a,b\n1,"two\nlines"\n3\n') + 'load_table("lines.csv")', false, "Line 4 of 'lines.csv'"],
+      [write("open.csv", 'a,b\n1,"never closed\n3,4\n5,6\n') + 'load_table("open.csv")', false, 'has a quote (") on line 2 that is never closed'],
+      [write("page.csv", "\ufeff<!-- generated -->\n<!DOCTYPE html><html></html>") + 'load_table("page.csv")', false, "gave back a web page"],
+      [write("one.csv", "n\n1\n\n3\n\n\n") + 'print(load_table("one.csv").column("n"))', true, "['1', '', '3']"],
+      [write("gaps.csv", "a,b\n1,2\n,\n3,4\n,\n\n") + 'print(load_table("gaps.csv").length())', true, "3"],
+    ];
+    for (const [code, ok, needle] of cases) {
+      const result = py(callRunFile, code, "csv.py", SK);
+      const text = ok ? result.stdout.trim() : result.error_message ?? "";
+      expect(result.ok === ok && text.includes(needle), `wanted ${ok ? "output" : "error"} ${needle}, got ${result.error_type}: ${text}`);
+    }
+    console.log("    lines as the file has them, blank cells kept, trailing blanks not rows");
+  }
+
+  console.log("\n[19] sums of whole numbers are whole, and True is not a number at the teaching levels");
+  {
+    const code = [
+      't = table(["n", "ok"], [[10**17, True], [1, False], [2, True]])',
+      'print(repr(t.sum("n")), t.mean("n") == (10**17 + 3) / 3)',
+      "def total(tb: Table) -> int:",
+      '    return tb.sum("n")',
+      "print(total(t))",
+    ].join("\n");
+    const beginner = py(callRunFile, code, "sums.py", SK, "beginner");
+    expect(beginner.ok === true && beginner.stdout === "100000000000000003 True\n100000000000000003\n",
+      `exact, and an int: ${JSON.stringify(beginner.stdout)} ${beginner.error_message ?? ""}`);
+    for (const level of ["beginner", "intermediate"]) {
+      const bools = py(callRunFile, 't = table(["ok"], [[True], [False]])\nt.sum("ok")', "bools.py", SK, level);
+      expect(bools.ok === false && /True and False are not numbers/.test(bools.error_message ?? ""),
+        `${level} refuses True: ${bools.error_message}`);
+    }
+    const advanced = py(callRunFile, 't = table(["ok"], [[True], [True], [False]])\nprint(t.sum("ok"), t.mean("ok"))', "bools.py", SK, "advanced");
+    expect(advanced.stdout === "2 0.6666666666666666\n", `advanced counts them, as Python does: ${JSON.stringify(advanced.stdout)}`);
+    console.log("    exact int sums, -> int fits, True refused where it is not a number");
+  }
+
+  console.log("\n[20] NaN and numbers left as text are not compared in silence");
+  {
+    const nan = py(callRunFile, 't = table(["x"], [[3.0], [float("nan")], [1.0], [2.0]])\nprint(t.order_by("x").column("x"))\nt.mean("x")', "nan.py", SK);
+    expect(nan.stdout === "[1.0, 2.0, 3.0, nan]\n", `NaN sorts last: ${JSON.stringify(nan.stdout)}`);
+    expect(nan.error_type === "ValueError" && /holds nan \("not a number"\) in the 2nd row/.test(nan.error_message ?? ""),
+      `mean says which row: ${nan.error_message}`);
+    const hist = py(callRunFile, 't = table(["x"], [[1.0], [float("inf")]])\nt.histogram("x")', "inf.py", SK);
+    expect(hist.error_type === "ValueError" && /holds inf in the 2nd row/.test(hist.error_message ?? ""), `inf: ${hist.error_message}`);
+    const CSV = 'with open("n.csv", "w") as f:\n    f.write("n\\n9\\n100\\n41\\n")\nc = load_table("n.csv")\n';
+    for (const call of ['c.max("n")', 'c.min("n")', 'c.order_by("n")']) {
+      const result = py(callRunFile, CSV + call, "text.py", SK);
+      expect(result.error_type === "TypeError" && /as text "100" comes before "9"/.test(result.error_message ?? "") &&
+        /transform_column\("n", int\)/.test(result.error_message ?? ""), `${call}: ${result.error_message}`);
+    }
+    // Text that sorts the same either way, like zip codes, is left alone.
+    const zips = py(callRunFile, 't = table(["zip"], [["02115"], ["10001"], ["02134"]])\nprint(t.order_by("zip").column("zip"), t.max("zip"))', "zip.py", SK);
+    expect(zips.stdout === "['02115', '02134', '10001'] 10001\n", `zip codes sort as text: ${JSON.stringify(zips.stdout)} ${zips.error_message ?? ""}`);
+    console.log("    NaN last and named; '9' > '100' refused; zip codes fine");
+  }
+
+  console.log("\n[21] charts are images: they combine, annotate and compare like any other");
+  {
+    const code = [
+      't = table(["n"], [[1], [2], [2], [9]])',
+      "def chart(tb: Table) -> Image:",
+      '    return tb.histogram("n")',
+      'pic = above(text("Counts", 14, "black"), chart(t))',
+      "print(image_width(pic), image_height(pic) > 320, chart(t) == chart(t))",
+      'print(t.histogram("n", bin_width=5).to_svg().count("<rect"))',
+      "import re",
+      "print(re.findall(r'text-anchor=\"middle\" fill=\"#444\">([^<]*)<', table(['n'], [[10], [9], [100], [9]]).freq_bar_chart('n').to_svg()))",
+      "print(function_plot(lambda x: 1 / x, -3, 3).to_svg().count(' M '))",
+      "import math",
+      "print(function_plot(math.sqrt, -3, 3) is not None)",
+    ].join("\n");
+    const result = py(callRunFile, code, "charts.py", SK, "beginner");
+    expect(result.ok === true, `ran: ${result.error_type}: ${result.error_message ?? ""}`);
+    const out = result.stdout.trim().split("\n");
+    expect(out[0] === "480 True True", `above a chart, annotated -> Image, equal: ${out[0]}`);
+    // 0-5, 5-10: two bars, and the white background.
+    expect(out[1] === "3", `bin_width is used: ${out[1]}`);
+    expect(out[2] === "['9', '10', '100']", `numbers in order of size: ${out[2]}`);
+    expect(out[3] === "1", `1/x has a gap at 0, not a line through it: ${out[3]}`);
+    expect(out[4] === "True", `sqrt below 0 is a gap, not a failed plot: ${out[4]}`);
+    const notFn = py(callRunFile, "function_plot(3, -3, 3)", "fp.py", SK);
+    expect(/function_plot needs a function, but got the number 3/.test(notFn.error_message ?? ""), `checked: ${notFn.error_message}`);
+    console.log("    above(title, chart), -> Image, bin_width, number order, gaps");
+  }
+
+  console.log("\n[22] an error in the student's own function is theirs, not transform_column's");
+  {
+    const code = [
+      "def per_hour(minutes):",
+      "    return 60 / minutes",
+      't = table(["m"], [[30], [0]])',
+      't.transform_column("m", per_hour)',
+    ].join("\n");
+    const result = py(callRunFile, code, "own.py", SK);
+    expect(result.error_type === "ZeroDivisionError" && result.error_message === "division by zero",
+      `Python's own error: ${result.error_type}: ${result.error_message}`);
+    const frames = (result.error_frames ?? []).filter((f) => f.user);
+    expect(frames.at(-1)?.line === 2 && frames.at(-1)?.function === "per_hour", `at their line: ${JSON.stringify(frames.at(-1))}`);
+    // A ValueError of their own is theirs too, in Python's words.
+    const own = py(callRunFile, 'def hours(m):\n    return int(m) / 60\n\nt = table(["m"], [["90"], ["abc"]])\nt.transform_column("m", hours)', "ownv.py", SK);
+    expect(own.error_type === "ValueError" && own.error_message === "invalid literal for int() with base 10: 'abc'",
+      `their ValueError, as raised: ${own.error_message}`);
+    // An exception whose constructor takes other arguments survives.
+    const odd = py(callRunFile, 't = table(["b"], [[b"\\xff"]])\nt.transform_column("b", bytes.decode)', "odd.py", SK);
+    expect(odd.error_type === "UnicodeDecodeError", `UnicodeDecodeError, as raised: ${odd.error_type}: ${odd.error_message}`);
+    // A conversion is still reworded with the row and the advice.
+    const blank = py(callRunFile, 't = table(["n"], [["1"], [""]])\nt.transform_column("n", int)', "conv.py", SK);
+    expect(/failed on the 2nd row, whose value is blank/.test(blank.error_message ?? ""), `int still explained: ${blank.error_message}`);
+    console.log("    the student's error kept, with its line; conversions still explained");
+  }
+
+  console.log("\n[23] names, slices, rows: refused in PLL's words");
+  {
+    const T = 't = table(["name", "age"], [["Ada", 36], ["Alan", 41]])\n';
+    for (const [code, kind, needle] of [
+      [`${T}t.add_column(5, [1, 2])`, "TypeError", "column name has to be a string"],
+      ['table_from_columns({5: [1]})', "TypeError", "column name has to be a string"],
+      ['table_from_columns([1, 2])', "TypeError", "takes one dictionary"],
+      ['table_from_columns({"a": "abc"})', "TypeError", 'needs a list of values for each column, but "a" is the string "abc"'],
+      ['table_from_columns({"a": [1, 2, 3], "b": [1, 2]})', "ValueError", '"a" has 3 values and "b" has 2'],
+      [`${T}t.select_columns(["name", "name"])`, "ValueError", 'given "name" more than once'],
+      [`${T}t.column(["name"])`, "TypeError", "a column is named by a string"],
+      [`${T}t.row(1.0)`, "TypeError", "got 1.0, which is a float: write row(1)"],
+      [`${T}t.head(-1)`, "ValueError", "cannot be negative"],
+      [`${T}t.tail("2")`, "TypeError", "as a whole number like tail(5)"],
+      [`${T}t.add_column("x", 0)`, "TypeError", "add_column needs a list of values"],
+      ['table(["age"], []).mean("age")', "ValueError", "mean needs at least one row"],
+      ['table(["name", "age"], [{"nmae": "Ada", "age": 3}])', "ValueError", '"nmae", which is not one of the columns (name, age). Did you mean "name"?'],
+      [`${T}t.histogram("age", bins=2.5)`, "TypeError", "`bins` has to be a whole number"],
+      [`${T}t.scatter_plot("name", "age")`, "TypeError", "scatter_plot needs a column of numbers"],
+      ['table(["l", "v"], [["a", -1]]).pie_chart("l", "v")', "ValueError", 'column "v" holds -1 in the 1st row'],
+      [`${T}t["age"]`, "TypeError", 'write t.column("age")'],
+      [`${T}t[0]`, "TypeError", "write t.row(0)"],
+      [`${T}[r for r in t]`, "TypeError", "loop over t.rows()"],
+      [`${T}t.age`, "AttributeError", 'write t.column("age")'],
+      [`${T}t.colum("age")`, "AttributeError", "a table has no method `colum`. Did you mean: 'column'?"],
+    ]) {
+      const result = py(callRunFile, code, "names.py", SK);
+      const message = result.error_message ?? "";
+      expect(result.ok === false && result.error_type === kind && message.includes(needle),
+        `${code.split("\n").at(-1)}: wanted ${kind} "${needle}", got ${result.error_type}: ${message}`);
+    }
+    console.log("    twenty-one mistakes, each with the fix");
+  }
+
+  console.log("\n[24] add_row, Row, and help in pll.table");
+  {
+    const code = [
+      'people = table(["name", "age"], [["Ada", 36]])',
+      'more = people.add_row(["Alan", 41]).add_row({"name": "Grace"})',
+      "print(more.rows(), people.length())",
+      "def first(tb: Table) -> Row:",
+      "    return tb.row(0)",
+      "print(first(more))",
+      "from pll.table import Row as R",
+      "print(R is Row)",
+      "import time",
+      "start = time.time()",
+      "big = table(['i'], [])",
+      "for i in range(2000):",
+      "    big = big.add_row([i])",
+      "print(big.length(), time.time() - start < 5)",
+      "import pydoc",
+      "print(pydoc.render_doc(load_table).splitlines()[0])",
+    ].join("\n");
+    const result = py(callRunFile, code, "rows.py", SK, "advanced");
+    expect(result.ok === true, `ran: ${result.error_type}: ${result.error_message ?? ""}`);
+    const out = result.stdout.trim().split("\n");
+    expect(out[0] === "[{'name': 'Ada', 'age': 36}, {'name': 'Alan', 'age': 41}, {'name': 'Grace', 'age': None}] 1",
+      `added, and the first table unchanged: ${out[0]}`);
+    expect(out[1] === "{'name': 'Ada', 'age': 36}" && out[2] === "True", `Row is a name: ${out.slice(1, 3)}`);
+    expect(out[3] === "2000 True", `row by row in time: ${out[3]}`);
+    expect(out[4] === "Python Library Documentation: function load_table in module pll.table", `help: ${out[4]}`);
+    console.log("    add_row, `-> Row`, `from pll.table import Row`, help names pll.table");
+  }
+
+  console.log("\n[25] a file kept back for its size is said to be, not missing");
+  {
+    pyodide.runPython('_pll_note_left_out(\'[{"name": "big.csv", "why": "each file can be at most 2 MB"}]\')');
+    const result = py(callRunFile, 'load_table("big.csv")', "big.py", SK);
+    expect(result.error_type === "FileNotFoundError" &&
+      result.error_message === '"big.csv" is next to your program, but it was not loaded: each file can be at most 2 MB.',
+      `why it is not there: ${result.error_message}`);
+    pyodide.runPython("_pll_note_left_out('[]')");
+    console.log("    not loaded, and why");
+  }
+
   callRunFile.destroy?.();
   callReplEval.destroy?.();
 

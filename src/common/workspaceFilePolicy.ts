@@ -77,6 +77,11 @@ const WHY_LEFT_OUT: Record<LeftOut["reason"], (action: "loaded" | "saved") => st
   failed: () => "it could not be written",
 };
 
+/** Why `file` was kept back, as the end of a sentence about loading it. */
+export function whyNotLoaded(file: LeftOut): string {
+  return WHY_LEFT_OUT[file.reason]("loaded");
+}
+
 /**
  * What to say about the files a limit or a rule kept back - one sentence
  * per reason - so that a program that cannot open or import one, or whose

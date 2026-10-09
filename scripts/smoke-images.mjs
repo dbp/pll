@@ -269,7 +269,7 @@ async function main() {
   {
     const code = `beside(crop(0, 0, 10, 10, square(50, "solid", "red")), place_image(square(30, "solid", "blue"), 5, 5, empty_scene(40, 40)))`;
     const img = imagesOf(py(callReplEval, [code, SK]))[0];
-    const ids = [...new Set((img.data.match(/id="pllclip\d+"/g) || []))];
+    const ids = [...new Set((img.data.match(/id="pll[0-9a-f]+c\d+"/g) || []))];
     expect(ids.length === 2, `two clip regions should get distinct ids, got ${ids.length}`);
     expect(img.data.includes("clip-path"), "clipping should be applied");
   }
@@ -649,6 +649,279 @@ async function main() {
     ]);
     expect(others.ok === true, `case and keywords still work: ${others.error_message ?? ""}`);
     console.log("    four misspellings named, all 148 CSS colours accepted");
+  }
+
+  console.log("\n[22] images are == when they draw alike");
+  {
+    const lines = [
+      "from dataclasses import dataclass",
+      "def dot(r):",
+      '    return circle(r, "solid", "red")',
+      "@dataclass",
+      "class Badge:",
+      "    pic: Image",
+      "    n: int",
+      "RED = square(10, 'solid', 'red')",
+      "BLUE = square(10, 'solid', 'blue')",
+      "checks = [",
+      '    dot(3) == circle(3, "solid", "red"),',
+      '    Badge(dot(3), 1) == Badge(circle(3, "solid", "red"), 1),',
+      // The same picture built two ways: painting order counts only where shapes overlap.
+      "    beside(RED, BLUE) == overlay_xy(BLUE, -10, 0, RED),",
+      '    rotate(90, rectangle(10, 20, "solid", "red")) == rectangle(20, 10, "solid", "red"),',
+      '    rotate(90, ellipse(10, 20, "solid", "red")) == ellipse(20, 10, "solid", "red"),',
+      '    circle(5, "solid", "red") == circle(5, "solid", (255, 0, 0)) == circle(5, "solid", "#f00") == circle(5, "solid", "rgb(255, 0, 0)"),',
+      '    place_image(RED, 20, 20, empty_scene(40, 40)) == overlay(RED, empty_scene(40, 40)),',
+      "    scale(2, RED) == square(20, 'solid', 'red'),",
+      "]",
+      "differ = [",
+      '    circle(5, "solid", "red") == circle(5, "outline", "red"),',
+      '    circle(5, "solid", "red") == circle(6, "solid", "red"),',
+      "    beside(RED, BLUE) == beside(BLUE, RED),",
+      // Overlapping, so which is on top is part of what is drawn.
+      "    overlay(RED, scale(2, BLUE)) == overlay(scale(2, BLUE), RED),",
+      '    text("a", 10, "red") == text("b", 10, "red"),',
+      "    RED == 3,",
+      "]",
+      'print(all(checks), [i for i, c in enumerate(checks) if not c])',
+      'print(any(differ), [i for i, c in enumerate(differ) if c])',
+      // Equal images hash alike, so they work in sets and as dictionary keys.
+      'print(len({dot(3), circle(3, "solid", (255, 0, 0)), square(3, "solid", "red")}))',
+    ];
+    const result = py(callRunFile, [lines.join("\n"), "eq.py", SK]);
+    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    const out = (result.stdout ?? "").trim().split("\n");
+    expect(out[0] === "True []", `drawn alike, equal: ${out[0]}`);
+    expect(out[1] === "False []", `drawn differently, not: ${out[1]}`);
+    expect(out[2] === "2", `hashes agree with ==: ${out[2]}`);
+
+    // And so a test of a function that draws passes.
+    const tested = py(callRunFile, [
+      'def dot(r: int) -> Image:\n    return circle(r, "solid", "red")\n\ndef test_dot():\n    assert dot(3) == circle(3, "solid", "red")\n',
+      "eqtest.py", SK, "beginner", true,
+    ]);
+    expect(tested.tests?.passed === 1 && tested.tests?.failed === 0, `the test passes: ${JSON.stringify(tested.tests)}`);
+    console.log("    alike is equal, whichever way it was built; different is not");
+  }
+
+  console.log("\n[23] a picture built in a long loop draws, quickly");
+  {
+    const code = [
+      "import time",
+      "start = time.time()",
+      "row = empty_image",
+      "for i in range(3000):",
+      '    row = beside(row, circle(2, "solid", "blue"))',
+      "scene = empty_scene(400, 400)",
+      "for i in range(2000):",
+      '    scene = place_image(circle(2, "solid", "blue"), (i * 7) % 400, (i * 13) % 400, scene)',
+      "spun = triangle(40, 'solid', 'red')",
+      "for i in range(36):",
+      "    spun = rotate(10, spun)",
+      "print(image_width(row), image_width(spun), image_height(spun))",
+      "print(row.to_svg().count('<circle'), scene.to_svg().count('<circle'), '<g transform' in scene.to_svg())",
+      "print(scene == scene, time.time() - start < 20)",
+      // An image never changes, so a copy is the image - and no recursion.
+      "import copy",
+      "print(copy.deepcopy(row) is row)",
+      "row",
+    ].join("\n");
+    const result = py(callRunFile, [code, "deep.py", SK]);
+    expect(result.ok === true, `no RecursionError: ${result.error_type}: ${result.error_message ?? ""}`);
+    const out = (result.stdout ?? "").trim().split("\n");
+    // Thirty-six turns of ten degrees come back to where they started, at the same size.
+    expect(out[0] === "12000 40 35", `sizes: ${out[0]}`);
+    // Flat: one element per shape, nothing nested.
+    expect(out[1] === "3000 2000 False", `every shape drawn, none nested: ${out[1]}`);
+    expect(out[2] === "True True", `compared and in time: ${out[2]}`);
+    expect(out[3] === "True", `copied as itself: ${out[3]}`);
+    expect(imagesOf(result).length === 1, "and shown");
+    console.log("    3000 besides, 2000 place_images and 36 nested rotations");
+  }
+
+  console.log("\n[24] the geometry is 2htdp's");
+  {
+    const code = [
+      "def size(i):",
+      "    return (image_width(i), image_height(i))",
+      // rotate's box is the turned shape's own.
+      'print(size(rotate(45, circle(20, "solid", "red"))), size(rotate(45, square(20, "solid", "red"))))',
+      'print(size(rotate(90, beside(circle(10, "solid", "red"), circle(10, "solid", "red")))))',
+      // A crop's own edges turn with it, as 2htdp's do.
+      'print(size(rotate(45, crop(0, 0, 10, 10, circle(100, "solid", "red")))))',
+      // A 1-pixel pen inside the shape.
+      'print(circle(20, "outline", "red").to_svg())',
+      'print(square(20, "outline", "black").to_svg())',
+      'print(line(30, 0, "red").to_svg())',
+      // The right angle at the bottom left.
+      'print(right_triangle(40, 30, "solid", "blue").to_svg())',
+      // A true star: the inner points where the lines between every 2nd corner cross.
+      "import re",
+      'pts = [tuple(map(float, p.split(","))) for p in re.search(r\'points="([^"]+)"\', star(40, "solid", "gold").to_svg()).group(1).split()]',
+      "import math",
+      "centre = (pts[0][0], pts[0][1] + 40 / (2 * math.sin(math.pi / 5)))",
+      "print(round(math.dist(pts[1], centre) / math.dist(pts[0], centre), 3))",
+    ].join("\n");
+    const result = py(callRunFile, [code, "geom.py", SK]);
+    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    const out = (result.stdout ?? "").trim().split("\n");
+    expect(out[0] === "(40, 40) (29, 29)", `a circle turned is as wide: ${out[0]}`);
+    expect(out[1] === "(20, 40)", `two circles turned, measured by the circles: ${out[1]}`);
+    expect(out[2] === "(15, 15)", `a crop's box turns with it: ${out[2]}`);
+    expect(/<circle cx="20" cy="20" r="19.5" fill="none" stroke="red" stroke-width="1"/.test(out[3]), `circle outline inside: ${out[3]}`);
+    expect(/<rect x="0.5" y="0.5" width="19" height="19" fill="none" stroke="black" stroke-width="1"/.test(out[4]), `square outline inside: ${out[4]}`);
+    expect(/<line x1="0" y1="0.5" x2="30" y2="0.5" stroke="red" stroke-width="1"/.test(out[5]), `a line's pen is 1 pixel, in its box: ${out[5]}`);
+    expect(/points="0,0 0,30 40,30"/.test(out[6]), `right angle bottom-left: ${out[6]}`);
+    expect(out[7] === "0.382", `the pentagram's inner radius: ${out[7]}`);
+    console.log("    rotate measures shapes, pens are 1 pixel inside, stars and right triangles are true");
+  }
+
+  console.log("\n[25] text is measured exactly, in a monospace font, spaces kept");
+  {
+    const code = [
+      'for s in ("WWW", "iii", "a   b", ""):',
+      '    t = text(s, 20, "black")',
+      "    print(repr(s), t.width, t.height)",
+      'print(text("a   b", 20, "black").to_svg())',
+      // Wide characters take two cells.
+      'print(text("日本", 10, "black").width)',
+    ].join("\n");
+    const result = py(callRunFile, [code, "text.py", SK]);
+    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    const out = (result.stdout ?? "").trim().split("\n");
+    expect(out[0] === "'WWW' 36.0 24.0" && out[1] === "'iii' 36.0 24.0", `every letter one width: ${out.slice(0, 2)}`);
+    expect(out[2] === "'a   b' 60.0 24.0" && out[3] === "'' 0.0 24.0", `spaces count, nothing is nothing: ${out.slice(2, 4)}`);
+    expect(
+      /font-family="monospace"/.test(out[4]) && /textLength="60"/.test(out[4]) && /xml:space="preserve"/.test(out[4]) && />a {3}b</.test(out[4]),
+      `monospace, held to its width, spaces kept: ${out[4]}`,
+    );
+    expect(out[5] === "24.0", `wide characters: ${out[5]}`);
+    console.log("    every character one cell, spaces kept, wide ones two");
+  }
+
+  console.log("\n[26] a colour is read, never copied into the SVG");
+  {
+    const code = [
+      'for c in ["red\\"/><script>alert(1)</script><x a=\\"", "rgb(banana)", "rgb(1,2,3);fill:url(x)", "red; } * { display: none"]:',
+      "    try:",
+      '        circle(5, "solid", c)',
+      '        print("drawn", c)',
+      "    except ValueError as e:",
+      '        print("refused")',
+      "import re",
+      'svg = beside(circle(5, "solid", "rgb(10 20 30 / 50%)"), circle(5, "solid", "hsl(120, 100%, 25%)"), circle(5, "solid", (1, 2, 3, 0.25)), circle(5, "outline", "#ABC"), text("x", 9, "Navy")).to_svg()',
+      'print(sorted(set(re.findall(r\'(?:fill|stroke)="([^"]*)"\', svg))))',
+      "col = [255, 0, 0]",
+      'pic = circle(5, "solid", col)',
+      "col[0] = 0",
+      'print(pic == circle(5, "solid", "red"))',
+      // The fourth number: a whole number from 0 to 255, or a fraction.
+      'print(circle(5, "solid", (255, 0, 0, 128)) == circle(5, "solid", (255, 0, 0, 128 / 255)), circle(5, "solid", (255, 0, 0, 1)) == circle(5, "solid", (255, 0, 0, 1.0)))',
+    ].join("\n");
+    const result = py(callRunFile, [code, "paint.py", SK]);
+    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    const out = (result.stdout ?? "").trim().split("\n");
+    expect(out.slice(0, 4).every((l) => l === "refused"), `markup refused: ${out.slice(0, 4)}`);
+    expect(
+      out[4] === "['#008000', '#010203', '#0a141e', '#aabbcc', 'navy', 'none']",
+      `only PLL's own spellings reach the SVG: ${out[4]}`,
+    );
+    expect(out[5] === "True", `a list changed later changes nothing drawn: ${out[5]}`);
+    expect(out[6] === "True False", `1 is out of 255, 1.0 is solid: ${out[6]}`);
+    console.log("    markup refused, colours rewritten, lists copied, opacity by type");
+  }
+
+  console.log("\n[27] a number that cannot be drawn is refused in PLL's words");
+  {
+    await pyodide.loadPackage("numpy");
+    for (const [code, kind, needle] of [
+      ['circle(float("nan"), "solid", "red")', "ValueError", 'circle\'s `radius` (the 1st argument) is NaN ("not a number")'],
+      ['rectangle(-float("inf"), 3, "solid", "red")', "ValueError", "rectangle's `width` (the 1st argument) cannot be infinite, but it is -inf"],
+      ['circle(10**400, "solid", "red")', "ValueError", "is a number too big to draw with"],
+      ['regular_polygon(20, 4.0, "solid", "red")', "TypeError", "`sides` (the 2nd argument) has to be a whole number, but it is 4.0: write 4"],
+      ['star_polygon(20, 2, 1, "solid", "red")', "ValueError", "`points_count` (the 2nd argument) cannot be less than 3, but it is 2"],
+      ['star_polygon(20, 5, 3, "solid", "red")', "ValueError", "`step` (the 3rd argument) has to be less than half of `points_count`"],
+      ['star(20, "solidd", "red")', "ValueError", "star's `mode` (the 2nd argument)"],
+      ['beside_align(circle(5, "solid", "red"), circle(5, "solid", "red"))', "TypeError", 'beside_align takes the alignment first, then the images: write beside_align("top", image1, image2)'],
+      ['beside_align("cener", circle(5, "solid", "red"))', "ValueError", "`y_place` (the 1st argument) should be \"top\", \"center\" or \"bottom\", but it is the string \"cener\". Did you mean \"center\"?"],
+      ["underlay()", "TypeError", "underlay needs at least one image"],
+      ['circle(5, "solid", "light blue")', "ValueError", 'Did you mean "lightblue"?'],
+      ['right_triangle(10, 10, "solid", "bleu")', "ValueError", "right_triangle's `color` (the 4th argument)"],
+      ["Image()", "TypeError", "Image is the type of pictures, not a way to make one"],
+    ]) {
+      const result = py(callRunFile, [code, "nums.py", SK]);
+      const message = result.error_message ?? "";
+      expect(result.ok === false && result.error_type === kind && message.includes(needle), `${code} -> ${kind} "${needle}", got ${result.error_type}: ${message}`);
+    }
+    const numpy = py(callRunFile, [
+      'import numpy as np\nprint(image_width(circle(np.int64(5), "solid", (np.int64(1), 2, 3))), image_width(rotate(np.float64(90), square(np.int32(4), "solid", "red"))))\nimport pydoc\nprint(pydoc.render_doc(circle).splitlines()[0])',
+      "np.py", SK,
+    ]);
+    expect(numpy.stdout === "10 4\nPython Library Documentation: function circle in module pll.image\n", `numpy's numbers are numbers, and help names pll.image: ${JSON.stringify(numpy.stdout)} ${numpy.error_message ?? ""}`);
+    console.log("    NaN, infinity, huge, 4.0 sides, bad stars, alignment, names - all PLL's words");
+  }
+
+  console.log("\n[28] load_image measures an SVG by its own tag, and embeds a picture once");
+  {
+    const code = [
+      "def write(name, text):",
+      "    with open(name, 'w') as f:",
+      "        f.write(text)",
+      // A child's width, a stroke-width and a comment do not count; units do.
+      "write('units.svg', '<?xml version=\"1.0\"?><!-- <svg width=\"999\" height=\"999\"> --><svg xmlns=\"http://www.w3.org/2000/svg\" stroke-width=\"7\" width=\"1in\" height=\"36pt\"><rect width=\"500\" height=\"500\"/></svg>')",
+      "write('box.svg', '<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 30 20\"><rect width=\"300\"/></svg>')",
+      "write('half.svg', '<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"60\" viewBox=\"0 0 30 20\"/>')",
+      "for name in ('units.svg', 'box.svg', 'half.svg'):",
+      "    pic = load_image(name)",
+      "    print(image_width(pic), image_height(pic))",
+      "pic = load_image('box.svg')",
+      "svg = beside(pic, pic, rotate(90, pic)).to_svg()",
+      "print(svg.count('base64,'), svg.count('<use '))",
+      "with open('big.png', 'wb') as f:",
+      "    f.write(b'\\x89PNG\\r\\n\\x1a\\n' + bytes(3 * 1024 * 1024))",
+      "try:",
+      "    load_image('big.png')",
+      "except ValueError as e:",
+      "    print(e)",
+    ].join("\n");
+    const result = py(callRunFile, [code, "svgsize.py", SK]);
+    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    const out = (result.stdout ?? "").trim().split("\n");
+    expect(out[0] === "96 48", `width and height in units: ${out[0]}`);
+    expect(out[1] === "30 20", `the viewBox: ${out[1]}`);
+    expect(out[2] === "60 40", `one side, the other from the viewBox: ${out[2]}`);
+    expect(out[3] === "1 3", `embedded once, drawn three times: ${out[3]}`);
+    expect(out[4] === "load_image reads at most 2 MB, and 'big.png' is 3.0 MB.", `a size limit: ${out[4]}`);
+    console.log("    sized by the root tag in pixels; one copy of the bytes; 2 MB");
+  }
+
+  console.log("\n[29] matplotlib draws with PLL's backend: plt.show() and a figure at top level are pictures");
+  {
+    await pyodide.loadPackage("matplotlib");
+    const code = [
+      "import matplotlib.pyplot as plt",
+      "plt.plot([1, 2, 3], [4, 1, 9])",
+      'plt.title("hello")',
+      "plt.show()",
+      "fig, ax = plt.subplots()",
+      'ax.bar(["a", "b"], [3, 5])',
+      "fig",
+      'print("done")',
+    ].join("\n");
+    const result = py(callRunFile, [code, "plot.py", SK, "beginner"]);
+    expect(result.ok === true, `ran: ${result.error_type}: ${result.error_message ?? ""}`);
+    const images = imagesOf(result);
+    // One for plt.show(), one for `fig`; plt's own return values are not printed.
+    expect(images.length === 2, `two pictures: ${images.length}`);
+    // A figure shown at top level is closed, so a show() after it does not repeat it.
+    const once = py(callRunFile, ["import matplotlib.pyplot as plt\nfig = plt.figure()\nfig\nplt.show()\n", "once.py", SK, "beginner"]);
+    expect(imagesOf(once).length === 1, `shown once: ${imagesOf(once).length} ${once.error_message ?? ""}`);
+    expect(images.every((i) => i.width === 640 && i.height === 480 && i.data.includes("data:image/png;base64,")), "each a 640x480 PNG");
+    expect(result.stdout === "done\n", `nothing of matplotlib's printed: ${JSON.stringify(result.stdout)}`);
+    // At raw, as in Python, a value at top level is not shown - but plt.show() is a call.
+    const raw = py(callRunFile, ["import matplotlib.pyplot as plt\nfig = plt.figure()\nfig\nplt.plot([1], [1])\nplt.show()\n", "raw.py", SK, "raw"]);
+    expect(raw.ok === true && imagesOf(raw).length === 1, `raw: show() only: ${imagesOf(raw).length} ${raw.error_message ?? ""}`);
+    console.log("    show() and a top-level figure, each once, as a PNG");
   }
 
   console.log("\n[21] the prompt says a compile warning once too");

@@ -582,6 +582,33 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         # `if a == Boa:` is always False - a value is never equal to the
         # class it was made from. `type(a) == Boa`, though, is a real check.
         sides = [node.left] + list(node.comparators)
+        # `x is 60.5`, `name is "Ada"`: `is` asks whether two are the same
+        # object, which a number or a string written out need not be -
+        # Python's SyntaxWarning, as a finding of the level's.
+        for op, left, right in zip(node.ops, sides, sides[1:]):
+            if isinstance(op, (_ast.Is, _ast.IsNot)):
+                literal = next(
+                    (
+                        side
+                        for side in (left, right)
+                        if isinstance(side, _ast.Constant)
+                        and side.value is not None
+                        and not isinstance(side.value, bool)
+                        and side.value is not Ellipsis
+                    ),
+                    None,
+                )
+                if literal is not None:
+                    self.found.append(
+                        _pll_finding(
+                            "is-literal",
+                            "WrongComparison",
+                            node.lineno,
+                            node.col_offset,
+                            operator="is not" if isinstance(op, _ast.IsNot) else "is",
+                            literal=_ast.get_source_segment(self._code, literal),
+                        )
+                    )
         if any(isinstance(op, (_ast.Eq, _ast.NotEq)) for op in node.ops):
             for i, side in enumerate(sides):
                 others = sides[:i] + sides[i + 1 :]
@@ -812,14 +839,14 @@ def _pll_static_analyze(code, level, filename, session_key=None):
         # outer binding's location and scope kind. We walk parents inner-to-
         # outer and refuse to overwrite, so the closest enclosing binding wins
         # (which is the one Python's lookup rules would resolve to).
-        enclosing = {}  # name -> (lineno, col, scope_kind)
+        enclosing = {}  # name -> (lineno, col, scope_kind, binding kind)
         cur = scope.parent
         while cur is not None:
             for outer_name, outer_locs in cur.bindings.items():
                 if outer_name in enclosing:
                     continue
                 outer_first = outer_locs[0]
-                enclosing[outer_name] = (outer_first[0], outer_first[1], cur.kind)
+                enclosing[outer_name] = (outer_first[0], outer_first[1], cur.kind, outer_first[2])
             cur = cur.parent
 
         shadowed_in_scope = set()
@@ -857,9 +884,11 @@ def _pll_static_analyze(code, level, filename, session_key=None):
                 findings.append(_pll_finding(
                     "shadowing", "Shadowing", report_loc[0], report_loc[1], name,
                     scope_kind=scope.kind,
+                    binding=report_loc[2],
                     outer_line_number=outer[0],
                     outer_column=outer[1],
                     outer_scope_kind=outer[2],
+                    outer_binding=outer[3],
                 ))
             elif name in builtins_set and defining_loc is not None:
                 shadowed_in_scope.add(name)
@@ -873,6 +902,8 @@ def _pll_static_analyze(code, level, filename, session_key=None):
                     "shadowing-library", "Shadowing", defining_loc[0], defining_loc[1], name,
                     scope_kind=scope.kind,
                     library=library_names[name],
+                    binding=defining_loc[2],
+                    module=defining_loc[3],
                 ))
 
         # ---- Then reassignment (skip names already shadow-flagged) ----

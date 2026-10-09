@@ -170,12 +170,37 @@ def _pll_extract_display(value):
     return None
 
 
+def _pll_matplotlib_figure(value):
+    """The figure a matplotlib Figure or Axes is, or None.
+
+    Looked up in `sys.modules`, so a program that never imports matplotlib
+    never loads it.
+    """
+    figures = _sys.modules.get("matplotlib.figure")
+    if figures is not None and isinstance(value, figures.Figure):
+        return value
+    axes = _sys.modules.get("matplotlib.axes")
+    if axes is not None and isinstance(value, axes.Axes):
+        return value.figure
+    return None
+
+
+def _pll_is_matplotlib(value):
+    """Whether `value` is one of matplotlib's objects, or holds one: what
+    `plt.title(...)` or `plt.plot(...)` returns, which says nothing to read."""
+    if isinstance(value, (list, tuple)):
+        return any(_pll_is_matplotlib(item) for item in value[:20])
+    return type(value).__module__.split(".")[0] == "matplotlib"
+
+
 def _pll_show_top_level(value):
     """Emit a value produced by a top-level expression statement.
 
     Mirrors the behavior of Python's interactive shell: `None` is suppressed,
     PLL images and tables are captured for the host to render, anything
     else is printed via `repr` so bare expressions like `1 + 2` still display.
+    A matplotlib figure is shown as a picture; the lines and labels
+    matplotlib's functions return are not printed.
     """
     if value is None:
         return
@@ -184,6 +209,12 @@ def _pll_show_top_level(value):
     # bootstrap still knows nothing about reactorLib.
     if getattr(value, "_pll_already_displayed", False):
         return
+    figure = _pll_matplotlib_figure(value)
+    if figure is not None:
+        globals()["_pll_show_figure"](figure)
+        return
+    if _pll_is_matplotlib(value):
+        return
     payload = _pll_extract_display(value)
     if payload is not None:
         _pll_push(payload)
@@ -191,9 +222,8 @@ def _pll_show_top_level(value):
     print(repr(value))
 
 
-# Seed the template with the auto-display helper. The image library names
-# get added later by PYODIDE_INSTALL_PY.
-_pll_initial_globals["_pll_show_top_level"] = _pll_show_top_level
+# Called by the code `_PllTopLevelExprWrapper` adds.
+_pll_hidden("show_top_level", _pll_show_top_level)
 
 
 def _pll_session_module(session_key):

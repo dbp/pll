@@ -23,7 +23,7 @@ export const Uri = {
   joinPath: (base, ...parts) => ({ path: [base.path, ...parts].join("/") }),
 };
 export const commands = { executeCommand: async () => undefined };
-export const window = {};
+export const window = { showSaveDialog: async () => undefined };
 export const workspace = {};
 `;
 
@@ -166,7 +166,11 @@ const webview = {
 };
 view.resolveWebviewView({ webview, onDidDispose: () => ({ dispose() {} }), show() {} });
 
-await page.exposeFunction("__pllToHost", (msg) => receive(msg));
+const fromView = [];
+await page.exposeFunction("__pllToHost", (msg) => {
+  fromView.push(msg);
+  receive(msg);
+});
 // `acquireVsCodeApi`, with its state kept across a reload the way VS Code
 // keeps it. An init script runs before the page's own and is not subject
 // to its CSP, so the policy under test is the view's alone.
@@ -305,6 +309,38 @@ try {
   const arrived = toHost.slice(sentBefore);
   expect(JSON.stringify(arrived) === JSON.stringify([{ type: "reactorControl", id: "r1", action: "seek", index: 3 }]),
     `only the well-formed one arrives: ${JSON.stringify(arrived)}`);
+
+  console.log("\n[8] a table card lines numbers up by type, and Save CSV sends the whole table");
+  {
+    view.append({
+      kind: "table",
+      columns: ["code", "amount"],
+      rows: [["9", "12999.99"], ["100", "2.0"]],
+      rowCount: 300,
+      shownCount: 2,
+      truncated: true,
+      numeric: [false, true],
+      csv: "code,amount\n9,12999.99\n100,2.0\n",
+      csvRows: 300,
+      source: "t.py",
+    });
+    await settle();
+    const card = await page.evaluate(() => {
+      const table = [...document.querySelectorAll(".entry.table")].at(-1);
+      return {
+        right: [...table.querySelectorAll("tbody td")].map((td) => td.classList.contains("num")),
+        title: table.querySelector("button")?.title,
+      };
+    });
+    // Text that looks like a number stays on the left: it is text.
+    expect(JSON.stringify(card.right) === "[false,true,false,true]", `aligned by what Python holds: ${JSON.stringify(card.right)}`);
+    expect(/full table/.test(card.title ?? ""), `the whole table: ${card.title}`);
+    const sentBefore = fromView.length;
+    await page.click(".entry.table >> nth=-1 >> button");
+    await settle();
+    const saved = fromView.slice(sentBefore).find((m) => m.type === "saveCsv");
+    expect(saved?.csv === "code,amount\n9,12999.99\n100,2.0\n", `Python's CSV, not the cells shown: ${JSON.stringify(saved)}`);
+  }
 
   expect(problems.length === 0, `no script errors or CSP violations: ${problems.join("; ")}`);
 } finally {

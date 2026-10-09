@@ -834,6 +834,59 @@ _g = _pll_get_session("smoke-lib")
     if (passed()) console.log(`    ${clean.length} correct programs found clean`);
   }
 
+  console.log("\n[23] the library-name and shadowing messages fit how the name is bound");
+  {
+    const explained = (code) =>
+      enrichStaticFindings(analyze(code, "beginner", "bind.py"), "beginner", "bind.py").map((f) =>
+        [f.headline, ...f.howToFix].join("\n"),
+      );
+    // An import: the fix is `as`, not a rename of their own definition.
+    const imported = explained("from PIL import Image\n");
+    expect(
+      imported.length === 1 && /this import replaces it/.test(imported[0]) && imported[0].includes("`from PIL import Image as PILImage`"),
+      `an import: ${imported}`,
+    );
+    // A parameter hides the name inside its function, and is renamed.
+    const parameter = explained("def wrap(package: int) -> int:\n    return package\n");
+    expect(
+      parameter.length === 1 && /this parameter hides it/.test(parameter[0]) && /Give the parameter another name/.test(parameter[0]) &&
+        !/defining a new/.test(parameter[0]),
+      `a parameter: ${parameter}`,
+    );
+    // A loop variable further down was not "already" there.
+    const later = explained("def show(t: int) -> int:\n    return t\n\nfor t in [1, 2]:\n    print(show(t))\n");
+    expect(
+      later.length === 1 && /`t` names two things: this parameter, and a loop variable in the file, on line 4\./.test(later[0]) &&
+        !/already defined/.test(later[0]),
+      `a later loop variable: ${later}`,
+    );
+    // One that is there first still is.
+    const earlier = explained("t = 3\n\ndef show(t: int) -> int:\n    return t\n");
+    expect(earlier.length === 1 && /`t` is already defined \(first defined on line 1, in the file\)/.test(earlier[0]) &&
+      /Rename this parameter/.test(earlier[0]), `an earlier one: ${earlier}`);
+    // A definition of their own keeps the advice about definitions.
+    const defined = explained('def circle(r: int) -> int:\n    return r\n');
+    expect(defined.length === 1 && /Pick a different name for your definition/.test(defined[0]), `a def: ${defined}`);
+    console.log("    import, parameter, later loop variable, earlier variable, def");
+  }
+
+  console.log("\n[24] `is` with a number or a string is a finding at the teaching levels");
+  {
+    for (const level of ["beginner", "intermediate"]) {
+      const found = analyze('x = 60.5\nassert x is 60.5\nname = "Ada"\nprint(name is not "Ada")\nprint(x is None)\n', level, "is.py");
+      const isLiteral = found.filter((f) => f.id === "is-literal");
+      expect(
+        isLiteral.length === 2 && isLiteral[0].operator === "is" && isLiteral[0].literal === "60.5" &&
+          isLiteral[1].operator === "is not" && isLiteral[1].severity === "error",
+        `${level}: two, not \`is None\`: ${JSON.stringify(isLiteral)}`,
+      );
+    }
+    const [finding] = enrichStaticFindings(analyze("x = 60.5\nassert x is 60.5\n", "beginner", "is.py"), "beginner", "is.py");
+    expect(finding?.howToFix?.[0] === "To compare with `60.5`, write `==` instead.", `the fix: ${JSON.stringify(finding)}`);
+    expect(analyze("x = 1\nprint(x is 1)\n", "advanced", "is.py").length === 0, "advanced is Python");
+    console.log("    `is 60.5` and `is not \"Ada\"`, and never `is None`");
+  }
+
   fn.destroy?.();
 
   console.log(passed() ? "\nALL SMOKE TESTS PASSED" : "\nFAILED");

@@ -35,6 +35,8 @@ export interface ErrorFacts {
   length?: number;
   /** For an element that failed its annotation: what the element was. */
   elementValue?: string;
+  /** Its type's name, as the course calls it. */
+  elementType?: string;
   /** For a dataclass field of the wrong type: the field whose value fits here. */
   swappedWith?: string;
   /** For a `TypeCheckError`: what failed its annotation. */
@@ -60,6 +62,20 @@ export interface ErrorFacts {
     level: Level;
     findings: StaticFinding[];
     headerProblem: { line: number; message: string } | null;
+  };
+  /**
+   * For a `ModuleNotFoundError`, why: Pyodide has no such package and it is
+   * none of the student's files (`missing`, with one it may misspell);
+   * their file was kept back (`leftOut`); Pyodide has it and it did not
+   * load (`notLoaded`); or no import PLL read before the run named it
+   * (`notSeen`).
+   */
+  module?: {
+    name: string;
+    kind: "missing" | "leftOut" | "notLoaded" | "notSeen";
+    close: string | null;
+    why: string | null;
+    package: string | null;
   };
 }
 
@@ -111,6 +127,8 @@ export interface TypeCheck {
   value?: string;
   /** The level of the code whose annotation it is, which may not be the run's. */
   level?: Level;
+  /** For "return": the function's return annotation, as written. */
+  annotation?: string | null;
 }
 
 export interface PythonError {

@@ -12,10 +12,14 @@ export const PLL_LIBRARY_FILES = {
   table: "<pll:table>",
   reactor: "<pll:reactor>",
   examplar: "<pll:examplar>",
+  matplotlib: "<pll:matplotlib>",
 } as const;
 
 /** The install step, run after the libraries. */
 export const PLL_INSTALL_FILE = "<pll:install>";
+
+/** PLL's transport for urllib, requests and pandas, under pyodide-http. */
+export const PLL_HTTP_FILE = "<pll:http>";
 
 /** A bootstrap file, by its name in `src/common/bootstrap/`. */
 export function bootstrapFile(name: string): string {

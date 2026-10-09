@@ -24,6 +24,30 @@ _sys.modules["pll.image"] = _pll_image_module
 _sys.modules["pll.table"] = _pll_table_module
 _sys.modules["pll.reactor"] = _pll_reactor_module
 
+# matplotlib draws with PLL's backend (`matplotlibBackend.py`), served from
+# its source under that name, so `plt.show()` puts a figure in the panel.
+import importlib.abc as _pll_importlib_abc
+import importlib.util as _pll_importlib_util
+import os as _pll_install_os
+
+
+class _PllMatplotlibFinder(_pll_importlib_abc.MetaPathFinder, _pll_importlib_abc.Loader):
+    def find_spec(self, name, path=None, target=None):
+        if name != "_pll_matplotlib":
+            return None
+        return _pll_importlib_util.spec_from_loader(name, self)
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        module._pll_show_figure = _pll_show_figure
+        exec(compile(_pll_matplotlib_backend_source, _PLL_MATPLOTLIB_FILE, "exec"), module.__dict__)
+
+
+_sys.meta_path.append(_PllMatplotlibFinder())
+_pll_install_os.environ["MPLBACKEND"] = "module://_pll_matplotlib"
+
 # Add image + table library names to the per-session globals template.
 # Each new session is initialized as a copy of this template, so every
 # file's Run File / REPL prompt sees these names without explicit imports.

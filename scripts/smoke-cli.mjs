@@ -925,6 +925,69 @@ async function main() {
     console.log("    no Python: one line, 64; José and 李华 aligned; LICENSE, both commands, no maps");
   }
 
+  if (section(31, "the libraries on the command line: tables, packages, figures")) {
+    const folder = join(work, "s31");
+    mkdirSync(folder);
+    const at = (name, ...lines) => {
+      writeFileSync(join(folder, name), lines.join("\n") + "\n", "utf8");
+      return join(folder, name);
+    };
+    // A cell from a CSV cannot move the cursor or break the table's lines.
+    const cells = await run([at("cells.py", "#level advanced", 'table(["a\\tb"], [["x\\ny"], ["\\x1b[31mred"]])')]);
+    expect(
+      cells.stdout.split("\n").slice(0, 4).join("|") === "a\\tb|-----------|x\\ny|\\x1b[31mred",
+      `control characters written out: ${JSON.stringify(cells.stdout)}`,
+    );
+    // A package imported only in a module of theirs, and one imported mid-line.
+    at("helper.py", "import numpy", "def total(xs):", "    return int(numpy.sum(xs))");
+    at("test.py", "def double(x):", "    return 2 * x");
+    const packages = await run([at("main.py", "#level advanced", "import helper", "import test", "print(helper.total([1, 2]), test.double(4))")]);
+    expect(packages.code === 0 && packages.stdout === "3 8\n", `found and loaded, and test.py is theirs: ${packages.code} ${JSON.stringify(packages.stdout)} ${packages.stderr}`);
+    const midLine = await run([at("mid.py", "#level advanced", "x = 1; import numpy", "print(numpy.arange(3).sum())")]);
+    expect(midLine.code === 0 && midLine.stdout === "3\n", `an import after a semicolon: ${midLine.code} ${midLine.stderr}`);
+    const missing = await run([at("flasky.py", "#level beginner", "import flask")]);
+    expect(missing.code === 1 && /There is no module called `flask` here\./.test(missing.stderr) && /Pyodide/.test(missing.stderr),
+      `a package Pyodide lacks, said so: ${missing.stderr}`);
+    // A file kept back for its size is said to be, where it is read.
+    writeFileSync(join(folder, "big.csv"), "n\n" + "1\n".repeat(1_100_000));
+    const big = await run([at("big.py", "#level beginner", 'load_table("big.csv")')]);
+    expect(/"big\.csv" is next to your program, but it was not loaded: each file can be at most 2 MB\./.test(big.stderr),
+      `not loaded, and why: ${big.stderr}`);
+    // A matplotlib figure is a picture like any other.
+    const figure = await run([at("plot.py", "#level beginner", "import matplotlib.pyplot as plt", "plt.plot([1, 2], [3, 4])", 'plt.title("t")', "plt.show()")]);
+    expect(figure.code === 0 && /\[image 640x480/.test(figure.stderr) && figure.stdout === "",
+      `plt.show() shows it, and plt's return values are not printed: ${figure.code} ${JSON.stringify(figure.stdout)} ${figure.stderr}`);
+    console.log("    escapes, a helper's numpy, test.py, flask, a file kept back, a figure");
+  }
+
+  if (section(32, "Ctrl+C reaches a program waiting for a URL")) {
+    const http = await import("node:http");
+    const server = http.createServer(() => {
+      /* never answers */
+    });
+    await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+    const port = server.address().port;
+    try {
+      const file = fixture(
+        "waits32.py",
+        "#level advanced",
+        "import urllib.request",
+        'print("asking", flush=True)',
+        `urllib.request.urlopen("http://127.0.0.1:${port}/")`,
+        'print("never")',
+      );
+      const started = Date.now();
+      const r = await run([file], { signalAfter: "asking", signalDelay: 500 });
+      expect(Date.now() - started < 30_000, `ended by the Stop, not the time limit: ${Date.now() - started} ms`);
+      expect(!/never/.test(r.stdout) && /stopped/i.test(r.stderr) && /waits32\.py:4/.test(r.stderr) && !/\.cjs/.test(r.stderr),
+        `stopped at the student's line: ${r.code} ${r.stderr}`);
+    } finally {
+      server.closeAllConnections?.();
+      server.close();
+    }
+    console.log("    the wait ends at once, placed at the program's line");
+  }
+
   rmSync(work, { recursive: true, force: true });
   if (!passed()) {
     console.error("\nsmoke-cli: FAILED");

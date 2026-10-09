@@ -37,9 +37,9 @@ class _PllTopLevelAnnAssign(_ast.NodeTransformer):
         return node
 
     def _checked(self, name, value, annotation):
-        """`value` -> `_pll_tg_check_assign(value, [(name, ann)], memo)`."""
+        """`value` -> `pll:tg_check_assign(value, [(name, ann)], memo)`."""
         memo = _ast.Call(
-            func=_ast.Name(id="_pll_tg_memo", ctx=_ast.Load()),
+            func=_ast.Name(id=_PLL_TG_MEMO, ctx=_ast.Load()),
             args=[
                 _ast.Call(func=_ast.Name(id="globals", ctx=_ast.Load()), args=[], keywords=[]),
                 _ast.Call(func=_ast.Name(id="locals", ctx=_ast.Load()), args=[], keywords=[]),
@@ -51,7 +51,7 @@ class _PllTopLevelAnnAssign(_ast.NodeTransformer):
             ctx=_ast.Load(),
         )
         call = _ast.Call(
-            func=_ast.Name(id="_pll_tg_check_assign", ctx=_ast.Load()),
+            func=_ast.Name(id=_PLL_TG_CHECK_ASSIGN, ctx=_ast.Load()),
             args=[value, _ast.List(elts=[target], ctx=_ast.Load()), memo],
             keywords=[],
         )
@@ -88,7 +88,7 @@ class _PllDataclassChecks(_ast.NodeTransformer):
         self.generic_visit(node)
         if any(_pll_is_dataclass_decorator(d) for d in node.decorator_list):
             node.decorator_list.insert(
-                0, _ast.Name(id="_pll_check_dataclass_fields", ctx=_ast.Load())
+                0, _ast.Name(id=_PLL_CHECK_DATACLASS_FIELDS, ctx=_ast.Load())
             )
         return node
 
@@ -152,8 +152,8 @@ def _pll_check_dataclass_fields(cls):
     """
     if not _PLL_TYPEGUARD_READY:
         return cls
-    memo_type = _pll_initial_globals.get("_pll_tg_memo")
-    check = _pll_initial_globals.get("_pll_tg_check_assign")
+    memo_type = _pll_builtins.__dict__.get(_PLL_TG_MEMO)
+    check = _pll_builtins.__dict__.get(_PLL_TG_CHECK_ASSIGN)
     if memo_type is None or check is None:
         return cls
 
@@ -338,7 +338,9 @@ def _pll_parse_and_instrument(code, filename, level):
             return tree
         try:
             instrumented = _ast.parse(code, filename=filename, mode="exec")
+            own = {id(node) for node in _ast.walk(instrumented) if isinstance(node, _ast.ImportFrom)}
             _pll_typeguard_transformer().visit(instrumented)
+            _pll_hide_typeguard_imports(instrumented, own)
             _PllTopLevelAnnAssign().visit(instrumented)
             _PllDataclassChecks().visit(instrumented)
             _ast.fix_missing_locations(instrumented)
@@ -346,6 +348,45 @@ def _pll_parse_and_instrument(code, filename, level):
             return instrumented
         except BaseException:
             return tree
+
+
+def _pll_hide_typeguard_imports(tree, own):
+    """Take typeguard's own imports out of the student's namespace.
+
+    Its instrumentation imports its checkers into the module it checks
+    (`TypeCheckMemo`, `check_argument_types_internal`), where `dir()` listed
+    them and an assignment could replace one. Each is bound among the
+    builtins instead (`_pll_hidden`), and the code that calls it renamed to
+    match. `own` is the imports the tree had before typeguard added any,
+    the student's, which are left alone.
+    """
+    import importlib as _pll_importlib
+
+    renamed = {}
+    for node in _ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(body, list):
+            continue
+        kept = []
+        for stmt in body:
+            if (
+                isinstance(stmt, _ast.ImportFrom)
+                and id(stmt) not in own
+                and stmt.level == 0
+                and (stmt.module or "").split(".")[0] == "typeguard"
+            ):
+                module = _pll_importlib.import_module(stmt.module)
+                for alias in stmt.names:
+                    renamed[alias.asname or alias.name] = _pll_hidden(
+                        "tg:" + alias.name, getattr(module, alias.name)
+                    )
+                continue
+            kept.append(stmt)
+        node.body = kept or [_ast.Pass()]
+    if renamed:
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Name) and node.id in renamed:
+                node.id = renamed[node.id]
 
 
 class _PllTopLevelExprWrapper(_ast.NodeTransformer):
@@ -360,7 +401,7 @@ class _PllTopLevelExprWrapper(_ast.NodeTransformer):
         for i, stmt in enumerate(node.body):
             if isinstance(stmt, _ast.Expr) and not _pll_should_skip_expr(stmt, i):
                 call = _ast.Call(
-                    func=_ast.Name(id="_pll_show_top_level", ctx=_ast.Load()),
+                    func=_ast.Name(id=_PLL_SHOW_TOP_LEVEL, ctx=_ast.Load()),
                     args=[stmt.value],
                     keywords=[],
                 )

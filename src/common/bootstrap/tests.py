@@ -88,6 +88,13 @@ def _pll_test_locations(tree):
     return locs
 
 
+#: A "where" line that only says what a function is: `<function approx
+#: at 0x1177>` is not something to read.
+_PLL_FUNCTION_WHERE_RE = _pll_src_re.compile(
+    r"^(?:where|and)\s+(<(?:function|built-in function|bound method|built-in method|class) [^\n]*?>) = (.+)$"
+)
+
+
 def _pll_friendly_assert_message(exc, tb_text):
     """Short explanation of a failed assert, with pytest internals stripped."""
     msg = str(exc).strip()
@@ -101,6 +108,13 @@ def _pll_friendly_assert_message(exc, tb_text):
         if stripped.startswith("+"):
             stripped = stripped.lstrip("+ ").strip()
         lines.append(stripped)
+    # pytest says what each name in the assert is; for a function that is
+    # its address. The name it was written as says more, so it stands in.
+    for line in list(lines):
+        found = _PLL_FUNCTION_WHERE_RE.match(line)
+        if found is not None:
+            lines.remove(line)
+            lines = [other.replace(found.group(1), found.group(2)) for other in lines]
     if lines:
         return "\n".join(lines) + _pll_float_note("\n".join(lines))
     for raw in reversed((tb_text or "").splitlines()):
@@ -311,6 +325,9 @@ def _pll_rewrite_asserts(tree, code, filename):
         from _pytest.assertion.rewrite import rewrite_asserts
 
         rewrite_asserts(tree, code.encode("utf-8"), module_path=filename)
+        import _pytest.assertion.util as _pll_assert_util
+
+        _pll_assert_util._reprcompare = _pll_reprcompare
         # Do not call ast.fix_missing_locations after this: it copies parent
         # positions onto pytest's injected nodes and yields ranges that
         # Python 3.12+ rejects (`end_lineno` < `lineno`).
@@ -320,6 +337,26 @@ def _pll_rewrite_asserts(tree, code, filename):
         # managed; a failure then shows an empty AssertionError, which is
         # worse than nothing but still runs.
         pass
+
+
+def _pll_reprcompare(op, left, right):
+    """What a failed comparison adds, as pytest's plugins add it: for two
+    tables, where they differ, which their rows alone do not show.
+
+    Looked up when called: the table library loads after this file.
+    """
+    differences = globals().get("_pll_table_differences")
+    if op != "==" or differences is None:
+        return None
+    try:
+        lines = differences(left, right)
+    except Exception:
+        return None
+    if not lines:
+        return None
+    lines = ["%r == %r" % (left, right)] + lines
+    # In pytest's own form: "~" continues the explanation, "%" is escaped.
+    return "\n~".join(line.replace("\n", "\\n") for line in lines).replace("%", "%%")
 
 
 def _pll_tests_result():

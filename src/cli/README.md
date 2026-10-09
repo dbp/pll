@@ -234,19 +234,22 @@ works too:
 printf 'Ada\n' | pll greet.py
 ```
 
-Ctrl+C stops the program wherever it is - waiting for input, or in
-`time.sleep` - as it would under `python`.
+Ctrl+C stops the program wherever it is - waiting for input, in
+`time.sleep`, or waiting for an address to answer - as it would under
+`python`.
 
 ## What differs from the editor
 
 - **Pictures cannot be drawn in a terminal.** Each one prints a note with
-  its size; `--save-images` writes them as `.svg` instead.
+  its size; `--save-images` writes them as `.svg` instead. A matplotlib
+  figure is a picture like any other: `plt.show()` prints the note.
 - **Reactors (`big_bang`, `animate`) do not run.** They need the editor's
   interactions panel to animate; here they print a note and the rest of the
   program continues. Their logic is still testable — `simulate_trace(n)`
   works fine and needs no clock.
 - **Tables do print**, as text. Their content is already text, so there is
-  nothing to lose.
+  nothing to lose; a tab, a new line or an escape in a cell is written out,
+  as `\t`, `\n` and `\x1b`.
 
 Everything else is the same code: the same Pyodide worker, the same Python
 libraries, the same analyzers and the same wording for errors.
@@ -269,9 +272,13 @@ it changed on disk while the program ran, or when it is an existing `.py`.
 
 ## Packages
 
-`import pandas`, `numpy`, `matplotlib` and pytest (for the tests) are
-downloaded the first time they are used, which needs the network; `pll`
-says so. They are kept beside Pyodide in the install, or in your cache
+`import pandas`, `numpy`, `matplotlib`, `requests`, pytest (for the tests)
+and the rest of Pyodide's packages are downloaded the first time they are
+used, which needs the network; `pll` says so. They are found from the
+program's imports wherever they are written, and from those of the files of
+yours it imports. A URL read with `urllib`, `requests` or pandas arrives
+byte for byte; an error page raises `HTTPError`, and an address that does
+not answer gives up after 60 seconds, or the program's own `timeout`. They are kept beside Pyodide in the install, or in your cache
 (`$XDG_CACHE_HOME/pll-python` or `~/.cache/pll-python`) when the install
 cannot be written to.
 

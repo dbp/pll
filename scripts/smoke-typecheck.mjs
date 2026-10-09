@@ -1082,7 +1082,12 @@ async function main() {
         ],
         [
           'def f() -> int:\n    return "a"\n\nf()\n',
-          { kind: "return", name: null, element: null, actual: "str", expected: ["int"], level: "beginner" },
+          { kind: "return", name: null, element: null, actual: "str", expected: ["int"], level: "beginner", annotation: "int" },
+        ],
+        // A return's annotation as written, for the advice to quote.
+        [
+          'def f() -> list[int]:\n    return ["a"]\n\nf()\n',
+          { kind: "return", name: null, element: "item 0", actual: "list", expected: ["int"], level: "beginner", annotation: "list[int]" },
         ],
         ['x: int = "a"\n', { kind: "variable", name: "x", element: null, actual: "str", expected: ["int"], level: "beginner" }],
         [
@@ -1278,6 +1283,68 @@ async function main() {
       await send({ type: "mountWorkspace", files: [] });
       console.log("    names, frames, columns, facts and messages, each from the exception itself");
     }
+    console.log("\n[26] the libraries' errors, explained as the student wrote them");
+    {
+      const explain = async (code, level = "beginner", fileName = "lib.py") => {
+        const result = await run(code, { level, fileName });
+        const finding = findRuntimeFinding(code, fileName, level, pythonErrorFrom(result));
+        return { result, finding, text: finding ? [finding.headline, ...finding.howToFix].join("\n") : "" };
+      };
+      const cases = [
+        // A collection's item, not its container.
+        ["def names() -> list[int]:\n    return [\"a\", \"b\"]\n\nnames()\n",
+          ['says it returns `list[int]`, with every item in it a whole number (`int`), but item 0 is the string "a".',
+            "change the annotation from `list[int]` to `list[str]`"]],
+        ["def prices() -> dict[str, int]:\n    return {\"tea\": \"two\"}\n\nprices()\n",
+          ['but the value for key "tea" is the string "two"', "from `dict[str, int]` to `dict[str, str]`"]],
+        ['def pair() -> tuple[Image, Image]:\n    return (circle(5, "solid", "red"), 3)\n\npair()\n',
+          ["says it returns `tuple[Image, Image]`", "item 1 is the number 3"]],
+        // PLL's own classes are `Image` to a student.
+        ['def t() -> Table:\n    return circle(5, "solid", "red")\n\nt()\n', ["this line returns `Image`"]],
+        // A `-` where a name has `_`, and a method called as a function.
+        ['load-table("cars.csv")\n', ["Python reads `load-table` as `load` minus `table`", "Write `load_table`"]],
+        ['image-width(circle(5, "solid", "red"))\n', ["Write `image_width`"]],
+        ['people = table(["age"], [[1]])\norder_by(people, "age")\n', ["`order_by` is a method of a table", 'Write `people.order_by("age")`']],
+        ['people = table(["age"], [[1]])\nsum(people, "age")\n', ["is Python's own `sum`", 'A table does this itself: `people.sum("age")`']],
+        ['people = table(["age"], [[1]])\nmax(people, "age")\n', ['A table does this itself: `people.max("age")`']],
+        // A method without its brackets.
+        ['people = table(["age"], [[1]])\nfor p in people.rows:\n    print(p)\n', ["`people.rows` is the method itself", "`for ... in people.rows():`"]],
+        ['people = table(["age"], [[1]])\npeople.rows[0]\n', ["Call it first: `people.rows()[0]`"]],
+        ['people = table(["age"], [[1]])\npeople.row[0]\n', ["Write `people.row(0)`"]],
+        // The student's own function, raising inside transform_column, is explained with what it was given.
+        ['def doubled(r):\n    return r["age"] * 2\n\npeople = table(["age"], [[1]])\npeople.transform_column("age", doubled)\n',
+          ["one *value* from the column, not a row"]],
+        // A package Pyodide has not got, and a file that is not there.
+        ["import flask\n", ["There is no module called `flask` here.", "Pyodide, which has many packages"]],
+        ['import importlib\nimportlib.import_module("micro" + "pip")\n', ["`micropip` was not loaded, because PLL did not see it imported.", "Add `import micropip`"]],
+      ];
+      for (const [code, needles] of cases) {
+        const { text } = await explain(`#level beginner\n${code}`);
+        for (const needle of needles) {
+          expect(text.includes(needle), `${JSON.stringify(code.split("\n").at(-2))}: wanted "${needle}" in:\n${text}`);
+        }
+      }
+      console.log(`    ${cases.length} library mistakes, each explained`);
+    }
+
+    console.log("\n[27] PLL's own names are not in the student's namespace");
+    {
+      const code = [
+        "#level beginner",
+        "def f(x: int) -> int:",
+        "    return x",
+        "y: int = 3",
+        'print([n for n in dir() if n.startswith("_pll") or n in ("TypeCheckMemo", "check_argument_types_internal", "check_return_type_internal")])',
+        "_pll_show_top_level = 0",
+        "f(3)",
+      ].join("\n");
+      const result = await run(code, { level: "beginner", fileName: "ns.py" });
+      expect(result.ok === true && result.stdout === "[]\n3\n", `nothing of PLL's or typeguard's, and values still shown: ${JSON.stringify(result.stdout)} ${result.error_message ?? ""}`);
+      const checked = await run('#level beginner\ndef f(x: int) -> int:\n    return x\nf("a")\n', { level: "beginner", fileName: "ns2.py" });
+      expect(checked.error_type === "TypeCheckError", `and the checks still run: ${checked.error_type}`);
+      console.log("    dir() is the student's, and the checks still happen");
+    }
+
   } finally {
     await worker.terminate();
   }

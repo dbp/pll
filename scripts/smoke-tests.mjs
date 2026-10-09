@@ -160,6 +160,31 @@ def test_add():
     expect(without.ok === true && without.tests == null, "and none are run unless asked for");
   }
 
+  console.log("\n[6] a failed comparison says where two tables differ, and pytest.approx reads as written");
+  {
+    const src = [
+      "import pytest",
+      "def test_tables():",
+      '    a = table(["n", "sq"], [[i, i * i] for i in range(10)])',
+      '    b = table(["n", "sq"], [[i, 0 if i == 8 else i * i] for i in range(10)])',
+      "    assert a == b",
+      "def test_columns():",
+      '    assert table(["n"], [[1]]) == table(["m"], [[1]])',
+      "def test_lengths():",
+      '    assert table(["n"], [[1], [2]]) == table(["n"], [[1]])',
+      "def test_close():",
+      "    assert 81.66 == pytest.approx(80)",
+    ].join("\n");
+    const tests = Object.fromEntries((runTests(src, "cmp.py").tests ?? []).map((t) => [t.name, t.message ?? ""]));
+    expect(/Row 8 is the first that differs: \[8, 64\] and \[8, 0\]\./.test(tests.test_tables), `the row: ${tests.test_tables}`);
+    expect(/The columns differ: \["n"\] and \["m"\]\./.test(tests.test_columns), `the columns: ${tests.test_columns}`);
+    expect(/The first has 2 rows and the second 1\./.test(tests.test_lengths), `the lengths: ${tests.test_lengths}`);
+    expect(
+      /80 ± 8\.0e-05 = pytest\.approx\(80\)/.test(tests.test_close) && !/<function/.test(tests.test_close),
+      `approx as written, no function's address: ${tests.test_close}`,
+    );
+  }
+
   hasTests.destroy?.();
   runFile.destroy?.();
   replEval.destroy?.();

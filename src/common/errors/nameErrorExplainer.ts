@@ -1,4 +1,4 @@
-import { FUNCTION_TAKER_NAMES } from "./libraryFacts";
+import { FUNCTION_TAKER_NAMES, TABLE_METHODS } from "./libraryFacts";
 import type { PythonError } from "./pythonError";
 import type { BeginnerExplanation } from "./types";
 
@@ -109,6 +109,32 @@ function passedResultNotFunction(line: string | null, name: string): string | nu
 }
 
 /**
+ * A name with a `-` in it that `name` is half of: Python reads
+ * `load-table(...)` as `load` minus `table(...)`. Only a function's name,
+ * called: `total-tax` on its own is as likely a subtraction.
+ */
+function hyphenated(line: string | null, name: string): string | null {
+  if (line === null) {
+    return null;
+  }
+  for (const found of line.matchAll(/(?<![.\w])([A-Za-z_]\w*(?:-[A-Za-z_]\w*)+)(?=\s*\()/g)) {
+    if (found[1].split("-").includes(name)) {
+      return found[1];
+    }
+  }
+  return null;
+}
+
+/** `order_by(people, "age")`: a table method called as a function, and on what. */
+function methodCalledAsFunction(line: string | null, name: string): { table: string; rest: string } | null {
+  if (line === null || !TABLE_METHODS.includes(name)) {
+    return null;
+  }
+  const found = new RegExp(`\\b${name}\\s*\\(\\s*([A-Za-z_][\\w.]*)\\s*(?:,\\s*([^)]*))?\\)`).exec(line);
+  return found ? { table: found[1], rest: (found[2] ?? "").trim() } : null;
+}
+
+/**
  * Which kind of name problem this is.
  *
  * "Never heard of it" and "not assigned yet" need opposite advice: the
@@ -169,6 +195,24 @@ export function explainNameError(
         `Pass the function itself: \`${taker}(${fn})\`.`,
         `\`${taker}\` supplies the argument for each row, so \`${fn}\` is never called by hand.`,
       ],
+    };
+  }
+
+  // A `-` where a name has `_`: `load-table`, `image-width`.
+  const hyphen = named ? hyphenated(context.line ?? null, name) : null;
+  if (hyphen !== null) {
+    return {
+      headline: `Python reads \`${hyphen}\` as \`${hyphen.split("-").join("` minus `")}\`: a name cannot have a \`-\` in it.`,
+      howToFix: [`Write \`${hyphen.replace(/-/g, "_")}\`, with an underscore.`],
+    };
+  }
+
+  // A table's method, called as if it were a function of its own.
+  const method = named ? methodCalledAsFunction(context.line ?? null, name) : null;
+  if (method !== null) {
+    return {
+      headline: `\`${name}\` is a method of a table, so it is called on one.`,
+      howToFix: [`Write \`${method.table}.${name}(${method.rest})\`.`],
     };
   }
 

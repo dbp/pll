@@ -277,21 +277,23 @@ export function renderTable(table: {
   shownCount: number;
   truncated: boolean;
 }): string {
-  const widths = table.columns.map((name, i) =>
-    Math.max(displayWidth(name), ...table.rows.map((row) => displayWidth(row[i] ?? "")), 0),
+  const columns = table.columns.map(visible);
+  const rows = table.rows.map((row) => columns.map((_, i) => visible(row[i] ?? "")));
+  const widths = columns.map((name, i) =>
+    Math.max(displayWidth(name), ...rows.map((row) => displayWidth(row[i])), 0),
   );
   const pad = (cell: string, width: number) => cell + " ".repeat(Math.max(0, width - displayWidth(cell)));
   const line = (cells: string[]) =>
     cells.map((cell, i) => pad(cell, widths[i])).join("  ").trimEnd();
   const out = [
-    line(table.columns),
+    line(columns),
     widths
       .map((w) => "-".repeat(w))
       .join("  ")
       .trimEnd(),
   ];
-  for (const row of table.rows) {
-    out.push(line(table.columns.map((_, i) => row[i] ?? "")));
+  for (const row of rows) {
+    out.push(line(row));
   }
   out.push(
     table.truncated
@@ -299,6 +301,20 @@ export function renderTable(table: {
       : `(${table.rowCount} row${table.rowCount === 1 ? "" : "s"})`,
   );
   return out.join("\n");
+}
+
+const ESCAPES: Record<string, string> = { "\t": "\\t", "\n": "\\n", "\r": "\\r" };
+
+/**
+ * `text` with its control characters written out as Python writes them -
+ * `\t`, `\n`, `\x1b` - so a cell from a CSV cannot break the table's lines
+ * or send the terminal an escape sequence.
+ */
+function visible(text: string): string {
+  return text.replace(
+    /[\u0000-\u001f\u007f-\u009f]/g,
+    (c) => ESCAPES[c] ?? `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  );
 }
 
 /** Characters a terminal shows two columns wide: CJK, Hangul, full-width forms, emoji. */

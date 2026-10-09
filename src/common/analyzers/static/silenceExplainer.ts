@@ -105,6 +105,23 @@ export function explainAssertTuple(
   });
 }
 
+/** `x is 60.5` - `is`, where `==` was meant. */
+export function explainIsLiteral(
+  raw: StaticFindingOf<SilenceFindingId>,
+  level: Level,
+  fileName: string,
+): AnalysisFinding {
+  const negated = raw.operator === "is not";
+  const literal = raw.literal ?? "a value";
+  return staticFindingFor(raw, level, fileName, {
+    headline: `\`${negated ? "is not" : "is"}\` asks whether two things are the very same object, not whether they are equal.`,
+    howToFix: [
+      `To compare with \`${literal}\`, write \`${negated ? "!=" : "=="}\` instead.`,
+      "`is` is for `None`: `x is None`.",
+    ],
+  });
+}
+
 /** `movies["rating"].mean` - the method, not its result. */
 export function explainMethodNotCalled(
   raw: StaticFindingOf<SilenceFindingId>,

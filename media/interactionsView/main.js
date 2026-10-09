@@ -537,15 +537,16 @@
     const tbody = document.createElement("tbody");
     for (const row of entry.rows) {
       const tr = document.createElement("tr");
-      for (const cell of row) {
+      row.forEach((cell, i) => {
         const td = document.createElement("td");
         td.textContent = cell;
-        // Right-align cells that look like numbers.
-        if (/^[-+]?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(cell)) {
+        // Columns of numbers to the right, by what Python holds: text that
+        // looks like a number stays on the left, so it can be seen to be text.
+        if (entry.numeric && entry.numeric[i]) {
           td.classList.add("num");
         }
         tr.appendChild(td);
-      }
+      });
       tbody.appendChild(tr);
     }
     tbl.appendChild(tbody);
@@ -570,11 +571,14 @@
 
     const save = document.createElement("button");
     save.textContent = "Save CSV";
-    save.title = "Download this table as a .csv file (full table, not just the visible rows)";
+    save.title =
+      entry.csvRows !== undefined && entry.csvRows < entry.rowCount
+        ? "Download the first " + entry.csvRows + " rows as a .csv file - the whole table is too big to save from here"
+        : "Download this table as a .csv file (full table, not just the visible rows)";
     save.addEventListener("click", () => {
       vscode.postMessage({
         type: "saveCsv",
-        csv: tableToCsv(entry),
+        csv: entry.csv,
         source: entry.source,
       });
     });
@@ -582,23 +586,6 @@
 
     div.appendChild(meta);
     return div;
-  }
-
-  /** Format an entry's *displayed* rows as CSV. (Truncated tables export only
-   *  the rows that came down the wire; that's an MVP limitation we accept.) */
-  function tableToCsv(entry) {
-    const escape = (s) => {
-      const str = String(s);
-      if (/[",\n\r]/.test(str)) {
-        return '"' + str.replace(/"/g, '""') + '"';
-      }
-      return str;
-    };
-    const lines = [entry.columns.map(escape).join(",")];
-    for (const row of entry.rows) {
-      lines.push(row.map(escape).join(","));
-    }
-    return lines.join("\n") + "\n";
   }
 
   function renderFinding(entry) {

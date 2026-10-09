@@ -1,210 +1,191 @@
 #!/usr/bin/env node
 /**
- * Smoke test for third-party package auto-loading and URL reads.
+ * Packages and URLs: what a program imports is found and loaded the way
+ * the worker does it, and URLs are read through the desktop's own network
+ * path - its XMLHttpRequest polyfill, fetching on a helper thread, under
+ * pyodide-http with PLL's transport (`http.py`).
  *
- * Boots Pyodide the way the runtime does, then exercises the same load path
- * PLL uses for user code: `loadPackagesFromImports` (which pulls pandas +
- * numpy from the CDN fallback), followed by the `pyodide-http` shim plus a
- * Node XMLHttpRequest polyfill (the desktop worker's network path).
- *
- * URL reads hit a local HTTP server so the test does not depend on GitHub
- * or CORS.
+ * URL reads hit a local HTTP server, in a child process: this thread
+ * blocks while it waits for an answer, so a server in it would never reply.
  */
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 
 import { importSource } from "./lib/bundle.mjs";
 import { expect, passed } from "./lib/check.mjs";
 import { bootPll } from "./lib/pyodide.mjs";
 
-// The hosts' own regex, bundled, rather than a copy that could drift from it.
-const { NETWORK_IMPORT_RE } = await importSource('export { NETWORK_IMPORT_RE } from "./src/common/packages";');
+const { installNodeXHR, PYODIDE_HTTP_PATCH_PY } = await importSource(
+  'export { installNodeXHR } from "./src/desktop/xhrPolyfill";\n' +
+    'export { PYODIDE_HTTP_PATCH_PY } from "./src/common/pythonSources";',
+);
 
 const CARS_CSV = "name,mpg\nvw,29\nhonda,33\nford,18\n";
 
 /**
- * Same idea as src/desktop/xhrPolyfill.ts + syncHttp.ts: Node has no
- * sync XHR, so a child process does async fetch and we block on it.
+ * A server with a CSV in UTF-8 whose letters are among the eight bytes
+ * Latin-1 and ISO-8859-15 disagree on, every byte value in a file, a 404,
+ * and an address that never answers.
  */
-function installNodeXHR() {
-  if (typeof globalThis.crossOriginIsolated === "undefined") {
-    globalThis.crossOriginIsolated = false;
-  }
-  if (typeof globalThis.XMLHttpRequest === "function") {
-    return;
-  }
-  globalThis.XMLHttpRequest = class XMLHttpRequest {
-    method = "GET";
-    url = "";
-    responseType = "";
-    status = 0;
-    statusText = "";
-    response = null;
-    responseText = "";
-    readyState = 0;
-    reqHeaders = {};
-    resHeaders = {};
-
-    open(method, url) {
-      this.method = method;
-      this.url = url;
-      this.readyState = 1;
-    }
-
-    setRequestHeader(name, value) {
-      this.reqHeaders[name] = value;
-    }
-
-    overrideMimeType() {}
-
-    send(body) {
-      const payload = JSON.stringify({
-        method: this.method || "GET",
-        url: this.url,
-        headers: this.reqHeaders,
-        body:
-          body == null || body === ""
-            ? null
-            : Buffer.from(
-                typeof body === "string" ? body : Buffer.from(body),
-              ).toString("base64"),
-      });
-      const script = `
-const fs = require("node:fs");
-const raw = fs.readFileSync(0, "utf8");
-const req = JSON.parse(raw);
-const init = { method: req.method, headers: req.headers };
-if (req.body) init.body = Buffer.from(req.body, "base64");
-fetch(req.url, init).then(async (r) => {
-  const hop = new Set(["transfer-encoding", "content-encoding", "connection", "keep-alive"]);
-  const headers = {};
-  r.headers.forEach((v, k) => {
-    if (!hop.has(k.toLowerCase())) headers[k] = v;
-  });
-  const raw = Buffer.from(await r.arrayBuffer());
-  headers["content-length"] = String(raw.length);
-  const body = raw.toString("base64");
-  process.stdout.write(JSON.stringify({ status: r.status, headers, body }));
-}).catch((e) => {
-  process.stderr.write(String(e && e.stack ? e.stack : e));
-  process.exit(1);
-});
-`;
-      const out = execFileSync(process.execPath, ["-e", script], {
-        input: payload,
-        maxBuffer: 64 * 1024 * 1024,
-        windowsHide: true,
-      });
-      const parsed = JSON.parse(out.toString("utf8"));
-      const bytes = new Uint8Array(Buffer.from(parsed.body ?? "", "base64"));
-      this.status = parsed.status;
-      this.statusText = parsed.status >= 200 && parsed.status < 300 ? "OK" : "";
-      this.resHeaders = parsed.headers ?? {};
-      this.readyState = 4;
-      if (this.responseType === "arraybuffer") {
-        const copy = new Uint8Array(bytes.byteLength);
-        copy.set(bytes);
-        this.response = copy.buffer;
-        this.responseText = "";
-      } else {
-        const text = new TextDecoder("latin1").decode(bytes);
-        this.response = text;
-        this.responseText = text;
-      }
-    }
-
-    getAllResponseHeaders() {
-      return Object.entries(this.resHeaders)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join("\r\n");
-    }
-  };
-}
-
-/**
- * Serve the CSV from a child process. The XHR polyfill uses
- * `execFileSync`, which blocks this event loop, so an in-process
- * `createServer` would deadlock.
- */
-function startCsvServer() {
+function startServer() {
   return new Promise((resolveServer, reject) => {
     const script = `
 const http = require("node:http");
-const csv = ${JSON.stringify(CARS_CSV)};
-const server = http.createServer((_req, res) => {
-  res.writeHead(200, {
-    "Content-Type": "text/csv",
-    "Access-Control-Allow-Origin": "*",
-  });
-  res.end(csv);
+const all = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
+const server = http.createServer((req, res) => {
+  if (req.url === "/cars.csv") { res.writeHead(200, { "Content-Type": "text/csv" }); return res.end(${JSON.stringify(CARS_CSV)}); }
+  if (req.url === "/cities.csv") { res.writeHead(200, { "Content-Type": "text/csv; charset=utf-8" }); return res.end("city,pop\\nZürich,400000\\n€ Šž Œœ Ÿ,1\\n"); }
+  if (req.url === "/bytes") { res.writeHead(200, { "Content-Type": "application/octet-stream" }); return res.end(all); }
+  if (req.url === "/hang") { return; }
+  res.writeHead(404, { "Content-Type": "text/html" });
+  res.end("<!DOCTYPE html><html><body>Not Found</body></html>");
 });
-server.listen(0, "127.0.0.1", () => {
-  process.stdout.write(String(server.address().port));
-});
+server.listen(0, "127.0.0.1", () => process.stdout.write(String(server.address().port)));
 `;
-    const child = spawn(process.execPath, ["-e", script], {
-      stdio: ["ignore", "pipe", "inherit"],
-    });
+    const child = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "pipe", "inherit"] });
     child.once("error", reject);
     child.stdout.once("data", (chunk) => {
-      const port = Number(String(chunk).trim());
-      resolveServer({
-        url: `http://127.0.0.1:${port}/cars.csv`,
-        close() {
-          child.kill();
-        },
-      });
+      resolveServer({ base: `http://127.0.0.1:${Number(String(chunk).trim())}`, close: () => child.kill() });
     });
   });
 }
 
 async function main() {
   installNodeXHR();
-
   const pyodide = await bootPll();
+  const py = (code) => pyodide.runPython(code);
+  const found = (code, siblings = []) =>
+    py(`_pll_package_imports(${JSON.stringify(code)}, ${JSON.stringify(JSON.stringify(siblings))})`).toJs({
+      dict_converter: Object.fromEntries,
+    });
 
-  const userCode = [
-    "import pandas as pd",
-    "import io",
-    "df = pd.read_csv(io.StringIO('name,mpg\\nvw,29\\nhonda,33\\nford,18\\n'))",
-    "(len(df), df[df['mpg'] >= 30]['name'].tolist())",
-  ].join("\n");
+  console.log("\n[1] every import is found, wherever it is written");
+  {
+    const helper = { name: "helper.py", text: "import pandas as pd\nimport requests\n" };
+    const other = { name: "other_program.py", text: "import scipy\n" };
+    const shapes = { name: "shapes/area.py", text: "import numpy\n" };
+    const test = { name: "test.py", text: "def double(x):\n    return 2 * x\n" };
+    const cases = [
+      // An import in a module of theirs the program imports, and not in
+      // another program beside it.
+      ["import helper\n", [helper, other], ["pandas", "requests"], true],
+      ["from shapes import area\n", [shapes], ["numpy"], false],
+      // Not at the start of a line, and not first in its statement.
+      ["x = 1; import numpy\n", [], ["numpy"], false],
+      ["import numpy as np, urllib.request\n", [], ["numpy", "urllib"], true],
+      ["def f():\n    import matplotlib.pyplot as plt\n", [], ["matplotlib"], false],
+      // Named to importlib or __import__ in so many words.
+      ['import importlib\nimportlib.import_module("micropip")\n', [], ["importlib", "micropip"], false],
+      ['__import__("sympy")\n', [], ["sympy"], false],
+      // Their own `test.py` is theirs, and CPython's tests are never loaded.
+      ["import test\n", [test], [], false],
+      ["import test\n", [], [], false],
+    ];
+    for (const [code, siblings, modules, network] of cases) {
+      const got = found(code, siblings);
+      expect(
+        JSON.stringify(got.modules) === JSON.stringify(modules) && got.network === network,
+        `${JSON.stringify(code)} with ${siblings.map((s) => s.name)}: wanted ${modules} (network ${network}), got ${JSON.stringify(got)}`,
+      );
+    }
+    console.log(`    ${cases.length} kinds of import`);
+  }
 
-  console.log("\n[1] loadPackagesFromImports pulls pandas");
-  await pyodide.loadPackagesFromImports(userCode);
-  const version = pyodide.runPython("import pandas; pandas.__version__");
-  console.log(`    pandas ${version}`);
-  expect(typeof version === "string" && version.length > 0, "pandas should be importable");
-
-  console.log("\n[2] the code the tool needs actually runs");
-  const res = pyodide.runPython(userCode).toJs();
-  console.log(`    rows=${res[0]} efficient=${JSON.stringify(res[1])}`);
-  expect(res[0] === 3, "expected 3 rows, got " + res[0]);
-  expect(
-    Array.isArray(res[1]) && res[1].join(",") === "honda",
-    "expected only 'honda' at >=30 mpg, got " + JSON.stringify(res[1]),
-  );
-
-  console.log("\n[3] network imports trigger the pyodide-http shim");
-  expect(NETWORK_IMPORT_RE.test(userCode), "pandas import should match NETWORK_IMPORT_RE");
-  expect(!NETWORK_IMPORT_RE.test("import math\nprint(math.pi)"), "plain math import should not match");
-  await pyodide.loadPackage("pyodide-http");
-  pyodide.runPython("import pyodide_http as _ph; _ph.patch_all()");
-  console.log("    pyodide-http loaded and patched (no error)");
-
-  console.log("\n[4] pd.read_csv(url) via Node XHR polyfill + local HTTP");
-  const { url, close } = await startCsvServer();
-  try {
-    const urlCode = [
+  console.log("\n[2] the packages found load, and the program runs");
+  {
+    const code = [
       "import pandas as pd",
-      `df = pd.read_csv(${JSON.stringify(url)})`,
+      "import io",
+      "df = pd.read_csv(io.StringIO('name,mpg\\nvw,29\\nhonda,33\\nford,18\\n'))",
       "(len(df), df[df['mpg'] >= 30]['name'].tolist())",
     ].join("\n");
-    const urlRes = pyodide.runPython(urlCode).toJs();
-    console.log(`    url=${url} rows=${urlRes[0]} efficient=${JSON.stringify(urlRes[1])}`);
-    expect(urlRes[0] === 3, "URL read expected 3 rows, got " + urlRes[0]);
+    await pyodide.loadPackagesFromImports(found(code).modules.map((name) => `import ${name}`).join("\n"));
+    const res = py(code).toJs();
+    expect(res[0] === 3 && res[1].join(",") === "honda", `pandas ran: ${JSON.stringify(res)}`);
+  }
+
+  console.log("\n[3] an import that finds nothing says why");
+  {
+    await pyodide.loadPackage("pyodide-http");
+    py(PYODIDE_HTTP_PATCH_PY.source);
+    const why = (code) => {
+      const result = py(`
+try:
+    exec(${JSON.stringify(code)}, {})
+    _r = None
+except ModuleNotFoundError as e:
+    _pll_enrich_module_not_found(e)
+    _r = (getattr(e, "_pll_facts", None) or {}).get("module")
+_r`);
+      return result?.toJs?.({ dict_converter: Object.fromEntries }) ?? result;
+    };
+    expect(why("import flask")?.kind === "missing", `flask: Pyodide has none: ${JSON.stringify(why("import flask"))}`);
+    // Asked for and not loaded, as it would be offline.
+    found("import micropip\n");
+    expect(why("import micropip")?.kind === "notLoaded", `asked for, not loaded: ${JSON.stringify(why("import micropip"))}`);
+    // Loaded by nothing, since no import PLL read named it.
+    found("x = 1\n");
+    const unseen = why('import importlib\nimportlib.import_module("micro" + "pip")');
+    expect(unseen?.kind === "notSeen" && unseen?.package === "micropip", `named as it ran: ${JSON.stringify(unseen)}`);
+    // A submodule of something that is there is Python's to explain.
+    expect(why("import pandas.nonsense") === undefined, `a part of pandas: ${JSON.stringify(why("import pandas.nonsense"))}`);
+  }
+
+  console.log("\n[4] URLs through urllib, pandas and the libraries, on the desktop's path");
+  const { base, close } = await startServer();
+  try {
+    const run = (code) => py(code).toJs({ dict_converter: Object.fromEntries });
+    // Every byte value as sent: Latin-1 and ISO-8859-15 differ at eight.
+    const bytes = run(`import urllib.request\nlist(urllib.request.urlopen(${JSON.stringify(base + "/bytes")}).read())`);
+    expect(bytes.length === 256 && bytes.every((b, i) => b === i), `all 256 bytes: ${bytes.length}`);
+    const cities = run(`urllib.request.urlopen(${JSON.stringify(base + "/cities.csv")}).read().decode("utf-8").splitlines()[1:]`);
+    expect(cities.join("|") === "Zürich,400000|€ Šž Œœ Ÿ,1", `text as sent: ${JSON.stringify(cities)}`);
+    const frame = run(`import pandas as pd\n(pd.read_csv(${JSON.stringify(base + "/cars.csv")}).name.tolist(), pd.read_csv(${JSON.stringify(base + "/cities.csv")}).city.tolist())`);
+    expect(frame[0].join(",") === "vw,honda,ford" && frame[1][0] === "Zürich", `pandas reads them: ${JSON.stringify(frame)}`);
+    // An error page is an error, not data.
+    const notFound = run(`
+import urllib.error
+_out = []
+for _read in (lambda: urllib.request.urlopen(${JSON.stringify(base + "/missing")}), lambda: pd.read_csv(${JSON.stringify(base + "/missing.csv")})):
+    try:
+        _read()
+        _out.append("read")
+    except urllib.error.HTTPError as e:
+        _out.append(e.code)
+_out`);
+    expect(notFound.join(",") === "404,404", `404 raises, in urllib and pandas: ${notFound}`);
+    // Unreachable, and too slow: urllib's own exceptions, in a sentence.
+    const failed = run(`
+import time
+_out = []
+for _url, _timeout in (("http://nowhere.invalid/x", None), (${JSON.stringify(base + "/hang")}, 0.5)):
+    _start = time.time()
+    try:
+        urllib.request.urlopen(_url, timeout=_timeout) if _timeout else urllib.request.urlopen(_url)
+    except urllib.error.URLError as e:
+        _out.append([type(e.reason).__name__, str(e.reason), time.time() - _start < 5])
+_out`);
     expect(
-      Array.isArray(urlRes[1]) && urlRes[1].join(",") === "honda",
-      "URL read expected only 'honda' at >=30 mpg, got " + JSON.stringify(urlRes[1]),
+      failed[0]?.[1] === "could not connect to nowhere.invalid (ENOTFOUND)",
+      `unreachable, said simply: ${JSON.stringify(failed[0])}`,
+    );
+    expect(
+      failed[1]?.[0] === "TimeoutError" && /did not answer within 0\.5 seconds/.test(failed[1]?.[1]) && failed[1]?.[2] === true,
+      `the timeout is kept: ${JSON.stringify(failed[1])}`,
+    );
+    // The libraries read the same way, and say what went wrong without
+    // a word about CORS, which is a browser's.
+    const libraries = run(`
+_t = load_table(${JSON.stringify(base + "/cities.csv")})
+try:
+    load_table("http://nowhere.invalid/x.csv")
+    _e = None
+except OSError as e:
+    _e = str(e)
+[_t.column("city"), _e]`);
+    expect(libraries[0][0] === "Zürich", `load_table: ${JSON.stringify(libraries[0])}`);
+    expect(
+      libraries[1] === "load_table could not read http://nowhere.invalid/x.csv: could not connect to nowhere.invalid (ENOTFOUND).",
+      `no CORS advice off the web: ${libraries[1]}`,
     );
   } finally {
     close();

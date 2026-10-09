@@ -298,11 +298,31 @@ takes a piece out of an image, and `frame(image)` outlines its edges.
 
 **Size:** `image_width`, `image_height`, `empty_image`.
 
-Colors can be names (`"red"`), hex (`"#ff0000"`), or tuples
-`(red, green, blue)` with values from 0 to 255. Names are checked against
-the CSS colours, which are the names a browser understands, so a
-misspelling is an error that suggests what you meant (`"rd"` → "Did you
-mean `red`?") rather than an invisible shape. `"transparent"` works too.
+The shapes are drawn as 2htdp/image draws them: an outline is a 1-pixel
+pen just inside the shape, a rotated picture's box is the box of the turned
+shapes (so a circle turned is as wide as it was), `star` and
+`star_polygon` are true star polygons, and `right_triangle`'s right angle
+is at the bottom left. `text` is set in a monospace font, so its size is
+exact and its spaces are kept.
+
+Two pictures are `==` when they draw the same shapes in the same places in
+the same colours, however they were built - so a test can compare what a
+function draws with what it should:
+
+```python
+def test_dot():
+    assert dot(3) == circle(3, "solid", "red")
+```
+
+Colors can be names (`"red"`), hex (`"#ff0000"`), `"rgb(255, 0, 0)"` or
+`"hsl(0, 100%, 50%)"`, or tuples `(red, green, blue)` with values from 0 to
+255. A fourth number is how solid it is: a whole number from 0 to 255, or a
+fraction from 0.0 to 1.0, so `(255, 0, 0, 128)` and `(255, 0, 0, 0.5)` are
+both half see-through. Names are checked against the CSS colours, which are
+the names a browser understands, so a misspelling is an error that suggests
+what you meant (`"rd"` → "Did you mean `red`?", `"light blue"` → "Did you
+mean `lightblue`?") rather than an invisible shape. `"transparent"` works
+too.
 
 ### Loading a picture
 
@@ -316,8 +336,9 @@ cat = load_image("https://example.edu/cat.png")
 
 It gives you an ordinary picture, so everything above works on it —
 `scale`, `rotate`, `beside`, `place_image` and the rest. PNG, JPEG, GIF,
-WebP and SVG files are understood, up to 2 MB each — these are for the
-graphics a program draws with, not for photographs.
+WebP and SVG files are understood, up to 2 MB each, from a file or an
+address — these are for the graphics a program draws with, not for
+photographs.
 
 ## Tables and charts
 
@@ -337,8 +358,12 @@ people
 people.bar_chart("name", "age", title="Age")
 ```
 
-Tables show up as a card you can scroll, with a **Save CSV** button.
-Charts show up as images.
+Tables show up as a card you can scroll, with a **Save CSV** button, which
+saves the whole table, every row and every digit. A number is shown as
+Python prints it (`12999.99`, `2.0`), and columns of numbers line up on the
+right - so a column of numbers that is still text, from a CSV, can be seen
+to be. Charts are pictures: they show up as images, and `beside`, `above`
+and the rest work on them.
 
 ### Loading a CSV
 
@@ -351,8 +376,10 @@ cars = load_table("https://example.edu/cars.csv")
 ```
 
 The first row names the columns, and **every value arrives as text** —
-including the ones that look like numbers. An empty cell is `""`. Convert a
-column when you want to chart it or average it:
+including the ones that look like numbers. An empty cell is `""`. A file
+saved by Excel is read either way: "CSV UTF-8", and a plain "CSV" in
+Windows-1252, which PLL says it has done. Convert a column when you want to
+chart it or average it:
 
 ```python
 cars = load_table("cars.csv").transform_column("mpg", float)
@@ -367,14 +394,21 @@ what the whole column holds.
 ### Methods
 
 Useful ones include `filter`, `transform_column`, `add_column`,
-`order_by`, `select_columns`, `head`, `columns`, `length`, `row`,
-`column`, `sum`, `mean`, `min`, and `max`. For a median, a standard
+`add_row`, `order_by`, `select_columns`, `head`, `columns`, `length`,
+`row`, `column`, `sum`, `mean`, `min`, and `max`. For a median, a standard
 deviation or anything else of that sort, use a column with Python's own
-`statistics` module.
+`statistics` module. A row is a `Row`, which is a `dict`.
+
+`sum` of whole numbers is a whole number. At `beginner` and `intermediate`,
+`True` and `False` are not numbers to `sum` and `mean`. `min`, `max` and
+`order_by` refuse a column of numbers that is still text when comparing it
+as text would give a different answer (`"9"` comes after `"100"`), and say
+to convert it first.
 
 Two tables are `==` when they have the same columns, in the same order,
 holding the same values — so you can test a function that builds a table
-by comparing it with the table you expect.
+by comparing it with the table you expect. When such a test fails, it says
+which row is the first to differ.
 
 ### Charts
 
@@ -404,9 +438,29 @@ function_plot(lambda x: x * x, -3, 3)
 
 If you already know pandas, `my_table.to_pandas()` gives you a DataFrame.
 You can also `import pandas as pd` and read a CSV from a URL with
-`pd.read_csv("https://...")`. That works in desktop VS Code and in the
-browser. In the browser, the site must allow cross-origin requests
-(CORS) — the same goes for `load_table` with an address.
+`pd.read_csv("https://...")`, and `urllib` and `requests` work too. That
+works in desktop VS Code, on the command line and in the browser. An
+address that answers with an error (a 404) raises `HTTPError`, as in
+Python; one that does not answer at all gives up after 60 seconds, or the
+`timeout` a program gives, and Stop ends the wait. In the browser, the site
+must allow cross-origin requests (CORS) — the same goes for `load_table`
+with an address.
+
+### Charts with matplotlib
+
+`import matplotlib.pyplot as plt` works too: `plt.show()` shows each figure
+in the panel as a picture, and so does a figure on a line of its own at a
+student level. The text and lines `plt.title(...)` or `plt.plot(...)` give
+back are not printed.
+
+### Packages
+
+A program can import any package Pyodide has - numpy, pandas, matplotlib,
+requests, scipy and many more. PLL finds them before the program runs, from
+its imports wherever they are, and from those of the files of yours it
+imports; the first time, it downloads them, which needs the network. A
+package Pyodide does not have (`flask`) is said to be one, rather than
+left as `No module named 'flask'`.
 
 ## Animations and interactive programs
 
@@ -601,8 +655,8 @@ npx pll-python hw.py
 ```
 
 The level still comes from the file's own `#level` line, an `#examplar` line
-still checks your tests, tests still run first, and errors are worded the
-same way. Pictures cannot be drawn in a
+still checks your tests, tests still run after the program, and errors are
+worded the same way. Pictures cannot be drawn in a
 terminal (each prints a note, or use `--save-images`) and reactors do not
 animate, but tables print as text and everything else is the same code.
 

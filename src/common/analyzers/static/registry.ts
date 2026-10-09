@@ -15,6 +15,7 @@ import {
   explainComparedWithClass,
   explainFieldAssignedType,
   explainFieldNoType,
+  explainIsLiteral,
   explainMethodNotCalled,
   explainTestNotNamed,
   explainUnusedComparison,
@@ -44,6 +45,7 @@ const explainers: {
   "field-assigned-type": explainFieldAssignedType,
   "class-needs-dataclass": explainClassNeedsDataclass,
   "compared-with-class": explainComparedWithClass,
+  "is-literal": explainIsLiteral,
   "duplicate-definition": explainDuplicateDefinition,
 };
 

@@ -15,13 +15,14 @@
 #     load_table(source)              read a CSV, from a path or a URL.
 #                                     Every cell is text, as in Pyret;
 #                                     convert with transform_column.
+#     t.add_row(row)                  one more row at the end
 #
 #   Inspection:
 #     t.columns()                     -> list[str]
 #     t.length() / len(t)             -> int
 #     t.column(name)                  -> list of values
-#     t.row(index)                    -> dict
-#     t.rows()                        -> list[dict]
+#     t.row(index)                    -> Row, a dict
+#     t.rows()                        -> list[Row]
 #
 #   Functional ops (return Table):
 #     t.filter(predicate)             keep rows where predicate(row) is truthy
@@ -39,8 +40,8 @@
 #     t.max(name)
 #     t.count()                       row count (alias for length)
 #
-#   Charts (return Image-compatible objects that auto-display). The set
-#   matches what the Pyret charting library gives a course, so an
+#   Charts (return images, which display and combine like any other). The
+#   set matches what the Pyret charting library gives a course, so an
 #   assignment written against one can be run against the other:
 #     t.bar_chart(x_name, y_name)             one bar per row
 #     t.freq_bar_chart(name)                  one bar per distinct value
@@ -70,10 +71,16 @@
 import csv as _csv
 import io as _io
 import math as _math
+import numbers as _pll_tbl_numbers
+import sys as _pll_tbl_sys
 
-#: Rows `repr(table)` shows before truncating. Enough to see what differs
-#: in a failed comparison, few enough not to bury the rest of the message.
+#: Rows `repr(table)` shows before truncating, few enough not to bury the
+#: rest of a message. A failed `==` between tables says where they differ
+#: (`_pll_compare_tables`), so the rows that matter are always shown.
 _REPR_ROWS = 6
+
+#: The most of a table's text the panel is given for Save CSV.
+_PLL_CSV_LIMIT = 8 * 1024 * 1024
 
 
 # -----------------------------------------------------------------------------
@@ -81,29 +88,41 @@ _REPR_ROWS = 6
 # -----------------------------------------------------------------------------
 
 def _format_cell(value):
-    """Render a cell value to a short display string.
+    """A cell as the panel and the command line show it: as Python prints it.
 
-    Short means rounded (`%g`), which suits a table and not a message: a
-    value quoted back to the student goes through `_pll_number`, which
-    shows it as it is.
+    A float is its `repr`, every digit of it - `12999.99`, not a rounded
+    `13000` - so what is shown is what a test compares. A missing value
+    (None) is blank.
     """
     if value is None:
         return ""
+    if isinstance(value, str):
+        return value
     if isinstance(value, bool):
         return "True" if value else "False"
     if isinstance(value, float):
-        if _math.isnan(value):
-            return "NaN"
-        if _math.isinf(value):
-            return "+inf" if value > 0 else "-inf"
-        if value == int(value) and abs(value) < 1e16:
-            return "%d" % int(value)
-        return "%g" % value
-    if isinstance(value, int):
-        return "%d" % value
-    if isinstance(value, str):
-        return value
-    return repr(value)
+        return repr(float(value))
+    return str(value) if isinstance(value, _pll_tbl_numbers.Number) else repr(value)
+
+
+def _pll_is_number(value):
+    """A number to count with: an int or a float, numpy's too, not a bool."""
+    return isinstance(value, _pll_tbl_numbers.Real) and not isinstance(value, bool)
+
+
+def _pll_student_level():
+    """The level of the student's code that called into the library.
+
+    Read from the namespace of the nearest of their frames, as the
+    strict-number check reads it, so a helper module at another level
+    gets its own.
+    """
+    frame = _pll_tbl_sys._getframe(1)
+    while frame is not None:
+        if _pll_is_students(frame.f_code.co_filename):
+            return frame.f_globals.get("__pll_level__", _PLL_LEVEL_RAW)
+        frame = frame.f_back
+    return _PLL_LEVEL_RAW
 
 
 # -----------------------------------------------------------------------------
@@ -141,6 +160,7 @@ def _pll_closest(name, candidates):
     """
     if not isinstance(name, str):
         return (None, "")
+    candidates = [c for c in candidates if isinstance(c, str)]
     for candidate in candidates:
         if candidate.lower() == name.lower():
             return (candidate, " Column names are case-sensitive.")
@@ -232,21 +252,34 @@ def _pll_parameter_count(fn):
     return required
 
 
+def _pll_raised_in_students_code(exc):
+    """Whether `exc` came from inside the student's own code."""
+    tb = exc.__traceback__
+    while tb is not None:
+        if _pll_is_students(tb.tb_frame.f_code.co_filename):
+            return True
+        tb = tb.tb_next
+    return False
+
+
 def _pll_apply_to_cell(fn, value, index, name):
-    """`fn(value)`, with the row and value named if it fails.
+    """`fn(value)`, with the row and value named if a conversion fails.
 
     `transform_column("tickets", int)` on a column with one blank cell
     fails with "invalid literal for int() with base 10: ''", which says
-    nothing about which row or which column.
+    nothing about which row or which column. Only a conversion - `int`,
+    `float`, a function that is not the student's - is reworded: an error
+    in their own function is theirs, and goes on as it was raised, with
+    its own line and name, to be explained like any other.
     """
     try:
         return fn(value)
     except Exception as exc:
-        if type(exc).__name__ == "TypeCheckError":
-            # The function's own annotation does not fit what
-            # transform_column hands it - a question about the `def`, not
-            # about this row's data. Left alone so the type checker's own
-            # explanation reaches the student intact.
+        if (
+            type(exc) not in (ValueError, TypeError)
+            or type(exc).__name__ == "TypeCheckError"
+            or _pll_raised_in_students_code(exc)
+        ):
             raise
         # What to do about it, rather than Python's own words after a colon:
         # a blank cell needs a decision, which is a function of their own.
@@ -316,6 +349,13 @@ class Row(dict):
 # -----------------------------------------------------------------------------
 
 class Table:
+    """A table: named columns, and rows of values in them.
+
+    Make one with `table(columns, rows)`, `table_from_columns(...)` or
+    `load_table("file.csv")`. A table never changes: every method that
+    changes something gives back a new table.
+    """
+
     __slots__ = ("_columns", "_data", "_length")
 
     def __init__(self, columns, rows):
@@ -324,8 +364,8 @@ class Table:
         Each row is a list/tuple aligned with `columns`. Rows may also be
         dicts; missing keys default to None.
         """
-        # A single string is iterable, so `table("month, riders", ...)` used
-        # to come apart into letters and be reported as duplicate columns.
+        # A single string is iterable, so `table("month, riders", ...)`
+        # would come apart into letters and be reported as duplicate columns.
         if isinstance(columns, str):
             raise TypeError(
                 "table's column names should be a list of strings, like "
@@ -354,37 +394,9 @@ class Table:
         data = {c: [] for c in cols}
         n = 0
         for row in rows:
+            for c, v in zip(cols, _pll_row_values(row, cols, n, "table")):
+                data[c].append(v)
             n += 1
-            if isinstance(row, dict):
-                for c in cols:
-                    data[c].append(row.get(c))
-            elif isinstance(row, str) or not hasattr(row, "__iter__"):
-                # `table(columns, ["Jan", 1])` - the values of one row where
-                # a list of rows belongs. Iterating it would take a string
-                # apart into letters and blame the wrong thing.
-                raise TypeError(
-                    "each row should be a list of values, but the %s row is "
-                    "%s. Put every row inside one outer list: "
-                    "table(columns, [[...], [...]])."
-                    % (_pll_ordinal(n - 1), _pll_describe(row))
-                )
-            else:
-                row_seq = list(row)
-                if len(row_seq) != len(cols):
-                    raise ValueError(
-                        "the %s row, %s, has %d value%s, but the table has %d "
-                        "columns: %s"
-                        % (
-                            _pll_ordinal(n - 1),
-                            _pll_literal(row_seq),
-                            len(row_seq),
-                            "" if len(row_seq) == 1 else "s",
-                            len(cols),
-                            ", ".join(cols),
-                        )
-                    )
-                for c, v in zip(cols, row_seq):
-                    data[c].append(v)
 
         self._columns = cols
         self._data = data
@@ -423,11 +435,17 @@ class Table:
         # Checked before the comparison below, which otherwise fails inside
         # `row` with "'<' not supported between instances of 'str' and
         # 'int'" - naming neither `row` nor the argument.
-        if isinstance(index, bool) or not isinstance(index, int):
+        if isinstance(index, float) and index.is_integer():
+            raise TypeError(
+                "row expects a whole row number, but got %r, which is a float: "
+                "write row(%d)." % (index, int(index))
+            )
+        if not isinstance(index, _pll_tbl_numbers.Integral) or isinstance(index, bool):
             raise TypeError(
                 "row expects a row number, but got %s. To find rows by a "
                 "value, use filter." % _pll_describe(index)
             )
+        index = int(index)
         if index < 0 or index >= self._length:
             raise IndexError(
                 "there is no row %d: this table's rows are numbered 0 to %d."
@@ -484,6 +502,7 @@ class Table:
         Pass a list of values aligned with the existing rows, or a function
         that takes a row dict and returns the value for that row.
         """
+        _pll_check_column_name(name, "add_column")
         if name in self._data:
             raise ValueError(
                 "this table already has a column called %s. To change the "
@@ -497,6 +516,12 @@ class Table:
                 row = Row((c, self._data[c][i]) for c in self._columns)
                 new_values.append(values_or_fn(row))
         else:
+            if isinstance(values_or_fn, (str, dict)) or not hasattr(values_or_fn, "__iter__"):
+                raise TypeError(
+                    "add_column needs a list of values, one for each row, or a "
+                    "function that works out the value from a row - but it was "
+                    "given %s." % _pll_describe(values_or_fn)
+                )
             new_values = list(values_or_fn)
             if len(new_values) != self._length:
                 raise ValueError(
@@ -514,6 +539,20 @@ class Table:
         new_data[name] = new_values
         return Table._from_columns(new_columns, new_data, self._length)
 
+    def add_row(self, row):
+        """This table with `row` added at the end.
+
+        `row` is a list of values in the order of the columns, or a dict
+        from column names to values, as in `table(...)`.
+        """
+        values = _pll_row_values(row, self._columns, self._length, "add_row")
+        new_data = {c: self._data[c] + [v] for c, v in zip(self._columns, values)}
+        t = Table.__new__(Table)
+        t._columns = list(self._columns)
+        t._data = new_data
+        t._length = self._length + 1
+        return t
+
     def select_columns(self, names):
         """Keep only the columns in `names`, in that order."""
         # One string is iterable, so `select_columns("name")` would come
@@ -526,6 +565,12 @@ class Table:
         names = list(names)
         for n in names:
             self._require_column(n)
+        repeated = sorted({n for n in names if names.count(n) > 1})
+        if repeated:
+            raise ValueError(
+                "select_columns was given %s more than once; a table cannot "
+                "have two columns of one name." % ", ".join(_pll_q(n) for n in repeated)
+            )
         new_data = {n: list(self._data[n]) for n in names}
         return Table._from_columns(names, new_data, self._length)
 
@@ -539,10 +584,12 @@ class Table:
                 "order_by's ascending has to be True or False, but it is %s."
                 % _pll_describe(ascending)
             )
+        values = self._data[name]
+        self._refuse_numbers_as_text(name, "order_by", "sorts")
         # Sort indices to keep all columns in lockstep.
         order = sorted(
             range(self._length),
-            key=lambda i: _sort_key(self._data[name][i]),
+            key=lambda i: _sort_key(values[i]),
             reverse=not ascending,
         )
         new_data = {c: [self._data[c][i] for i in order] for c in self._columns}
@@ -550,10 +597,12 @@ class Table:
 
     def head(self, n=10):
         """First `n` rows as a new table."""
+        n = _pll_row_count(n, "head")
         return self._slice(0, min(n, self._length))
 
     def tail(self, n=10):
         """Last `n` rows as a new table."""
+        n = _pll_row_count(n, "tail")
         start = max(0, self._length - n)
         return self._slice(start, self._length)
 
@@ -565,30 +614,30 @@ class Table:
 
     def sum(self, name):
         """Sum of all values in `name` (numeric column)."""
-        return _sum_numeric(self._numeric_column(name, "sum"))
+        return sum(self._numeric_column(name, "sum", counting=True))
 
     def mean(self, name):
         """Mean (average) of `name`."""
-        values = self._numeric_column(name, "mean")
+        values = self._numeric_column(name, "mean", counting=True)
         if len(values) == 0:
-            raise ValueError("mean of empty column %r" % name)
-        return _sum_numeric(values) / len(values)
+            raise ValueError(self._empty("mean", "nothing to average"))
+        return sum(values) / len(values)
 
     def min(self, name):
         """Minimum value in `name`."""
         self._require_column(name)
-        values = self._data[name]
-        if len(values) == 0:
-            raise ValueError("min of empty column %r" % name)
-        return min(values, key=_sort_key)
+        if self._length == 0:
+            raise ValueError(self._empty("min", "no smallest value"))
+        self._refuse_numbers_as_text(name, "min", "compares")
+        return min(self._data[name], key=_sort_key)
 
     def max(self, name):
         """Maximum value in `name`."""
         self._require_column(name)
-        values = self._data[name]
-        if len(values) == 0:
-            raise ValueError("max of empty column %r" % name)
-        return max(values, key=_sort_key)
+        if self._length == 0:
+            raise ValueError(self._empty("max", "no largest value"))
+        self._refuse_numbers_as_text(name, "max", "compares")
+        return max(self._data[name], key=_sort_key)
 
     def count(self):
         """Number of rows (alias for length)."""
@@ -606,8 +655,11 @@ class Table:
 
     def scatter_chart(self, x, y, title=None):
         """Scatter plot of x vs y (both numeric)."""
-        xs = self._numeric_column(x, "scatter_chart")
-        ys = self._numeric_column(y, "scatter_chart")
+        return self._scatter(x, y, title, "scatter_chart")
+
+    def _scatter(self, x, y, title, who):
+        xs = self._numeric_column(x, who)
+        ys = self._numeric_column(y, who)
         return _PllChart(_render_xy_chart(xs, ys, x, y, title, mode="scatter"))
 
     def line_chart(self, x, y, title=None):
@@ -625,32 +677,45 @@ class Table:
 
         `bins` counts the buckets; `bin_width` sets how wide each one is
         instead, which is how the same chart is asked for in Pyret and is
-        usually what the data calls for ("group ages by 5").
+        usually what the data calls for ("group ages by 5"): the buckets
+        then start at a multiple of the width.
         """
         values = self._numeric_column(name, "histogram")
         if bin_width is not None:
+            if not _pll_is_number(bin_width) or not _math.isfinite(bin_width):
+                raise TypeError(
+                    "histogram's `bin_width` has to be a number, but it is %s."
+                    % _pll_describe(bin_width)
+                )
             if bin_width <= 0:
                 raise ValueError(
                     "histogram's `bin_width` has to be more than 0, but it is %s."
                     % _pll_number(bin_width)
                 )
-            if not values:
-                bins = 1
-            else:
-                span = max(values) - min(values)
-                bins = max(1, int(_math.ceil(span / bin_width))) if span > 0 else 1
+            if values and (max(values) - min(values)) / bin_width > 1000:
+                raise ValueError(
+                    "histogram's `bin_width` of %s would make more than 1000 bars "
+                    "across these values; use a wider one."
+                    % _pll_number(bin_width)
+                )
+            return _PllChart(_render_histogram(values, None, name, title, bin_width))
+        if isinstance(bins, bool) or not isinstance(bins, _pll_tbl_numbers.Integral):
+            raise TypeError(
+                "histogram's `bins` has to be a whole number - it is how many bars "
+                "to draw - but it is %s." % _pll_describe(bins)
+            )
         if bins < 1:
             raise ValueError(
                 "histogram's `bins` has to be 1 or more - it is how many bars "
                 "to draw - but it is %s." % _pll_number(bins)
             )
-        return _PllChart(_render_histogram(values, bins, name, title))
+        return _PllChart(_render_histogram(values, int(bins), name, title))
 
     # ---- Charts: the rest of the Pyret set ----
 
     def scatter_plot(self, x, y, title=None):
         """Scatter plot of x vs y. Another name for `scatter_chart`."""
-        return self.scatter_chart(x, y, title)
+        return self._scatter(x, y, title, "scatter_plot")
 
     def labeled_scatter_plot(self, labels, x, y, title=None):
         """Scatter plot with the points coloured and keyed by `labels`."""
@@ -666,20 +731,21 @@ class Table:
         """Pie chart: one slice per row, sized by `values`."""
         self._require_column(labels)
         amounts = self._numeric_column(values, "pie_chart")
-        for amount in amounts:
+        for index, amount in enumerate(amounts):
             if amount < 0:
                 raise ValueError(
-                    "a pie chart cannot show a negative value; column %r "
-                    "contains %g" % (values, amount)
+                    "a pie chart cannot show a negative value, but column %s "
+                    "holds %s in the %s row."
+                    % (_pll_q(values), _pll_number(amount), _pll_ordinal(index))
                 )
         names = [_format_cell(v) for v in self._data[labels]]
-        return _PllChart(_render_pie_chart(names, amounts, title))
+        return _PllChart(_render_pie_chart(names, amounts, title, values))
 
     def dot_plot(self, name, title=None):
         """One dot per row along `name`, stacked where rows share a value."""
         values = self._numeric_column(name, "dot_plot")
         if not values:
-            raise ValueError("dot_plot needs at least one row")
+            raise ValueError(self._empty("dot_plot", "nothing to plot"))
         return _PllChart(_render_dot_plot(values, None, name, title))
 
     def labeled_dot_plot(self, labels, name, title=None):
@@ -687,7 +753,7 @@ class Table:
         self._require_column(labels)
         values = self._numeric_column(name, "labeled_dot_plot")
         if not values:
-            raise ValueError("labeled_dot_plot needs at least one row")
+            raise ValueError(self._empty("labeled_dot_plot", "nothing to plot"))
         names = [_format_cell(v) for v in self._data[labels]]
         return _PllChart(_render_dot_plot(values, names, name, title))
 
@@ -696,25 +762,28 @@ class Table:
 
         Unlike `bar_chart` this needs one column, not two: it counts the
         rows itself. The column can hold anything - counting words is the
-        usual reason to reach for it.
+        usual reason to reach for it. The bars are in the values' order:
+        numbers by size, words alphabetically.
         """
         self._require_column(name)
         counts = {}
         for value in self._data[name]:
             key = _format_cell(value)
-            counts[key] = counts.get(key, 0) + 1
+            if key not in counts:
+                counts[key] = [value, 0]
+            counts[key][1] += 1
         if not counts:
-            raise ValueError("freq_bar_chart needs at least one row")
-        keys = sorted(counts, key=_sort_key)
+            raise ValueError(self._empty("freq_bar_chart", "nothing to count"))
+        keys = sorted(counts, key=lambda k: _sort_key(counts[k][0]))
         return _PllChart(
-            _render_bar_chart(keys, [float(counts[k]) for k in keys], name, "count", title)
+            _render_bar_chart(keys, [float(counts[k][1]) for k in keys], name, "count", title)
         )
 
     def box_plot(self, name, title=None):
         """Box and whisker plot of `name`: quartiles, range and outliers."""
         values = self._numeric_column(name, "box_plot")
         if not values:
-            raise ValueError("box_plot needs at least one row")
+            raise ValueError(self._empty("box_plot", "nothing to plot"))
         return _PllChart(_render_box_plot(values, name, title))
 
     def lr_plot(self, x, y, title=None):
@@ -760,12 +829,24 @@ class Table:
     # ---- Display protocol ----
 
     def _pll_table_data(self, max_rows=200):
-        """Return the JSON-friendly payload the host renders."""
+        """Return the JSON-friendly payload the host renders.
+
+        `rows` are the cells shown, as text; `numeric` says which columns
+        hold only numbers, which the panel lines up on the right - so text
+        that looks like a number, from a CSV, is left-aligned and can be
+        seen not to be one. `csv` is the whole table for Save CSV, every
+        row and every digit, as far as `_PLL_CSV_LIMIT`.
+        """
         n = self._length
         shown = min(n, max_rows)
         rows = []
         for i in range(shown):
             rows.append([_format_cell(self._data[c][i]) for c in self._columns])
+        numeric = []
+        for c in self._columns:
+            cells = [v for v in self._data[c][:shown] if v is not None]
+            numeric.append(bool(cells) and all(_pll_is_number(v) for v in cells))
+        csv_text, csv_rows = self._csv_text(_PLL_CSV_LIMIT)
         return {
             "type": "table",
             "columns": list(self._columns),
@@ -773,7 +854,27 @@ class Table:
             "row_count": n,
             "shown_count": shown,
             "truncated": n > shown,
+            "numeric": numeric,
+            "csv": csv_text,
+            "csv_rows": csv_rows,
         }
+
+    def _csv_text(self, limit):
+        """The table as CSV, and how many rows that is: all that fit in `limit`."""
+        out = _io.StringIO()
+        writer = _csv.writer(out, lineterminator="\n")
+        writer.writerow(self._columns)
+        written = 0
+        for i in range(self._length):
+            writer.writerow([_format_cell(self._data[c][i]) for c in self._columns])
+            if out.tell() > limit:
+                break
+            written += 1
+        text = out.getvalue()
+        if written < self._length:
+            # The row that went past the limit is not kept.
+            text = text[: text.rstrip("\n").rfind("\n") + 1]
+        return text, written
 
     # ---- Escape hatch ----
 
@@ -793,8 +894,9 @@ class Table:
         """Same columns, in the same order, holding the same values.
 
         Column order counts: two tables that display differently are not
-        the same table. Cells compare as Python values, so `1 == 1.0` and a
-        loaded CSV's `29` equals a literal `29`.
+        the same table. Cells compare as Python values, so `1 == 1.0` - but
+        a CSV's cells are text, and its "29" is not the number 29 until the
+        column is converted.
         """
         if not isinstance(other, Table):
             return NotImplemented
@@ -806,6 +908,47 @@ class Table:
     # and that is the right default here: a table's cells can be lists or
     # other unhashable values, so there is no honest hash to give.
     __hash__ = None
+
+    # ---- Used the way a list or a dict is ----
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            raise TypeError(
+                "a table's columns are not taken out with square brackets: "
+                "write t.column(%s) for the values in it." % _pll_q(key)
+            )
+        if isinstance(key, _pll_tbl_numbers.Integral) and not isinstance(key, bool):
+            raise TypeError(
+                "a table's rows are not taken out with square brackets: "
+                "write t.row(%d) for that row." % key
+            )
+        raise TypeError(
+            "a table is not taken apart with square brackets: t.row(0) is a "
+            'row, t.column("name") a column, and t.rows() every row.'
+        )
+
+    def __iter__(self):
+        raise TypeError(
+            "a table is not a list of rows itself: loop over t.rows(), as in "
+            "`for r in t.rows():`."
+        )
+
+    def __getattr__(self, name):
+        # Only for names the class does not have. Private and special
+        # lookups are Python's own probing, and fail the ordinary way.
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name in self._data:
+            # `name=None`, so Python adds no "Did you mean" of its own: the
+            # column is the answer, not a method spelt like it.
+            raise AttributeError(
+                "a table's columns are not attributes: write t.column(%s) for "
+                "the values in it." % _pll_q(name),
+                name=None,
+                obj=None,
+            )
+        # Python adds the nearest method, after a full stop of its own.
+        raise AttributeError("a table has no method `%s`" % name)
 
     # ---- Repr ----
 
@@ -830,22 +973,99 @@ class Table:
     # ---- Helpers ----
 
     def _require_column(self, name):
+        if not isinstance(name, str):
+            raise TypeError(
+                "a column is named by a string, like %s, but this is %s.%s"
+                % (
+                    _pll_q(self._columns[0]) if self._columns else '"name"',
+                    _pll_describe(name),
+                    " To keep several columns, use select_columns."
+                    if isinstance(name, (list, tuple))
+                    else "",
+                )
+            )
         if name not in self._data:
             raise KeyError(_pll_no_column(name, self._columns))
 
-    def _numeric_column(self, name, op, swap_with=None):
+    def _empty(self, op, what):
+        return "%s needs at least one row, but the table has none, so there is %s." % (op, what)
+
+    def _refuse_numbers_as_text(self, name, op, does):
+        """Stop `op` giving a wrong answer for numbers a CSV left as text.
+
+        Text compares letter by letter, so "9" comes after "100". When every
+        value in the column is a number written as text, and comparing them
+        as text gives a different answer than as numbers would, the
+        column was almost certainly never converted.
+        """
+        values = self._data[name]
+        texts = [v for v in values if isinstance(v, str) and v.strip() != ""]
+        if not texts or len(texts) != sum(1 for v in values if v is not None and v != ""):
+            return
+        try:
+            numbers = [float(v) for v in texts]
+        except ValueError:
+            return
+        if sorted(range(len(texts)), key=lambda i: texts[i]) == sorted(
+            range(len(texts)), key=lambda i: (numbers[i], texts[i])
+        ):
+            return
+        whole = all(n.is_integer() for n in numbers)
+        first, second = sorted(texts, key=lambda t: float(t))[0], sorted(texts)[0]
+        raise TypeError(
+            "%s %s column %s as text, and as text %s comes before %s: the values "
+            "were read from a CSV and never converted to numbers. Convert the "
+            "column first: transform_column(%s, %s)."
+            % (
+                op,
+                does,
+                _pll_q(name),
+                _pll_q(second),
+                _pll_q(first),
+                _pll_q(name),
+                "int" if whole else "float",
+            )
+        )
+
+    def _numeric_column(self, name, op, swap_with=None, counting=False):
         """The column as numbers, or an error saying why it is not.
 
         `swap_with` is the other column of a two-column chart, so a chart
-        given its arguments the wrong way round can say so.
+        given its arguments the wrong way round can say so. `counting` is
+        for `sum` and `mean`, which keep each number as it is - whole
+        numbers add up to a whole number - and refuse True and False at the
+        teaching levels, where neither is a number.
         """
         self._require_column(name)
+        strict = counting and _pll_student_level() in _PLL_TEACHING_LEVELS
         out = []
         for index, v in enumerate(self._data[name]):
-            f = _to_number(v)
-            if f is None:
-                raise TypeError(self._not_numeric(name, v, index, op, swap_with))
-            out.append(f)
+            if isinstance(v, bool):
+                if strict:
+                    raise TypeError(
+                        "%s needs a column of numbers, but column %s holds %s in the "
+                        "%s row. True and False are not numbers; to count the rows "
+                        "where it is True, filter on it and take the length."
+                        % (op, _pll_q(name), v, _pll_ordinal(index))
+                    )
+                out.append(int(v) if counting else float(v))
+                continue
+            if _pll_is_number(v):
+                if isinstance(v, float) and not _math.isfinite(v):
+                    raise ValueError(
+                        "%s needs numbers it can %s, but column %s holds %s in the %s "
+                        "row. Leave such rows out first, with filter."
+                        % (
+                            op,
+                            "add up" if counting else "draw",
+                            _pll_q(name),
+                            "nan (\"not a number\")" if v != v else repr(v),
+                            _pll_ordinal(index),
+                        )
+                    )
+                out.append(v if counting else float(v))
+                continue
+            raise TypeError(self._not_numeric(name, v, index, op, swap_with))
         return out
 
     def _looks_numeric(self, name):
@@ -891,6 +1111,113 @@ class Table:
         return "%s. That column holds text, so there is nothing to measure." % base
 
 
+def _pll_check_column_name(name, who):
+    if not isinstance(name, str):
+        raise TypeError(
+            "%s's column name has to be a string, like \"total\", but it is %s."
+            % (who, _pll_describe(name))
+        )
+
+
+def _pll_row_count(n, who):
+    """How many rows `head` or `tail` is asked for: a whole number, not negative."""
+    if isinstance(n, bool) or not isinstance(n, _pll_tbl_numbers.Integral):
+        raise TypeError(
+            "%s takes how many rows to keep, as a whole number like %s(5), but it "
+            "was given %s." % (who, who, _pll_describe(n))
+        )
+    if n < 0:
+        raise ValueError(
+            "%s takes how many rows to keep, which cannot be negative, but it is %d."
+            % (who, n)
+        )
+    return int(n)
+
+
+def _pll_row_values(row, cols, index, who):
+    """One row's values, in the order of `cols`, checked."""
+    if isinstance(row, dict):
+        unknown = [key for key in row if key not in cols]
+        if unknown:
+            suggestion, note = _pll_closest(unknown[0], cols)
+            raise ValueError(
+                "the %s row has %s, which is not one of the columns (%s).%s%s"
+                % (
+                    _pll_ordinal(index),
+                    _pll_q(unknown[0]),
+                    ", ".join(cols),
+                    " Did you mean %s?" % _pll_q(suggestion) if suggestion else "",
+                    note,
+                )
+            )
+        return [row.get(c) for c in cols]
+    if isinstance(row, str) or not hasattr(row, "__iter__"):
+        # `table(columns, ["Jan", 1])` - the values of one row where a list
+        # of rows belongs. Iterating it would take a string apart into
+        # letters and blame the wrong thing.
+        if who == "add_row":
+            raise TypeError(
+                "add_row takes one row, as a list of values or a dict, but it was "
+                "given %s." % _pll_describe(row)
+            )
+        raise TypeError(
+            "each row should be a list of values, but the %s row is "
+            "%s. Put every row inside one outer list: "
+            "table(columns, [[...], [...]])."
+            % (_pll_ordinal(index), _pll_describe(row))
+        )
+    values = list(row)
+    if len(values) != len(cols):
+        raise ValueError(
+            "the %s row, %s, has %d value%s, but the table has %d "
+            "columns: %s"
+            % (
+                _pll_ordinal(index),
+                _pll_literal(values),
+                len(values),
+                "" if len(values) == 1 else "s",
+                len(cols),
+                ", ".join(cols),
+            )
+        )
+    return values
+
+
+def _pll_table_differences(left, right):
+    """Where two tables differ, for a failed `assert left == right`, or None.
+
+    A table's repr shows its first rows, which are the same in two tables
+    that differ further down.
+    """
+    if not (isinstance(left, Table) and isinstance(right, Table)):
+        return None
+    if left._columns != right._columns:
+        return [
+            "The columns differ: %s and %s."
+            % (_pll_literal(left._columns, 200), _pll_literal(right._columns, 200))
+        ]
+    lines = []
+    if left._length != right._length:
+        lines.append("The first has %d rows and the second %d." % (left._length, right._length))
+    differ = [
+        i
+        for i in range(min(left._length, right._length))
+        if any(left._data[c][i] != right._data[c][i] for c in left._columns)
+    ]
+    if differ:
+        i = differ[0]
+        lines.append(
+            "Row %d is the first that differs: %r and %r%s."
+            % (
+                i,
+                [left._data[c][i] for c in left._columns],
+                [right._data[c][i] for c in left._columns],
+                " (%d more rows differ)" % (len(differ) - 1) if len(differ) > 1 else "",
+            )
+        )
+    return lines
+
+
 # -----------------------------------------------------------------------------
 # Constructors (module-level)
 # -----------------------------------------------------------------------------
@@ -906,20 +1233,38 @@ def table_from_columns(data):
     Iteration order of the dict determines column order (Python 3.7+
     preserves insertion order).
     """
+    if not isinstance(data, dict):
+        raise TypeError(
+            "table_from_columns takes one dictionary, from each column's name to "
+            'its values: table_from_columns({"month": ["Jan", "Feb"], "riders": [1, 2]}) - '
+            "but it was given %s." % _pll_describe(data)
+        )
     cols = list(data.keys())
-    n = None
     for c in cols:
-        ln = len(data[c])
-        if n is None:
-            n = ln
-        elif ln != n:
-            raise ValueError(
-                "Columns have differing lengths: %r"
-                % {c: len(data[c]) for c in cols}
+        _pll_check_column_name(c, "table_from_columns")
+        values = data[c]
+        # One string is iterable, and would become a column of its letters.
+        if isinstance(values, (str, dict)) or not hasattr(values, "__iter__"):
+            raise TypeError(
+                "table_from_columns needs a list of values for each column, but "
+                "%s is %s." % (_pll_q(c), _pll_describe(values))
             )
-    if n is None:
-        n = 0
-    return Table._from_columns(cols, data, n)
+    columns = {c: list(data[c]) for c in cols}
+    lengths = {c: len(columns[c]) for c in cols}
+    if len(set(lengths.values())) > 1:
+        first, other = cols[0], next(c for c in cols if lengths[c] != lengths[cols[0]])
+        raise ValueError(
+            "table_from_columns needs every column to be the same length, but "
+            "%s has %d value%s and %s has %d."
+            % (
+                _pll_q(first),
+                lengths[first],
+                "" if lengths[first] == 1 else "s",
+                _pll_q(other),
+                lengths[other],
+            )
+        )
+    return Table._from_columns(cols, columns, lengths[cols[0]] if cols else 0)
 
 
 def _pll_refuse_html(text, source):
@@ -930,7 +1275,14 @@ def _pll_refuse_html(text, source):
     9 value(s) but there are 1 columns (<!DOCTYPE html>)" - a message about
     a line nobody wrote.
     """
-    start = text.lstrip()[:200].lower()
+    start = text.lstrip("\ufeff \t\r\n")
+    # Past any comments: a page may start with one.
+    while start.startswith("<!--"):
+        end = start.find("-->")
+        if end < 0:
+            break
+        start = start[end + 3:].lstrip()
+    start = start[:200].lower()
     if not (start.startswith("<!doctype html") or start.startswith("<html")):
         return
     hint = ""
@@ -969,18 +1321,21 @@ def load_table(source):
     """
     text = _pll_read_source(source, "load_table")
     _pll_refuse_html(text, source)
-    # `csv` rather than `split(",")`: quoted fields containing commas and
-    # newlines are ordinary in real data, and getting them wrong shifts
-    # every later column without saying anything.
-    reader = _csv.reader(_io.StringIO(text))
-    try:
-        rows = [row for row in reader if row and any(cell.strip() for cell in row)]
-    except _csv.Error as e:
-        raise ValueError("Could not read %r as a CSV: %s" % (source, e)) from None
-    if not rows:
+    records = _pll_csv_records(text, source)
+
+    def blank(row):
+        return not any(cell.strip() for cell in row)
+
+    # Blank lines before the names and after the last row are not rows; an
+    # editor or a spreadsheet leaves them there.
+    while records and blank(records[0][1]):
+        records.pop(0)
+    while records and blank(records[-1][1]):
+        records.pop()
+    if not records:
         raise ValueError("%r has no rows in it." % source)
 
-    header = [name.strip() for name in rows[0]]
+    header = [name.strip() for name in records[0][1]]
     if len(header) != len(set(header)):
         seen = set()
         for name in header:
@@ -991,23 +1346,59 @@ def load_table(source):
                     % (_pll_q(source), _pll_q(name))
                 )
             seen.add(name)
-    blank = [i for i, name in enumerate(header) if not name]
-    if blank:
+    blank_names = [i for i, name in enumerate(header) if not name]
+    if blank_names:
         raise ValueError(
-            "Column %d of %r has no name in the first row." % (blank[0] + 1, source)
+            "Column %d of %r has no name in the first row." % (blank_names[0] + 1, source)
         )
 
     raw = {name: [] for name in header}
-    for line_number, row in enumerate(rows[1:], start=2):
+    length = 0
+    for line, row in records[1:]:
+        if not row or (len(row) == 1 and not row[0].strip()):
+            # An empty line: in a file of one column, an empty cell, and in
+            # any other just a gap between rows.
+            if len(header) != 1:
+                continue
+            row = [""]
         if len(row) != len(header):
             raise ValueError(
                 "Line %d of %r has %d value(s) but there are %d columns (%s)."
-                % (line_number, source, len(row), len(header), ", ".join(header))
+                % (line, source, len(row), len(header), ", ".join(header))
             )
         for name, cell in zip(header, row):
             raw[name].append(cell)
+        length += 1
 
-    return Table._from_columns(header, raw, len(rows) - 1)
+    return Table._from_columns(header, raw, length)
+
+
+def _pll_csv_records(text, source):
+    """`(line, cells)` for each record of a CSV, with the line it starts on.
+
+    `csv` rather than `split(",")`: quoted fields containing commas and
+    newlines are ordinary in real data, and getting them wrong shifts every
+    later column without saying anything. Strict, so a quote never closed
+    is an error rather than the rest of the file in one cell.
+    """
+    reader = _csv.reader(_io.StringIO(text), strict=True)
+    records = []
+    line = 1
+    try:
+        for row in reader:
+            records.append((line, row))
+            line = reader.line_num + 1
+    except _csv.Error as e:
+        if "unexpected end of data" in str(e):
+            raise ValueError(
+                '%s has a quote (") on line %d that is never closed, so everything '
+                "after it would be one cell. Close the quote, or take it out."
+                % (_pll_q(source), line)
+            ) from None
+        raise ValueError(
+            "Could not read %s as a CSV: line %d: %s" % (_pll_q(source), line, e)
+        ) from None
+    return records
 
 
 def function_plot(f, x_min, x_max, steps=200, title=None):
@@ -1018,36 +1409,55 @@ def function_plot(f, x_min, x_max, steps=200, title=None):
     and guessing one would quietly decide what the picture shows.
 
         function_plot(lambda x: x * x, -3, 3)
+
+    Where `f` has no value - 1/x at 0, a square root below 0 - the line
+    has a gap.
     """
+    _pll_check_function(f, "function_plot", "one number")
+    for name, value in (("x_min", x_min), ("x_max", x_max)):
+        if not _pll_is_number(value) or not _math.isfinite(value):
+            raise TypeError(
+                "function_plot's `%s` has to be a number, but it is %s."
+                % (name, _pll_describe(value))
+            )
     if x_max <= x_min:
         raise ValueError("function_plot needs x_max to be greater than x_min")
-    if steps < 2:
-        raise ValueError("function_plot needs at least 2 steps")
+    if isinstance(steps, bool) or not isinstance(steps, _pll_tbl_numbers.Integral) or steps < 2:
+        raise ValueError(
+            "function_plot's `steps` has to be a whole number, at least 2, but it is %s."
+            % _pll_describe(steps)
+        )
     xs = []
     ys = []
+    starts = []
+    gap = True
+    failed = None
     for i in range(steps + 1):
         x = x_min + (x_max - x_min) * i / steps
         try:
-            y = f(x)
-        except Exception as e:
-            raise ValueError(
-                "function_plot could not work out the value at x=%g (%s: %s)"
-                % (x, type(e).__name__, e)
-            ) from None
-        value = _to_number(y)
+            value = _to_number(f(x))
+        except (ZeroDivisionError, ValueError, OverflowError) as e:
+            # No value here: math's own errors, for 1/x at 0 or log of 0.
+            failed = failed or e
+            value = None
         if value is None:
-            # A gap - a vertical asymptote, say - rather than a whole
-            # failed plot. Drawing what is defined is more use than nothing.
+            gap = True
             continue
+        if gap:
+            starts.append(len(xs))
+            gap = False
         xs.append(x)
         ys.append(value)
+    if not xs and failed is not None:
+        # Nowhere at all: that is not a gap but the function failing.
+        raise failed
     if len(xs) < 2:
         raise ValueError(
-            "function_plot found no numbers to draw between x=%g and x=%g"
-            % (x_min, x_max)
+            "function_plot found no numbers to draw between x=%s and x=%s"
+            % (_pll_number(x_min), _pll_number(x_max))
         )
     return _PllChart(
-        _render_xy_chart(xs, ys, "x", "y", title, mode="line", markers=False)
+        _render_xy_chart(xs, ys, "x", "y", title, mode="line", markers=False, starts=starts)
     )
 
 
@@ -1058,10 +1468,12 @@ def function_plot(f, x_min, x_max, steps=200, title=None):
 def _to_number(value):
     if isinstance(value, bool):
         return float(value)
-    if isinstance(value, (int, float)):
-        if isinstance(value, float) and (_math.isnan(value) or _math.isinf(value)):
+    if _pll_is_number(value):
+        try:
+            number = float(value)
+        except OverflowError:
             return None
-        return float(value)
+        return number if _math.isfinite(number) else None
     return None
 
 
@@ -1084,20 +1496,23 @@ def _pll_reads_as_number(value):
 
 
 def _sum_numeric(values):
-    s = 0.0
-    for v in values:
-        s += v
-    return s
+    return sum(values)
 
 
 def _sort_key(value):
-    """Sort key tolerant of mixed None/str/numeric columns."""
+    """Sort key tolerant of mixed None/str/numeric columns.
+
+    NaN after every number: it compares as neither larger nor smaller, so
+    among numbers it would leave the order as it found it.
+    """
     if value is None:
         return (0, 0)
     if isinstance(value, bool):
         return (1, int(value))
-    if isinstance(value, (int, float)):
-        return (1, float(value))
+    if _pll_is_number(value):
+        if value != value:
+            return (1.5, 0)
+        return (1, value)
     if isinstance(value, str):
         return (2, value)
     return (3, repr(value))
@@ -1107,10 +1522,9 @@ def _sort_key(value):
 # Chart rendering
 # -----------------------------------------------------------------------------
 #
-# Charts are pure SVG, produced as a `_PllChart` object that exposes the
-# image-display protocol so the host's existing image-card pipeline can
-# render them. We don't subclass `Image` from imageLib.py so the table
-# library doesn't need to import it; we duck-type via `_pll_image_data`.
+# Charts are pure SVG, made into a `_PllChart` - an `Image` from the image
+# library, loaded before this one into the same globals - so a chart is
+# displayed, `beside`d and annotated `-> Image` like any picture.
 
 _CHART_W = 480
 _CHART_H = 320
@@ -1120,23 +1534,15 @@ _CHART_MARGIN_T = 28  # space for title
 _CHART_MARGIN_B = 44
 
 
-class _PllChart:
-    """An immutable, displayable SVG chart. Duck-types as a PLL image."""
+class _PllChart(_Drawing):
+    """A chart: an image, which displays and combines like any other."""
 
     def __init__(self, svg_payload):
         # svg_payload: {"width", "height", "data"}
-        self._payload = svg_payload
-
-    def _pll_image_data(self):
-        return {
-            "type": "svg",
-            "width": int(self._payload["width"]),
-            "height": int(self._payload["height"]),
-            "data": self._payload["data"],
-        }
+        _Drawing.__init__(self, svg_payload["data"], svg_payload["width"], svg_payload["height"])
 
     def __repr__(self):
-        return "<Chart %dx%d>" % (self._payload["width"], self._payload["height"])
+        return "<Chart %dx%d>" % (_pll_px(self._w), _pll_px(self._h))
 
 
 def _plot_box(height=None):
@@ -1451,13 +1857,14 @@ def _quartiles(values):
     return at(0.25), at(0.5), at(0.75)
 
 
-def _render_xy_chart(xs, ys, x_label, y_label, title, mode, labels=None, lines=(), markers=True):
+def _render_xy_chart(xs, ys, x_label, y_label, title, mode, labels=None, lines=(), markers=True, starts=(0,)):
     """Points, optionally grouped by label and overlaid with fitted lines.
 
     One renderer for scatter, line, labelled scatter and the regression
     plots: they differ only in how points are coloured and whether a line
     is drawn through them, so the axis and tick work is not worth
-    duplicating four times.
+    duplicating four times. `starts` are the points a line starts afresh
+    at, after a gap.
     """
     px, py, pw, ph = _plot_box()
     if not xs:
@@ -1488,7 +1895,11 @@ def _render_xy_chart(xs, ys, x_label, y_label, title, mode, labels=None, lines=(
 
     if mode == "line":
         coords = [to_px(x, y) for x, y in zip(xs, ys)]
-        path = "M " + " L ".join("%g %g" % (sx, sy) for sx, sy in coords)
+        lifted = set(starts)
+        path = " ".join(
+            "%s %g %g" % ("M" if i in lifted or i == 0 else "L", sx, sy)
+            for i, (sx, sy) in enumerate(coords)
+        )
         body.append(
             '<path d="%s" fill="none" stroke="#4f8cff" stroke-width="2" '
             'stroke-linejoin="round" stroke-linecap="round"/>' % path
@@ -1542,13 +1953,13 @@ def _render_xy_chart(xs, ys, x_label, y_label, title, mode, labels=None, lines=(
     }
 
 
-def _render_pie_chart(labels, values, title):
+def _render_pie_chart(labels, values, title, column):
     """Slices plus a key, with each slice's share of the total."""
     total = _sum_numeric(values)
     if total <= 0:
         raise ValueError(
-            "a pie chart needs the values to add up to more than zero; they "
-            "add up to %g" % total
+            "a pie chart needs the values in column %s to add up to more than "
+            "zero, but they add up to %s." % (_pll_q(column), _pll_number(total))
         )
     cx, cy = _CHART_W * 0.32, _CHART_MARGIN_T + 124
     radius = 108
@@ -1712,7 +2123,11 @@ def _render_dot_plot(values, labels, name, title):
     }
 
 
-def _render_histogram(values, bins, name, title):
+def _render_histogram(values, bins, name, title, bin_width=None):
+    """Counts per bucket: `bins` of them across the values, or buckets
+    `bin_width` wide starting at a multiple of it, so ages grouped by 5
+    are 20-25, 25-30, ...
+    """
     px, py, pw, ph = _plot_box()
     if not values:
         body = ""
@@ -1723,14 +2138,18 @@ def _render_histogram(values, bins, name, title):
         }
 
     lo, hi = min(values), max(values)
-    if hi == lo:
-        hi = lo + 1.0  # avoid zero-width bins for constant data
-    width = (hi - lo) / bins
+    if bin_width is not None:
+        width = float(bin_width)
+        lo = _math.floor(lo / width) * width
+        bins = int((hi - lo) // width) + 1
+        hi = lo + bins * width
+    else:
+        if hi == lo:
+            hi = lo + 1.0  # avoid zero-width bins for constant data
+        width = (hi - lo) / bins
     counts = [0] * bins
     for v in values:
-        idx = int((v - lo) / width)
-        if idx == bins:
-            idx = bins - 1
+        idx = min(int((v - lo) / width), bins - 1)
         counts[idx] += 1
     max_count = max(counts) if counts else 1
 
@@ -1767,8 +2186,16 @@ def _render_histogram(values, bins, name, title):
 
 PLL_TABLE_EXPORTS = [
     "Table",
+    "Row",
     "table",
     "table_from_columns",
     "load_table",
     "function_plot",
 ]
+
+# Each function says it is `pll.table`'s, so `help(load_table)` does.
+for _pll_exported in PLL_TABLE_EXPORTS:
+    _pll_value = globals()[_pll_exported]
+    if callable(_pll_value) and not isinstance(_pll_value, type):
+        _pll_value.__module__ = "pll.table"
+del _pll_exported, _pll_value

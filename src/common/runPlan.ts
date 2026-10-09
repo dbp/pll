@@ -5,7 +5,7 @@ import type { AnalysisFinding } from "./analyzers/types";
 import { runExamplarStep, type ExamplarEntry } from "./examplarPhase";
 import type { BundleStore } from "./examplarSource";
 import { levelHasStaticChecks, parseLevel, type Level } from "./level";
-import { needsPackages } from "./packages";
+import { needsPackages, type SiblingSource } from "./packages";
 import type { ExecutionEvent, PythonRuntime } from "./types";
 import {
   leftOutNotes,
@@ -128,8 +128,8 @@ export async function runFilePlan(
     return tally.summary(checked);
   }
   const beforeStart = STOPPED.beforeStart;
-  const outcome = await withFiles(runtime, host, fileName, beforeStart, async (mountFiles, starting) => {
-    await loadPackages(runtime, host, code);
+  const outcome = await withFiles(runtime, host, fileName, beforeStart, async (files, starting) => {
+    await loadPackages(runtime, host, code, await files.sources());
     if (stopped(host, STOPPED.beforeStart)) {
       return "stopped";
     }
@@ -140,7 +140,7 @@ export async function runFilePlan(
       return "stopped";
     }
     const beforeProgram = complete === null ? STOPPED.beforeStart : STOPPED.afterChecking;
-    await mountFiles();
+    await files.mount();
     // With an Examplar check, the file's own tests run only once the file
     // defines everything the check provides - against missing functions
     // every test would report a NameError under a perfectly good verdict -
@@ -183,9 +183,9 @@ export async function runInputPlan(
   if (checked !== "passed") {
     return tally.summary(checked);
   }
-  const outcome = await withFiles(runtime, host, fileName, STOPPED.input, async (mountFiles, starting) => {
-    await loadPackages(runtime, host, code);
-    await mountFiles();
+  const outcome = await withFiles(runtime, host, fileName, STOPPED.input, async (files, starting) => {
+    await loadPackages(runtime, host, code, await files.sources());
+    await files.mount();
     if (stopped(host, STOPPED.input)) {
       return "stopped";
     }
@@ -303,32 +303,52 @@ async function staticChecks(
   return "blocked";
 }
 
+/** The files next to the program, as a run uses them. */
+interface ProgramFiles {
+  /** The student's `.py` files among them, whose imports need packages too. */
+  sources(): Promise<SiblingSource[]>;
+  /** Give them all to Python. */
+  mount(): Promise<void>;
+}
+
 /**
- * `run`, given a way to mount the files next to the program and a way to
- * say the program is starting, and then the files it changed written back
- * - if they were mounted, and Python is still there to ask. An error `run`
- * throws because of a Stop is reported as the Stop - `beforeStart` if the
- * program had not started; any other error is the host's to report.
+ * `run`, given the files next to the program and a way to say the program
+ * is starting, and then the files it changed written back - if they were
+ * mounted, and Python is still there to ask. The files are chosen once,
+ * when first asked for. An error `run` throws because of a Stop is
+ * reported as the Stop - `beforeStart` if the program had not started; any
+ * other error is the host's to report.
  */
 async function withFiles(
   runtime: PythonRuntime,
   host: RunHost,
   fileName: string,
   beforeStart: string,
-  run: (mountFiles: () => Promise<void>, starting: () => void) => Promise<Outcome>,
+  run: (files: ProgramFiles, starting: () => void) => Promise<Outcome>,
 ): Promise<Outcome> {
   let mounted: Selection | null = null;
   let started = false;
   let lost = false;
+  let selecting: Promise<Selection> | null = null;
+  const select = () => (selecting ??= host.siblingFiles());
+  const files: ProgramFiles = {
+    async sources() {
+      try {
+        return pythonSources(await select());
+      } catch (err) {
+        if (err instanceof StoppedError) throw err;
+        // Said when they are mounted.
+        return [];
+      }
+    },
+    async mount() {
+      mounted = await mount(runtime, host, select);
+    },
+  };
   try {
-    return await run(
-      async () => {
-        mounted = await mount(runtime, host);
-      },
-      () => {
-        started = true;
-      },
-    );
+    return await run(files, () => {
+      started = true;
+    });
   } catch (err) {
     lost = err instanceof PythonLostError;
     if (err instanceof StoppedError) {
@@ -343,13 +363,29 @@ async function withFiles(
   }
 }
 
-async function loadPackages(runtime: PythonRuntime, host: RunHost, code: string): Promise<void> {
-  if (!needsPackages(code)) {
+/** The student's `.py` files among those beside the program, as text. */
+function pythonSources(selection: Selection): SiblingSource[] {
+  const decoder = new TextDecoder();
+  return selection.files
+    .filter((file) => file.name.endsWith(".py"))
+    .map((file) => ({
+      name: file.name,
+      text: typeof file.contents === "string" ? file.contents : decoder.decode(file.contents),
+    }));
+}
+
+async function loadPackages(
+  runtime: PythonRuntime,
+  host: RunHost,
+  code: string,
+  siblings: SiblingSource[],
+): Promise<void> {
+  if (!needsPackages(code, siblings)) {
     return;
   }
   host.status("Loading libraries...");
   try {
-    await runtime.ensurePackages(code);
+    await runtime.ensurePackages(code, siblings);
   } catch (err) {
     // A load that Stop interrupted is the Stop, which the next check says.
     if (!(err instanceof StoppedError)) {
@@ -362,11 +398,15 @@ async function loadPackages(runtime: PythonRuntime, host: RunHost, code: string)
  * Mount the files next to the program. Always, even with none to mount,
  * so a previous program's files do not leak into this run.
  */
-async function mount(runtime: PythonRuntime, host: RunHost): Promise<Selection | null> {
+async function mount(
+  runtime: PythonRuntime,
+  host: RunHost,
+  select: () => Promise<Selection>,
+): Promise<Selection | null> {
   host.status("Loading files...");
   try {
-    const selection = await host.siblingFiles();
-    await runtime.mountWorkspaceFiles(selection.files);
+    const selection = await select();
+    await runtime.mountWorkspaceFiles(selection.files, selection.leftOut);
     // A problem, not a note: a program that opens one fails, and this is why.
     for (const note of leftOutNotes(selection.leftOut, "loaded")) {
       host.say(note, "problem");

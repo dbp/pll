@@ -40,6 +40,8 @@ const MAIN_PREFIX = "__main__.";
  * would be telling them to write a name they have never been shown.
  */
 const COURSE_NAME_FOR: Record<string, string> = { Row: "dict" };
+// PLL's own picture classes - `_Circle`, a chart - arrive already named
+// `Image` (`_pll_course_type_name`).
 
 function cleanTypeName(type: string): string {
   // Replaced anywhere, not just at the start: typeguard reports a class
@@ -545,6 +547,34 @@ function explainReturn({
   // for all of them describes the symptom rather than any of them.
   if (parsed.actual === "None" || parsed.actual === "NoneType") {
     return noneReturn(owner, wanted, context);
+  }
+  if (parsed.element) {
+    // One item of a collection: the collection is what was asked for, so
+    // the item is the thing to change - not the annotation's container.
+    const value = context?.facts?.elementValue;
+    const element = describeElement(parsed.element);
+    const container = parsed.actual ? cleanTypeName(parsed.actual) : "value";
+    const howToFix = [
+      `Look at ${element} of the ${container} this line returns: every one has to match the annotation, not just the first.`,
+    ];
+    const elementType = context?.facts?.elementType;
+    const written = parsed.annotation ?? null;
+    if (written !== null && annotation !== null && elementType !== undefined) {
+      // Only where the annotation names the type once, so which one to
+      // change is not a guess.
+      const type = new RegExp(`\\b${annotation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g");
+      if ((written.match(type) ?? []).length === 1) {
+        howToFix.push(
+          `Or, if that is what it should hold, change the annotation from \`${written}\` to \`${written.replace(type, elementType)}\`.`,
+        );
+      }
+    }
+    return {
+      headline:
+        `${owner} says it returns ${written !== null ? `\`${written}\`` : `a ${container}`}, with ` +
+        `${membersPhrase(element)} it ${wanted}, but ${element}${value !== undefined ? ` is ${value}` : " is not"}.`,
+      howToFix,
+    };
   }
   const got = parsed.actual ? describeType(parsed.actual) : "something else";
   const howToFix: string[] = [];

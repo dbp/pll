@@ -41,6 +41,7 @@ export interface WireFacts {
   sequence?: string;
   length?: number;
   element_value?: string;
+  element_type?: string;
   swapped_with?: string;
   check?: WireTypeCheck;
   definitions?: Record<string, WireDefinition>;
@@ -58,6 +59,19 @@ export interface WireFacts {
     findings: RawStaticFinding[];
     header_problem: { line: number; message: string } | null;
   };
+  /** For a `ModuleNotFoundError`: why the import found nothing (`_pll_enrich_module_not_found`). */
+  module?: WireMissingModule;
+}
+
+export interface WireMissingModule {
+  name: string;
+  kind: "missing" | "leftOut" | "notLoaded" | "notSeen";
+  /** For `missing`: the student's file it may be a misspelling of. */
+  close?: string | null;
+  /** For `leftOut`: why the file was not loaded. */
+  why?: string;
+  /** For `notLoaded` and `notSeen`: the Pyodide package that has it. */
+  package?: string;
 }
 
 /** What a name in the error is, as `_pll_definition` describes it. */
@@ -86,6 +100,8 @@ export interface WireTypeCheck {
   value?: string;
   /** The level of the code whose annotation it is. */
   level?: string | null;
+  /** For "return": the function's return annotation, as written. */
+  annotation?: string | null;
 }
 
 /** Whether a prompt line is complete yet, as `_pll_repl_check` says. */
@@ -150,6 +166,12 @@ export interface TableDisplay {
   shown_count: number;
   /** True iff the host should show a "row N of M" indicator. */
   truncated: boolean;
+  /** For each column, whether every shown cell in it is a number. */
+  numeric: boolean[];
+  /** The whole table as CSV, every digit, for Save CSV - as much as fits its limit. */
+  csv: string;
+  /** How many rows `csv` holds. */
+  csv_rows: number;
 }
 
 /**
@@ -353,7 +375,8 @@ export type SilenceFindingId =
   | "field-no-type"
   | "field-assigned-type"
   | "class-needs-dataclass"
-  | "compared-with-class";
+  | "compared-with-class"
+  | "is-literal";
 
 /**
  * One finding of `_pll_static_analyze`, keyed on `id`: each kind carries the
@@ -365,14 +388,26 @@ export type RawStaticFinding = StaticFindingBase &
   (
     | (InScope & {
         id: "shadowing";
-        /** The nearest enclosing binding of the same name. */
+        /** How the name is bound here: "argument", "for", "assign", ... */
+        binding?: string | null;
+        /** The nearest enclosing binding of the same name, and how it is bound. */
         outer_line_number?: number | null;
         outer_column?: number | null;
         outer_scope_kind?: string | null;
+        outer_binding?: string | null;
       })
     | (InScope & { id: "shadowing-builtin" })
-    /** `library` is "image", "table", "reactor" or "library". */
-    | (InScope & { id: "shadowing-library"; library?: string | null })
+    /**
+     * `library` is "image", "table", "reactor" or "library"; `binding` how
+     * the name is bound ("import", "importfrom", "argument", "functiondef",
+     * ...), and `module` what an import imports it from.
+     */
+    | (InScope & {
+        id: "shadowing-library";
+        library?: string | null;
+        binding?: string | null;
+        module?: string | null;
+      })
     /** Where the name was first assigned. */
     | (InScope & { id: "reassignment"; first_line_number?: number | null; first_column?: number | null })
     | (InScope & {
@@ -392,6 +427,9 @@ export type RawStaticFinding = StaticFindingBase &
           written_type?: string | null;
           /** For a value thrown away: the expression, as the student wrote it. */
           expression?: string | null;
+          /** For "is-literal": `is` or `is not`, and the literal, as written. */
+          operator?: string | null;
+          literal?: string | null;
         };
       }[SilenceFindingId]
   );

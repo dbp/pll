@@ -8,7 +8,8 @@ import type {
   ReactorStep,
   StaticFinding,
 } from "./fromPython";
-import type { WorkspaceChanges, WorkspaceFile } from "./workspaceFilePolicy";
+import type { LeftOut, WorkspaceChanges, WorkspaceFile } from "./workspaceFilePolicy";
+import type { SiblingSource } from "./packages";
 
 export interface ExecutionStdoutChunk {
   kind: "stdout";
@@ -47,6 +48,15 @@ export interface ExecutionTableChunk {
   shownCount: number;
   /** True when display was truncated for size. */
   truncated: boolean;
+  /**
+   * For each column, whether it holds only numbers - as Python sees them,
+   * so text that looks like one, from a CSV, is not.
+   */
+  numeric: boolean[];
+  /** The whole table as CSV, for Save CSV, as far as a size limit. */
+  csv: string;
+  /** How many rows `csv` holds: `rowCount`, unless the limit cut it short. */
+  csvRows: number;
   /** Source caption (file name or "<repl>"). */
   source?: string;
 }
@@ -183,11 +193,12 @@ export interface PythonRuntime {
   runFile(request: RunFileRequest, onEvent: ExecutionEventHandler): Promise<void>;
   replEval(request: ReplEvalRequest, onEvent: ExecutionEventHandler): Promise<void>;
   /**
-   * Load any Pyodide packages the code imports (pandas, numpy, ...), via
-   * Pyodide's `loadPackagesFromImports`. A no-op when the code imports nothing
-   * that maps to a known package; needs network the first time it loads one.
+   * Load any Pyodide packages the code imports (pandas, numpy, ...) - it or
+   * the student's `.py` files beside it - wherever the import is. A no-op
+   * when nothing imported maps to a known package; needs network the first
+   * time it loads one.
    */
-  ensurePackages(code: string): Promise<void>;
+  ensurePackages(code: string, siblings?: SiblingSource[]): Promise<void>;
   /** True if `code` contains pytest-style `test_*` functions or `Test*` classes. */
   hasTests(code: string): Promise<boolean>;
   /** Load the pytest package (no-op if already loaded). Needs network the first time. */
@@ -204,9 +215,10 @@ export interface PythonRuntime {
   /**
    * Copy the files under the program's folder into Pyodide's work directory
    * so `open("data/cars.csv")` / `pd.read_csv("cars.csv")` see them.
-   * Replaces any files from a previous mount.
+   * Replaces any files from a previous mount. `leftOut` are the files a
+   * limit kept back, so reading one says why it is not there.
    */
-  mountWorkspaceFiles(files: WorkspaceFile[]): Promise<void>;
+  mountWorkspaceFiles(files: WorkspaceFile[], leftOut?: LeftOut[]): Promise<void>;
   /** What Python made, changed and deleted in the work directory since the last mount. */
   collectWorkspaceFiles(): Promise<WorkspaceChanges>;
   /**

@@ -268,31 +268,47 @@ edit nobody asked for.
 
 ## Images
 
-`imageLib.py` follows HtDP's `2htdp/image`. The protocol is small: an
-`Image` has `width` and `height`, and `_render_body(x, y)` returns an SVG
-fragment drawn with its top-left at `(x, y)`. `to_svg()` renders the root
-from `(0, 0)` into `viewBox="0 0 w h"`, so **nothing may draw at a negative
-coordinate**.
+`imageLib.py` follows HtDP's `2htdp/image`, geometry included. An `Image`
+is a tree: shapes at the leaves, combinators above them. Each node works out
+its size when it is made (`_w`, `_h`, from its children's, in constant
+time), and says where its children sit inside it - `_parts()`, each child
+with a transform (SVG's `matrix(a b c d e f)`) and, for `crop` and
+`place_image`, a rectangle to clip it to.
 
-That matters for `overlay_xy` / `underlay_xy`, where a negative offset moves
-the second image left or up and the bounding box has to grow that way -
-shifting the composite's own origin, which the protocol has no way to
-express. `_LayeredXY` absorbs it locally: it reports the union size and
-shifts *both* children right / down by however far the box grew, so its
-parent still sees a plain top-left-at-`(x, y)` image. No other class needed
-changing, and adding `place_image` on top of it was then trivial.
+`_pll_flatten` walks the tree once, with a stack rather than recursion, into
+a flat list of *items* - each shape with its own geometry in the picture's
+coordinates (a polygon's points, an ellipse's centre, radii and turn, a
+line's ends, text or a loaded picture with its matrix) and the convex
+polygon it is clipped to, if any. A picture built in a loop of thousands of
+`beside`s is thousands of levels deep, past Python's recursion limit and the
+HTML parser's nesting of `<g>`s; flat, it is one element per shape. A clip
+that cuts nothing off is dropped (`_pll_settle`), and a shape wholly outside
+its clip is not drawn.
 
-`crop` and `place_image` clip with an SVG `clipPath`, whose id comes from a
-module counter (`_pll_next_clip_id`) - two crops in one picture must not
-share one. Because the `<defs>` sits immediately inside the same group as
-the `clip-path` reference, the rect is in the same user space even when an
-enclosing `rotate` or `scale` has applied a transform.
+The flat list is what three things use:
 
-`beside`, `above`, `overlay` and `underlay` are the centered special cases
-of the `*_align` forms; `_pll_offset` is the single place that turns a place
-name into a coordinate. The refactor that introduced it was checked by
-rendering twelve pre-existing compositions before and after and diffing the
-SVG - byte-identical.
+- **Rendering.** `_pll_render` writes one element per item, in absolute
+  coordinates. An outline is a 1-pixel pen just inside the shape, at any
+  scale (the polygon moved in by half a pixel, `_pll_inset`); text is set in
+  a monospace font held to its width with `textLength`, spaces kept, so its
+  size is known rather than guessed. Clip paths and a picture used more than
+  once go in `<defs>`, with ids from a per-interpreter prefix, so two
+  pictures in one panel never share one. Colours are read when a shape is
+  made (`_Paint`) and written by PLL - a name from the CSS list or
+  `#rrggbb` - so nothing of the student's string reaches the SVG.
+- **`rotate`.** Its box is the turned shapes' own, as 2htdp's is: the child
+  is flattened turned, and the box is what its items cover (`_PllBox` marks
+  a crop's or a scene's edges, which count though nothing is drawn there).
+- **`==`.** Two images are equal when they are the same size and draw the
+  same items, compared to a hundredth of a pixel, colours by their value
+  (`"red"` is `(255, 0, 0)`). Painting order counts only where shapes
+  overlap: `_pll_canonical` orders the items by the least key free to go
+  next, so every way of drawing a picture gives the same list. `__hash__`
+  agrees with it.
+
+Charts are images too: `_Drawing` is a ready-made SVG of a known size, and
+`tableLib.py`'s `_PllChart` is one. A matplotlib figure becomes a
+`_LoadedImage` of its PNG (`_pll_figure_image`).
 
 Adding a combinator means three edits: the `_Foo(Image)` class, the public
 wrapper, and the name in `PLL_IMAGE_EXPORTS` (that list is what injects it
@@ -300,17 +316,24 @@ into student globals with no import, via the install step, `install.py`).
 
 ## Third-party packages
 
-Before running a file or a prompt line that contains an `import`,
-`replSession` calls `runtime.ensurePackages(code)`, which delegates to
-Pyodide's `loadPackagesFromImports`. That scans the code for imports,
-maps them to packages in `pyodide-lock.json`, and loads the ones it
-recognizes (with their dependencies) — so `import pandas as pd` pulls in
-pandas, numpy, etc. Unknown imports (e.g. the user's own modules) are
-ignored and surface as normal `ImportError`s at run time. Wheels come
-from `indexURL`, falling back to the pinned jsdelivr CDN when they are
-not vendored locally, so the first load of a package needs the network.
-The call is gated on the code actually containing an `import`, so plain
-REPL lines never pay a round-trip.
+Pyodide has to download a package before Python can import it, and cannot
+in the middle of a run, so they are loaded first. `runPlan.ts` gives
+`runtime.ensurePackages` the program's code and the student's `.py` files
+beside it; the worker asks Python what they import
+(`_pll_package_imports`, `bootstrap/packages.py`): every `import` and `from`
+anywhere in the program, a module named to `importlib.import_module` or
+`__import__` in so many words, and the imports of the student's modules
+the program imports, and theirs in turn - but not another program in the
+same folder. The student's own module names are not packages, and Pyodide's
+`test` (CPython's own tests, which would hide a `test.py`) is never loaded.
+The names go to Pyodide's `loadPackagesFromImports`, which maps them to
+packages in `pyodide-lock.json` and loads those it has. `packages.ts` only
+gates the round-trip: code with no `import` in it never pays one.
+
+When an import still finds nothing, `_pll_enrich_module_not_found` says why
+(`module` fact): Pyodide has no such package, or it is a misspelt file of
+theirs; their file was kept back by a limit; Pyodide has it and it did not
+load (offline, the first time); or no import PLL read named it.
 
 Pyodide's Node loader **writes wheels it downloads back into `indexURL`**,
 which for the desktop host is `vendor/pyodide`. So running a pandas lab
@@ -322,18 +345,32 @@ machine happened to download (13.6 MB, before the exclusion). If PLL ever
 *should* ship a package, add it to `PYODIDE_ASSETS` so the build copies it
 deliberately - do not rely on the cache being warm.
 
+matplotlib draws with PLL's own backend, `module://_pll_matplotlib`
+(`matplotlibBackend.py`, served by a finder `install.py` registers, and set
+as `MPLBACKEND`): Agg to draw, and `show()` puts each open figure where the
+program's pictures go. Pyodide's own backend draws into a page's `document`,
+which a worker has none of.
+
 Pyodide does not connect Python's `urllib` to the host network, so
 `pd.read_csv(url)` / `requests` / `urllib` otherwise fail with "unknown
-url type: https". When the code imports a networked module
-(`NETWORK_IMPORT_RE` — pandas, requests, urllib, ...), `ensurePackages`
-also loads `pyodide-http` and runs `pyodide_http.patch_all()` once per
-interpreter, routing those reads through the host's network. The web
-worker uses the browser's synchronous XHR. The desktop worker installs
-a Node `XMLHttpRequest` polyfill that performs the request in a child
-process (`syncHttp.ts`) so the same `pyodide-http` patch works. Both
-the load and the patch are guarded so non-networked programs never
-load the shim. Browser requests still need CORS; desktop Node fetch
-does not.
+url type: https". When a program imports a module that reads URLs
+(pandas, requests, urllib, ...), the worker loads `pyodide-http` once and
+runs `http.py` - idempotent, so each time, and `requests` is patched once it
+is loaded too. `http.py` puts PLL's own transport under pyodide-http's
+patches: an `arraybuffer` response, so the bytes arrive as sent; the
+timeout a program gives; `urlopen` raising `HTTPError` for 400 and above
+and `URLError` when nothing answers, as CPython's does; requests'
+`ConnectionError` with what went wrong. `load_table` and `load_image` read
+the same way (`_pll_fetch_bytes`).
+
+The web worker uses the browser's synchronous XHR; browser requests need
+CORS. The desktop worker installs a Node `XMLHttpRequest` polyfill
+(`xhrPolyfill.ts`) over `syncHttp.ts`: a helper thread fetches, and the
+Pyodide thread waits for its answer in 20 ms slices - so a Stop written to
+the interrupt buffer ends the wait, as does the time limit (60 seconds when
+the program gives none) - and takes it with `receiveMessageOnPort`. Errors
+carry a browser's names (`NetworkError`, `TimeoutError`, `AbortError`) and
+a sentence, never the helper's code.
 
 ## From an exception to a finding
 

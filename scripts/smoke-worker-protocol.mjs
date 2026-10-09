@@ -574,6 +574,9 @@ console.log("\n[12b] the worker answers one request at a time, with typed errors
       if (name === "_pll_repl_check") {
         return { toJs: () => ({ status: "invalid", error_type: "SyntaxError", lineno: undefined }), destroy() {} };
       }
+      if (name === "_pll_package_imports") {
+        return { toJs: () => ({ modules: ["numpy"], network: false }), destroy() {} };
+      }
       if (name === "_pll_has_tests") throw pythonError("KeyboardInterrupt");
       if (name === "_pll_repl_eval") throw pythonError("ValueError");
       return undefined;

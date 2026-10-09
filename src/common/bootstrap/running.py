@@ -99,7 +99,8 @@ def _pll_repl_check(source, whole=False):
 # -----------------------------------------------------------------------------
 
 def _pll_reset_notes():
-    """Forget what the last run had to say at its end."""
+    """Forget what the last run had to say, at its end or along the way."""
+    _pll_encoding_notes.clear()
     reset = globals().get("_pll_reset_reactor_notes")
     if reset is not None:
         reset()

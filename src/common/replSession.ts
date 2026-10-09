@@ -389,7 +389,8 @@ export class ReplSession implements vscode.Disposable {
     if (!this.reactors.hasAny(session)) return;
     void this.enqueue(async () => {
       try {
-        await this.deps.runtime.mountWorkspaceFiles((await this.filesBeside(session)).files);
+        const { files, leftOut } = await this.filesBeside(session);
+        await this.deps.runtime.mountWorkspaceFiles(files, leftOut);
       } catch {
         /* the reactor still runs; a file it opens may be missing */
       }

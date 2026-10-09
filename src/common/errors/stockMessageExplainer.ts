@@ -17,6 +17,7 @@ import {
   FUNCTION_TAKER_NAMES,
   FUNCTION_TAKERS,
   HANDLER_KEYWORDS,
+  libraryCaller,
   libraryHint,
 } from "./libraryFacts";
 import type { Definition, ErrorFacts, ErrorFrame } from "./pythonError";
@@ -528,11 +529,33 @@ const notSubscriptable: Rule = {
         howToFix: none.howToFix,
       };
     }
+    const method = /([A-Za-z_][\w.]*)\.(\w+)\s*\[\s*([^\]]*)\]/.exec(ctx.offendingLine ?? "");
+    if (lastSegment(type) === "method" && method !== null) {
+      // `people.rows[0]`, `people.row[0]`: a method used as if it were a list.
+      const [, holder, name, inside] = method;
+      return {
+        headline: `\`${holder}.${name}\` is a method, so it is called with round brackets, not indexed with square ones.`,
+        howToFix: [
+          name === "row"
+            ? `Write \`${holder}.row(${inside})\`: the row number goes in the round brackets.`
+            : `Call it first: \`${holder}.${name}()[${inside}]\`.`,
+        ],
+      };
+    }
     const fields = fieldsOf(ctx, lastSegment(type));
     if (fields === null) {
+      // `r["age"]` in a function `transform_column` calls: it is given one
+      // value of the column, not the row.
+      const caller = libraryCaller(ctx.frames);
+      const taker = caller !== null ? FUNCTION_TAKERS[caller] : undefined;
       return {
         headline: `Square brackets do not work on a ${friendly(type)}.`,
-        howToFix: ["Square brackets are for lists, dictionaries and table rows."],
+        howToFix: [
+          ...(caller === "transform_column" && taker !== undefined
+            ? [`${taker.calls}, so what your function is given is already the value - there is nothing to take out of it.`]
+            : []),
+          "Square brackets are for lists, dictionaries and table rows.",
+        ],
       };
     }
     // Their own subscript, turned round: `s["year"]` becomes `s.year`.
@@ -569,6 +592,14 @@ const notIterable: Rule = {
     if (lastSegment(m[1]) === "NoneType") {
       const none = whyNone(ctx, loopedOver(ctx.offendingLine));
       return { headline: `${none.subject}, so there is nothing to loop over.`, howToFix: none.howToFix };
+    }
+    const looped = loopedOver(ctx.offendingLine);
+    if (lastSegment(m[1]) === "method" && looped !== null && /\.\w+$/.test(looped)) {
+      // `for p in people.rows:` - the method itself, not the rows it gives.
+      return {
+        headline: `\`${looped}\` is the method itself, not what it gives back - it has not been called.`,
+        howToFix: [`Call it, with brackets: \`for ... in ${looped}():\`.`],
+      };
     }
     return {
       headline: `A ${friendly(m[1])} is not something to loop over.`,
@@ -1062,7 +1093,86 @@ const pandasKeyError: Rule = {
   },
 };
 
+/**
+ * `No module named 'flask'`, said as why: PLL's Python is Pyodide's, whose
+ * packages are downloaded before a program runs, from the imports PLL can
+ * read in it.
+ */
+const missingModule: Rule = {
+  types: ["ModuleNotFoundError"],
+  pattern: /^No module named/,
+  explain: (_m, ctx) => {
+    const module = ctx.facts.module;
+    if (module === undefined) {
+      return null;
+    }
+    const name = module.name;
+    switch (module.kind) {
+      case "leftOut":
+        return {
+          headline: `\`${name}.py\` is next to your program, but it was not loaded: ${module.why}.`,
+          howToFix: ["A file that was not loaded cannot be imported."],
+        };
+      case "notLoaded":
+        return {
+          headline: `\`${name}\` could not be loaded before your program ran.`,
+          howToFix: [
+            `PLL downloads \`${module.package}\` the first time a program imports it, so this needs the internet once; after that it is kept.`,
+            "Check the connection, and run the program again.",
+          ],
+        };
+      case "notSeen":
+        return {
+          headline: `\`${name}\` was not loaded, because PLL did not see it imported.`,
+          howToFix: [
+            `PLL loads a package before the program runs, from its \`import\` lines - and this import is made another way, with a name worked out as it runs.`,
+            `Add \`import ${name}\` near the top of the file.`,
+          ],
+        };
+      case "missing":
+        if (module.close !== null) {
+          return {
+            headline: `There is no module called \`${name}\` - and no file \`${name}.py\` next to your program.`,
+            howToFix: [`Did you mean \`${module.close}\`, for \`${module.close}.py\`?`],
+          };
+        }
+        return {
+          headline: `There is no module called \`${name}\` here.`,
+          howToFix: [
+            `PLL runs Python with Pyodide, which has many packages - numpy, pandas, matplotlib, requests and more - but not \`${name}\`.`,
+            `If \`${name}\` is a file of your own, put \`${name}.py\` next to your program.`,
+          ],
+        };
+    }
+  },
+};
+
+/**
+ * `sum(people, "age")`: Python's own `sum`, `min` or `max` given a table
+ * and a column. A table does that itself.
+ */
+const builtinOnTable: Rule = {
+  types: ["TypeError"],
+  pattern: /Table|^a table /,
+  explain: (_m, ctx) => {
+    const call = /\b(sum|min|max|len|sorted)\s*\(\s*([A-Za-z_][\w.]*)\s*,\s*("[^"]*"|'[^']*')\s*\)/.exec(
+      ctx.offendingLine ?? "",
+    );
+    if (call === null) {
+      return null;
+    }
+    const [, fn, table, column] = call;
+    const method = fn === "len" ? "length" : fn === "sorted" ? "order_by" : fn;
+    return {
+      headline: `\`${fn}(${table}, ${column})\` is Python's own \`${fn}\`, which knows nothing of tables.`,
+      howToFix: [`A table does this itself: \`${table}.${method}(${method === "length" ? "" : column})\`.`],
+    };
+  },
+};
+
 const RULES: Rule[] = [
+  missingModule,
+  builtinOnTable,
   conditionNotFunction,
   handlerCalled,
   functionCalledNotPassed,

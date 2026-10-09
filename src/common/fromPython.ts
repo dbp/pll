@@ -169,6 +169,9 @@ export function deliverDisplay(
         rowCount: display.row_count,
         shownCount: display.shown_count,
         truncated: display.truncated,
+        numeric: display.numeric,
+        csv: display.csv,
+        csvRows: display.csv_rows,
         source: fileName,
       });
       break;
@@ -231,12 +234,22 @@ export function pythonErrorFrom(wire: Partial<WireError> | null | undefined): Py
       sequence: facts.sequence ?? undefined,
       length: numberOrNull(facts.length) ?? undefined,
       elementValue: facts.element_value ?? undefined,
+      elementType: facts.element_type ?? undefined,
       swappedWith: facts.swapped_with ?? undefined,
       check: facts.check ? typeCheckFrom(facts.check) : undefined,
       definitions: facts.definitions ?? undefined,
       assigned: facts.assigned ?? undefined,
       returnedNone: facts.returned_none ? returnedNoneFrom(facts.returned_none) : undefined,
       stop: facts.stop === true ? true : undefined,
+      module: facts.module
+        ? {
+            name: facts.module.name,
+            kind: facts.module.kind,
+            close: facts.module.close ?? null,
+            why: facts.module.why ?? null,
+            package: facts.module.package ?? null,
+          }
+        : undefined,
       checks: facts.checks
         ? {
             file: facts.checks.file,
@@ -259,6 +272,7 @@ function typeCheckFrom(check: WireTypeCheck): TypeCheck {
     owner: check.owner ?? undefined,
     value: check.value ?? undefined,
     level: check.level && isLevel(check.level) ? check.level : undefined,
+    annotation: check.annotation ?? null,
   };
 }
 

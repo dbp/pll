@@ -1,6 +1,6 @@
 import { collectChangedWorkspaceFiles, mountWorkspaceFiles } from "./memfsWorkspace";
-import type { WorkspaceFile } from "./workspaceFilePolicy";
-import { NETWORK_IMPORT_RE, PANDAS_METHOD_RE } from "./packages";
+import { whyNotLoaded, type WorkspaceFile } from "./workspaceFilePolicy";
+import { PANDAS_METHOD_RE } from "./packages";
 import { installPll, type PyodideCore } from "./pythonInstall";
 import { PYODIDE_HTTP_PATCH_PY } from "./pythonSources";
 import type {
@@ -247,12 +247,17 @@ export function createWorkerHost(
     return pyodide;
   }
 
-  /** Route `urllib` / `requests` through the host network. Once per interpreter. */
-  const ensureHttpShim = onceSuccessful(async (): Promise<void> => {
-    const instance = ready();
-    await instance.loadPackage("pyodide-http", packageProgress);
-    instance.runPython(PYODIDE_HTTP_PATCH_PY);
-  });
+  const loadHttpShim = onceSuccessful(() => ready().loadPackage("pyodide-http", packageProgress));
+
+  /**
+   * Route `urllib` / `requests` through the host network. The package is
+   * loaded once; the patch runs every time, so a `requests` loaded since
+   * the last is patched too.
+   */
+  async function ensureHttpShim(): Promise<void> {
+    await loadHttpShim();
+    ready().runPython(PYODIDE_HTTP_PATCH_PY.source, { filename: PYODIDE_HTTP_PATCH_PY.file });
+  }
 
   const ensurePytest = onceSuccessful(() => ready().loadPackage("pytest", packageProgress));
 
@@ -366,14 +371,24 @@ export function createWorkerHost(
       return { type: "hasTests", result: callPython<boolean>("_pll_has_tests", [data.code]) };
     },
     async loadPackages(data) {
-      await ready().loadPackagesFromImports(data.code, packageProgress);
-      // `loadPackagesFromImports` only sees imports, and `to_pandas`
-      // keeps its own inside the method, so it has to be asked for
-      // by name.
-      if (PANDAS_METHOD_RE.test(data.code)) {
-        await ready().loadPackage("pandas", packageProgress);
+      const siblings = data.siblings ?? [];
+      const found = callPython<{ modules: string[]; network: boolean }>("_pll_package_imports", [
+        data.code,
+        JSON.stringify(siblings),
+      ]);
+      // `to_pandas` keeps its import inside the method, so it is asked
+      // for by the call.
+      const modules = [...found.modules];
+      if ([data.code, ...siblings.map((s) => s.text)].some((text) => PANDAS_METHOD_RE.test(text))) {
+        modules.push("pandas");
       }
-      if (NETWORK_IMPORT_RE.test(data.code)) {
+      // Pyodide's own map from what is imported to the package that has
+      // it; names it does not know - the standard library, or none at
+      // all - it leaves alone.
+      if (modules.length > 0) {
+        await ready().loadPackagesFromImports(modules.map((name) => `import ${name}`).join("\n"), packageProgress);
+      }
+      if (found.network || modules.includes("pandas")) {
         await ensureHttpShim();
       }
       return { type: "packagesReady" };
@@ -433,6 +448,8 @@ export function createWorkerHost(
     mountWorkspace(data) {
       mountWorkspaceFiles(ready().FS, data.files);
       callPython("_pll_note_file_levels", [JSON.stringify(levelsOf(data.files))]);
+      const leftOut = (data.leftOut ?? []).map((file) => ({ name: file.name, why: whyNotLoaded(file) }));
+      callPython("_pll_note_left_out", [JSON.stringify(leftOut)]);
       return { type: "workspaceReady" };
     },
     collectWorkspace() {

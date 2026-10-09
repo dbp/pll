@@ -28,7 +28,8 @@ import {
   type WorkerReply,
 } from "./workerProtocol";
 import { PythonLostError, StoppedError } from "./runtimeErrors";
-import type { WorkspaceChanges, WorkspaceFile } from "./workspaceFilePolicy";
+import type { LeftOut, WorkspaceChanges, WorkspaceFile } from "./workspaceFilePolicy";
+import type { SiblingSource } from "./packages";
 
 /** Why a request could not be sent: there is no Python to send it to. */
 const NOT_RUNNING = "Python is not running.";
@@ -185,9 +186,9 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     return result;
   }
 
-  async ensurePackages(code: string): Promise<void> {
+  async ensurePackages(code: string, siblings: SiblingSource[] = []): Promise<void> {
     await this.initialize();
-    await this.request({ type: "loadPackages", code });
+    await this.request({ type: "loadPackages", code, siblings });
   }
 
   async ensurePytest(): Promise<void> {
@@ -201,9 +202,9 @@ export abstract class WorkerPythonRuntime implements PythonRuntime {
     return staticFindingsFrom(result);
   }
 
-  async mountWorkspaceFiles(files: WorkspaceFile[]): Promise<void> {
+  async mountWorkspaceFiles(files: WorkspaceFile[], leftOut: LeftOut[] = []): Promise<void> {
     await this.initialize();
-    await this.request({ type: "mountWorkspace", files });
+    await this.request({ type: "mountWorkspace", files, leftOut });
   }
 
   async collectWorkspaceFiles(): Promise<WorkspaceChanges> {

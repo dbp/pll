@@ -5,6 +5,8 @@
  *
  * In one place because each fact is needed by more than one explanation.
  */
+import { PLL_LIBRARY_FILES } from "../pythonFiles";
+import type { ErrorFrame } from "./pythonError";
 
 /**
  * The library functions that call a function the student passes them, and
@@ -45,6 +47,25 @@ export const FUNCTION_TAKERS: Record<
 /** The names of `FUNCTION_TAKERS`. */
 export const FUNCTION_TAKER_NAMES = Object.keys(FUNCTION_TAKERS);
 
+/**
+ * The library function that called the student's function, if one did -
+ * "reactor" for any frame in the reactor library, whichever of its methods
+ * was driving. Its frames are PLL's, not the student's, but they are there
+ * to be read, and knowing which one it was changes the advice completely.
+ */
+export function libraryCaller(frames: ErrorFrame[]): string | null {
+  for (const { fileName, functionName } of frames) {
+    if (fileName === PLL_LIBRARY_FILES.reactor) {
+      return "reactor";
+    }
+    const inLibrary = fileName === PLL_LIBRARY_FILES.table || fileName === PLL_LIBRARY_FILES.image;
+    if (inLibrary && functionName !== null && FUNCTION_TAKER_NAMES.includes(functionName)) {
+      return functionName;
+    }
+  }
+  return null;
+}
+
 /** A reactor's handlers, which are given a function by keyword: `to_draw=draw`. */
 export const HANDLER_KEYWORDS = ["to_draw", "on_tick", "stop_when", "on_key", "on_mouse", "on_receive"];
 
@@ -71,3 +92,13 @@ export function libraryHint(name: string): string[] {
     ? LIBRARY_HINTS[name]
     : [];
 }
+
+/** The methods of a table, which are called on one: `people.order_by(...)`. */
+export const TABLE_METHODS = [
+  "columns", "length", "column", "row", "rows", "filter", "transform_column",
+  "add_column", "add_row", "select_columns", "order_by", "head", "tail", "sum",
+  "mean", "min", "max", "count", "bar_chart", "scatter_chart", "scatter_plot",
+  "line_chart", "histogram", "labeled_scatter_plot", "pie_chart", "dot_plot",
+  "labeled_dot_plot", "freq_bar_chart", "box_plot", "lr_plot", "labeled_lr_plot",
+  "linear_regression", "to_pandas",
+];

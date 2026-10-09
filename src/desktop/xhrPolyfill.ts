@@ -7,30 +7,39 @@ import { syncHttpRequest } from "./syncHttp";
  * `XMLHttpRequest.new(); open(..., false); send();`, reading `status`,
  * `response` / `responseText`, and `getAllResponseHeaders()`.
  *
- * When Pyodide is not in a *web* worker it treats `response` as a string
- * of ISO-8859-15 bytes, so the body is decoded one character per byte.
+ * PLL reads with `responseType = "arraybuffer"`, which gives the bytes as
+ * they came (`_pll_fetch_bytes`, and the transport PLL gives pyodide-http).
+ * Text is decoded as a browser decodes it: by the charset asked for with
+ * `overrideMimeType`, else the response's own, else UTF-8.
  */
 
-/**
- * Decode bytes so character *i* has code point `bytes[i]`, for any byte.
- *
- * `TextDecoder("latin1")` cannot do this: every `latin1` label in the
- * Encoding Standard is an alias for **windows-1252**, which maps 0x80-0x9f
- * to code points above 255 (0x89 becomes U+2030). That is lossless for
- * text but destroys binary: a PNG's signature would arrive mangled.
- */
-function decodeByteString(bytes: Uint8Array): string {
-  // Chunked: `String.fromCharCode(...bytes)` spreads into the argument list
+/** Text as XHR's `x-user-defined` gives it: 0x80-0xff become U+F780-U+F7FF. */
+function decodeUserDefined(bytes: Uint8Array): string {
+  // Chunked: `String.fromCharCode(...codes)` spreads into the argument list
   // and blows the stack somewhere around a hundred thousand bytes.
   const CHUNK = 0x8000;
   let out = "";
   for (let i = 0; i < bytes.length; i += CHUNK) {
-    out += String.fromCharCode.apply(
-      null,
-      bytes.subarray(i, i + CHUNK) as unknown as number[],
-    );
+    const codes = Array.from(bytes.subarray(i, i + CHUNK), (b) => (b < 0x80 ? b : 0xf700 + b));
+    out += String.fromCharCode(...codes);
   }
   return out;
+}
+
+function charsetOf(mime: string | null): string | null {
+  const found = mime ? /;\s*charset=("?)([^";]+)\1/i.exec(mime) : null;
+  return found ? found[2].trim().toLowerCase() : null;
+}
+
+function decodeText(bytes: Uint8Array, charset: string | null): string {
+  if (charset === "x-user-defined") {
+    return decodeUserDefined(bytes);
+  }
+  try {
+    return new TextDecoder(charset ?? "utf-8").decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
 }
 
 export function installNodeXHR(): void {
@@ -51,9 +60,12 @@ export function installNodeXHR(): void {
     static readonly HEADERS_RECEIVED = 2;
     static readonly LOADING = 3;
     static readonly DONE = 4;
+    /** Says this is the desktop's, where a failed request is not about CORS. */
+    static readonly pllNode = true;
     method = "GET";
     url = "";
     async = true;
+    /** Milliseconds, as a browser's; 0 for the default limit. */
     timeout = 0;
     responseType = "";
     withCredentials = false;
@@ -62,8 +74,11 @@ export function installNodeXHR(): void {
     response: ArrayBuffer | string | null = null;
     responseText = "";
     readyState = 0;
+    /** The interrupt buffer, set by PLL's Python so a Stop ends the wait. */
+    pllInterrupt: Uint8Array | null = null;
     private reqHeaders: Record<string, string> = {};
     private resHeaders: Record<string, string> = {};
+    private mimeOverride: string | null = null;
 
     open(method: string, url: string, async = true): void {
       this.method = method;
@@ -76,10 +91,8 @@ export function installNodeXHR(): void {
       this.reqHeaders[name] = value;
     }
 
-    overrideMimeType(_mime: string): void {
-      /* Ignored on purpose. Callers ask for `x-user-defined` so a *browser*
-         stops decoding the body as UTF-8; here every response is already
-         one character per byte, which is what that request is for. */
+    overrideMimeType(mime: string): void {
+      this.mimeOverride = mime;
     }
 
     send(body?: ArrayBuffer | Uint8Array | string | null): void {
@@ -98,6 +111,8 @@ export function installNodeXHR(): void {
         url: this.url,
         headers: this.reqHeaders,
         body: payload,
+        timeoutMs: this.timeout,
+        interrupt: this.pllInterrupt,
       });
       this.status = result.status;
       this.statusText = result.status >= 200 && result.status < 300 ? "OK" : "";
@@ -109,7 +124,8 @@ export function installNodeXHR(): void {
         this.response = copy.buffer;
         this.responseText = "";
       } else {
-        const text = decodeByteString(result.body);
+        const charset = charsetOf(this.mimeOverride) ?? charsetOf(this.getResponseHeader("content-type"));
+        const text = decodeText(result.body, charset);
         this.response = text;
         this.responseText = text;
       }

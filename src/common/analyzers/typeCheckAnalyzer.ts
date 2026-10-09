@@ -1,28 +1,8 @@
-import { FUNCTION_TAKER_NAMES } from "../errors/libraryFacts";
-import { PLL_LIBRARY_FILES } from "../pythonFiles";
-import { userFrames, type PythonError } from "../errors/pythonError";
+import { libraryCaller } from "../errors/libraryFacts";
+import { userFrames } from "../errors/pythonError";
 import { frameText } from "./errorPlace";
 import { explainTypeCheckError } from "../errors/typeCheckExplainer";
 import { runtimeFindingFor, type AnalysisFinding, type RuntimeAnalyzer, type RuntimeAnalyzerInput } from "./types";
-
-/**
- * The library function that called the student's function, if one did -
- * "reactor" for any frame in the reactor library, whichever of its methods
- * was driving. Its frames are PLL's, not the student's, but they are there
- * to be read, and knowing which one it was changes the advice completely.
- */
-function libraryCaller(error: PythonError): string | null {
-  for (const { fileName, functionName } of error.frames) {
-    if (fileName === PLL_LIBRARY_FILES.reactor) {
-      return "reactor";
-    }
-    const inLibrary = fileName === PLL_LIBRARY_FILES.table || fileName === PLL_LIBRARY_FILES.image;
-    if (inLibrary && functionName !== null && FUNCTION_TAKER_NAMES.includes(functionName)) {
-      return functionName;
-    }
-  }
-  return null;
-}
 
 export const typeCheckAnalyzer: RuntimeAnalyzer = {
   handles: ["TypeCheckError"],
@@ -47,7 +27,7 @@ export const typeCheckAnalyzer: RuntimeAnalyzer = {
       // itself - or, when the function ran off its end, is not one.
       {
         line: frameText(input, innermost),
-        calledBy: libraryCaller(error),
+        calledBy: libraryCaller(error.frames),
         facts: error.facts,
       },
     );

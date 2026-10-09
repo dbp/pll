@@ -4,6 +4,7 @@ import {
   PLL_BOOTSTRAP_PY,
   PLL_EXAMPLAR_LIB_PY,
   PLL_IMAGE_LIB_PY,
+  PLL_MATPLOTLIB_PY,
   PLL_REACTOR_LIB_PY,
   PLL_TABLE_LIB_PY,
   PYODIDE_INSTALL_PY,
@@ -52,6 +53,8 @@ export function installPll(
     instance.globals.set("_pll_interrupt_view", view);
     instance.globals.set("_pll_wait_for_stop", waitForStop(view));
   }
+  instance.globals.set("_pll_matplotlib_backend_source", PLL_MATPLOTLIB_PY.source);
+  instance.globals.set("_PLL_MATPLOTLIB_FILE", PLL_MATPLOTLIB_PY.file);
   run(instance, PLL_IMAGE_LIB_PY);
   run(instance, PLL_TABLE_LIB_PY);
   // After the image lib: `to_draw` handlers use the image primitives.

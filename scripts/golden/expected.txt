@@ -1198,7 +1198,7 @@ stderr:
     at student.py:4:5
   
   How to fix:
-    - Rename the inner `x` to something distinct (e.g. `x_inner`, `local_x`, or whatever describes its role).
+    - Rename this variable to something distinct (e.g. `x_inner`, `local_x`, or whatever describes its role).
     - Or, if you want to use the outer `x`, just read it directly without making a new variable.
   
   Static analysis found 1 problem. The file was not run.
@@ -1536,7 +1536,7 @@ stderr:
 === img-place (exit 1)
 stderr:
   student.py [raw]
-  ValueError: beside_align: expected one of 'top', 'center', 'middle', 'bottom', got 'upper'.
+  ValueError: beside_align's `y_place` (the 1st argument) should be "top", "center" or "bottom", but it is the string "upper".
     at student.py:2
 
 === img-load-missing (exit 1)

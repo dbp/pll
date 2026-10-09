@@ -8,7 +8,8 @@ import type {
   RunResult,
 } from "./wire";
 import type { Level } from "./level";
-import type { WorkspaceChanges, WorkspaceFile } from "./workspaceFilePolicy";
+import type { LeftOut, WorkspaceChanges, WorkspaceFile } from "./workspaceFilePolicy";
+import type { SiblingSource } from "./packages";
 
 export type WorkerInbound =
   | {
@@ -39,11 +40,11 @@ export type WorkerInbound =
       level?: Level;
     }
   | { id: number; type: "checkSyntax"; code: string; whole?: boolean }
-  | { id: number; type: "loadPackages"; code: string }
+  | { id: number; type: "loadPackages"; code: string; siblings?: SiblingSource[] }
   | { id: number; type: "hasTests"; code: string }
   | { id: number; type: "loadPytest" }
   | { id: number; type: "staticAnalyze"; code: string; level: Level; fileName: string; sessionKey?: string }
-  | { id: number; type: "mountWorkspace"; files: WorkspaceFile[] }
+  | { id: number; type: "mountWorkspace"; files: WorkspaceFile[]; leftOut?: LeftOut[] }
   | { id: number; type: "collectWorkspace" }
   /** Apply one event (tick / key / mouse / receive) to a running reactor. */
   | { id: number; type: "reactorStep"; reactorId: string; event: string }
