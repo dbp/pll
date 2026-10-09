@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+## 0.4.0 (2026-10-09)
+
+### Breaking
+- **Pictures are drawn as 2htdp/image draws them**, so they look different
+  and some sizes change: outlines are thinner and inside the shape, a turned
+  picture's box fits the turned shape (`image_width(rotate(45, circle(20,
+  ...)))` is 40, where it was 57), stars have the true star shape,
+  `right_triangle`'s right angle is at the bottom left, and text is in a
+  monospace font. See Changed.
+- **More library calls refuse what they used to accept**: a colour string
+  like `"rgb(banana)"`, NaN or infinite sizes, a star whose step is half its
+  points or more, a column name that is not a string, `select_columns`
+  naming a column twice, `head(-1)`, a dict row with a key that is not a
+  column, and a CSV with a quote never closed. Each stops the program with
+  a message, where before it drew nothing, built a broken table, or read
+  the rest of the file into one cell.
+- **At `beginner` and `intermediate`**, `sum` and `mean` refuse `True` and
+  `False`, and `is` with a number or a string (`assert x is 60.5`) is a
+  finding that stops the file.
+- **`min`, `max` and `order_by` refuse numbers left as text** when comparing
+  them as text gives another answer, where they gave that answer.
+- **Some results change**: `sum` of whole numbers is an `int`, not a float;
+  a table shows a float in full (`2.0`, `12999.99`); a CSV's row of empty
+  cells is a row; `urlopen` and `pd.read_csv` raise `HTTPError` for an error
+  page, where they read it as data; and a URL read on the desktop or the
+  command line gives up after 60 seconds.
+- **A file runs once, and its tests after it**, so a program that raises,
+  is stopped or calls `sys.exit()` leaves its tests unrun.
+- **The command line exits with the status a program ends itself with**
+  (`sys.exit(3)` exits 3, not 0), and `-v` is no longer an option (`-V` is
+  `--version`).
+- **A `#level raw` file shows no value on a line of its own**, as `python`
+  shows none, and a `#level` line under code is reported and stops the file,
+  where the file ran as plain Python.
+- **Closing a file ends its session**: its output in the panel, its
+  reactors and the names its runs defined go with it.
+
 ### Added
 - **Pictures compare with `==`** by what they draw: the same shapes, in the
   same places, in the same colours, to a hundredth of a pixel - however they
@@ -297,10 +334,9 @@
   the name rather than was "already defined"; `load-table(...)` and
   `image-width(...)` are told a name has `_`, not `-`, and
   `order_by(people, ...)` and `sum(people, "age")` that a table does it
-  itself; `for p in
-  people.rows:` and `people.rows[0]` are told to call the method; `assert x
-  is 60.5` is a finding at the teaching levels; a failed `pytest.approx`
-  names it as written, not `<function approx at 0x...>`.
+  itself; `for p in people.rows:` and `people.rows[0]` are told to call the
+  method; `assert x is 60.5` is a finding at the teaching levels; a failed
+  `pytest.approx` names it as written, not `<function approx at 0x...>`.
 - **`help(circle)`** says `pll.image`, not `__main__`.
 
 - **A file that was not loaded is no longer replaced** by what the program
