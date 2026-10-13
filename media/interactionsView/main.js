@@ -2,28 +2,26 @@
 //
 // Lives inside the WebviewView. Holds the currently-displayed session's
 // entry log + an input row, and talks to the extension host via postMessage.
-// The session manager on the host owns per-file session state, and replays
+// The session manager on the host owns per-file session state, and shows
 // it whenever this view (re)loads and says it is ready. The one thing only
 // the view knows is the prompt's input history, and that is all it saves.
 //
 // The messages, in summary. Their types are `HostToView` and `ViewToHost`
-// in src/common/interactionsView.ts, which also checks every message this
+// in src/editor/panel/view.ts, which also checks every message this
 // sends before acting on it.
 //
 // Host -> view:
 //   { type: "appendMany", entries }          - append a batch of entries
 //   { type: "reactorPatch", id, patch }      - update a live reactor card
 //   { type: "clear" }                        - clear current session entries
-//   { type: "prompt", kind }                 - change prompt for current
-//   { type: "busy", busy, status? }          - busy state for current
-//   { type: "awaitingInput", awaiting, prefix? } - program input() is waiting
-//   { type: "replay", mode: "session", title, entries, prompt, busy, status?,
-//     awaitingInput?, inputPrefix? }         - show a session, from scratch
-//   { type: "title", title }                 - update header title in place
+//   { type: "show", entries, state }         - show a session, from scratch
+//   { type: "state", state }                 - the header and the input row
 //   { type: "focusInput" }
 //
+// `state` is a `PanelState`: { title, prompt, status, awaitingInput, inputPrefix }.
+//
 // View -> host:
-//   { type: "ready" }                        - (re)loaded; send a replay
+//   { type: "ready" }                        - (re)loaded; show me a session
 //   { type: "submit", code }
 //   { type: "interrupt" }
 //   { type: "clearRequested" }
@@ -37,19 +35,14 @@
   const vscode = acquireVsCodeApi();
 
   const saved = vscode.getState();
-  /** @type {{ mode: "session" | "waiting", title: string, entries: any[], prompt: "primary" | "continuation", busy: boolean, status: string, awaitingInput: boolean, inputPrefix: string, history: string[] }} */
-  const state = {
-    // Until the host's first replay, which is almost at once.
-    mode: "waiting",
-    title: "",
-    entries: [],
-    prompt: "primary",
-    busy: false,
-    status: "",
-    awaitingInput: false,
-    inputPrefix: "",
-    history: Array.isArray(saved?.history) ? saved.history : [],
-  };
+  /** Whether the host has shown a session yet - which it does almost at once. */
+  let shown = false;
+  /** The session's entries, as shown. */
+  let entries = [];
+  /** @type {{ title: string, prompt: "primary" | "continuation", status: string | null, awaitingInput: boolean, inputPrefix: string }} */
+  let panel = { title: "", prompt: "primary", status: null, awaitingInput: false, inputPrefix: "" };
+  /** The prompt's input history: what only this view knows, and all it saves. */
+  const history = Array.isArray(saved?.history) ? saved.history : [];
 
   const body = document.body;
   const titleEl = document.getElementById("title");
@@ -71,109 +64,73 @@
   let stickToBottom = true;
 
   /**
+   * An element: `h("div", { className: "entry banner" }, "text", child)`.
+   * Props are set as properties, and `on...` ones are listeners; children
+   * are nodes or strings, or arrays of them, and a null or false one is
+   * left out.
+   */
+  function h(tag, props, ...children) {
+    const el = document.createElement(tag);
+    for (const [key, value] of Object.entries(props || {})) {
+      if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
+      else el[key] = value;
+    }
+    el.append(...children.flat(Infinity).filter((child) => child !== null && child !== undefined && child !== false));
+    return el;
+  }
+
+  const post = (message) => vscode.postMessage(message);
+  const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`;
+
+  /**
    * Save what only this view knows. The entries are not saved: the host
-   * replays them on every load, and saving them meant serialising the whole
-   * log - every SVG with it - on each reactor frame, 28 times a second.
+   * shows them again on every load, and saving them meant serialising the
+   * whole log - every SVG with it - on each reactor frame, 28 times a second.
    */
   function persist() {
-    vscode.setState({ history: state.history });
+    vscode.setState({ history });
   }
 
-  function applyMode() {
-    body.classList.toggle("mode-waiting", state.mode === "waiting");
-    body.classList.toggle("mode-session", state.mode === "session");
-  }
-
-  function applyTitle() {
-    titleEl.textContent = state.title || "";
-  }
-
-  function setPromptText() {
-    if (state.awaitingInput) {
-      promptEl.textContent = state.inputPrefix || "";
-      return;
-    }
-    promptEl.textContent = state.prompt === "continuation" ? "..." : ">>>";
-  }
-
-  function applyInputEnabled() {
-    const blocked = state.busy && !state.awaitingInput;
+  /** The header and the input row, from `panel`. */
+  function applyPanel() {
+    body.classList.toggle("mode-waiting", !shown);
+    body.classList.toggle("mode-session", shown);
+    titleEl.textContent = panel.title;
+    promptEl.textContent = panel.awaitingInput
+      ? panel.inputPrefix
+      : panel.prompt === "continuation" ? "..." : ">>>";
+    // Busy, except that a program waiting in `input()` takes a line.
+    const blocked = panel.status !== null && !panel.awaitingInput;
     inputRow.classList.toggle("busy", blocked);
-    inputRow.classList.toggle("awaiting-input", state.awaitingInput);
+    inputRow.classList.toggle("awaiting-input", panel.awaitingInput);
     textarea.disabled = blocked;
     // Only offered while a program is actually running.
     stopBtn.hidden = !blocked;
-    if (!blocked && state.mode === "session") {
+    statusEl.textContent = panel.status ?? "";
+    if (!blocked && shown) {
       requestAnimationFrame(() => textarea.focus());
     }
+    if (entries.length === 0) renderEmpty();
   }
 
-  function setBusy(busy, status) {
-    state.busy = busy;
-    state.status = busy ? (status || "Running...") : "";
-    if (!busy) {
-      state.awaitingInput = false;
-      state.inputPrefix = "";
-      setPromptText();
-    }
-    statusEl.textContent = state.status;
-    applyInputEnabled();
-    refreshEmptyIfNeeded();
-  }
-
-  function setAwaitingInput(awaiting, prefix) {
-    state.awaitingInput = !!awaiting;
-    state.inputPrefix = awaiting ? (prefix || "") : "";
-    setPromptText();
-    applyInputEnabled();
-  }
-
-  function clearStream() {
-    reactorCards.clear();
-    state.entries = [];
-    renderAll();
-  }
-
-  /** Default empty-stream caption for an active session that has no entries yet. */
-  const SESSION_EMPTY_TEXT =
-    "Run the file or evaluate an expression at the prompt below.";
-
+  /** The caption of a stream with nothing in it: a spinner while busy. */
   function renderEmpty() {
-    empty.innerHTML = "";
-    const busyWait = state.mode === "session" && state.busy;
-    empty.classList.toggle("busy", busyWait);
-    if (busyWait) {
-      const spinner = document.createElement("span");
-      spinner.className = "spinner";
-      spinner.setAttribute("aria-hidden", "true");
-      empty.appendChild(spinner);
-    }
-    const span = document.createElement("span");
-    span.textContent = busyWait
-      ? (state.status || "Running...")
-      : state.mode === "waiting"
-        ? ""
-        : SESSION_EMPTY_TEXT;
-    empty.appendChild(span);
-  }
-
-  function refreshEmptyIfNeeded() {
-    if (state.entries.length === 0 && empty.parentNode) {
-      renderEmpty();
-    }
+    const busy = shown && panel.status !== null;
+    empty.classList.toggle("busy", busy);
+    const caption = h("span", {}, busy ? panel.status : shown ? "Run the file or evaluate an expression at the prompt below." : "");
+    empty.replaceChildren(...(busy ? [h("span", { className: "spinner", ariaHidden: "true" }), caption] : [caption]));
   }
 
   function renderAll() {
-    stream.innerHTML = "";
-    if (state.entries.length === 0) {
+    // The cards drawn now are the only ones with a clock.
+    for (const card of reactorCards.values()) clearInterval(card.clock);
+    reactorCards.clear();
+    if (entries.length === 0) {
       renderEmpty();
-      stream.appendChild(empty);
+      stream.replaceChildren(empty);
       return;
     }
-    if (empty.parentNode) empty.parentNode.removeChild(empty);
-    for (const entry of state.entries) {
-      stream.appendChild(buildEntryNode(entry));
-    }
+    stream.replaceChildren(...entries.map(buildEntryNode));
     scrollToBottom();
   }
 
@@ -181,19 +138,134 @@
    * Append a batch of entries with one DOM insertion and one scroll. Doing
    * those per entry is what made a printing loop unusable.
    */
-  function appendEntries(entries) {
-    if (!entries || entries.length === 0) return;
-    if (empty.parentNode) empty.parentNode.removeChild(empty);
-    const fragment = document.createDocumentFragment();
-    for (const entry of entries) {
-      state.entries.push(entry);
-      fragment.appendChild(buildEntryNode(entry));
-    }
-    stream.appendChild(fragment);
+  function appendEntries(batch) {
+    if (!batch || batch.length === 0) return;
+    empty.remove();
+    entries.push(...batch);
+    stream.append(...batch.map(buildEntryNode));
     if (stickToBottom) scrollToBottom();
   }
 
+  function scrollToBottom() {
+    stream.scrollTop = stream.scrollHeight;
+  }
+
+  function buildEntryNode(entry) {
+    switch (entry.kind) {
+      case "banner":
+        return h("div", { className: "entry banner" }, entry.text);
+      case "echo":
+        return h("div", { className: "entry echo" },
+          h("span", { className: "prompt" }, entry.prompt + " "),
+          h("span", { className: "code" }, entry.code));
+      case "stdout":
+      case "stderr":
+        // An empty line (`print()`) still takes up one.
+        return h("div", { className: `entry ${entry.kind}` }, entry.text === "" ? " " : entry.text);
+      case "result":
+        return h("div", { className: "entry result" }, entry.repr);
+      case "image":       return renderImage(entry);
+      case "table":       return renderTable(entry);
+      case "finding":     return h("div", { className: "entry finding" }, ...findingParts(entry.finding));
+      case "rawError":
+        return h("div", { className: "entry rawError" }, h("div", { className: "head" }, `${entry.errorType}: ${entry.message}`));
+      case "testReport":  return renderTestReport(entry);
+      case "reactor":     return renderReactor(entry);
+      case "examplar":    return renderExamplar(entry);
+      default:            return h("div", { className: "entry" }, "(unknown entry)");
+    }
+  }
+
+  function renderImage(entry) {
+    return h("div", { className: "entry card image" },
+      h("div", { className: "imgWrap", innerHTML: entry.svg }),
+      h("div", { className: "meta" },
+        h("span", { className: "caption" }, entry.source || "image"),
+        h("span", { className: "dims" }, `${entry.width} × ${entry.height}`),
+        h("button", {
+          title: "Download this image as an .svg file",
+          onclick: () => post({ type: "saveSvg", svg: entry.svg, source: entry.source }),
+        }, "Save SVG")));
+  }
+
+  function renderTable(entry) {
+    const caption = entry.truncated
+      ? `Showing ${entry.shownCount} of ${entry.rowCount} rows`
+      : `${plural(entry.rowCount, "row")} × ${plural(entry.columns.length, "column")}`;
+    return h("div", { className: "entry card table" },
+      h("div", { className: "tableWrap" },
+        h("table", {},
+          h("thead", {}, h("tr", {}, entry.columns.map((name) => h("th", {}, name)))),
+          // Columns of numbers to the right, by what Python holds: text that
+          // looks like a number stays on the left, so it can be seen to be text.
+          h("tbody", {}, entry.rows.map((row) =>
+            h("tr", {}, row.map((cell, i) => h("td", { className: entry.numeric?.[i] ? "num" : "" }, cell))))))),
+      h("div", { className: "meta" },
+        h("span", { className: "caption" }, caption),
+        h("button", {
+          title: entry.csvRows < entry.rowCount
+            ? `Download the first ${entry.csvRows} rows as a .csv file - the whole table is too big to save from here`
+            : "Download this table as a .csv file (full table, not just the visible rows)",
+          onclick: () => post({ type: "saveCsv", csv: entry.csv, source: entry.source }),
+        }, "Save CSV")));
+  }
+
+  /** A link to `line` of `fileName`, which the host opens. */
+  function locationLink(fileName, line, column, label, className) {
+    return h("a", {
+      className,
+      onclick: () => post({ type: "openLocation", fileName, line, column }),
+    }, label);
+  }
+
+  /**
+   * A finding's parts - headline, where, and how to fix it. Shared by a
+   * finding entry and a test that raised, so an error reads the same
+   * wherever it is shown.
+   */
+  function findingParts(f) {
+    return [
+      h("div", {}, h("span", { className: "errType" }, f.errorType + ": "), h("span", { className: "headline" }, f.headline)),
+      f.location && h("span", { className: "loc" },
+        locationLink(f.location.fileName, f.location.line, f.location.column, "at " + f.location.label)),
+      f.howToFix?.length > 0 && h("div", { className: "howTitle" }, "How to fix:"),
+      f.howToFix?.length > 0 && h("ul", {}, f.howToFix.map((item) => h("li", {}, item))),
+    ];
+  }
+
+  /** What each outcome is marked with: a square for a Stop, as on its button - not a failure's cross. */
+  const MARKS = { passed: "✓", skipped: "–", stopped: "■" };
+
+  function renderTestReport(entry) {
+    const failed = (entry.failed || 0) + (entry.errors || 0);
+    const parts = [
+      entry.passed && `${entry.passed} passed`,
+      entry.failed && `${entry.failed} failed`,
+      entry.errors && plural(entry.errors, "error"),
+      entry.skipped && `${entry.skipped} skipped`,
+      entry.stopped && (entry.stoppedIn ? "stopped during " + entry.stoppedIn : "stopped before any test ran"),
+    ].filter(Boolean);
+    const tests = entry.tests || [];
+    // A stopped phase is neither a pass nor a failure: the student ended it.
+    return h("div", { className: "entry card testReport " + (entry.stopped ? "stopped" : failed > 0 ? "failed" : "passed") },
+      h("div", { className: "summary" }, "Tests: " + (parts.length > 0 ? parts.join(", ") : "no tests collected")),
+      tests.length > 0 && h("div", { className: "testList" }, tests.map((t) => [
+        h("div", { className: "testRow " + (t.outcome || "") },
+          h("span", { className: "mark" }, MARKS[t.outcome] ?? "✗"),
+          h("span", { className: "name" }, t.name),
+          t.lineNumber != null && entry.fileName &&
+            locationLink(entry.fileName, t.lineNumber, null, `at ${entry.fileName}:${t.lineNumber}`, "loc")),
+        t.finding
+          ? h("div", { className: "testFinding finding" }, ...findingParts(t.finding))
+          : t.message && h("div", { className: "testMsg" }, t.message),
+        t.stdout && h("div", { className: "testStdout" }, t.stdout),
+      ])));
+  }
+
   /* ---- Examplar ---------------------------------------------------- */
+
+  /** The tone of an Examplar line, as a class. */
+  const TONE = { good: "exGood", bad: "exBad", warn: "exWarn", note: "exNote" };
 
   /**
    * One Examplar verdict.
@@ -208,544 +280,139 @@
    * name, not its assertion, which would state the correct answer; a buggy
    * implementation that got through gives its id, not its failure message,
    * which would describe the bug. Say which thing is wrong, never what is
-   * right.
+   * right. The wording is the host's (run/examplar.ts), so the panel and
+   * the command line say the same thing; this only draws it.
    */
   function renderExamplar(entry) {
-    const div = document.createElement("div");
-    div.className = "entry examplar ex-" + (entry.card ?? "failed");
-
-    const head = document.createElement("div");
-    head.className = "exHead";
-    const title = document.createElement("span");
-    title.className = "exTitle";
-    title.textContent = entry.card === "function" ? entry.name : "Your tests";
-    const source = document.createElement("span");
-    source.className = "exSource";
-    source.textContent = "Examplar";
-    // A 304 means the bundle is current, not stale, so being served from the
-    // store is not worth a badge - but it is worth being able to check.
-    source.title = entry.cached ? `${entry.url} (cached copy)` : entry.url;
-    head.append(title, source);
-    div.append(head);
-
-    // The wording is the host's (examplarPhase.ts), so the panel and the
-    // command line say the same thing; this only draws it.
-    const TONE = { good: "exGood", bad: "exBad", warn: "exWarn", note: "exNote" };
-    for (const block of entry.body ?? []) {
-      if (block.kind === "line") {
-        const el = document.createElement("div");
-        el.className = "exLine " + TONE[block.tone];
-        el.textContent = block.text;
-        div.append(el);
-        continue;
-      }
-      const item = document.createElement("div");
-      item.className = "exFailure " + (block.tone === "bad" ? "exFailureBad" : "exFailureWarn");
-      const name = document.createElement("code");
-      name.textContent = block.name;
-      item.append(name);
-      if (block.detail) {
-        const msg = document.createElement("pre");
-        msg.textContent = block.detail;
-        item.append(msg);
-      }
-      div.append(item);
-    }
-    return div;
+    return h("div", { className: "entry examplar ex-" + (entry.card ?? "failed") },
+      h("div", { className: "exHead" },
+        h("span", { className: "exTitle" }, entry.card === "function" ? entry.name : "Your tests"),
+        // A 304 means the bundle is current, not stale, so being served from
+        // the store is not worth a badge - but it is worth being able to check.
+        h("span", { className: "exSource", title: entry.cached ? `${entry.url} (cached copy)` : entry.url }, "Examplar")),
+      (entry.body ?? []).map((block) => block.kind === "line"
+        ? h("div", { className: "exLine " + TONE[block.tone] }, block.text)
+        : h("div", { className: "exFailure " + (block.tone === "bad" ? "exFailureBad" : "exFailureWarn") },
+            h("code", {}, block.name),
+            block.detail && h("pre", {}, block.detail))));
   }
 
   /* ---- Reactors --------------------------------------------------- */
 
   /** DOM key names -> the names HtDP hands to `on_key`. */
+  const KEY_NAMES = {
+    ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down",
+    Enter: "\r", Tab: "\t", Backspace: "\b", Escape: "escape", Delete: "delete",
+    Home: "home", End: "end", PageUp: "prior", PageDown: "next",
+  };
+
+  /** The `on_key` name of a key press, or null for a modifier on its own - which means nothing by itself. */
   function reactorKeyName(event) {
-    const named = {
-      ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down",
-      Enter: "\r", Tab: "\t", Backspace: "\b", Escape: "escape", Delete: "delete",
-      Home: "home", End: "end", PageUp: "prior", PageDown: "next",
-    };
-    if (named[event.key]) return named[event.key];
-    // Modifier-only presses would fire repeatedly while held and mean
-    // nothing on their own, so they are not events.
-    if (event.key.length !== 1) return null;
-    return event.key;
+    return KEY_NAMES[event.key] ?? (event.key.length === 1 ? event.key : null);
   }
 
-  function renderReactor(entry) {
-    const div = document.createElement("div");
-    div.className = "entry reactor";
+  const CONNECTION_LABELS = {
+    connecting: "connecting…", open: "connected", closed: "disconnected", error: "connection failed", none: "",
+  };
 
-    const head = document.createElement("div");
-    head.className = "rxHead";
-    const title = document.createElement("span");
-    title.className = "rxTitle";
-    title.textContent = entry.title;
-    const value = document.createElement("code");
-    value.className = "rxValue";
+  function renderReactor(entry) {
+    const send = (action, index) => post({ type: "reactorControl", id: entry.id, action, index });
+    const card = { entry };
+    const input = (event) => post({ type: "reactorInput", id: entry.id, event });
+    const mouse = (kind) => (event) => {
+      const box = card.stage.getBoundingClientRect();
+      input({ kind: "mouse", x: Math.round(event.clientX - box.left), y: Math.round(event.clientY - box.top), event: kind });
+    };
+    const button = (label, title, onclick) => h("button", { title, onclick }, label);
+
+    card.value = h("code", { className: "rxValue" });
     // Only worlds registered with a universe server have a connection to
     // report, so this stays hidden otherwise.
-    const link = document.createElement("span");
-    link.className = "rxLink";
-    link.hidden = !entry.register;
-    head.append(title, link, value);
-
-    // `tabindex` so the picture can take keyboard focus; without it a key
+    card.link = h("span", { className: "rxLink", hidden: !entry.register });
+    // `tabIndex` so the picture can take keyboard focus; without it a key
     // press would go to the prompt instead.
-    const stage = document.createElement("div");
-    stage.className = "rxStage";
-    if (entry.wantsKeys) stage.tabIndex = 0;
-    stage.innerHTML = entry.frame.data;
-
-    const bar = document.createElement("div");
-    bar.className = "rxBar";
-    const send = (action, index) =>
-      vscode.postMessage({ type: "reactorControl", id: entry.id, action, index });
-
-    const reset = button("⏮", "Back to the first frame", () => send("reset"));
-    // Mirrors the step button, bar and all: a bare "◀" read as "play
-    // backwards", which is not what it does.
-    const back = button("❙◀", "One frame back", () =>
-      send("back", Math.max(0, (card.index || 0) - 1)));
-    const play = button("▶", "Play", () => send(card.playing ? "pause" : "play"));
-    const step = button("▶❙", "One frame forward", () => send("step"));
-    const scrub = document.createElement("input");
-    scrub.type = "range";
-    scrub.className = "rxScrub";
-    scrub.min = "0";
-    scrub.addEventListener("input", () => send("seek", Number(scrub.value)));
-    const counter = document.createElement("span");
-    counter.className = "rxCounter";
-    bar.append(reset, back, play, step, scrub, counter);
-
-    div.append(head, stage, bar);
-
-    const card = {
-      entry, stage, value, link, play, scrub, counter, step, back, reset,
-      index: entry.index, length: entry.length, playing: entry.playing,
-    };
-    reactorCards.set(entry.id, card);
-
+    card.stage = h("div", { className: "rxStage", innerHTML: entry.frame });
     if (entry.wantsKeys) {
-      stage.addEventListener("keydown", (event) => {
+      card.stage.tabIndex = 0;
+      card.stage.addEventListener("keydown", (event) => {
         const key = reactorKeyName(event);
         if (key === null) return;
         // Arrows and space would otherwise scroll the panel.
         event.preventDefault();
-        vscode.postMessage({
-          type: "reactorInput", id: entry.id, event: { kind: "key", key },
-        });
+        input({ kind: "key", key });
       });
     }
     if (entry.wantsMouse) {
-      const at = (event, kind) => {
-        const box = stage.getBoundingClientRect();
-        vscode.postMessage({
-          type: "reactorInput",
-          id: entry.id,
-          event: {
-            kind: "mouse",
-            x: Math.round(event.clientX - box.left),
-            y: Math.round(event.clientY - box.top),
-            event: kind,
-          },
-        });
-      };
-      stage.addEventListener("mousedown", (e) => at(e, "button-down"));
-      stage.addEventListener("mouseup", (e) => at(e, "button-up"));
-      stage.addEventListener("mousemove", (e) => at(e, e.buttons ? "drag" : "move"));
-      stage.addEventListener("mouseenter", (e) => at(e, "enter"));
-      stage.addEventListener("mouseleave", (e) => at(e, "leave"));
+      card.stage.addEventListener("mousedown", mouse("button-down"));
+      card.stage.addEventListener("mouseup", mouse("button-up"));
+      card.stage.addEventListener("mousemove", (e) => mouse(e.buttons ? "drag" : "move")(e));
+      card.stage.addEventListener("mouseenter", mouse("enter"));
+      card.stage.addEventListener("mouseleave", mouse("leave"));
     }
-
+    card.reset = button("⏮", "Back to the first frame", () => send("reset"));
+    // Mirrors the step button, bar and all: a bare "◀" read as "play
+    // backwards", which is not what it does.
+    card.back = button("❙◀", "One frame back", () => send("back", Math.max(0, (entry.index || 0) - 1)));
+    card.play = button("▶", "Play", () => send(entry.playing ? "pause" : "play"));
+    card.step = button("▶❙", "One frame forward", () => send("step"));
+    card.scrub = h("input", { type: "range", className: "rxScrub", min: "0", oninput: () => send("seek", Number(card.scrub.value)) });
+    card.counter = h("span", { className: "rxCounter" });
+    reactorCards.set(entry.id, card);
     patchReactorCard(entry.id, entry);
-    return div;
-  }
-
-  function button(label, title, onClick) {
-    const el = document.createElement("button");
-    el.textContent = label;
-    el.title = title;
-    el.addEventListener("click", onClick);
-    return el;
+    return h("div", { className: "entry card reactor" },
+      h("div", { className: "rxHead" }, h("span", { className: "rxTitle" }, entry.title), card.link, card.value),
+      card.stage,
+      h("div", { className: "rxBar" }, card.reset, card.back, card.play, card.step, card.scrub, card.counter));
   }
 
   /** Apply a patch to a live card, touching only what changed. */
   function patchReactorCard(id, patch) {
     const card = reactorCards.get(id);
     if (!card) return;
-    Object.assign(card.entry, patch);
-    const e = card.entry;
-    if (patch.frame) card.stage.innerHTML = patch.frame.data;
+    const e = Object.assign(card.entry, patch);
+    if (patch.frame) card.stage.innerHTML = patch.frame;
     if (patch.valueRepr !== undefined) card.value.textContent = patch.valueRepr;
     if (e.register) {
-      const labels = {
-        connecting: "connecting\u2026", open: "connected",
-        closed: "disconnected", error: "connection failed", none: "",
-      };
       card.link.hidden = false;
-      card.link.textContent = labels[e.connection] || "";
+      card.link.textContent = CONNECTION_LABELS[e.connection] || "";
       card.link.dataset.state = e.connection;
-      card.link.title = e.connectionDetail
-        ? `${e.register} - ${e.connectionDetail}`
-        : e.register;
+      card.link.title = e.connectionDetail ? `${e.register} - ${e.connectionDetail}` : e.register;
     }
-    if (patch.index !== undefined) card.index = patch.index;
-    if (patch.length !== undefined) card.length = patch.length;
-    if (patch.playing !== undefined) card.playing = patch.playing;
-
-    card.play.textContent = card.playing ? "❙❙" : "▶";
-    card.play.title = card.playing ? "Pause" : "Play";
+    if (patch.playing !== undefined) setClock(card);
+    card.play.textContent = e.playing ? "❙❙" : "▶";
+    card.play.title = e.playing ? "Pause" : "Play";
     card.play.disabled = !e.ticking || (e.stopped && e.atEnd);
     card.step.disabled = !e.ticking;
-    card.back.disabled = card.index <= 0;
-    card.reset.disabled = card.index <= 0;
-    const last = Math.max(0, card.length - 1);
+    card.back.disabled = e.index <= 0;
+    card.reset.disabled = e.index <= 0;
+    const last = Math.max(0, e.length - 1);
     card.scrub.max = String(last);
-    card.scrub.value = String(Math.min(card.index, last));
+    card.scrub.value = String(Math.min(e.index, last));
     card.scrub.disabled = last === 0;
     // The bar is the recorded history, and a running animation is always
     // at its newest frame - so while it plays, the bar is full. Saying
     // "live" is what makes that read as right rather than as stuck, the way
     // a live stream's player does. Replaying from an earlier frame moves
     // the thumb along the bar like any other playback.
-    const live = card.playing && e.atEnd !== false && card.index >= last;
+    const live = e.playing && e.atEnd !== false && e.index >= last;
     card.counter.textContent = e.stopped
-      ? `frame ${card.index} of ${last} · stopped`
+      ? `frame ${e.index} of ${last} · stopped`
       : live
-        ? `frame ${card.index} · live`
-        : `frame ${card.index} of ${last}`;
-  }
-
-  function scrollToBottom() {
-    stream.scrollTop = stream.scrollHeight;
-  }
-
-  function buildEntryNode(entry) {
-    switch (entry.kind) {
-      case "banner":      return renderBanner(entry);
-      case "echo":        return renderEcho(entry);
-      case "stdout":      return renderText(entry, "stdout");
-      case "stderr":      return renderText(entry, "stderr");
-      case "result":      return renderResult(entry);
-      case "image":       return renderImage(entry);
-      case "table":       return renderTable(entry);
-      case "finding":     return renderFinding(entry);
-      case "rawError":    return renderRawError(entry);
-      case "testReport":  return renderTestReport(entry);
-      case "reactor":     return renderReactor(entry);
-      case "examplar":    return renderExamplar(entry);
-      default: {
-        const div = document.createElement("div");
-        div.className = "entry";
-        div.textContent = "(unknown entry)";
-        return div;
-      }
-    }
-  }
-
-  function renderBanner(entry) {
-    const div = document.createElement("div");
-    div.className = "entry banner";
-    div.textContent = entry.text;
-    return div;
-  }
-
-  function renderEcho(entry) {
-    const div = document.createElement("div");
-    div.className = "entry echo";
-
-    const p = document.createElement("span");
-    p.className = "prompt";
-    p.textContent = entry.prompt + " ";
-    div.appendChild(p);
-
-    const code = document.createElement("span");
-    code.className = "code";
-    code.textContent = entry.code;
-    div.appendChild(code);
-
-    return div;
-  }
-
-  function renderText(entry, klass) {
-    const div = document.createElement("div");
-    div.className = `entry ${klass}`;
-    // Empty strings (e.g. an empty print()) need a non-breaking space so the
-    // entry still occupies a visible line.
-    div.textContent = entry.text === "" ? "\u00a0" : entry.text;
-    return div;
-  }
-
-  function renderResult(entry) {
-    const div = document.createElement("div");
-    div.className = "entry result";
-    div.textContent = entry.repr;
-    return div;
-  }
-
-  function renderImage(entry) {
-    const div = document.createElement("div");
-    div.className = "entry image";
-
-    const wrap = document.createElement("div");
-    wrap.className = "imgWrap";
-    wrap.innerHTML = entry.svg;
-    div.appendChild(wrap);
-
-    const meta = document.createElement("div");
-    meta.className = "imgMeta";
-
-    const caption = document.createElement("span");
-    caption.className = "caption";
-    caption.textContent = entry.source || "image";
-    meta.appendChild(caption);
-
-    const dims = document.createElement("span");
-    dims.className = "dims";
-    dims.textContent = `${entry.width} \u00d7 ${entry.height}`;
-    meta.appendChild(dims);
-
-    const save = document.createElement("button");
-    save.textContent = "Save SVG";
-    save.title = "Download this image as an .svg file";
-    save.addEventListener("click", () => {
-      vscode.postMessage({ type: "saveSvg", svg: entry.svg, source: entry.source });
-    });
-    meta.appendChild(save);
-
-    div.appendChild(meta);
-    return div;
-  }
-
-  function renderTable(entry) {
-    const div = document.createElement("div");
-    div.className = "entry table";
-
-    const wrap = document.createElement("div");
-    wrap.className = "tableWrap";
-
-    const tbl = document.createElement("table");
-    const thead = document.createElement("thead");
-    const headerRow = document.createElement("tr");
-    for (const colName of entry.columns) {
-      const th = document.createElement("th");
-      th.textContent = colName;
-      headerRow.appendChild(th);
-    }
-    thead.appendChild(headerRow);
-    tbl.appendChild(thead);
-
-    const tbody = document.createElement("tbody");
-    for (const row of entry.rows) {
-      const tr = document.createElement("tr");
-      row.forEach((cell, i) => {
-        const td = document.createElement("td");
-        td.textContent = cell;
-        // Columns of numbers to the right, by what Python holds: text that
-        // looks like a number stays on the left, so it can be seen to be text.
-        if (entry.numeric && entry.numeric[i]) {
-          td.classList.add("num");
-        }
-        tr.appendChild(td);
-      });
-      tbody.appendChild(tr);
-    }
-    tbl.appendChild(tbody);
-    wrap.appendChild(tbl);
-    div.appendChild(wrap);
-
-    const meta = document.createElement("div");
-    meta.className = "tableMeta";
-
-    const caption = document.createElement("span");
-    caption.className = "caption";
-    if (entry.truncated) {
-      caption.textContent =
-        "Showing " + entry.shownCount + " of " + entry.rowCount + " rows";
-    } else {
-      caption.textContent =
-        entry.rowCount + " row" + (entry.rowCount === 1 ? "" : "s") +
-        " \u00d7 " + entry.columns.length + " column" +
-        (entry.columns.length === 1 ? "" : "s");
-    }
-    meta.appendChild(caption);
-
-    const save = document.createElement("button");
-    save.textContent = "Save CSV";
-    save.title =
-      entry.csvRows !== undefined && entry.csvRows < entry.rowCount
-        ? "Download the first " + entry.csvRows + " rows as a .csv file - the whole table is too big to save from here"
-        : "Download this table as a .csv file (full table, not just the visible rows)";
-    save.addEventListener("click", () => {
-      vscode.postMessage({
-        type: "saveCsv",
-        csv: entry.csv,
-        source: entry.source,
-      });
-    });
-    meta.appendChild(save);
-
-    div.appendChild(meta);
-    return div;
-  }
-
-  function renderFinding(entry) {
-    const div = document.createElement("div");
-    div.className = "entry finding";
-    appendFinding(div, entry.finding);
-    return div;
+        ? `frame ${e.index} · live`
+        : `frame ${e.index} of ${last}`;
   }
 
   /**
-   * A finding's parts - headline, where, and how to fix it - into `div`.
-   * Shared by a finding entry and a test that raised, so an error reads the
-   * same wherever it is shown.
+   * A card's clock: a tick for the host every `tickRate` seconds while it
+   * plays. It runs only while the card is drawn, so nothing advances while
+   * the panel is hidden or shows another file. Floored at 10ms, so a tiny
+   * rate cannot flood the host.
    */
-  function appendFinding(div, f) {
-    const head = document.createElement("div");
-    const errType = document.createElement("span");
-    errType.className = "errType";
-    errType.textContent = f.errorType + ": ";
-    head.appendChild(errType);
-    const headline = document.createElement("span");
-    headline.className = "headline";
-    headline.textContent = f.headline;
-    head.appendChild(headline);
-    div.appendChild(head);
-
-    if (f.location) {
-      const loc = document.createElement("span");
-      loc.className = "loc";
-      const link = document.createElement("a");
-      link.textContent = "at " + f.location.label;
-      link.addEventListener("click", () => {
-        vscode.postMessage({
-          type: "openLocation",
-          fileName: f.location.fileName,
-          line: f.location.line,
-          column: f.location.column,
-        });
-      });
-      loc.appendChild(link);
-      div.appendChild(loc);
-    }
-
-    if (f.howToFix && f.howToFix.length > 0) {
-      const t = document.createElement("div");
-      t.className = "howTitle";
-      t.textContent = "How to fix:";
-      div.appendChild(t);
-
-      const ul = document.createElement("ul");
-      for (const item of f.howToFix) {
-        const li = document.createElement("li");
-        li.textContent = item;
-        ul.appendChild(li);
-      }
-      div.appendChild(ul);
-    }
-  }
-
-  function renderRawError(entry) {
-    const div = document.createElement("div");
-    div.className = "entry rawError";
-
-    const head = document.createElement("div");
-    head.className = "head";
-    head.textContent = `${entry.errorType}: ${entry.message}`;
-    div.appendChild(head);
-
-    if (entry.traceback && entry.traceback !== `${entry.errorType}: ${entry.message}`) {
-      const pre = document.createElement("div");
-      pre.style.whiteSpace = "pre-wrap";
-      pre.textContent = entry.traceback;
-      div.appendChild(pre);
-    }
-    return div;
-  }
-
-  function renderTestReport(entry) {
-    const failed = (entry.failed || 0) + (entry.errors || 0);
-    const div = document.createElement("div");
-    // A stopped phase is neither a pass nor a failure: the student ended it.
-    div.className =
-      "entry testReport " + (entry.stopped ? "stopped" : failed > 0 ? "failed" : "passed");
-
-    const summary = document.createElement("div");
-    summary.className = "summary";
-    const parts = [];
-    if (entry.passed) parts.push(entry.passed + " passed");
-    if (entry.failed) parts.push(entry.failed + " failed");
-    if (entry.errors) parts.push(entry.errors + " error" + (entry.errors === 1 ? "" : "s"));
-    if (entry.skipped) parts.push(entry.skipped + " skipped");
-    if (entry.stopped) {
-      parts.push(
-        entry.stoppedIn ? "stopped during " + entry.stoppedIn : "stopped before any test ran",
-      );
-    }
-    if (parts.length === 0) parts.push("no tests collected");
-    summary.textContent = "Tests: " + parts.join(", ");
-    div.appendChild(summary);
-
-    const tests = entry.tests || [];
-    if (tests.length > 0) {
-      const list = document.createElement("div");
-      list.className = "testList";
-      for (const t of tests) {
-        const row = document.createElement("div");
-        row.className = "testRow " + (t.outcome || "");
-
-        const mark = document.createElement("span");
-        mark.className = "mark";
-        if (t.outcome === "passed") mark.textContent = "\u2713";
-        else if (t.outcome === "skipped") mark.textContent = "\u2013";
-        // A square, as on a Stop button - not the cross a failure gets.
-        else if (t.outcome === "stopped") mark.textContent = "\u25A0";
-        else mark.textContent = "\u2717";
-        row.appendChild(mark);
-
-        const name = document.createElement("span");
-        name.className = "name";
-        name.textContent = t.name;
-        row.appendChild(name);
-
-        if (t.lineNumber != null && entry.fileName) {
-          const loc = document.createElement("a");
-          loc.className = "loc";
-          loc.textContent = "at " + entry.fileName + ":" + t.lineNumber;
-          loc.addEventListener("click", () => {
-            vscode.postMessage({
-              type: "openLocation",
-              fileName: entry.fileName,
-              line: t.lineNumber,
-              column: null,
-            });
-          });
-          row.appendChild(loc);
-        }
-
-        list.appendChild(row);
-
-        if (t.finding) {
-          const box = document.createElement("div");
-          box.className = "testFinding finding";
-          appendFinding(box, t.finding);
-          list.appendChild(box);
-        } else if (t.message) {
-          const msg = document.createElement("div");
-          msg.className = "testMsg";
-          msg.textContent = t.message;
-          list.appendChild(msg);
-        }
-        if (t.stdout) {
-          const out = document.createElement("div");
-          out.className = "testStdout";
-          out.textContent = t.stdout;
-          list.appendChild(out);
-        }
-      }
-      div.appendChild(list);
-    }
-    return div;
+  function setClock(card) {
+    clearInterval(card.clock);
+    card.clock = card.entry.playing
+      ? setInterval(() => post({ type: "reactorControl", id: card.entry.id, action: "tick" }), Math.max(10, card.entry.tickRate * 1000))
+      : undefined;
   }
 
   // Input handling ---------------------------------------------
@@ -756,25 +423,25 @@
   }
 
   function submitCurrent() {
-    if (state.busy && !state.awaitingInput) return;
+    if (panel.status !== null && !panel.awaitingInput) return;
     const code = textarea.value;
     textarea.value = "";
     autoSizeInput();
-    if (!state.awaitingInput && code.trim().length > 0) {
+    if (!panel.awaitingInput && code.trim().length > 0) {
       pushHistory(code);
     }
     historyIdx = -1;
     historyDraft = "";
-    vscode.postMessage({ type: "submit", code });
+    post({ type: "submit", code });
   }
 
   function pushHistory(code) {
-    if (state.history.length > 0 && state.history[state.history.length - 1] === code) {
+    if (history.length > 0 && history[history.length - 1] === code) {
       return;
     }
-    state.history.push(code);
-    if (state.history.length > 200) {
-      state.history.splice(0, state.history.length - 200);
+    history.push(code);
+    if (history.length > 200) {
+      history.splice(0, history.length - 200);
     }
     persist();
   }
@@ -789,38 +456,33 @@
     return lastNL === -1 || pos > lastNL;
   }
 
+  /** Show history entry `index`, or the draft when it is past the newest. */
+  function showHistory(index) {
+    historyIdx = index;
+    if (index === -1) {
+      textarea.value = historyDraft;
+      historyDraft = "";
+    } else {
+      textarea.value = history[index];
+    }
+    autoSizeInput();
+    const len = textarea.value.length;
+    textarea.setSelectionRange(len, len);
+  }
+
   function historyPrev() {
-    if (state.history.length === 0) return;
+    if (history.length === 0 || historyIdx === 0) return;
     if (historyIdx === -1) {
       historyDraft = textarea.value;
-      historyIdx = state.history.length - 1;
-    } else if (historyIdx > 0) {
-      historyIdx -= 1;
+      showHistory(history.length - 1);
     } else {
-      return;
+      showHistory(historyIdx - 1);
     }
-    textarea.value = state.history[historyIdx];
-    autoSizeInput();
-    placeCaretAtEnd();
   }
 
   function historyNext() {
     if (historyIdx === -1) return;
-    historyIdx += 1;
-    if (historyIdx >= state.history.length) {
-      historyIdx = -1;
-      textarea.value = historyDraft;
-      historyDraft = "";
-    } else {
-      textarea.value = state.history[historyIdx];
-    }
-    autoSizeInput();
-    placeCaretAtEnd();
-  }
-
-  function placeCaretAtEnd() {
-    const len = textarea.value.length;
-    textarea.setSelectionRange(len, len);
+    showHistory(historyIdx + 1 >= history.length ? -1 : historyIdx + 1);
   }
 
   textarea.addEventListener("input", () => {
@@ -833,10 +495,8 @@
 
   textarea.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      if (event.shiftKey) {
-        // Allow newline.
-        return;
-      }
+      // Shift+Enter is a new line.
+      if (event.shiftKey) return;
       event.preventDefault();
       submitCurrent();
       return;
@@ -858,105 +518,72 @@
         event.preventDefault();
         textarea.value = "";
         autoSizeInput();
-        vscode.postMessage({ type: "interrupt" });
+        post({ type: "interrupt" });
       }
       return;
     }
-    if (event.key === "l" && (event.ctrlKey || event.metaKey)) {
+    if (event.key === "l" && mod) {
       event.preventDefault();
-      vscode.postMessage({ type: "clearRequested" });
-      return;
+      post({ type: "clearRequested" });
     }
   });
 
-  clearBtn.addEventListener("click", () => {
-    vscode.postMessage({ type: "clearRequested" });
-  });
-
-  stopBtn.addEventListener("click", () => {
-    vscode.postMessage({ type: "interrupt" });
-  });
+  clearBtn.addEventListener("click", () => post({ type: "clearRequested" }));
+  stopBtn.addEventListener("click", () => post({ type: "interrupt" }));
 
   // While a program runs the textarea is disabled, so its own Ctrl/Cmd+C
   // handler cannot fire. Catch the key on the document instead, and only
   // while blocked, so it never competes with copying from the stream.
   document.addEventListener("keydown", (event) => {
-    if (!state.busy || state.awaitingInput) return;
+    if (panel.status === null || panel.awaitingInput) return;
     if (event.key !== "c" || !(event.ctrlKey || event.metaKey)) return;
     if (event.shiftKey || event.altKey) return;
     const selection = window.getSelection();
     if (selection && String(selection).length > 0) return;
     event.preventDefault();
-    vscode.postMessage({ type: "interrupt" });
+    post({ type: "interrupt" });
   });
 
   stream.addEventListener("scroll", () => {
     const slack = 16;
-    stickToBottom = (stream.scrollHeight - stream.scrollTop - stream.clientHeight) <= slack;
+    stickToBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight <= slack;
   });
 
   window.addEventListener("message", (event) => {
     const msg = event.data;
     if (!msg || typeof msg !== "object") return;
+    // Until a session is shown, there is nothing for the rest to act on.
+    if (msg.type !== "show" && !shown) return;
     switch (msg.type) {
       case "appendMany":
-        if (state.mode !== "session") return;
         appendEntries(msg.entries);
         break;
       case "reactorPatch":
-        if (state.mode !== "session") return;
         patchReactorCard(msg.id, msg.patch);
         break;
       case "clear":
-        if (state.mode !== "session") return;
-        clearStream();
-        break;
-      case "prompt":
-        if (state.mode !== "session") return;
-        state.prompt = msg.kind === "continuation" ? "continuation" : "primary";
-        setPromptText();
-        break;
-      case "busy":
-        if (state.mode !== "session") return;
-        setBusy(!!msg.busy, msg.status);
-        break;
-      case "awaitingInput":
-        if (state.mode !== "session") return;
-        setAwaitingInput(!!msg.awaiting, msg.prefix);
-        break;
-      case "replay":
-        // Switch to (or stay in) session mode.
-        state.mode = "session";
-        state.title = typeof msg.title === "string" ? msg.title : "";
-        state.entries = Array.isArray(msg.entries) ? msg.entries.slice() : [];
-        state.prompt = msg.prompt === "continuation" ? "continuation" : "primary";
-        state.busy = !!msg.busy;
-        applyMode();
-        applyTitle();
+        entries = [];
         renderAll();
-        setAwaitingInput(!!msg.awaitingInput, msg.inputPrefix);
-        setPromptText();
-        setBusy(state.busy, msg.status);
         break;
-      case "title":
-        if (state.mode !== "session") return;
-        state.title = typeof msg.title === "string" ? msg.title : "";
-        applyTitle();
+      case "show":
+        shown = true;
+        entries = Array.isArray(msg.entries) ? msg.entries.slice() : [];
+        panel = msg.state;
+        renderAll();
+        applyPanel();
+        break;
+      case "state":
+        panel = msg.state;
+        applyPanel();
         break;
       case "focusInput":
-        if (state.mode === "session") textarea.focus();
+        textarea.focus();
         break;
     }
   });
 
-  // Initial render --------------------------------------------
-
-  applyMode();
-  applyTitle();
-  setPromptText();
-  setBusy(state.busy);
+  // Initial render, and tell the host we are ready to be shown a session.
+  applyPanel();
   renderAll();
-
-  // Tell the host we're alive and ready to receive a fresh replay.
-  vscode.postMessage({ type: "ready" });
+  post({ type: "ready" });
 })();

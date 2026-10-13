@@ -1,12 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
-import {
-  WorkerPythonRuntime,
-  type WorkerHandle,
-  type WorkerHandlers,
-} from "../common/workerRuntime";
-import type { WorkerOutbound } from "../common/workerProtocol";
+import { Python } from "../run/python";
+import type { WorkerOutbound } from "../pyodide/protocol";
 
 export interface NodeRuntimePaths {
   /** Directories to look for Pyodide's assets in, most preferred first. */
@@ -33,37 +29,29 @@ export interface NodeRuntimePaths {
  * differ only in where their assets and worker bundle sit - hence the paths
  * being injected rather than derived here.
  */
-export class DesktopPyodideRuntime extends WorkerPythonRuntime {
-  constructor(private readonly paths: NodeRuntimePaths) {
-    super();
-    this.startTimeoutMs = paths.startTimeoutMs ?? null;
-  }
-
-  protected resolveIndexUrl(): string {
-    const found = this.paths.indexUrlCandidates.find((dir) =>
-      fs.existsSync(path.join(dir, "pyodide.asm.wasm")),
-    );
-    if (!found) {
-      throw new Error(this.paths.missingAssetsHint);
-    }
-    return found;
-  }
-
-  protected resolvePackageCacheDir(indexUrl: string): string | null {
-    return this.paths.packageCacheDir?.(indexUrl) ?? null;
-  }
-
-  protected spawn(handlers: WorkerHandlers): WorkerHandle {
-    const worker = new Worker(this.paths.workerPath);
-    worker.on("message", (msg: WorkerOutbound) => handlers.onMessage(msg));
-    // A Node worker that throws is ended, and `exit` follows: that is what
-    // fails its requests, once, as Python lost. The error itself goes to
-    // the log.
-    worker.on("error", (err) => console.error("Pyodide worker failed:", err));
-    worker.on("exit", () => handlers.onExit?.());
-    return {
-      post: (msg) => worker.postMessage(msg),
-      terminate: () => void worker.terminate(),
-    };
-  }
+export function desktopPython(paths: NodeRuntimePaths): Python {
+  return new Python({
+    indexUrl() {
+      const found = paths.indexUrlCandidates.find((dir) => fs.existsSync(path.join(dir, "pyodide.asm.wasm")));
+      if (!found) {
+        throw new Error(paths.missingAssetsHint);
+      }
+      return found;
+    },
+    packageCacheDir: paths.packageCacheDir,
+    startTimeoutMs: paths.startTimeoutMs,
+    spawn(handlers) {
+      const worker = new Worker(paths.workerPath);
+      worker.on("message", (msg: WorkerOutbound) => handlers.onMessage(msg));
+      // A Node worker that throws is ended, and `exit` follows: that is what
+      // fails its requests, once, as Python lost. The error itself goes to
+      // the log.
+      worker.on("error", (err) => console.error("Pyodide worker failed:", err));
+      worker.on("exit", () => handlers.onExit?.());
+      return {
+        post: (msg) => worker.postMessage(msg),
+        terminate: () => void worker.terminate(),
+      };
+    },
+  });
 }

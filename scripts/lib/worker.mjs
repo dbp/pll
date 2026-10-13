@@ -9,8 +9,30 @@ export const WORKER_PATH = resolve(ROOT, "dist", "desktop", "pyodideWorker.js");
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
 /**
+ * The calls into Python a test asks for by name, as `run/python.ts` makes
+ * them: the function, its arguments, and whether its output streams.
+ */
+const CALLS = {
+  runFile: (r) => ["_pll_run_file", [r.code, r.fileName, r.sessionKey, r.level ?? "raw", r.withTests ?? false], true],
+  replEval: (r) => ["_pll_repl_eval", [r.code, r.sessionKey, r.level ?? "raw"], false],
+  checkSyntax: (r) => ["_pll_repl_check", [r.code, r.whole === true], false],
+  hasTests: (r) => ["_pll_has_tests", [r.code], false],
+  staticAnalyze: (r) => ["_pll_static_analyze", [r.code, r.level, r.fileName, r.sessionKey ?? null], false],
+  reactorStep: (r) => ["_pll_reactor_step", [r.reactorId, r.event], true],
+  reactorSeek: (r) => ["_pll_reactor_seek", [r.reactorId, r.index], false],
+  endSession: (r) => ["_pll_end_session", [r.sessionKey], false],
+  examplarBuild: (r) => ["_pll_examplar_build", [r.sources], false],
+  examplarRun: (r) => ["_pll_examplar_run", [r.testSource, r.bundle, r.fileName], false],
+};
+
+/**
  * Talk to a real worker the way the runtime does: `send` a request and get
  * its reply; `displays` is everything streamed live, in order.
+ *
+ * A request is one of the worker's own (`init`, `load`, `mount`,
+ * `collect`, `call`), or named for what it does - `{ type: "runFile",
+ * code, fileName, sessionKey }` - and answered `{ result }`; `loadPytest`
+ * and `loadPackages` load as the runtime does.
  *
  * `onStdinRequest(request)` answers a blocked read of stdin, with
  * `writeStdin`; without it the request is ignored, which is right for a
@@ -35,14 +57,21 @@ export function talk(worker, { onStdinRequest } = {}) {
     if (!waiting) return;
     pending.delete(msg.id);
     if (msg.type === "error") waiting.reject(Object.assign(new Error(msg.message), { reply: msg }));
-    else waiting.resolve(msg);
+    else waiting.resolve(msg.value);
   });
   worker.on("error", (err) => {
     for (const waiting of pending.values()) waiting.reject(err);
     pending.clear();
   });
   const streamed = () =>
-    displays.filter((d) => d.type === "stdout").map((d) => d.text).join("");
+    displays.filter((d) => d.kind === "stdout").map((d) => d.text).join("");
+  /** One of the worker's own requests, and the value it replies with. */
+  const request = (payload) => {
+    const id = nextId++;
+    const reply = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+    worker.postMessage({ id, ...payload });
+    return reply;
+  };
   return {
     displays,
     /** Everything streamed to stdout so far. */
@@ -71,11 +100,30 @@ export function talk(worker, { onStdinRequest } = {}) {
         await sleep(25);
       }
     },
-    send(payload) {
-      const id = nextId++;
-      const reply = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
-      worker.postMessage({ id, ...payload });
-      return reply;
+    async send({ type, ...fields }) {
+      if (type in CALLS) {
+        const [fn, args, live] = CALLS[type](fields);
+        return { result: await request({ type: "call", fn, args, live }) };
+      }
+      if (type === "loadPytest") {
+        return request({ type: "load", modules: ["pytest"], network: false });
+      }
+      if (type === "loadPackages") {
+        const found = await request({
+          type: "call",
+          fn: "_pll_package_imports",
+          args: [fields.code, JSON.stringify(fields.siblings ?? [])],
+          live: false,
+        });
+        return request({ type: "load", modules: found.modules, network: found.network || found.modules.includes("pandas") });
+      }
+      if (type === "mountWorkspace") {
+        return request({ type: "mount", files: fields.files, leftOut: fields.leftOut ?? [] });
+      }
+      if (type === "collectWorkspace") {
+        return { changes: await request({ type: "collect" }) };
+      }
+      return request({ type, ...fields });
     },
   };
 }

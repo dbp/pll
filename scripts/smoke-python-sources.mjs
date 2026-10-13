@@ -15,7 +15,7 @@ import { expect, passed } from "./lib/check.mjs";
 import { ROOT } from "./lib/bundle.mjs";
 import { INDEX_URL } from "./lib/pyodide.mjs";
 
-const dirs = ["src/common", "src/common/bootstrap"];
+const dirs = ["src/python", "src/python/bootstrap", "src/python/explain", "src/python/libraries"];
 const sources = dirs.flatMap((dir) =>
   readdirSync(join(ROOT, dir))
     .filter((name) => name.endsWith(".py"))

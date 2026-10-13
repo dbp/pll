@@ -11,123 +11,98 @@ line via the `pll-python` npm package (a third host; see
 
 ## Layout
 
-Both hosts share everything except how they spawn a worker and where
-Pyodide's assets come from. `common/workerRuntime.ts` and
-`common/workerHost.ts` hold the two ends of the worker protocol; the
-`desktop/` and `web/` files below them are thin adapters.
+Three hosts - desktop VS Code, vscode.dev and the command line - share
+everything except how they spawn a worker and where Pyodide's assets come
+from. The directories are the layers: Python that runs inside Pyodide; the
+worker and the one contract with it; a run, the same for every host; and
+the editor. Only `src/editor` (and the two extension entry points) import
+`vscode`.
 
 ```
 src/
-├── desktop/extension.ts           Desktop entrypoint (Node host)
-├── web/extension.ts               Web entrypoint (vscode.dev)
-├── web/pyodideWorker.ts           Browser Worker: boots Pyodide via importScripts
-├── web/pyodideRuntime.ts          Spawns the browser Worker
-├── desktop/pyodideWorker.ts       Node worker_threads Worker: boots Pyodide
-├── desktop/pyodideRuntime.ts      Spawns the Node worker; finds vendor/pyodide
-├── desktop/xhrPolyfill.ts         Sync XMLHttpRequest for pyodide-http
-├── desktop/syncHttp.ts            Child-process fetch used by the XHR polyfill
-├── cli/bin.ts                     `pll` entry point: exit codes
-├── cli/main.ts                    Argument parsing, SIGINT -> interrupt
-├── cli/run.ts                     One file, in the editor's order
-├── cli/view.ts                    ExecutionEvents as text
-├── cli/files.ts                   Sibling files over node:fs
-├── cli/stdin.ts                   Line reader for input()
-├── cli/runtime.ts                 The Node host, pointed at this package
-├── cli/examplar.ts                `pll examplar build --verify`
-├── cli/bundleStore.ts             On-disk bundle cache
-└── common/
-    ├── activate.ts                Shared activation for both hosts
-    ├── workerProtocol.ts          Shared worker message types
-    ├── workerRuntime.ts           Host side of the protocol: request/reply
-    │                              correlation, live displays, stdin
-    ├── workerHost.ts              Worker side of the protocol: one Pyodide
-    │                              interpreter + the message dispatch
-    ├── stdinBuffer.ts             SharedArrayBuffer protocol for input()
-    ├── interruptBuffer.ts         SharedArrayBuffer protocol for Stop
-    ├── workspaceFilePolicy.ts     Which files under the program's folder to mount / save
-    ├── workspaceFiles.ts          vscode.workspace.fs snapshot + writeback
-    ├── memfsWorkspace.ts          Pyodide MEMFS mount / collect helpers
-    ├── commands.ts                Run File / Show Interactions / Start REPL /
-    │                              Clear / Stop
-    ├── editorClipboard.ts         Palette PLL: Editor Copy/Cut/Paste (no keys)
-    ├── runPlan.ts                 The steps of a run, for every host
-    ├── replSession.ts             Drives the interactions view: init,
-    │                              REPL multi-line buffer, exec chain, and the
-    │                              panel's side of a run plan
-    ├── reactorController.ts       Reactors' clocks, card controls, universe sockets
-    ├── interactionsView.ts        WebviewView provider for the integrated
-    │                              text + image stream + input row
-    ├── newFileLevel.ts            Seeds new .py files with a #level line
-    ├── level.ts                   `#level raw|beginner|intermediate|advanced`
-    │                              header parser; the single source of what
-    │                              each level checks
-    ├── errorFormatter.ts          Plain-text rendering for diagnostic tooltips
-    ├── diagnostics.ts             VS Code DiagnosticCollection (multi-finding)
-    ├── pythonSources.ts           The Python run in Pyodide, inlined as strings
-    ├── packages.ts                Which packages a program needs, from its text
-    ├── wire.ts                    The shapes of what the Python side returns
-    ├── pythonVendor.ts            Bundled typeguard / typing_extensions wheels
-    ├── fromPython.ts              Every Python result into the host's types
-    ├── runtimeErrors.ts           PythonLostError, StoppedError
-    ├── bootstrap/                 Real Python, one file per concern, loaded in order:
-    │   ├── typeChecking.py        the level's checks; typeguard set up
-    │   ├── errorInfo.py           an exception described for the host
-    │   ├── codeFacts.py           what the code says about it: definitions,
-    │                              assignments, a function's shape
-    │   ├── sessions.py            per-file globals; output in program order
-    │   ├── stop.py                Stop as KeyboardInterrupt, acknowledged
-    │   ├── compile.py             AST passes over the student's code
-    │   ├── libraryHelpers.py      what the libraries share (sources, names)
-    │   ├── running.py             run a file / a prompt line
-    │   ├── tests.py               the file's own tests
-    │   ├── staticAnalysis.py      the checks made before a program runs
-    │   └── imports.py             the student's files, imported at their own levels
-    ├── imageLib.py                Real Python: SVG image primitives + combinators
-    ├── reactorLib.py              Real Python: reactor values + history
-    ├── examplarLib.py             Real Python: wheat/chaff build + run
-    ├── universeClient.ts          World-side protocol, transport, failure text
-    ├── examplarSource.ts          #examplar directive, fetch + cache
-    ├── vscodeBundleStore.ts       Bundle cache in globalState (web included)
-    ├── tableLib.py                Real Python: Table type + charts
-    ├── analyzers/
-    │   ├── runtimeFinding.ts      Error event -> finding (both hosts)
-    │   ├── types.ts               AnalysisFinding, RuntimeAnalyzer
-    │   ├── nameErrorAnalyzer.ts   Runtime: NameError -> friendly finding
-    │   ├── typeCheckAnalyzer.ts   Runtime: TypeCheckError -> friendly finding
-    │   ├── registry.ts            Runtime analyzer registry
-    │   └── static/
-    │       ├── shadowingExplainer.ts            shadowing + shadowing-builtin
-    │       ├── reassignmentExplainer.ts         reassignment
-    │       ├── disallowedKeywordExplainer.ts    `global` / `nonlocal`
-    │       └── registry.ts        Wraps Python-side raw findings
-    └── errors/
-        ├── pythonError.ts         An exception as Python describes it: frames, facts
-        ├── libraryFacts.ts        What the explanations know about PLL's library
-        ├── sourceFacts.ts         What they read from the student's line:
-        │                          operands, a table's row
-        ├── nameErrorExplainer.ts
-        ├── syntaxExplainer.ts
-        ├── stockMessageExplainer.ts  Python's wording -> beginner wording
-        └── typeCheckExplainer.ts  typeguard wording -> beginner wording
+├── python/                        Python that runs inside Pyodide, all of it in one
+│   │                              namespace, loaded in this order (`pyodide/install.ts`)
+│   ├── bootstrap/
+│   │   ├── typeChecking.py        the level's checks; typeguard set up
+│   │   ├── errorInfo.py           an exception described, and explained (`error`)
+│   │   ├── codeFacts.py           what the code says about it: definitions,
+│   │   │                          assignments, a function's shape
+│   │   ├── sessions.py            per-file globals; output in program order
+│   │   ├── stop.py                Stop as KeyboardInterrupt, acknowledged
+│   │   ├── compile.py             AST passes over the student's code
+│   │   ├── libraryHelpers.py      what the libraries share (sources, names)
+│   │   ├── packages.py            the packages a program imports
+│   │   ├── running.py             `_pll_call`; run a file / a prompt line
+│   │   ├── tests.py               the file's own tests
+│   │   ├── staticAnalysis.py      the checks made before a program runs
+│   │   └── imports.py             the student's files, imported at their own levels
+│   ├── explain/                   what the student is told about an error or a finding
+│   │   ├── finding.py             where a finding is; the rules' registry; the
+│   │   │                          catch-all; ChecksFailed; what PLL's library does
+│   │   ├── names.py               SyntaxError, NameError and UnboundLocalError
+│   │   ├── typeCheck.py           a value that does not match its annotation
+│   │   ├── stock.py               Python's own messages, reworded for a beginner
+│   │   └── static.py              each static finding's wording
+│   ├── libraries/                 image, table (and charts), reactor, examplar,
+│   │                              http (pyodide-http's transport), matplotlibBackend
+│   └── install.py                 registers `pll.image` / `pll.table` / `pll.reactor`
+├── pyodide/                       the worker and the one contract with it
+│   ├── protocol.ts                five requests (init, call, load, mount, collect)
+│   │                              and the messages back
+│   ├── worker.ts                  the worker side: one interpreter, one request at a
+│   │                              time, live output, stdin
+│   ├── runtime.ts                 the host side (`WorkerConnection`): starting it,
+│   │                              replies, live output, stdin, Stop, Python lost
+│   ├── install.ts                 putting PLL into Pyodide: the Python above, the
+│   │                              vendored wheels
+│   ├── sharedMemory.ts            the stdin and Stop SharedArrayBuffers
+│   ├── workspace.ts               the files beside the program, in MEMFS
+│   └── fileNames.ts               the `<pll:...>` names, apart so the host bundle does
+│                                  not pull in the Python text
+├── run/                           a run, the same for every host; no `vscode`
+│   ├── python.ts                  `Python`: one method per entry point Python offers
+│   ├── types.ts                   what Python returns, and a run's events
+│   ├── plan.ts                    the steps of a run
+│   ├── finding.ts                 a finding's place and plain text; the `#level`
+│   │                              line check; Python's finding for an error
+│   ├── packages.ts                whether a program may need packages, from its text
+│   ├── examplar.ts                an Examplar check's cards
+│   └── examplarSource.ts          the #examplar directive, fetch and cache
+├── core/                          what every layer uses: level.ts (the levels, and the
+│                                  `#level` line), files.ts (which files beside a program
+│                                  are loaded and saved), editDistance.ts, errorText.ts
+├── editor/                        everything that imports `vscode`
+│   ├── activate.ts                shared activation for both editor hosts
+│   ├── replSession.ts             a session per file: the panel, prompt lines, runs
+│   ├── commands.ts                Run File / Show Interactions / Start REPL / Clear / Stop
+│   ├── diagnostics.ts             findings as squiggles
+│   ├── workspaceFiles.ts          the files beside a program, over vscode.workspace.fs
+│   ├── programDocuments.ts        which documents are programs
+│   ├── bundleStore.ts, notify.ts
+│   ├── panel/view.ts              the interactions panel: entries, its state, messages
+│   ├── reactors/controller.ts     reactors: playing, their cards' ticks and controls,
+│   │                              universe sockets
+│   ├── reactors/universe.ts       the universe client
+│   └── setup/                     newFileLevel.ts, extensionGuard.ts, clipboard.ts
+├── cli/                           the `pll-python` command line
+├── desktop/                       extension.ts, pyodideWorker.ts, pyodideRuntime.ts
+│                                  (`desktopPython`, shared with the CLI), xhrPolyfill.ts,
+│                                  syncHttp.ts
+└── web/                           extension.ts, pyodideWorker.ts, pyodideRuntime.ts
 
-vendor/
-└── python/                        Pure-Python wheels, inlined by esbuild
-    ├── typeguard-*.whl
-    └── typing_extensions-*.whl
-
-media/
-├── interactionsView/
-│   ├── style.css                  Stream + input row styling
-│   └── main.js                    View-side state, history, message routing
-├── pll-icon.svg                   Panel container icon
-└── error-gutter.svg               Diagnostic gutter icon
+vendor/python/                     typeguard and typing_extensions wheels, inlined by esbuild
+media/interactionsView/            the panel's page: main.js, style.css
 ```
 
-The static analyzer (scope builder, shadowing/reassignment checks) lives
-in `bootstrap/staticAnalysis.py`. esbuild's `text` loader inlines the
-Python files as strings at build time, and they are loaded into Pyodide
-once on init. Analysis therefore runs in the same Python interpreter that runs the user's code,
-in both desktop and web hosts.
+The core, read in order: `run/plan.ts` (the steps of a run),
+`run/python.ts` (what crosses to Python), `pyodide/worker.ts`, and
+`python/bootstrap/running.py`.
+
+esbuild's `text` loader inlines the Python files as strings at build time,
+and they are loaded into Pyodide once, on init. The static checks
+(`bootstrap/staticAnalysis.py`) therefore run in the same interpreter that
+runs the student's code, in every host, and their findings come back
+worded (`explain/static.py`).
 
 Prompt submissions use the language level of the last Run File
 (`session.lastLevel`, shown in the interactions header), or `raw`
@@ -152,26 +127,40 @@ loaded into that interpreter.
 
 ## The worker protocol
 
-`workerProtocol.ts` defines the messages; `workerRuntime.ts` (host) and
-`workerHost.ts` (worker) are its two ends.
+`pyodide/protocol.ts` defines the messages; `pyodide/runtime.ts` (host) and
+`pyodide/worker.ts` (worker) are its two ends, and `run/python.ts` the
+calls into Python made over it.
 
+- **Five requests.** `init` starts Pyodide; `call` calls a Python function
+  by name, `fn(*args)`; `load` loads the packages Pyodide has for some
+  modules (and, for the network, pyodide-http and PLL's transport over
+  it); `mount` and `collect` move the files beside a program in and out of
+  MEMFS, which their bytes do not cross as JSON. Everything else is a
+  `call`: `run/python.ts` has one method per Python entry point, saying
+  what it takes and what it returns, and a new one is written in two
+  places - the Python function and its method.
+- **A call's arguments and result cross as JSON**, through one Python
+  dispatcher, `_pll_call` (`bootstrap/running.py`): a `None` is `null`, and
+  a NaN or an infinity, which JSON cannot say, fails the call in Python.
+  Python builds what it returns in the host's names (`run/types.ts`), so
+  nothing on the host converts it.
 - **One request at a time.** The worker queues requests and starts each
   only when the last has replied, including ones that await (loading
   Pyodide or a package), so no Python runs while a package is half
   installed.
-- **The reply each request gets** is named once, in `REPLY_TO`: the worker's
-  handler for a request is typed to return it, and the runtime waits for it.
 - **An error says what kind it is**: `interrupted` (a Stop ended it, raised
   as `StoppedError`), `finished` (Python can no longer run, raised as
   `PythonLostError`, and a new Python is started next time), or `failed`.
+  Its message is Pyodide's - or, when Pyodide gives it none, as it can a
+  `KeyboardInterrupt`, the exception's type.
 - **Output during a request** (`display`) carries that request's id, and
-  goes to the place that request asked for it to go.
-- **Python's results are read in one place.** `wire.ts` describes what
-  Python sends, snake_case; the worker's `callPython` turns every `None`
-  into `null`, and `fromPython.ts` - the only other module that reads those
-  shapes - turns them into the host's own types, in camelCase. A run's
-  result becomes a stream of `ExecutionEvent`s; the static checks' findings,
-  an Examplar run and a reactor step each become one value.
+  goes to the place that request asked for it to go - only a call with
+  `live` streams, a file run's and a reactor step's.
+- **Loading is asked of Pyodide every time.** Its own record of what is
+  loaded is the cache, so a package that failed to download is tried again
+  by the next run. Pyodide resolves after a package fails, and says so only
+  to its error callback: the worker makes that a failed `load`, and a Stop
+  that landed in Pyodide's installer the Stop it is.
 
 ## Sessions
 
@@ -268,7 +257,7 @@ edit nobody asked for.
 
 ## Images
 
-`imageLib.py` follows HtDP's `2htdp/image`, geometry included. An `Image`
+`libraries/image.py` follows HtDP's `2htdp/image`, geometry included. An `Image`
 is a tree: shapes at the leaves, combinators above them. Each node works out
 its size when it is made (`_w`, `_h`, from its children's, in constant
 time), and says where its children sit inside it - `_parts()`, each child
@@ -307,7 +296,7 @@ The flat list is what three things use:
   agrees with it.
 
 Charts are images too: `_Drawing` is a ready-made SVG of a known size, and
-`tableLib.py`'s `_PllChart` is one. A matplotlib figure becomes a
+`libraries/table.py`'s `_PllChart` is one. A matplotlib figure becomes a
 `_LoadedImage` of its PNG (`_pll_figure_image`).
 
 Adding a combinator means three edits: the `_Foo(Image)` class, the public
@@ -317,7 +306,7 @@ into student globals with no import, via the install step, `install.py`).
 ## Third-party packages
 
 Pyodide has to download a package before Python can import it, and cannot
-in the middle of a run, so they are loaded first. `runPlan.ts` gives
+in the middle of a run, so they are loaded first. `run/plan.ts` gives
 `runtime.ensurePackages` the program's code and the student's `.py` files
 beside it; the worker asks Python what they import
 (`_pll_package_imports`, `bootstrap/packages.py`): every `import` and `from`
@@ -374,10 +363,11 @@ a sentence, never the helper's code.
 
 ## From an exception to a finding
 
-Python describes an exception as data; the host only explains it. Every
-place that reports one - a file run, a prompt line, a single test, a
-reactor handler - goes through
-`_pll_error_info`, which sends:
+An error is explained in Python, beside the exception. Every place that
+reports one - a file run, a prompt line, a single test, a reactor handler -
+goes through `_pll_error_info` (`bootstrap/errorInfo.py`), which describes
+the exception and has `explain/finding.py` explain it. A result's `error`
+is:
 
 - the type, and the message **as Python's traceback shows it** (so a
   `NameError` keeps "Did you mean: 'total'?", which `str(exc)` lacks, and a
@@ -389,8 +379,7 @@ reactor handler - goes through
   and prompt lines, never a `<...>` name - PLL's own Python runs under
   names like `<pll:table>` and `<pll:bootstrap/running>`, so a frame says
   which library it is. A frame of theirs carries its line, read from its
-  own file (a sibling's line is not the run file's), and its function's
-  parameters;
+  own file, and its function's parameters;
 - facts learned from the live frames: the name a `NameError` is about, a
   sequence's real length, the element that failed its annotation, a
   swapped dataclass field, typeguard's message read into its parts
@@ -401,25 +390,30 @@ reactor handler - goes through
   objects wherever they were defined, PLL's libraries included), where
   those names were last set from a call (`assigned`), and, for a function
   that returned `None` against its annotation, the `match` it ends with
-  and a branch of it that ends in `print` (`returned_none`). The host reads
-  no definition out of the student's text.
+  and a branch of it that ends in `print` (`returned_none`);
+- and the **finding**: what the student is told, and where.
 
-`pythonErrorFrom` turns that into a `PythonError`, and is the one place a
-Python `None` (which arrives as `undefined`) becomes `null`. The analyzers
-read its fields; nothing on the host parses a traceback. `traceback` is
-kept only to show when nothing better can be said. Where a finding goes is
-decided once, by `placeOf` (`analyzers/errorPlace.ts`): the error's own
-file and line, which may be another of the student's files than the one
-that was run.
+The finding is made by the rules in `explain/`, each registered for the
+errors it explains (`@_pll_explains`) and tried in the order they load:
+ChecksFailed, the name and syntax errors, type checks, and Python's stock
+messages (`explain/stock.py`, each rule `@_pll_stock` with the message it
+recognises). The first that says something wins; one that, on a closer
+look, cannot say anything better than Python did gives the error to the
+next, and the last resort, `_pll_catch_all`, says Python's own message
+where the error is. Where that is is decided once, by `_PllError` in
+`finding.py`: the error's own file and line, which may be another of the
+student's files than the one that was run. A rule that fails leaves
+Python's words (`_pll_unexplained`), and the error is reported either way.
 
-There is then one way to explain an error: `findRuntimeFinding`, which
-tries the analyzers in order and falls back to `analyzeRuntimeError`, so it
-never returns null. Run errors reach it through `findingForErrorEvent`;
-errors a test raised through `explainTestReport`, which puts the finding on
-the test row; a reactor handler's error directly. Both hosts call these -
-the runtime layer only translates results into events - and a test row's
-finding is rendered by the same code as any other finding, in the panel and
-on the command line.
+The frames and facts are for the rules and for PLL's tests; the host reads
+only `errorType`, `message` and `finding` (`PythonError` in `run/types.ts`).
+`findRuntimeFinding` (`run/finding.ts`) takes the finding as the run's,
+filling in the run's file for an error in none of the student's, and its
+level. Run errors reach it through the run plan; errors a test raised
+through `explainTestReport`, which puts the finding on the test row; a
+reactor handler's error through the reactor controller. A test row's
+finding is rendered by the same code as any other finding, in the panel
+and on the command line.
 
 ## Runtime type checking
 
@@ -457,9 +451,9 @@ from the namespace of the code being checked (typeguard's `memo.globals`),
 where a run records it as `__pll_level__` - so code is checked at its own
 file's level whenever it runs, a reactor's handler included, and `#level
 advanced` keeps Python's own rule. The replacements raise typeguard's exact
-wording, and their frames are dropped like typeguard's own, so the
-host-side explainer needs no special case; it only adds a note saying this
-is PLL's rule and not Python's.
+wording, and their frames are dropped like typeguard's own, so its
+explanation needs no special case; it only adds a note saying this is
+PLL's rule and not Python's.
 
 Two adjustments to typeguard's defaults:
 
@@ -481,9 +475,9 @@ student's code will not run.
 ### Error messages
 
 typeguard's wording is accurate but not teachable ("is not an instance
-of", "did not match any element in the union"), so `TypeCheckError` goes
-through the normal analyzer path and comes out as a finding labelled
-`TypeMismatch`:
+of", "did not match any element in the union"), so `TypeCheckError` is
+explained like any other error (`explain/typeCheck.py`), as a finding
+labelled `TypeMismatch`:
 
 | typeguard | PLL |
 | --- | --- |
@@ -494,32 +488,33 @@ through the normal analyzer path and comes out as a finding labelled
 Two details that decide where the squiggle lands:
 
 - An argument is checked on entry to the callee, so the innermost frame is
-  the `def` line. `typeCheckAnalyzer` blames the frame *outside* it — the
-  call — which is where the mistake actually is. Returns and assignments
-  are blamed on their own line.
-- `_pll_format_exception` drops frames inside `/pll_vendor`, so students
-  never see typeguard's internals. When nothing is dropped it returns the
-  stdlib formatting unchanged, so ordinary errors are unaffected.
-- typeguard's message is read once, in Python (`_pll_type_check_parts`),
-  into what the annotation is on, its name, the element that failed, the
-  actual type and the accepted ones - a union's on the lines after the
-  first. A dataclass field PLL checks itself sends the same parts. The
-  explainer reads only those.
+  the `def` line. The finding blames the frame *outside* it - the call -
+  which is where the mistake actually is. Returns and assignments are
+  blamed on their own line.
+- Frames inside `/pll_vendor` are left out of the error's frames, so
+  nothing a student sees points into typeguard's internals.
+- typeguard's message is read once (`_pll_type_check_parts`), into what
+  the annotation is on, its name, the element that failed, the actual type
+  and the accepted ones - a union's on the lines after the first. A
+  dataclass field PLL checks itself gives the same parts. The rules read
+  only those.
 
 ## Reactors (big-bang / animate) and the universe client
 
-`reactorLib.py` holds the model, which follows Pyret's reactors rather than
+`libraries/reactor.py` holds the model, which follows Pyret's reactors rather than
 Racket's `big-bang`: a reactor is a **value**, and `react` returns a new one
 instead of mutating. That choice is what makes the card's slider work -
 rewinding is just holding an earlier value - and it is also what lets
 `simulate_trace` test a reactor's logic with no clock and no drawing.
 
-**Nothing in Python runs an event loop.** The extension host owns the clock
-(`setInterval` in `ReactorController`) and calls `_pll_reactor_step` once per
-event. A loop in the worker would hold it, and the exec chain with it, for
-as long as the animation ran - the exact failure `Stop` exists for. Because
-the host drives it, the prompt stays usable while something is animating,
-and several reactors can run at once.
+**Nothing in Python runs an event loop.** The clock is the card's
+(`setClock` in the panel's `main.js`): while the card plays, it sends the
+host a tick every `tick_rate` seconds, and the host's `ReactorController`
+calls `_pll_reactor_step` once per event. A loop in the worker would hold
+it, and the exec chain with it, for as long as the animation ran - the
+exact failure `Stop` exists for. Because each tick is one short request,
+the prompt stays usable while something is animating, and several reactors
+can run at once.
 
 Frame budget is not a concern: a 60-sprite frame renders and serializes in
 about 0.3ms under CPython, so even at Pyodide's 2-5x penalty there is two
@@ -546,11 +541,13 @@ Two details in the driver:
   deterministic. A new event at a rewound cursor discards the frames after
   it, like an editor's undo history.
 
-A file's reactors play only while that file is the one on screen. Switching
-to another Python file pauses the ones that were playing (`suspendAllFor`),
-so nothing ticks out of sight, and switching back mounts the file's own
-files again - another file's run may have mounted its own - and plays them
-again. A reactor a student paused stays paused.
+A card ticks only while it is drawn, so a reactor advances only while its
+file is the one shown and the panel is open: VS Code ends a hidden panel's
+page, and another file's session shows other cards. Nothing is paused for
+it - the reactor is still playing, and its card's clock starts again when
+it is drawn again. Switching back to a file with reactors mounts its own
+files again first - another file's run may have mounted its own. A reactor
+a student paused stays paused.
 
 A top-level `big_bang(...)` would otherwise print the returned reactor's
 repr underneath its own card, so `interact()` marks the value it returns and
@@ -573,13 +570,13 @@ WebSocket text message, each way, with no envelope and no handshake. A
 conforming server is a page of code - see `samples/universe_server.mjs`,
 which is dependency-free so it can be copied anywhere.
 
-The socket lives on the **extension host**, next to the clock, so a received
+The socket lives on the **extension host**, next to the reactor's driver, so a received
 message is just another event for the same reactor driver and the Pyodide
 worker needs no networking at all. Outgoing messages come from
 `package(state, message)`; they are held (up to `MAX_UNIVERSE_BACKLOG`) if
 the socket has not opened yet, and flushed on open.
 
-There is **one** transport, in `universeClient.ts`, and it is worth saying
+There is **one** transport, in `reactors/universe.ts`, and it is worth saying
 why there is no per-host adapter here when everything else has one.
 `WebSocket` is a global in browser workers, and in Node from v22 - which
 `engines.vscode: ^1.101.0` guarantees (see below). Node's is undici's and
@@ -604,7 +601,7 @@ not mount Node `fs` or a browser File System Access tree.
 Before a file run (after static checks, before tests) and before each
 REPL evaluation, the run plan asks its host for the files under the
 program's folder - the editor through `workspace.fs`, the command line
-through Node's `fs` - and `workspaceFilePolicy.ts` decides, the same for
+through Node's `fs` - and `core/files.ts` decides, the same for
 both, which are given to the program:
 
 - **Which.** Data, text and picture files (`.csv`, `.tsv`, `.txt`,
@@ -691,8 +688,8 @@ sits inside a synchronous `runPython`, so it cannot read another message,
 so every later run, in every file, waits behind it. Only a window reload
 recovered.
 
-`interruptBuffer.ts` is the fix, and it is the same shape as
-`stdinBuffer.ts`: a small `SharedArrayBuffer` passed to the worker on
+The Stop buffer in `pyodide/sharedMemory.ts` is the fix, and it is the
+same shape as the stdin one beside it: a small `SharedArrayBuffer` passed to the worker on
 `init` and handed to Pyodide via `setInterruptBuffer`. Writing SIGINT (2)
 into its first byte makes the interpreter raise `KeyboardInterrupt` at its
 next bytecode check. It has to be shared memory for the same reason stdin
@@ -709,9 +706,9 @@ retry that loses the race with the acknowledgement does not raise a second
 `KeyboardInterrupt` into PLL's own clean-up.
 
 `_pll_run_file` catches `BaseException`, so a Stop in the student's code
-arrives as an ordinary error result (`error_type: "KeyboardInterrupt"`)
+arrives as an ordinary error result (`errorType: "KeyboardInterrupt"`)
 with the `finally` still capturing whatever the program printed first, and
-the analyzer words it "The program was stopped." A Stop retried into the
+the catch-all words it "The program was stopped." A Stop retried into the
 moment a run starts can instead land while PLL is still parsing and
 instrumenting the file, outside that `except`; `_pll_stoppable` turns one
 there into the same stopped result, for a file, a prompt line or the tests.
@@ -731,7 +728,7 @@ files next to the program are mounted, then the program and its own tests -
 and a Stop lands in whichever is running. What the student asked for is
 that nothing more runs. A Stop in the program ends it before its tests; one
 in the tests ends them: the tests that finished keep their results, the one
-running is marked `stopped`, and the rest are not run. `runPlan.ts` checks the host's
+running is marked `stopped`, and the rest are not run. `run/plan.ts` checks the host's
 `stopRequested()` between the steps and ends the run with a banner saying
 what was not run. The same checks catch a Stop
 pressed while something loads, which reaches no running Python at all and
@@ -768,7 +765,7 @@ than the extension host could drain them, so its queue grew without bound
 and the Stop the student pressed was never processed. The interrupt was
 working the whole time; nothing ever got around to asking for it.
 
-`workerHost` therefore coalesces consecutive stdout/stderr writes into at
+`pyodide/worker.ts` therefore coalesces consecutive stdout/stderr writes into at
 most one message per `LIVE_FLUSH_MS` (50ms), turning that same second of
 output into about 20 messages. Images and tables flush the pending text
 first, so the interleaving of output and cards is unchanged, and `readStdin`
@@ -785,7 +782,7 @@ bounds the total. Each is load-bearing; none substitutes for another:
 
 | constant / change | kind | bounds |
 | --- | --- | --- |
-| `LIVE_FLUSH_MS` (50ms, workerHost) | rate | worker -> host messages |
+| `LIVE_FLUSH_MS` (50ms, `pyodide/worker.ts`) | rate | worker -> host messages |
 | `APPEND_FLUSH_MS` (16ms, interactionsView) | rate | host -> webview messages |
 | `_pll_push` live/batch split | accumulation | the Python display list |
 | `MAX_STREAM_LINES_PER_RUN` (5000) | accumulation | entries and DOM nodes |
@@ -854,20 +851,22 @@ Three of them cover the host-side TypeScript with no Pyodide involved:
   recording view, with `vscode` aliased to a stub: per-file sessions,
   the multi-line prompt buffer, static-check gating, stream line
   batching, the `input()` handshake, sibling-file syncing.
-- `smoke-worker-protocol.mjs` — `WorkerPythonRuntime` against a scripted
-  in-process worker: request/reply correlation, error propagation, live
-  display streaming, the stdin round-trip.
+- `smoke-worker-protocol.mjs` — `Python` (`run/python.ts`) against a
+  scripted in-process worker, and the real worker against a fake Pyodide:
+  request/reply correlation, error propagation, live display streaming,
+  the stdin round-trip, loading packages.
 - `smoke-new-file-level.mjs` — `newFileLevel.ts` against a stub filesystem:
   which new files get a header, which are left alone, and that what it
   writes parses back to the level that was asked for.
 
 `smoke-typecheck.mjs` spans both halves: it drives the built desktop
-worker for the instrumentation and then feeds the real typeguard messages
-and tracebacks through the host-side analyzer, so the rewritten wording
-and the blamed line are both asserted.
+worker for the instrumentation, and reads the findings Python made of the
+real typeguard messages through the host's `findRuntimeFinding`, so the
+rewritten wording and the blamed line are both asserted.
 
 The rest boot real Pyodide in Node: `smoke-static-analyze`,
-`smoke-explainers`, `smoke-images`, `smoke-tables`, `smoke-tests`,
+`smoke-explainers` (the explanations, from real programs and from errors
+described by hand), `smoke-images`, `smoke-tables`, `smoke-tests`,
 `smoke-pandas` (incl. a URL read), `smoke-typecheck`, `smoke-input`,
 `smoke-workspace-files`, `smoke-interrupt`, and `smoke-desktop-parity` (the
 built desktop worker, end to end).
@@ -1100,31 +1099,31 @@ a physical key event arriving from the OS.
 
 ## Command line (`pll-python`)
 
-`pll hw.py` runs a file with the same language levels, the same analyzers
-and the same wording as the editor. It exists because the architecture
-already allowed it: **everything below the orchestrator is `vscode`-free**.
-Of the modules in `common/`, only nine import `vscode`, and the CLI needs
-none of them - it reuses the worker protocol, all four Python libraries,
-every analyzer and explainer, `errorFormatter` (which already renders plain
-text), `level.ts`, and the stdin and interrupt buffers verbatim.
+`pll hw.py` runs a file with the same language levels, the same
+explanations and the same wording as the editor. It exists because the
+architecture already allowed it: **everything below the editor is
+`vscode`-free**. Only `src/editor` imports `vscode`, and the CLI needs none
+of it - it reuses `src/python` (the libraries and every explanation),
+`src/pyodide`, `src/run` (the run plan, and `formatFriendlyError`, which
+already renders plain text) and `src/core` verbatim.
 
 It is a third host beside `desktop/` and `web/`, and replaces exactly three
 things:
 
 | Editor | Command line |
 | --- | --- |
-| `interactionsView.ts` (webview) | `cli/view.ts` (text on stdout/stderr) |
-| `workspaceFiles.ts` (`vscode.workspace.fs`) | `cli/files.ts` (`node:fs`); which files, and what may be saved, is `workspaceFilePolicy.ts` for both |
+| `editor/panel/view.ts` (webview) | `cli/view.ts` (text on stdout/stderr) |
+| `editor/workspaceFiles.ts` (`vscode.workspace.fs`) | `cli/files.ts` (`node:fs`); which files, and what may be saved, is `core/files.ts` for both |
 | `ReplSession` (sessions, exec chain) and `ReactorController` | `cli/run.ts` (one linear run) |
 
-The run itself is shared, not copied: `runPlan.ts` holds the steps - the
+The run itself is shared, not copied: `run/plan.ts` holds the steps - the
 `#level` line, static checks, libraries, files, Examplar, tests, the
 program, write back - and each host supplies a `RunHost` saying how to show
 a finding, a banner, a status, an event. Two copies of the sequence would
 drift: word the same failures differently, or run a step in one host and
 not the other. Both run the Examplar check, and the CLI prints the same
-cards, from the same lines (`examplarPhase.ts` words them; the panel and
-the terminal only draw them). `DesktopPyodideRuntime` takes its asset and
+cards, from the same lines (`run/examplar.ts` words them; the panel and
+the terminal only draw them). `desktopPython` takes its asset and
 worker paths, a start time limit and where to keep downloaded packages,
 instead of deriving them, so both Node hosts share the spawn;
 `desktop/pyodideWorker.ts` is reused **verbatim**, only bundled to a
@@ -1176,7 +1175,7 @@ line (`print("Total:", end="")`) on a terminal, `CliView` ends it first.
 Output appears as the program prints it - each finished line, up to 100 a
 second, then batched - and `flush()` posts a partial one.
 
-Stdin is a stream of bytes (`stdinBuffer.ts`), read as it comes: `printf
+Stdin is a stream of bytes (`pyodide/sharedMemory.ts`), read as it comes: `printf
 'a' | pll prog.py` gives `sys.stdin.read()` exactly `"a"`, and a file piped
 in arrives whole, however long. A Ctrl+C while the program waits for input
 ends the wait, and `input()` raises `KeyboardInterrupt`, as in CPython; so
@@ -1206,8 +1205,8 @@ is instead of leaving that to be guessed. Rehearse with
 
 The package declares `node >=22`, which is a support decision rather than a
 technical floor: the CLI bundle contains no `WebSocket` reference at all -
-`universeClient.ts` is only reachable through `activate.ts` and the
-editor's session (`replSession.ts`, `reactorController.ts`), none of which
+`reactors/universe.ts` is only reachable through `activate.ts` and the
+editor's session (`replSession.ts`, `reactors/controller.ts`), none of which
 the CLI imports - and `pyodide` itself
 only asks for `>=18`. But 18 and 20 are both past end of life, so 22 is the
 oldest Node we could support, and it matches what the extension already gets
@@ -1281,7 +1280,7 @@ rather than by asking course staff to keep a matching CPython. `built.magic`
 is carried so a stale bundle reports *"built for Python 3.9 and cannot run
 here"* instead of `ValueError: bad marshal data`.
 
-`examplarLib.py` holds both primitives, shared by the editor and the command
+`libraries/examplar.py` holds both primitives, shared by the editor and the command
 line: `_pll_examplar_build` (authoring) and `_pll_examplar_run`, which execs
 the student's file, overlays an implementation so its names win, and calls
 each `test_*`. That overlay *is* the Examplar semantics - their tests are
@@ -1352,7 +1351,7 @@ and a fallback to an older copy - gets a banner.
 
 ### The phase in a run
 
-The run plan runs the Examplar step (`examplarPhase.ts`) once libraries are
+The run plan runs the Examplar step (`run/examplar.ts`) once libraries are
 loaded and before the student's files are mounted, in the editor and on the
 command line alike. It fetches the bundle (so a fetch failure is reported
 once) and runs the phase; the plan then mounts the files:
@@ -1539,7 +1538,7 @@ worst case is **`matangover.mypy`**, which has no `enabled` and no
 `ignorePatterns`; the only fix is to disable the extension.
 
 On activation, the
-[extension guard](https://github.com/dbp/pll/blob/main/src/common/extensionGuard.ts)
+[extension guard](https://github.com/dbp/pll/blob/main/src/editor/setup/extensionGuard.ts)
 scans for known conflicts (`ms-python.python`,
 `ms-python.vscode-pylance`, `matangover.mypy`,
 `ms-python.{mypy-type-checker,pylint,flake8,bandit}`,

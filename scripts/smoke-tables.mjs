@@ -43,13 +43,13 @@ async function main() {
       "1 display emission",
     );
     const d = result.displays[0];
-    expect(d.type === "table", "display.type === 'table'");
+    expect(d.kind === "table", "display.type === 'table'");
     expect(
       Array.isArray(d.columns) && d.columns[0] === "name" && d.columns[1] === "age",
       "columns are name, age",
     );
-    expect(d.row_count === 2, "row_count === 2");
-    expect(d.shown_count === 2, "shown_count === 2");
+    expect(d.rowCount === 2, "row_count === 2");
+    expect(d.shownCount === 2, "shown_count === 2");
     expect(d.truncated === false, "truncated === false for 2 rows");
     expect(
       Array.isArray(d.rows) && d.rows.length === 2 && d.rows[0][0] === "Alice",
@@ -72,7 +72,7 @@ t.select_columns(["name"])
     expect(result.displays.length === 4, "4 table displays");
 
     const filtered = result.displays[0];
-    expect(filtered.row_count === 2, "filter -> 2 rows (Alice 30, Carol 35)");
+    expect(filtered.rowCount === 2, "filter -> 2 rows (Alice 30, Carol 35)");
 
     const transformed = result.displays[1];
     expect(
@@ -151,8 +151,8 @@ t.histogram("y", bins=3, title="hist")
     expect(result.ok === true, "ok; stderr=" + result.stderr);
     expect(result.displays.length === 4, "4 image emissions");
     for (const d of result.displays) {
-      expect(d.type === "image", "chart display type === 'image'");
-      expect(typeof d.data === "string" && d.data.startsWith("<svg"), "chart SVG produced");
+      expect(d.kind === "image", "chart display type === 'image'");
+      expect(typeof d.svg === "string" && d.svg.startsWith("<svg"), "chart SVG produced");
       expect(d.width === 480 && d.height === 320, "chart sized 480x320");
     }
   }
@@ -168,13 +168,13 @@ t.add_column("z", [10, 20])      # 3: table (with z col)
     const result = py(callRunFile, code, "interleave.py", SK);
     expect(result.ok === true, "ok");
     const cards = result.displays.filter(
-      (d) => d.type === "table" || d.type === "image",
+      (d) => d.kind === "table" || d.kind === "image",
     );
     expect(cards.length === 3, "3 image/table displays");
     expect(
-      cards[0].type === "table" &&
-        cards[1].type === "image" &&
-        cards[2].type === "table",
+      cards[0].kind === "table" &&
+        cards[1].kind === "image" &&
+        cards[2].kind === "table",
       "order: table, image, table",
     );
     expect(
@@ -199,7 +199,7 @@ print("after t2")
     // Strip out the stdout chunks that just contain the trailing "\n" so the
     // ordering test is easier to read; we still want every type to appear.
     const types = result.displays.map((d) =>
-      d.type === "stdout"
+      d.kind === "stdout"
         ? "stdout(" + JSON.stringify(d.text) + ")"
         : d.type,
     );
@@ -209,17 +209,17 @@ print("after t2")
     // *first* table emission must come strictly after the first print
     // and strictly before the second print.
     const firstStdoutBefore = result.displays.findIndex(
-      (d) => d.type === "stdout" && d.text.includes("before"),
+      (d) => d.kind === "stdout" && d.text.includes("before"),
     );
-    const firstTable = result.displays.findIndex((d) => d.type === "table");
+    const firstTable = result.displays.findIndex((d) => d.kind === "table");
     const firstStdoutBetween = result.displays.findIndex(
-      (d) => d.type === "stdout" && d.text.includes("between"),
+      (d) => d.kind === "stdout" && d.text.includes("between"),
     );
     const secondTable = result.displays
       .map((d, i) => [d, i])
-      .filter(([d]) => d.type === "table")[1]?.[1];
+      .filter(([d]) => d.kind === "table")[1]?.[1];
     const stdoutAfter = result.displays.findIndex(
-      (d) => d.type === "stdout" && d.text.includes("after"),
+      (d) => d.kind === "stdout" && d.text.includes("after"),
     );
     expect(firstStdoutBefore >= 0, "saw 'before t1' stdout chunk");
     expect(firstTable > firstStdoutBefore, "first table after 'before t1'");
@@ -236,8 +236,8 @@ table(["i"], [[i] for i in range(500)])
     const result = py(callRunFile, code, "big.py", SK);
     expect(result.ok === true, "ok");
     const d = result.displays[0];
-    expect(d.row_count === 500, "row_count === 500");
-    expect(d.shown_count === 200, "shown_count === 200");
+    expect(d.rowCount === 500, "row_count === 500");
+    expect(d.shownCount === 200, "shown_count === 200");
     expect(d.truncated === true, "truncated === true");
     expect(d.rows.length === 200, "rows array capped at 200");
   }
@@ -245,11 +245,11 @@ table(["i"], [[i] for i in range(500)])
   console.log("\n[8] bad column / non-numeric ops produce friendly errors");
   {
     const result = py(callRunFile, `table(["a"], [[1]]).sum("b")`, "err.py", SK);
-    expect(result.ok === false && result.error_type === "KeyError", "KeyError on missing column");
+    expect(result.ok === false && result.error?.errorType === "KeyError", "KeyError on missing column");
 
     const result2 = py(callRunFile, `table(["a"], [["x"]]).sum("a")`, "err2.py", SK);
     expect(
-      result2.ok === false && result2.error_type === "TypeError",
+      result2.ok === false && result2.error?.errorType === "TypeError",
       "TypeError on non-numeric sum",
     );
   }
@@ -258,7 +258,7 @@ table(["i"], [[i] for i in range(500)])
   {
     const result = py(callReplEval, `table(["n"], [[1], [2]])`, SK);
     expect(result.ok === true, "ok");
-    expect(result.displays.length === 1 && result.displays[0].type === "table",
+    expect(result.displays.length === 1 && result.displays[0].kind === "table",
       "REPL eval emits a table display");
   }
 
@@ -266,7 +266,7 @@ table(["i"], [[i] for i in range(500)])
   {
     const result = py(callRunFile, `circle(20, "solid", "red")`, "img.py", SK);
     expect(result.ok === true, "ok");
-    expect(result.displays.length === 1 && result.displays[0].type === "image",
+    expect(result.displays.length === 1 && result.displays[0].kind === "image",
       "image display still emitted via new protocol");
   }
 
@@ -300,13 +300,13 @@ table(["i"], [[i] for i in range(500)])
     };
     for (const [name, call] of Object.entries(calls)) {
       const result = py(callRunFile, setup + call, `${name}.py`, SK);
-      expect(result.ok === true, `${name} ran: ${result.error_message ?? ""}`);
+      expect(result.ok === true, `${name} ran: ${result.error?.message ?? ""}`);
       const shown = result.displays?.[0];
-      expect(shown?.type === "image", `${name} emitted an image display`);
+      expect(shown?.kind === "image", `${name} emitted an image display`);
       expect(
-        typeof shown?.data === "string" &&
-          shown.data.startsWith("<svg") &&
-          shown.data.trimEnd().endsWith("</svg>"),
+        typeof shown?.svg === "string" &&
+          shown.svg.startsWith("<svg") &&
+          shown.svg.trimEnd().endsWith("</svg>"),
         `${name} produced a complete svg`,
       );
       expect(shown.width > 0 && shown.height > 0, `${name} reported a size`);
@@ -341,8 +341,8 @@ table(["i"], [[i] for i in range(500)])
     ]) {
       const result = py(callRunFile, code, "bad.py", SK);
       expect(
-        result.ok === false && result.error_type === kind,
-        `${code} -> ${kind}, got ${result.error_type}: ${result.error_message}`,
+        result.ok === false && result.error?.errorType === kind,
+        `${code} -> ${kind}, got ${result.error?.errorType}: ${result.error?.message}`,
       );
     }
     console.log("    six refusals, each with its own reason");
@@ -381,7 +381,7 @@ table(["i"], [[i] for i in range(500)])
       'print(repr(table(["a"], [[1], [2]])))',
     ].join("\n");
     const result = py(callRunFile, code, "load.py", SK);
-    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    expect(result.ok === true, `ran: ${result.error?.message ?? ""}`);
     const lines = (result.stdout ?? "").trim().split("\n");
     expect(lines[0] === "['name', 'mpg', 'note']", `columns: ${lines[0]}`);
     // Every cell is text, as Pyret's `load-table` gives it to you - a
@@ -423,9 +423,9 @@ table(["i"], [[i] for i in range(500)])
     ]) {
       const result = py(callRunFile, code, "lterr.py", SK);
       expect(
-        result.ok === false && result.error_type === kind &&
-          (result.error_message ?? "").includes(needle),
-        `${kind}/${needle}, got ${result.error_type}: ${result.error_message}`,
+        result.ok === false && result.error?.errorType === kind &&
+          (result.error?.message ?? "").includes(needle),
+        `${kind}/${needle}, got ${result.error?.errorType}: ${result.error?.message}`,
       );
     }
     console.log("    seven bad inputs, each named precisely");
@@ -603,10 +603,10 @@ table(["i"], [[i] for i in range(500)])
       ],
     ]) {
       const result = py(callRunFile, code, "f6.py", SK);
-      const message = result.error_message ?? "";
+      const message = result.error?.message ?? "";
       expect(
-        result.ok === false && result.error_type === kind && message.includes(needle),
-        `${label}: wanted ${kind} "${needle}", got ${result.error_type}: ${message}`,
+        result.ok === false && result.error?.errorType === kind && message.includes(needle),
+        `${label}: wanted ${kind} "${needle}", got ${result.error?.errorType}: ${message}`,
       );
     }
     console.log("    twenty-nine table, row, CSV and chart messages name the fix");
@@ -616,21 +616,21 @@ table(["i"], [[i] for i in range(500)])
     const missing = py(callRunFile, 'load_table("car.csv")', "f6.py", SK);
     // A close name answers it outright, rather than sitting in a list.
     expect(
-      (missing.error_message ?? "").includes('Did you mean "cars.csv"?'),
-      `a near-miss names the file: ${missing.error_message}`,
+      (missing.error?.message ?? "").includes('Did you mean "cars.csv"?'),
+      `a near-miss names the file: ${missing.error?.message}`,
     );
     expect(
-      !(missing.error_message ?? "").includes("Check the spelling"),
-      `and does not also say to check the spelling: ${missing.error_message}`,
+      !(missing.error?.message ?? "").includes("Check the spelling"),
+      `and does not also say to check the spelling: ${missing.error?.message}`,
     );
     // Nothing close: the files that are there.
     const unrelated = py(callRunFile, 'load_table("zebra.csv")', "f6.py", SK);
     expect(
-      (unrelated.error_message ?? "").includes("The CSV files next to your program are:"),
-      `nothing close lists the real ones: ${unrelated.error_message}`,
+      (unrelated.error?.message ?? "").includes("The CSV files next to your program are:"),
+      `nothing close lists the real ones: ${unrelated.error?.message}`,
     );
     // File names are quoted the course's way.
-    expect(!/'car\.csv'/.test(missing.error_message ?? ""), `no Python repr quotes: ${missing.error_message}`);
+    expect(!/'car\.csv'/.test(missing.error?.message ?? ""), `no Python repr quotes: ${missing.error?.message}`);
 
     // Rows still have to be dicts, or every test written against one breaks.
     const asDict = py(
@@ -639,7 +639,7 @@ table(["i"], [[i] for i in range(500)])
       "row.py",
       SK,
     );
-    expect(asDict.ok === true, `rows still behave as dicts: ${asDict.error_message ?? ""}`);
+    expect(asDict.ok === true, `rows still behave as dicts: ${asDict.error?.message ?? ""}`);
     expect(
       (asDict.stdout ?? "").trim().split("\n").join("|") ===
         "True|['month', 'riders']|True",
@@ -664,8 +664,8 @@ table(["i"], [[i] for i in range(500)])
       "floats.py",
       SK,
     );
-    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
-    const [money, big, text] = result.displays.filter((d) => d.type === "table");
+    expect(result.ok === true, `ran: ${result.error?.message ?? ""}`);
+    const [money, big, text] = result.displays.filter((d) => d.kind === "table");
     expect(
       JSON.stringify(money.rows) === JSON.stringify([["12999.99", "True", ""], ["1234567.89", "False", "2.0"]]),
       `every digit, as Python prints it: ${JSON.stringify(money.rows)}`,
@@ -673,9 +673,9 @@ table(["i"], [[i] for i in range(500)])
     // Only columns of numbers - as Python holds them - line up on the right.
     expect(JSON.stringify(money.numeric) === "[true,false,true]", `numeric columns: ${JSON.stringify(money.numeric)}`);
     expect(JSON.stringify(text.numeric) === "[false]", `text that looks like a number is text: ${JSON.stringify(text.numeric)}`);
-    expect(big.shown_count === 200 && big.truncated === true, `the card shows 200: ${big.shown_count}`);
+    expect(big.shownCount === 200 && big.truncated === true, `the card shows 200: ${big.shownCount}`);
     const csv = big.csv.trim().split("\n");
-    expect(csv.length === 251 && csv[0] === "n,x" && csv[250] === "249,249.25" && big.csv_rows === 250,
+    expect(csv.length === 251 && csv[0] === "n,x" && csv[250] === "249,249.25" && big.csvRows === 250,
       `Save CSV: every row, every digit: ${csv.length} lines, last ${csv[250]}`);
     expect(money.csv === "amount,flag,missing\n12999.99,True,\n1234567.89,False,2.0\n", `CSV of the values: ${JSON.stringify(money.csv)}`);
     console.log("    repr in the cells, numbers on the right by type, the whole table in the CSV");
@@ -693,7 +693,7 @@ table(["i"], [[i] for i in range(500)])
       'print(load_table("excel.csv").length())',
     ].join("\n");
     const result = py(callRunFile, code, "excel.py", SK);
-    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    expect(result.ok === true, `ran: ${result.error?.message ?? ""}`);
     const out = result.stdout.trim().split("\n");
     expect(out[0] === "['name', 'age']", `no BOM on the first name: ${out[0]}`);
     expect(out[1] === "['Zürich', 'Köln']", `Windows-1252 read: ${out[1]}`);
@@ -702,7 +702,7 @@ table(["i"], [[i] for i in range(500)])
     const again = py(callRunFile, 'load_table("excel.csv")', "excel.py", SK);
     expect(/note: excel\.csv is not UTF-8/.test(again.stderr ?? ""), `and again in the next run: ${JSON.stringify(again.stderr)}`);
     const binary = py(callRunFile, 'with open("p.csv", "wb") as f:\n    f.write(b"\\x89PNG\\x00\\x00")\nload_table("p.csv")', "bin.py", SK);
-    expect(/does not look like a text file/.test(binary.error_message ?? ""), `a binary file is still refused: ${binary.error_message}`);
+    expect(/does not look like a text file/.test(binary.error?.message ?? ""), `a binary file is still refused: ${binary.error?.message}`);
     console.log("    BOM gone, cp1252 read with one note, binary still refused");
   }
 
@@ -718,8 +718,8 @@ table(["i"], [[i] for i in range(500)])
     ];
     for (const [code, ok, needle] of cases) {
       const result = py(callRunFile, code, "csv.py", SK);
-      const text = ok ? result.stdout.trim() : result.error_message ?? "";
-      expect(result.ok === ok && text.includes(needle), `wanted ${ok ? "output" : "error"} ${needle}, got ${result.error_type}: ${text}`);
+      const text = ok ? result.stdout.trim() : result.error?.message ?? "";
+      expect(result.ok === ok && text.includes(needle), `wanted ${ok ? "output" : "error"} ${needle}, got ${result.error?.errorType}: ${text}`);
     }
     console.log("    lines as the file has them, blank cells kept, trailing blanks not rows");
   }
@@ -735,11 +735,11 @@ table(["i"], [[i] for i in range(500)])
     ].join("\n");
     const beginner = py(callRunFile, code, "sums.py", SK, "beginner");
     expect(beginner.ok === true && beginner.stdout === "100000000000000003 True\n100000000000000003\n",
-      `exact, and an int: ${JSON.stringify(beginner.stdout)} ${beginner.error_message ?? ""}`);
+      `exact, and an int: ${JSON.stringify(beginner.stdout)} ${beginner.error?.message ?? ""}`);
     for (const level of ["beginner", "intermediate"]) {
       const bools = py(callRunFile, 't = table(["ok"], [[True], [False]])\nt.sum("ok")', "bools.py", SK, level);
-      expect(bools.ok === false && /True and False are not numbers/.test(bools.error_message ?? ""),
-        `${level} refuses True: ${bools.error_message}`);
+      expect(bools.ok === false && /True and False are not numbers/.test(bools.error?.message ?? ""),
+        `${level} refuses True: ${bools.error?.message}`);
     }
     const advanced = py(callRunFile, 't = table(["ok"], [[True], [True], [False]])\nprint(t.sum("ok"), t.mean("ok"))', "bools.py", SK, "advanced");
     expect(advanced.stdout === "2 0.6666666666666666\n", `advanced counts them, as Python does: ${JSON.stringify(advanced.stdout)}`);
@@ -750,19 +750,19 @@ table(["i"], [[i] for i in range(500)])
   {
     const nan = py(callRunFile, 't = table(["x"], [[3.0], [float("nan")], [1.0], [2.0]])\nprint(t.order_by("x").column("x"))\nt.mean("x")', "nan.py", SK);
     expect(nan.stdout === "[1.0, 2.0, 3.0, nan]\n", `NaN sorts last: ${JSON.stringify(nan.stdout)}`);
-    expect(nan.error_type === "ValueError" && /holds nan \("not a number"\) in the 2nd row/.test(nan.error_message ?? ""),
-      `mean says which row: ${nan.error_message}`);
+    expect(nan.error?.errorType === "ValueError" && /holds nan \("not a number"\) in the 2nd row/.test(nan.error?.message ?? ""),
+      `mean says which row: ${nan.error?.message}`);
     const hist = py(callRunFile, 't = table(["x"], [[1.0], [float("inf")]])\nt.histogram("x")', "inf.py", SK);
-    expect(hist.error_type === "ValueError" && /holds inf in the 2nd row/.test(hist.error_message ?? ""), `inf: ${hist.error_message}`);
+    expect(hist.error?.errorType === "ValueError" && /holds inf in the 2nd row/.test(hist.error?.message ?? ""), `inf: ${hist.error?.message}`);
     const CSV = 'with open("n.csv", "w") as f:\n    f.write("n\\n9\\n100\\n41\\n")\nc = load_table("n.csv")\n';
     for (const call of ['c.max("n")', 'c.min("n")', 'c.order_by("n")']) {
       const result = py(callRunFile, CSV + call, "text.py", SK);
-      expect(result.error_type === "TypeError" && /as text "100" comes before "9"/.test(result.error_message ?? "") &&
-        /transform_column\("n", int\)/.test(result.error_message ?? ""), `${call}: ${result.error_message}`);
+      expect(result.error?.errorType === "TypeError" && /as text "100" comes before "9"/.test(result.error?.message ?? "") &&
+        /transform_column\("n", int\)/.test(result.error?.message ?? ""), `${call}: ${result.error?.message}`);
     }
     // Text that sorts the same either way, like zip codes, is left alone.
     const zips = py(callRunFile, 't = table(["zip"], [["02115"], ["10001"], ["02134"]])\nprint(t.order_by("zip").column("zip"), t.max("zip"))', "zip.py", SK);
-    expect(zips.stdout === "['02115', '02134', '10001'] 10001\n", `zip codes sort as text: ${JSON.stringify(zips.stdout)} ${zips.error_message ?? ""}`);
+    expect(zips.stdout === "['02115', '02134', '10001'] 10001\n", `zip codes sort as text: ${JSON.stringify(zips.stdout)} ${zips.error?.message ?? ""}`);
     console.log("    NaN last and named; '9' > '100' refused; zip codes fine");
   }
 
@@ -782,7 +782,7 @@ table(["i"], [[i] for i in range(500)])
       "print(function_plot(math.sqrt, -3, 3) is not None)",
     ].join("\n");
     const result = py(callRunFile, code, "charts.py", SK, "beginner");
-    expect(result.ok === true, `ran: ${result.error_type}: ${result.error_message ?? ""}`);
+    expect(result.ok === true, `ran: ${result.error?.errorType}: ${result.error?.message ?? ""}`);
     const out = result.stdout.trim().split("\n");
     expect(out[0] === "480 True True", `above a chart, annotated -> Image, equal: ${out[0]}`);
     // 0-5, 5-10: two bars, and the white background.
@@ -791,7 +791,7 @@ table(["i"], [[i] for i in range(500)])
     expect(out[3] === "1", `1/x has a gap at 0, not a line through it: ${out[3]}`);
     expect(out[4] === "True", `sqrt below 0 is a gap, not a failed plot: ${out[4]}`);
     const notFn = py(callRunFile, "function_plot(3, -3, 3)", "fp.py", SK);
-    expect(/function_plot needs a function, but got the number 3/.test(notFn.error_message ?? ""), `checked: ${notFn.error_message}`);
+    expect(/function_plot needs a function, but got the number 3/.test(notFn.error?.message ?? ""), `checked: ${notFn.error?.message}`);
     console.log("    above(title, chart), -> Image, bin_width, number order, gaps");
   }
 
@@ -804,20 +804,20 @@ table(["i"], [[i] for i in range(500)])
       't.transform_column("m", per_hour)',
     ].join("\n");
     const result = py(callRunFile, code, "own.py", SK);
-    expect(result.error_type === "ZeroDivisionError" && result.error_message === "division by zero",
-      `Python's own error: ${result.error_type}: ${result.error_message}`);
-    const frames = (result.error_frames ?? []).filter((f) => f.user);
+    expect(result.error?.errorType === "ZeroDivisionError" && result.error?.message === "division by zero",
+      `Python's own error: ${result.error?.errorType}: ${result.error?.message}`);
+    const frames = (result.error?.frames ?? []).filter((f) => f.user);
     expect(frames.at(-1)?.line === 2 && frames.at(-1)?.function === "per_hour", `at their line: ${JSON.stringify(frames.at(-1))}`);
     // A ValueError of their own is theirs too, in Python's words.
     const own = py(callRunFile, 'def hours(m):\n    return int(m) / 60\n\nt = table(["m"], [["90"], ["abc"]])\nt.transform_column("m", hours)', "ownv.py", SK);
-    expect(own.error_type === "ValueError" && own.error_message === "invalid literal for int() with base 10: 'abc'",
-      `their ValueError, as raised: ${own.error_message}`);
+    expect(own.error?.errorType === "ValueError" && own.error?.message === "invalid literal for int() with base 10: 'abc'",
+      `their ValueError, as raised: ${own.error?.message}`);
     // An exception whose constructor takes other arguments survives.
     const odd = py(callRunFile, 't = table(["b"], [[b"\\xff"]])\nt.transform_column("b", bytes.decode)', "odd.py", SK);
-    expect(odd.error_type === "UnicodeDecodeError", `UnicodeDecodeError, as raised: ${odd.error_type}: ${odd.error_message}`);
+    expect(odd.error?.errorType === "UnicodeDecodeError", `UnicodeDecodeError, as raised: ${odd.error?.errorType}: ${odd.error?.message}`);
     // A conversion is still reworded with the row and the advice.
     const blank = py(callRunFile, 't = table(["n"], [["1"], [""]])\nt.transform_column("n", int)', "conv.py", SK);
-    expect(/failed on the 2nd row, whose value is blank/.test(blank.error_message ?? ""), `int still explained: ${blank.error_message}`);
+    expect(/failed on the 2nd row, whose value is blank/.test(blank.error?.message ?? ""), `int still explained: ${blank.error?.message}`);
     console.log("    the student's error kept, with its line; conversions still explained");
   }
 
@@ -848,9 +848,9 @@ table(["i"], [[i] for i in range(500)])
       [`${T}t.colum("age")`, "AttributeError", "a table has no method `colum`. Did you mean: 'column'?"],
     ]) {
       const result = py(callRunFile, code, "names.py", SK);
-      const message = result.error_message ?? "";
-      expect(result.ok === false && result.error_type === kind && message.includes(needle),
-        `${code.split("\n").at(-1)}: wanted ${kind} "${needle}", got ${result.error_type}: ${message}`);
+      const message = result.error?.message ?? "";
+      expect(result.ok === false && result.error?.errorType === kind && message.includes(needle),
+        `${code.split("\n").at(-1)}: wanted ${kind} "${needle}", got ${result.error?.errorType}: ${message}`);
     }
     console.log("    twenty-one mistakes, each with the fix");
   }
@@ -876,7 +876,7 @@ table(["i"], [[i] for i in range(500)])
       "print(pydoc.render_doc(load_table).splitlines()[0])",
     ].join("\n");
     const result = py(callRunFile, code, "rows.py", SK, "advanced");
-    expect(result.ok === true, `ran: ${result.error_type}: ${result.error_message ?? ""}`);
+    expect(result.ok === true, `ran: ${result.error?.errorType}: ${result.error?.message ?? ""}`);
     const out = result.stdout.trim().split("\n");
     expect(out[0] === "[{'name': 'Ada', 'age': 36}, {'name': 'Alan', 'age': 41}, {'name': 'Grace', 'age': None}] 1",
       `added, and the first table unchanged: ${out[0]}`);
@@ -890,9 +890,9 @@ table(["i"], [[i] for i in range(500)])
   {
     pyodide.runPython('_pll_note_left_out(\'[{"name": "big.csv", "why": "each file can be at most 2 MB"}]\')');
     const result = py(callRunFile, 'load_table("big.csv")', "big.py", SK);
-    expect(result.error_type === "FileNotFoundError" &&
-      result.error_message === '"big.csv" is next to your program, but it was not loaded: each file can be at most 2 MB.',
-      `why it is not there: ${result.error_message}`);
+    expect(result.error?.errorType === "FileNotFoundError" &&
+      result.error?.message === '"big.csv" is next to your program, but it was not loaded: each file can be at most 2 MB.',
+      `why it is not there: ${result.error?.message}`);
     pyodide.runPython("_pll_note_left_out('[]')");
     console.log("    not loaded, and why");
   }

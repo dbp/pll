@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
-import type { BundleStore, CachedBundle } from "../common/examplarSource";
+import type { BundleStore, CachedBundle } from "../run/examplarSource";
 
 /**
  * Cache fetched bundles on disk, so a student without a network - or an

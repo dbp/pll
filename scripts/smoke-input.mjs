@@ -25,7 +25,7 @@ function call(fn, args) {
 
 function stdoutTexts(result) {
   return (result.displays || [])
-    .filter((d) => d.type === "stdout")
+    .filter((d) => d.kind === "stdout")
     .map((d) => d.text);
 }
 
@@ -109,7 +109,7 @@ async function main() {
       "s3",
     ]);
     pyodide.runPython("_pll_live_emit = None");
-    const liveStdout = emitted.filter((d) => d.type === "stdout").map((d) => d.text);
+    const liveStdout = emitted.filter((d) => d.kind === "stdout").map((d) => d.text);
     const liveJoined = liveStdout.join("");
     console.log(`    live=${JSON.stringify(liveStdout)} resultStdout=${JSON.stringify(result.stdout)}`);
     expect(result.ok === true, "live-emit program should succeed");
@@ -122,9 +122,9 @@ async function main() {
     stdinCalls = 0;
     lines.length = 0;
     const result = call(runFile, ['input("x")\n', "eof.py", "s4"]);
-    console.log(`    ok=${result.ok} error=${result.error_type}`);
+    console.log(`    ok=${result.ok} error=${result.error?.errorType}`);
     expect(result.ok === false, "EOF should fail the run");
-    expect(result.error_type === "EOFError", "expected EOFError, got " + result.error_type);
+    expect(result.error?.errorType === "EOFError", "expected EOFError, got " + result.error?.errorType);
   }
 
   console.log("\n[5] sys.stdin reads exactly what was given");

@@ -124,13 +124,37 @@ button:disabled {
 }
 
 /* Inline image card */
-.entry.image {
+/* A card: an image, a table, a test report, a reactor. */
+.entry.card {
   margin: 6px 0;
   border: 1px solid var(--vscode-panel-border, #333);
   border-radius: 4px;
+}
+.entry.image, .entry.table {
   overflow: hidden;
   background: var(--vscode-editorWidget-background, #252526);
   flex-shrink: 0;
+}
+/* The strip under an image or a table: its caption, and Save. */
+.entry .meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: var(--vscode-font-family, sans-serif);
+  color: var(--vscode-descriptionForeground, #aaa);
+  background: var(--vscode-sideBarSectionHeader-background, rgba(255,255,255,0.02));
+  border-top: 1px solid var(--vscode-panel-border, #333);
+}
+.entry .meta .caption {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.entry .meta .dims {
+  flex: 0 0 auto;
 }
 .entry.image .imgWrap {
   display: flex;
@@ -151,36 +175,8 @@ button:disabled {
    * container width, but height: auto would otherwise make a wide
    * SVG taller than necessary in narrow viewports. */
 }
-.entry.image .imgMeta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 8px;
-  font-size: 11px;
-  font-family: var(--vscode-font-family, sans-serif);
-  color: var(--vscode-descriptionForeground, #aaa);
-  background: var(--vscode-sideBarSectionHeader-background, rgba(255,255,255,0.02));
-  border-top: 1px solid var(--vscode-panel-border, #333);
-}
-.entry.image .imgMeta .caption {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.entry.image .imgMeta .dims {
-  flex: 0 0 auto;
-}
 
 /* Inline table card */
-.entry.table {
-  margin: 6px 0;
-  border: 1px solid var(--vscode-panel-border, #333);
-  border-radius: 4px;
-  overflow: hidden;
-  background: var(--vscode-editorWidget-background, #252526);
-  flex-shrink: 0;
-}
 .entry.table .tableWrap {
   overflow: auto;
   max-height: 360px;
@@ -218,26 +214,9 @@ button:disabled {
   font-variant-numeric: tabular-nums;
   color: var(--vscode-symbolIcon-numberForeground, #b5cea8);
 }
-.entry.table .tableMeta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 8px;
-  font-size: 11px;
-  font-family: var(--vscode-font-family, sans-serif);
-  color: var(--vscode-descriptionForeground, #aaa);
-  background: var(--vscode-sideBarSectionHeader-background, rgba(255,255,255,0.02));
-  border-top: 1px solid var(--vscode-panel-border, #333);
-}
-.entry.table .tableMeta .caption {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 /* Structured error finding */
-.entry.finding {
+.entry.finding, .entry.rawError {
   margin: 6px 0;
   border-left: 3px solid var(--vscode-editorError-foreground, #f48771);
   padding: 4px 0 4px 8px;
@@ -281,9 +260,6 @@ button:disabled {
 
 /* PLL itself failing (Python would not start), shown as it is */
 .entry.rawError {
-  margin: 6px 0;
-  border-left: 3px solid var(--vscode-editorError-foreground, #f48771);
-  padding: 4px 0 4px 8px;
   color: var(--vscode-terminal-ansiRed, #f48771);
 }
 .entry.rawError .head {
@@ -292,9 +268,6 @@ button:disabled {
 
 /* Pytest report card */
 .entry.testReport {
-  margin: 6px 0;
-  border: 1px solid var(--vscode-panel-border, #333);
-  border-radius: 4px;
   padding: 8px 10px;
   background: var(--vscode-editorWidget-background, #252526);
   font-family: var(--vscode-font-family, sans-serif);
@@ -480,10 +453,7 @@ body.mode-waiting #inputRow {
 /* Reactors ---------------------------------------------------- */
 
 .entry.reactor {
-  border: 1px solid var(--vscode-panel-border, #444);
-  border-radius: 4px;
   padding: 6px 8px 8px;
-  margin: 6px 0;
   max-width: 100%;
 }
 

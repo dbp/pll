@@ -13,8 +13,8 @@ import { expect, passed } from "./lib/check.mjs";
 import { bootPll } from "./lib/pyodide.mjs";
 import { ROOT } from "./lib/bundle.mjs";
 
-const POLICY_PATH = resolve(ROOT, "out/test/workspaceFilePolicy.js");
-const MEMFS_PATH = resolve(ROOT, "out/test/memfsWorkspace.js");
+const POLICY_PATH = resolve(ROOT, "out/test/core/files.js");
+const MEMFS_PATH = resolve(ROOT, "out/test/pyodide/workspace.js");
 
 const CARS_CSV = "name,mpg\nvw,29\nhonda,33\nford,18\n";
 
@@ -370,12 +370,12 @@ _buf.getvalue()
   const shadowJs = shadowProxy.toJs({ dict_converter: Object.fromEntries });
   shadowProxy.destroy?.();
   console.log(
-    `    ok=${shadowJs.ok} stdout=${JSON.stringify(shadowJs.stdout)} error=${shadowJs.error_message || ""}`,
+    `    ok=${shadowJs.ok} stdout=${JSON.stringify(shadowJs.stdout)} error=${shadowJs.error?.message || ""}`,
   );
   expect(
     shadowJs.ok === true,
     "import pandas must use the real package, not sibling pandas.py: " +
-      (shadowJs.error_message || ""),
+      (shadowJs.error?.message || ""),
   );
   expect(
     String(shadowJs.stdout).includes("3") && String(shadowJs.stdout).includes("7"),

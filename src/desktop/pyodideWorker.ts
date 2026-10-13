@@ -1,6 +1,6 @@
 import { parentPort } from "node:worker_threads";
-import { createWorkerHost, type PyodideInstance } from "../common/workerHost";
-import type { WorkerInbound } from "../common/workerProtocol";
+import { createWorkerHost, type PyodideInstance } from "../pyodide/worker";
+import type { WorkerInbound } from "../pyodide/protocol";
 import { installNodeXHR } from "./xhrPolyfill";
 
 if (!parentPort) {

@@ -21,7 +21,7 @@ const {
   INTERRUPT_SIGINT,
   INTERRUPT_ACK_INDEX,
   requestInterrupt,
-} = await importSource('export * from "./src/common/interruptBuffer";\n');
+} = await importSource('export * from "./src/pyodide/sharedMemory";\n');
 
 /** Generous: a bytecode check is immediate, so this only bounds a failure. */
 const INTERRUPT_DEADLINE_MS = 20000;
@@ -145,14 +145,14 @@ async function main() {
     const { result } = await withDeadline(run, INTERRUPT_DEADLINE_MS, "interrupted run");
     expect(result.ok === false, `interrupted run should not be ok, got ok=${result.ok}`);
     expect(
-      result.error_type === "KeyboardInterrupt",
-      `expected KeyboardInterrupt, got ${result.error_type}`,
+      result.error?.errorType === "KeyboardInterrupt",
+      `expected KeyboardInterrupt, got ${result.error?.errorType}`,
     );
     expect(
       result.stdout.includes("before"),
       `output printed before the loop should survive, got ${JSON.stringify(result.stdout)}`,
     );
-    console.log(`    error_type=${result.error_type} stdout=${JSON.stringify(result.stdout)}`);
+    console.log(`    error_type=${result.error?.errorType} stdout=${JSON.stringify(result.stdout)}`);
 
     console.log("\n[3] the interpreter still works after an interrupt");
     const after = await withDeadline(
@@ -187,7 +187,7 @@ async function main() {
     );
     expect(
       later.result.ok === true,
-      `a stale Stop must not interrupt the next program: ${later.result.error_type}`,
+      `a stale Stop must not interrupt the next program: ${later.result.error?.errorType}`,
     );
     expect(later.result.stdout.includes("clean"), "post-stale-signal stdout should be captured");
     console.log("    ok");
@@ -210,8 +210,8 @@ async function main() {
     stop(printRun);
     const noisy = await withDeadline(printRun, INTERRUPT_DEADLINE_MS, "interrupted print loop");
     expect(
-      noisy.result.error_type === "KeyboardInterrupt",
-      `expected KeyboardInterrupt, got ${noisy.result.error_type}`,
+      noisy.result.error?.errorType === "KeyboardInterrupt",
+      `expected KeyboardInterrupt, got ${noisy.result.error?.errorType}`,
     );
     expect(
       noisy.result.stdout.includes("hello"),
@@ -250,7 +250,7 @@ async function main() {
       Atomics.store(new Uint8Array(interruptBuffer), 0, 0);
       try {
         const { result } = await withDeadline(attempt, 5000, `attempt ${i}`);
-        if (result.error_type !== "KeyboardInterrupt") lost++;
+        if (result.error?.errorType !== "KeyboardInterrupt") lost++;
       } catch {
         lost++;
         break; // the worker is stuck in the loop; nothing after this can run
@@ -273,7 +273,7 @@ async function main() {
     );
     expect(
       next.result.ok === true && next.result.stdout.includes("finished"),
-      `the next program must run to the end: ${next.result.error_type ?? "ok"}`,
+      `the next program must run to the end: ${next.result.error?.errorType ?? "ok"}`,
     );
     console.log("    ok");
 
@@ -328,8 +328,8 @@ async function main() {
     stop(stubborn);
     const stubbornResult = await withDeadline(stubborn, INTERRUPT_DEADLINE_MS, "second stop");
     expect(
-      stubbornResult.result.error_type === "KeyboardInterrupt",
-      `the second press should stop it, got ${stubbornResult.result.error_type}`,
+      stubbornResult.result.error?.errorType === "KeyboardInterrupt",
+      `the second press should stop it, got ${stubbornResult.result.error?.errorType}`,
     );
     console.log("    the repeat was consumed; the next press stopped it");
 
@@ -369,10 +369,10 @@ async function main() {
       await sleep(1500);
       stop(tests);
       const { result: ran } = await withDeadline(tests, INTERRUPT_DEADLINE_MS, "stopped tests");
-      expect(ran.ok === true, `the program itself finished: ${ran.error_type}`);
+      expect(ran.ok === true, `the program itself finished: ${ran.error?.errorType}`);
       const result = ran.tests ?? {};
       expect(result.stopped === true, `the tests should be marked stopped: ${JSON.stringify(result.stopped)}`);
-      expect(result.stopped_in === "test_forever", `stopped in the looping test: ${result.stopped_in}`);
+      expect(result.stoppedIn === "test_forever", `stopped in the looping test: ${result.stoppedIn}`);
       const names = (result.tests ?? []).map((t) => `${t.name}:${t.outcome}`);
       expect(
         names.join(",") === "test_double:passed,test_forever:stopped",
@@ -393,7 +393,7 @@ async function main() {
       await sleep(500);
       stop(looping);
       const top = await withDeadline(looping, INTERRUPT_DEADLINE_MS, "stopped program");
-      expect(top.result.error_type === "KeyboardInterrupt", `the program was stopped: ${top.result.error_type}`);
+      expect(top.result.error?.errorType === "KeyboardInterrupt", `the program was stopped: ${top.result.error?.errorType}`);
       expect(top.result.tests == null, `and no test ran: ${JSON.stringify(top.result.tests)}`);
       console.log("    and in the program itself, before any test");
     }
@@ -439,7 +439,7 @@ async function main() {
         expect(failure === null, `${type} should report the Stop, not fail: ${failure}`);
         if (reply === null) continue;
         expect(
-          reply.result.error_type === "KeyboardInterrupt",
+          reply.result.error?.errorType === "KeyboardInterrupt",
           `${type} should say it was stopped: ${JSON.stringify(reply.result).slice(0, 200)}`,
         );
       }

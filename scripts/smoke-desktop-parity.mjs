@@ -13,7 +13,7 @@ import { INDEX_URL } from "./lib/pyodide.mjs";
 import { startWorker, talk } from "./lib/worker.mjs";
 
 // The real layout, so the test cannot agree with itself and not the worker.
-const { STDIN_SAB_BYTES, writeStdin } = await importSource('export * from "./src/common/stdinBuffer";\n');
+const { STDIN_SAB_BYTES, writeStdin } = await importSource('export * from "./src/pyodide/sharedMemory";\n');
 
 const CARS_CSV = "name,mpg\nvw,29\nhonda,33\nford,18\n";
 
@@ -75,7 +75,7 @@ async function main() {
       inputResult.stdout === "Name: hi Ada\n",
       "stdout should be prompt + print, got " + JSON.stringify(inputResult.stdout),
     );
-    const livePrompt = session.displays.find((d) => d.type === "stdout" && d.text === "Name: ");
+    const livePrompt = session.displays.find((d) => d.kind === "stdout" && d.text === "Name: ");
     expect(!!livePrompt, "live emit should include the input prompt");
 
     const { server, url } = await startCsvServer();
@@ -95,9 +95,9 @@ async function main() {
       });
       const urlResult = urlReply.result;
       console.log(
-        `    url=${url} ok=${urlResult.ok} stdout=${JSON.stringify(urlResult.stdout)} error=${urlResult.error_type || ""}`,
+        `    url=${url} ok=${urlResult.ok} stdout=${JSON.stringify(urlResult.stdout)} error=${urlResult.error?.errorType || ""}`,
       );
-      expect(urlResult.ok === true, "URL read should succeed: " + (urlResult.error_message || ""));
+      expect(urlResult.ok === true, "URL read should succeed: " + (urlResult.error?.message || ""));
       expect(
         String(urlResult.stdout).includes("3") && String(urlResult.stdout).includes("honda"),
         "URL read stdout should include 3 and honda, got " + JSON.stringify(urlResult.stdout),
@@ -130,9 +130,9 @@ async function main() {
     });
     const fileResult = fileReply.result;
     console.log(
-      `    ok=${fileResult.ok} stdout=${JSON.stringify(fileResult.stdout)} error=${fileResult.error_type || ""}`,
+      `    ok=${fileResult.ok} stdout=${JSON.stringify(fileResult.stdout)} error=${fileResult.error?.errorType || ""}`,
     );
-    expect(fileResult.ok === true, "open() program should succeed: " + (fileResult.error_message || ""));
+    expect(fileResult.ok === true, "open() program should succeed: " + (fileResult.error?.message || ""));
     expect(
       String(fileResult.stdout).includes("3"),
       "open() should print 3 data rows, got " + JSON.stringify(fileResult.stdout),
@@ -169,7 +169,7 @@ async function main() {
     });
     expect(
       pandasReply.result.ok === true,
-      "local pd.read_csv should succeed: " + (pandasReply.result.error_message || ""),
+      "local pd.read_csv should succeed: " + (pandasReply.result.error?.message || ""),
     );
     const pandasCollected = await session.send({ type: "collectWorkspace" });
     const pandasFile = pandasCollected.changes.files.find((f) => f.name === "efficient_pandas.csv");
@@ -196,13 +196,13 @@ async function main() {
         sessionKey: "desktop-reactor",
         level: "raw",
       });
-      const id = session.displays.find((d) => d.type === "reactor")?.id;
+      const id = session.displays.find((d) => d.kind === "reactor")?.id;
       const before = session.displays.length;
       const step = await session.send({ type: "reactorStep", reactorId: id, event: '{"kind":"tick"}' });
-      expect(step.result.ok === true, "the tick should succeed");
+      expect(step.result.kind === "frame", `the tick should succeed: ${JSON.stringify(step.result)}`);
       const printed = session.displays
         .slice(before)
-        .filter((d) => d.type === "stdout")
+        .filter((d) => d.kind === "stdout")
         .map((d) => d.text)
         .join("");
       expect(printed === "tick 0\n", `the handler's print is streamed: ${JSON.stringify(printed)}`);
@@ -216,12 +216,20 @@ async function main() {
         session.send({ type: "replEval", code: "kept + 1", sessionKey, level: "raw" });
       await define("ends");
       await define("stays");
-      expect((await read("ends")).result.result_repr === "42", "defined in the session to be ended");
+      expect((await read("ends")).result.resultRepr === "42", "defined in the session to be ended");
       await session.send({ type: "endSession", sessionKey: "ends" });
       const after = (await read("ends")).result;
-      expect(after.error_type === "NameError", `gone once it ends: ${after.error_type} ${after.result_repr}`);
-      expect((await read("stays")).result.result_repr === "42", "another session's are untouched");
-      console.log(`    after ending: ${after.error_type}`);
+      expect(after.error?.errorType === "NameError", `gone once it ends: ${after.error?.errorType} ${after.resultRepr}`);
+      expect((await read("stays")).result.resultRepr === "42", "another session's are untouched");
+      console.log(`    after ending: ${after.error?.errorType}`);
+    }
+    console.log("\n[6b] a call's arguments and result cross as JSON");
+    {
+      const value = await session.send({ type: "call", fn: "_pll_run_file", args: ["x = 1\n", "j.py", "json", "raw", false], live: false });
+      expect(value.ok === true && value.resultRepr === null && value.error === null, `a None arrives as null: ${JSON.stringify(value)}`);
+      let failure = null;
+      await session.send({ type: "call", fn: "_pll_no_such_entry", args: [], live: false }).catch((err) => (failure = err.message));
+      expect(/KeyError: '_pll_no_such_entry'/.test(failure ?? ""), `a name that is not an entry point fails plainly: ${failure}`);
     }
     console.log("\n[9] a file's code runs as its own __main__, and at its own level");
     {
@@ -238,14 +246,14 @@ async function main() {
         "r = reactor(init=0, on_tick=tick, to_draw=draw)",
         "r.interact()",
       ].join("\n"), "lvA", "beginner");
-      const id = session.displays.slice(before).find((d) => d.type === "reactor")?.id;
+      const id = session.displays.slice(before).find((d) => d.kind === "reactor")?.id;
       const tick = async () =>
-        (await session.send({ type: "reactorStep", reactorId: id, event: '{"kind":"tick"}' })).result.error_type;
+        (await session.send({ type: "reactorStep", reactorId: id, event: '{"kind":"tick"}' })).result.error?.errorType;
       expect((await tick()) === "TypeCheckError", "a bool is not an int at beginner");
       await run("x = 1\n", "lvB", "advanced");
       expect((await tick()) === "TypeCheckError", "nor after another file ran at advanced");
       const advanced = await run("def f(n: int) -> int:\n    return n\nprint(f(True))\n", "lvC", "advanced");
-      expect(advanced.stdout === "True\n", `at advanced it is: ${advanced.error_type}`);
+      expect(advanced.stdout === "True\n", `at advanced it is: ${advanced.error?.errorType}`);
 
       // What looks a class's module up finds the student's names.
       const own = await run([
@@ -259,10 +267,10 @@ async function main() {
         "print(__main__.Node is Node, sys.modules['__main__'].__dict__ is globals())",
         "print(any(n.startswith('_pll_run') for n in vars(__main__)))",
       ].join("\n"), "mainA", "raw");
-      expect(own.stdout === "__main__.Node | None\nTrue True\nFalse\n", `the student's own module: ${JSON.stringify(own.stdout)} ${own.error_type}`);
+      expect(own.stdout === "__main__.Node | None\nTrue True\nFalse\n", `the student's own module: ${JSON.stringify(own.stdout)} ${own.error?.errorType}`);
       // A prompt line, and a reactor's handler, run as it too.
       const prompt = (await session.send({ type: "replEval", code: "import __main__\n__main__.Node is Node", sessionKey: "mainA", level: "raw" })).result;
-      expect(prompt.result_repr === "True", `a prompt line runs as the file's __main__: ${prompt.result_repr} ${prompt.error_type}`);
+      expect(prompt.resultRepr === "True", `a prompt line runs as the file's __main__: ${prompt.resultRepr} ${prompt.error?.errorType}`);
       const mark = session.displays.length;
       await run([
         "import sys",
@@ -273,9 +281,9 @@ async function main() {
         '    return circle(5, "solid", "red")',
         "reactor(init=0, on_tick=tick, to_draw=draw).interact()",
       ].join("\n"), "mainC", "raw");
-      const rid = session.displays.slice(mark).find((d) => d.type === "reactor")?.id;
+      const rid = session.displays.slice(mark).find((d) => d.kind === "reactor")?.id;
       const stepped = (await session.send({ type: "reactorStep", reactorId: rid, event: '{"kind":"tick"}' })).result;
-      expect(stepped.value_repr === "1", `a handler runs as its file's __main__: ${stepped.value_repr} ${stepped.error_type}`);
+      expect(stepped.valueRepr === "1", `a handler runs as its file's __main__: ${stepped.valueRepr} ${stepped.error?.errorType}`);
 
       // A name typing cannot resolve: the error is at the student's line,
       // not at line 1 of the string typing evaluated.
@@ -284,9 +292,9 @@ async function main() {
         "mainB",
         "raw",
       );
-      const users = (missing.error_frames ?? []).filter((f) => f.user).map((f) => `${f.file}:${f.line}`);
-      expect(missing.error_type === "NameError" && users.join() === "mainB.py:4",
-        `only the student's own frame is theirs: ${missing.error_type} ${users.join()}`);
+      const users = (missing.error?.frames ?? []).filter((f) => f.user).map((f) => `${f.file}:${f.line}`);
+      expect(missing.error?.errorType === "NameError" && users.join() === "mainB.py:4",
+        `only the student's own frame is theirs: ${missing.error?.errorType} ${users.join()}`);
       console.log("    its level, its __main__, and only its own frames");
     }
     console.log("\n[7] os._exit ends the program, not Python; a fatal error says Python is finished");
@@ -299,12 +307,12 @@ async function main() {
       expect(aborted.result.ok, "so does os.abort()");
       // The status reaches the host, and a message is shown, as Python shows it.
       const coded = await run("import sys\nsys.exit(3)\n");
-      expect(coded.result.exit_code === 3, `the status is carried: ${coded.result.exit_code}`);
+      expect(coded.result.exitCode === 3, `the status is carried: ${coded.result.exitCode}`);
       const said = await run('import sys\nsys.exit("no data file")\n');
-      expect(said.result.exit_code === 1 && said.result.stderr === "no data file\n",
-        `a message is written to stderr: ${JSON.stringify(said.result.stderr)} ${said.result.exit_code}`);
+      expect(said.result.exitCode === 1 && said.result.stderr === "no data file\n",
+        `a message is written to stderr: ${JSON.stringify(said.result.stderr)} ${said.result.exitCode}`);
       const finished = await run('print("done")\n');
-      expect(finished.result.exit_code == null, `a program that just finishes has none: ${finished.result.exit_code}`);
+      expect(finished.result.exitCode == null, `a program that just finishes has none: ${finished.result.exitCode}`);
       const after = await run('print("still here")\n', "another");
       expect(after.result.stdout === "still here\n", `and Python carries on: ${JSON.stringify(after.result.stdout)}`);
       // A real abort, in C, which nothing can survive: the reply says so, so
@@ -323,9 +331,9 @@ async function main() {
 
   console.log("\n[8] a Node worker that crashes is reported once, as Python lost");
   {
-    const { DesktopPyodideRuntime, PythonLostError } = await importSource(`
-export { DesktopPyodideRuntime } from "./src/desktop/pyodideRuntime";
-export { PythonLostError } from "./src/common/runtimeErrors";
+    const { desktopPython, PythonLostError } = await importSource(`
+export { desktopPython } from "./src/desktop/pyodideRuntime";
+export { PythonLostError } from "./src/pyodide/runtime";
 `);
     // A worker that starts, and then throws outside any request.
     const dir = mkdtempSync(join(ROOT, ".smoke-crash-"));
@@ -333,11 +341,11 @@ export { PythonLostError } from "./src/common/runtimeErrors";
     writeFileSync(script, [
       'const { parentPort } = require("node:worker_threads");',
       "parentPort.on('message', (msg) => {",
-      "  if (msg.type === 'init') parentPort.postMessage({ id: msg.id, type: 'ready' });",
+      "  if (msg.type === 'init') parentPort.postMessage({ id: msg.id, type: 'reply', value: null });",
       "  else setTimeout(() => { throw new Error('worker crashed'); }, 0);",
       "});",
     ].join("\n"));
-    const runtime = new DesktopPyodideRuntime({
+    const runtime = desktopPython({
       indexUrlCandidates: [INDEX_URL],
       workerPath: script,
       missingAssetsHint: "no assets",

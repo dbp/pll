@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Fixed
+- **A package that failed to download is tried again** by the next run:
+  pytest or pyodide-http failing once, offline, was remembered as loaded,
+  so a file's tests or its URLs failed until the window was reloaded.
+- **A package that could not be loaded says so**, in the panel as on the
+  command line ("Could not load libraries (...)"), where in the editor it
+  went only to the log and the program then failed at its `import`.
+- **A reactor's `tick_rate` of NaN or infinity is refused**, with the
+  message any other bad rate gets, where it was accepted.
+
+### Changed
+- **A reactor advances only while its card is on screen**: while the panel
+  is hidden, or shows another file, it waits where it is, and carries on
+  when it is shown again. Its clock is now the card's.
+- **Internal: the code is reorganised by layer**, under `src/python`,
+  `src/pyodide`, `src/run`, `src/core` and `src/editor` (see
+  ARCHITECTURE.md's Layout). Every explanation - of a runtime error and of
+  a static finding - is now made in Python (`src/python/explain/`), beside
+  the exception; the host calls Python through one request, `call`, and
+  Python returns its results in the host's own shapes; the panel's header
+  and input row are one state, drawn by a smaller page script. Nothing a
+  student reads changes: the golden corpus is unchanged.
+
 ## 0.4.0 (2026-10-09)
 
 ### Breaking

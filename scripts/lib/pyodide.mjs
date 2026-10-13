@@ -10,7 +10,7 @@ export const INDEX_URL = resolve(ROOT, "node_modules", "pyodide");
  * runs in, not one assembled by hand.
  */
 export async function bootPll() {
-  const { installPll } = await importSource('export { installPll } from "./src/common/pythonInstall";');
+  const { installPll } = await importSource('export { installPll } from "./src/pyodide/install";');
   const pyodide = await loadPyodide({ indexURL: INDEX_URL });
   installPll(pyodide);
   return pyodide;

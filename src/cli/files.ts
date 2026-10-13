@@ -10,7 +10,7 @@ import {
   type SiblingFolder,
   type WorkspaceChanges,
   type WriteBackResult,
-} from "../common/workspaceFilePolicy";
+} from "../core/files";
 
 /**
  * The script's folder over Node's filesystem. There is no editor, so unlike

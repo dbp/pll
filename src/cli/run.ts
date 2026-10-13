@@ -1,11 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { runFilePlan, type RunHost, type RunSummary } from "../common/runPlan";
-import type { PythonRuntime } from "../common/types";
+import { runFilePlan, type RunHost, type RunSummary } from "../run/plan";
+import type { PythonRuntime } from "../run/python";
 import { createFileStore } from "./bundleStore";
 import { collectSiblingFiles, writeBackSiblingFiles } from "./files";
 import type { CliView } from "./view";
-import { errorText } from "../common/errorText";
+import { errorText } from "../core/errorText";
 
 /**
  * Exit codes. Distinct on purpose: an autograder wants to tell "the level

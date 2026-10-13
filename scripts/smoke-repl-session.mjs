@@ -196,10 +196,9 @@ export function __setActiveEditor(editor) {
 
 async function load() {
   const mod = await importSource(`
-export { ReplSession, STOP_TIMEOUT_MS, MAX_STREAM_LINES_PER_RUN } from "./src/common/replSession";
-export { PythonLostError, StoppedError } from "./src/common/runtimeErrors";
-export { examplarOutcomeFrom, reactorStepFrom, staticFindingsFrom } from "./src/common/fromPython";
-export { registerCommands } from "./src/common/commands";
+export { ReplSession, STOP_TIMEOUT_MS, MAX_STREAM_LINES_PER_RUN } from "./src/editor/replSession";
+export { PythonLostError, StoppedError } from "./src/pyodide/runtime";
+export { registerCommands } from "./src/editor/commands";
 export * as vscodeStub from "vscode";
 `, { vscodeStub: VSCODE_STUB });
   return mod;
@@ -211,9 +210,6 @@ const {
   MAX_STREAM_LINES_PER_RUN,
   PythonLostError,
   StoppedError,
-  examplarOutcomeFrom,
-  reactorStepFrom,
-  staticFindingsFrom,
   vscodeStub,
   registerCommands,
 } = await load();
@@ -228,7 +224,7 @@ function makeView() {
     entries: [],
     prompt: "primary",
     busy: false,
-    status: undefined,
+    status: null,
     title: "",
     awaitingInput: false,
     inputPrefix: "",
@@ -239,47 +235,46 @@ function makeView() {
       view.handlers = h;
     },
     reveal: async () => undefined,
-    empty: false,
-    showEmpty() {
-      view.empty = true;
-      view.title = "";
-      view.entries = [];
+    /** The cards' clocks, as the page runs them: a tick per `tickRate` while a card is drawn and plays. */
+    clocks: new Map(),
+    clock(entry) {
+      clearInterval(view.clocks.get(entry.id));
+      view.clocks.delete(entry.id);
+      if (entry.kind !== "reactor" || !entry.playing) return;
+      const clock = setInterval(() => view.handlers.onReactorControl(entry.id, "tick"), Math.max(10, entry.tickRate * 1000));
+      clock.unref?.();
+      view.clocks.set(entry.id, clock);
     },
-    showSession(state) {
-      view.empty = false;
-      view.title = state.title;
-      view.entries = [...state.entries];
-      view.prompt = state.prompt;
-      view.busy = state.busy;
-      view.status = state.status;
-      view.awaitingInput = !!state.awaitingInput;
-      view.inputPrefix = state.inputPrefix ?? "";
+    stopClocks() {
+      for (const clock of view.clocks.values()) clearInterval(clock);
+      view.clocks.clear();
     },
-    setTitle(t) {
-      view.title = t;
+    show(entries, state) {
+      view.stopClocks();
+      view.entries = [...entries];
+      for (const entry of view.entries) view.clock(entry);
+      view.setState(state);
+    },
+    /** The header and the input row; `busy` is whether there is a status. */
+    setState(state) {
+      Object.assign(view, state, { busy: state.status !== null });
     },
     append(entry) {
       view.entries.push(entry);
+      view.clock(entry);
     },
     clear() {
+      view.stopClocks();
       view.entries = [];
-    },
-    setPrompt(kind) {
-      view.prompt = kind;
-    },
-    setBusy(busy, status) {
-      view.busy = busy;
-      view.status = status;
     },
     updateReactor(id, patch) {
       view.reactorPatches.push([id, patch]);
       for (const entry of view.entries) {
-        if (entry.kind === "reactor" && entry.id === id) Object.assign(entry, patch);
+        if (entry.kind === "reactor" && entry.id === id) {
+          Object.assign(entry, patch);
+          if (patch.playing !== undefined) view.clock(entry);
+        }
       }
-    },
-    setAwaitingInput(awaiting, prefix) {
-      view.awaitingInput = awaiting;
-      view.inputPrefix = prefix ?? "";
     },
     focusInput() {
       view.focusedInput += 1;
@@ -312,11 +307,20 @@ function makeDiagnostics() {
  * `script.runTests` emits a run's test report: as in Python, the tests run
  * inside `runFile`, after the program, and only if it did not raise.
  *
- * Results are scripted as Python returns them and translated the way the
- * real runtime translates them, through `fromPython`.
+ * Results are scripted as Python returns them, which the runtime passes on
+ * as they are.
  */
 /** A reactor step that worked, as Python reports one. */
-const FRAME = { ok: true, frame: { data: "<svg/>", width: 1, height: 1 }, index: 0, length: 1 };
+const FRAME = {
+  kind: "frame",
+  frame: "<svg/>",
+  index: 0,
+  length: 1,
+  atEnd: false,
+  stopped: false,
+  valueRepr: "",
+  messages: [],
+};
 
 function makeRuntime(script = {}) {
   const calls = [];
@@ -333,7 +337,7 @@ function makeRuntime(script = {}) {
       const raw = script.examplarRun
         ? await script.examplarRun(testSource, bundle)
         : (script.examplarResult ?? { ok: true, provides: [], wheats: [], chaffs: [] });
-      return examplarOutcomeFrom(raw);
+      return raw;
     },
     async examplarBuild(sources) {
       calls.push(["examplarBuild", sources]);
@@ -341,11 +345,11 @@ function makeRuntime(script = {}) {
     },
     async reactorStep(reactorId, event, output) {
       calls.push(["reactorStep", reactorId, event]);
-      return reactorStepFrom(script.reactorStep?.(reactorId, JSON.parse(event), output) ?? FRAME);
+      return script.reactorStep?.(reactorId, JSON.parse(event), output) ?? FRAME;
     },
     async reactorSeek(reactorId, index) {
       calls.push(["reactorSeek", reactorId, index]);
-      return reactorStepFrom(script.reactorSeek?.(reactorId, index) ?? FRAME);
+      return script.reactorSeek?.(reactorId, index) ?? FRAME;
     },
     async reactorDispose(reactorId) {
       calls.push(["reactorDispose", reactorId]);
@@ -360,6 +364,7 @@ function makeRuntime(script = {}) {
     },
     async initialize() {
       calls.push(["initialize"]);
+      if (script.initialize) return script.initialize();
       if (script.initFails) throw new Error("pyodide unavailable");
       if (script.initFailsOnce && calls.filter((c) => c[0] === "initialize").length === 1) {
         throw new Error("pyodide unavailable");
@@ -437,9 +442,15 @@ function makeRuntime(script = {}) {
     },
     async staticAnalyze(request) {
       calls.push(["staticAnalyze", request.fileName, request.level, request.sessionKey]);
-      return staticFindingsFrom(
-        script.staticAnalyze ? await script.staticAnalyze(request) : (script.findings ?? []),
-      );
+      if (script.staticAnalyze) return script.staticAnalyze(request);
+      // Worded, as Python words them, for the file asked about.
+      return (script.findings ?? []).map((finding) => ({
+        howToFix: [],
+        origin: "static",
+        fileName: request.fileName,
+        level: request.level,
+        ...finding,
+      }));
     },
     async mountWorkspaceFiles(files) {
       calls.push(["mountWorkspaceFiles", files.map((f) => f.name).join("|")]);
@@ -522,33 +533,31 @@ async function harness(script = {}, doc = makeDoc("hello.py")) {
 }
 
 /**
- * An error event, as the runtime builds one from `_pll_error_info`: `frames`
- * is `[file, line, function]` per frame, outermost first, and a frame is the
- * student's unless its file is a `<...>` other than `<repl>`.
+ * A runtime error event, as the runtime delivers one: Python's words for
+ * the error, and the finding Python made of it (`explain/finding.py`) - by
+ * default the catch-all's, Python's message where the error is. `facts.name`
+ * is the name a `NameError` is about.
  */
-function errorEvent({ type, message, file, line, column = null, frames = [], facts = {} }) {
+function errorEvent({ type, message, file, line, column = null, facts = {}, finding = {} }) {
   return {
     kind: "error",
     fileName: file,
     error: {
       errorType: type,
       message,
-      traceback: `${type}: ${message}`,
-      fileName: file,
-      lineNumber: line,
-      column,
-      text: null,
-      nameToken: facts.name ?? null,
-      frames: frames.map(([fileName, frameLine, functionName = null]) => ({
-        fileName,
-        line: frameLine,
-        column: null,
-        functionName,
-        // As `_pll_is_students` decides: no `<...>` but a prompt line.
-        user: fileName === "<repl>" || !fileName.startsWith("<"),
-        text: null,
-      })),
-      facts,
+      finding: {
+        id: "runtime-error",
+        errorType: type,
+        headline: message,
+        howToFix: [],
+        fileName: file,
+        lineNumber: line,
+        column,
+        nameToken: facts.name ?? null,
+        severity: "error",
+        origin: "runtime",
+        ...finding,
+      },
     },
   };
 }
@@ -661,15 +670,12 @@ console.log("\n[5] beginner static findings block the file and become diagnostic
       findings: [
         {
           id: "reassignment",
-          error_type: "Reassignment",
+          errorType: "Reassignment",
           severity: "error",
-          message: "x is assigned twice",
-          line_number: 3,
+          headline: "x is assigned twice",
+          lineNumber: 3,
           column: 0,
-          name_token: "x",
-          scope_kind: "module",
-          first_line_number: 2,
-          first_column: 0,
+          nameToken: "x",
         },
       ],
     },
@@ -711,13 +717,12 @@ console.log("\n[6] prompt findings stay in the view and carry the session key");
       findings: [
         {
           id: "shadowing-builtin",
-          error_type: "Shadowing",
+          errorType: "Shadowing",
           severity: "error",
-          message: "list shadows a builtin",
-          line_number: 1,
+          headline: "list shadows a builtin",
+          lineNumber: 1,
           column: 0,
-          name_token: "list",
-          scope_kind: "module",
+          nameToken: "list",
         },
       ],
     },
@@ -1148,6 +1153,18 @@ console.log("\n[20] a Pyodide that will not start is reported once");
   repl.dispose();
 }
 
+console.log("\n[20b] while Python starts, the panel says so, and not after");
+{
+  const starting = makeGate();
+  const { repl, view } = await harness({ initialize: () => starting.promise });
+  await settle();
+  expect(view.busy === true && view.status === "Loading Python...", `starting: ${view.busy} ${view.status}`);
+  starting.open();
+  await settle();
+  expect(view.busy === false && view.status === null, `started: ${view.busy} ${view.status}`);
+  repl.dispose();
+}
+
 console.log("\n[21] a static-analysis crash does not block the run");
 {
   const doc = makeDoc("beginner.py", "#level beginner\nprint(1)\n");
@@ -1347,7 +1364,7 @@ function reactorEvent(over = {}) {
     wantsKeys: false,
     wantsMouse: false,
     register: null,
-    frame: { data: "<svg/>", width: 10, height: 10 },
+    frame: "<svg/>",
     index: 0,
     length: 1,
     atEnd: true,
@@ -1365,14 +1382,14 @@ function countingReactor(extra = {}) {
     reactorStep: (_id, event) => {
       if (event.kind === "tick") n += 1;
       return {
-        ok: true, frame: { data: `<svg id="${n}"/>`, width: 10, height: 10 },
-        index: n, length: n + 1, at_end: true, stopped: extra.stopAt === n,
-        value_repr: String(n), messages: extra.send ? [JSON.stringify(extra.send)] : [],
+        kind: "frame", frame: `<svg id="${n}"/>`,
+        index: n, length: n + 1, atEnd: true, stopped: extra.stopAt === n,
+        valueRepr: String(n), messages: extra.send ? [JSON.stringify(extra.send)] : [],
       };
     },
     reactorSeek: (_id, index) => ({
-      ok: true, frame: { data: "<svg/>", width: 10, height: 10 },
-      index, length: n + 1, at_end: false, stopped: false, value_repr: String(index),
+      kind: "frame", frame: "<svg/>",
+      index, length: n + 1, atEnd: false, stopped: false, valueRepr: String(index), messages: [],
     }),
     ...extra.script,
   };
@@ -1406,6 +1423,10 @@ console.log("\n[30] pause stops the clock; step advances exactly one frame");
     runtime.calls.filter((c) => c[0] === "reactorStep").length === paused,
     "no ticks should happen while paused",
   );
+  // A tick the card sent before the pause reached it is not applied.
+  view.handlers.onReactorControl("r1", "tick");
+  await settle();
+  expect(runtime.calls.filter((c) => c[0] === "reactorStep").length === paused, "a late tick is dropped");
   view.handlers.onReactorControl("r1", "step");
   await settle();
   expect(
@@ -1605,7 +1626,7 @@ function examplarReply({
         targets: fn,
         loaded: true,
         tests: outcomes(mine, missed.includes(key) ? [] : mine),
-        student_defines: defines,
+        studentDefines: defines,
       });
     }
   }
@@ -1614,10 +1635,10 @@ function examplarReply({
     provides,
     attribution: attributed,
     wheats: [
-      { id: "reference", loaded: true, tests: outcomes(tests, failing), student_defines: defines },
+      { id: "reference", loaded: true, tests: outcomes(tests, failing), studentDefines: defines },
     ],
     chaffs,
-    chaffs_skipped: provides.filter((fn) => !settled.includes(fn)),
+    chaffsSkipped: provides.filter((fn) => !settled.includes(fn)),
   };
 }
 
@@ -1771,7 +1792,7 @@ console.log("\n[40] a test that raised is not a test that is wrong");
           id: "alternative",
           loaded: true,
           tests: { test_a: { outcome: "error", message: "TypeError: nope" } },
-          student_defines: [],
+          studentDefines: [],
         });
         return reply;
       })(),
@@ -1913,13 +1934,12 @@ console.log("\n[45] a warning is shown and the file still runs");
       findings: [
         {
           id: "test-not-named",
-          error_type: "NeverRun",
+          errorType: "NeverRun",
           severity: "warning",
-          message: "`check_total` has an `assert` in it, but nothing runs it",
-          line_number: 2,
+          headline: "`check_total` has an `assert` in it, but nothing runs it",
+          lineNumber: 2,
           column: 0,
-          name_token: "check_total",
-          scope_kind: "module",
+          nameToken: "check_total",
         },
       ],
     },
@@ -1951,13 +1971,12 @@ console.log("\n[46] an error still stops the file");
       findings: [
         {
           id: "assert-tuple",
-          error_type: "AlwaysTrue",
+          errorType: "AlwaysTrue",
           severity: "error",
-          message: "this `assert` is always true",
-          line_number: 3,
+          headline: "this `assert` is always true",
+          lineNumber: 3,
           column: 4,
-          name_token: null,
-          scope_kind: "function",
+          nameToken: null,
         },
       ],
     },
@@ -2420,18 +2439,24 @@ console.log("\n[55] an error in a reactor's handler is a finding, like any other
     countingReactor({
       script: {
         reactorStep: () => ({
-          ok: false,
-          error_type: "NameError",
-          error_message: "name 'undefined_step' is not defined",
-          traceback: "Traceback ...",
-          error_file: "anim.py",
-          line_number: 2,
-          column: 15,
-          error_frames: [
-            { file: "<exec>", line: 400, column: null, function: "_pll_reactor_step", user: false },
-            { file: "anim.py", line: 2, column: 15, function: "tick", user: true },
-          ],
-          error_facts: { name: "undefined_step" },
+          kind: "raised",
+          error: {
+            errorType: "NameError",
+            message: "name 'undefined_step' is not defined",
+            // What Python makes of it (`explain/names.py`).
+            finding: {
+              id: "name-error",
+              errorType: "NameError",
+              headline: "Python doesn't know what `undefined_step` means.",
+              howToFix: [],
+              fileName: "anim.py",
+              lineNumber: 2,
+              column: 15,
+              nameToken: "undefined_step",
+              severity: "error",
+              origin: "runtime",
+            },
+          },
         }),
       },
     }),
@@ -2480,6 +2505,7 @@ console.log("\n[56] a test's error is explained in the card, as the run's would 
                 file: "t.py",
                 line: 2,
                 frames: [["t.py", 5, "test_add"], ["t.py", 2, "add"]],
+                finding: { id: "stock-message", headline: "A list and a string cannot be added together." },
               }).error,
             },
           ],
@@ -2561,7 +2587,7 @@ console.log("\n[59] what a reactor's handler prints is shown, like the program's
       script: {
         reactorStep: (_id, _event, output) => {
           output?.onEvent({ kind: "stdout", text: "tick\n" });
-          return { ok: true, frame: { data: "<svg/>", width: 1, height: 1 }, index: 1, length: 2, at_end: true, stopped: true, value_repr: "1", messages: [] };
+          return { kind: "frame", frame: "<svg/>", index: 1, length: 2, atEnd: true, stopped: true, valueRepr: "1", messages: [] };
         },
       },
     }),
@@ -2702,7 +2728,7 @@ console.log("\n[64] a webview that reloads is replayed the session, from the ses
   );
   await repl.runFile('print("hi")\n', "reload.py", doc);
   await settle();
-  view.showSession({ title: "", entries: [], prompt: "primary", busy: false });
+  view.show([], { title: "", prompt: "primary", status: null, awaitingInput: false, inputPrefix: "" });
   view.handlers.onViewReady();
   expect(texts(view, "stdout").join("|") === "hi", `its output is back: ${JSON.stringify(texts(view, "stdout"))}`);
   expect(view.title === "reload.py [raw]", `and its title: ${view.title}`);
@@ -2710,7 +2736,7 @@ console.log("\n[64] a webview that reloads is replayed the session, from the ses
 
   // With no Python file open, the session with no file.
   const none = await harness({}, null);
-  none.view.showSession({ title: "", entries: [], prompt: "primary", busy: false });
+  none.view.show([], { title: "", prompt: "primary", status: null, awaitingInput: false, inputPrefix: "" });
   none.view.handlers.onViewReady();
   expect(none.view.title === "No file [beginner]", `the one with no file: ${none.view.title}`);
   none.repl.dispose();
@@ -2785,7 +2811,7 @@ console.log("\n[67] a reactor that floods the panel is pointed at Pause, not Sto
       script: {
         reactorStep: (_id, _event, output) => {
           output?.onEvent({ kind: "stdout", text: flood });
-          return { ok: true, frame: { data: "<svg/>", width: 1, height: 1 }, index: 1, length: 2, at_end: true, stopped: false, value_repr: "1", messages: [] };
+          return { kind: "frame", frame: "<svg/>", index: 1, length: 2, atEnd: true, stopped: false, valueRepr: "1", messages: [] };
         },
       },
     }),
@@ -2901,7 +2927,7 @@ console.log("\n[71] a reactor Python no longer has is dropped quietly");
   // Its session was reset under it: there is nothing to show, and nothing
   // wrong with the student's program.
   const { repl, view, runtime, doc } = await harness(
-    countingReactor({ script: { reactorStep: () => ({ ok: false, gone: true }) } }),
+    countingReactor({ script: { reactorStep: () => ({ kind: "gone" }) } }),
   );
   await repl.runFile("animate(...)", "hello.py", doc);
   await new Promise((r) => setTimeout(r, 150));
@@ -2912,7 +2938,7 @@ console.log("\n[71] a reactor Python no longer has is dropped quietly");
   repl.dispose();
 }
 
-console.log("\n[72] a file's reactor pauses while another file is shown, and resumes after");
+console.log("\n[72] a file's reactor does not tick while another file is shown, and does again after");
 {
   const { repl, view, runtime, doc } = await harness(countingReactor());
   await repl.runFile("animate(...)", "hello.py", doc);
@@ -3040,8 +3066,8 @@ console.log("\n[75] a world's messages wait for its newest frame, and none is lo
         event: { ticking: false, register: "ws://localhost:9999" },
         script: {
           reactorSeek: (_id, index) => ({
-            ok: true, frame: { data: "<svg/>", width: 10, height: 10 },
-            index, length: 2, at_end: newest, stopped: false, value_repr: String(index),
+            kind: "frame", frame: "<svg/>",
+            index, length: 2, atEnd: newest, stopped: false, valueRepr: String(index), messages: [],
           }),
         },
       }),

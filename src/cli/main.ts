@@ -6,9 +6,9 @@ import { createCliRuntime } from "./runtime";
 import { EXIT, runFile } from "./run";
 import { createStdinReader } from "./stdin";
 import { CliView } from "./view";
-import { errorText } from "../common/errorText";
-import { PythonLostError } from "../common/runtimeErrors";
-import type { PythonRuntime } from "../common/types";
+import { errorText } from "../core/errorText";
+import { PythonLostError } from "../pyodide/runtime";
+import type { PythonRuntime } from "../run/python";
 
 declare const PLL_CLI_VERSION: string;
 

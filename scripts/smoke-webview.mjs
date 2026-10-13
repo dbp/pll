@@ -31,16 +31,13 @@ const {
   InteractionsView,
   buildExamplarEntries,
   findRuntimeFinding,
-  pythonErrorFrom,
-  examplarOutcomeFrom,
   serializeFinding,
 } = await importSource(
   `
-export { InteractionsView } from "./src/common/interactionsView";
-export { buildExamplarEntries } from "./src/common/examplarPhase";
-export { findRuntimeFinding } from "./src/common/analyzers/registry";
-export { examplarOutcomeFrom, pythonErrorFrom } from "./src/common/fromPython";
-export { serializeFinding } from "./src/common/analyzers/findingLocation";
+export { InteractionsView } from "./src/editor/panel/view";
+export { buildExamplarEntries } from "./src/run/examplar";
+export { findRuntimeFinding } from "./src/run/finding";
+export { serializeFinding } from "./src/run/finding";
 `,
   { vscodeStub: VSCODE_STUB },
 );
@@ -49,17 +46,23 @@ export { serializeFinding } from "./src/common/analyzers/findingLocation";
 
 const CODE = "def add(xs: list, item: str) -> list:\n    return xs + item\n";
 const finding = serializeFinding(
-  findRuntimeFinding(
-    CODE,
-    "t.py",
-    "beginner",
-    pythonErrorFrom({
-      error_type: "TypeError",
-      error_message: 'can only concatenate list (not "str") to list',
-      error_file: "t.py",
-      line_number: 2,
-    }),
-  ),
+  findRuntimeFinding("t.py", "beginner", {
+    errorType: "TypeError",
+    message: 'can only concatenate list (not "str") to list',
+    // As Python explains it (`explain/stock.py`).
+    finding: {
+      id: "stock-message",
+      errorType: "TypeError",
+      headline: "A list and a string cannot be added together.",
+      howToFix: ["`+` joins a list to another list. To add one item, put it inside brackets: `xs + [item]`."],
+      fileName: "t.py",
+      lineNumber: 2,
+      column: null,
+      nameToken: null,
+      severity: "error",
+      origin: "runtime",
+    },
+  }),
 );
 const testReport = {
   kind: "testReport",
@@ -86,7 +89,7 @@ const testReport = {
 // so it must not reach the card.
 const examplar = buildExamplarEntries(
   { url: "https://example.test/hw.json", json: "", cached: false },
-  examplarOutcomeFrom({
+  {
     ok: true,
     provides: ["add", "double"],
     attribution: { test_add_one: ["add"], test_double: ["double"] },
@@ -104,19 +107,17 @@ const examplar = buildExamplarEntries(
       { id: "1", targets: "add", loaded: true, tests: { test_add_one: { outcome: "fail", message: "x" } } },
       { id: "2", targets: "add", loaded: true, tests: { test_add_one: { outcome: "pass", message: null } } },
     ],
-    chaffs_skipped: ["double"],
-  }),
+    chaffsSkipped: ["double"],
+  },
 );
 const session = {
-  title: "t.py [beginner]",
   entries: [
     { kind: "banner", text: "Running t.py" },
     testReport,
     { kind: "finding", finding },
     ...examplar,
   ],
-  prompt: "primary",
-  busy: false,
+  state: { title: "t.py [beginner]", prompt: "primary", status: null, awaitingInput: false, inputPrefix: "" },
 };
 
 /* ---- The host half --------------------------------------------------- */
@@ -134,7 +135,7 @@ view.setHandlers({
   onOpenLocation: (fileName, line, column) => opened.push({ fileName, line, column }),
   onViewReady() {
     toHost.push({ type: "ready" });
-    if (showOnReady) view.showSession(session);
+    if (showOnReady) view.show(session.entries, session.state);
   },
 });
 
@@ -210,7 +211,7 @@ try {
   expect(empty.text === "", `with nothing to say yet: ${JSON.stringify(empty.text)}`);
 
   console.log("\n[2] a session's entries are drawn from the host's own shapes");
-  view.showSession(session);
+  view.show(session.entries, session.state);
   await settle();
   const drawn = await page.evaluate(() => {
     const box = document.querySelector(".entry.testReport .testFinding");
@@ -271,6 +272,36 @@ try {
   expect(toHost.some((m) => m.type === "submit" && m.code === "1 + 1"), "the host got the code");
   expect(JSON.stringify(saved) === JSON.stringify({ history: ["1 + 1"] }),
     `nothing but history saved: ${JSON.stringify(saved)}`);
+
+  console.log("\n[5b] the input row follows the state: busy, waiting for input(), and idle");
+  {
+    const row = () =>
+      page.evaluate(() => ({
+        disabled: document.getElementById("input").disabled,
+        stop: !document.getElementById("stop").hidden,
+        status: document.getElementById("status").textContent,
+        prompt: document.getElementById("prompt").textContent,
+        title: document.getElementById("title").textContent,
+      }));
+    const state = { title: "t.py [raw]", prompt: "primary", status: "Running...", awaitingInput: false, inputPrefix: "" };
+    view.setState(state);
+    await settle();
+    const busy = await row();
+    expect(busy.disabled && busy.stop && busy.status === "Running..." && busy.title === "t.py [raw]",
+      `running: no typing, Stop offered, the status said: ${JSON.stringify(busy)}`);
+    view.setState({ ...state, status: "Waiting for input...", awaitingInput: true, inputPrefix: "Name: " });
+    await settle();
+    const waiting = await row();
+    expect(!waiting.disabled && !waiting.stop && waiting.prompt === "Name: ",
+      `input() takes a line, after its own prompt: ${JSON.stringify(waiting)}`);
+    view.setState({ ...state, status: null, prompt: "continuation" });
+    await settle();
+    const idle = await row();
+    expect(!idle.disabled && !idle.stop && idle.status === "" && idle.prompt === "...",
+      `idle, in the middle of a block: ${JSON.stringify(idle)}`);
+    view.setState({ ...state, status: null });
+    await settle();
+  }
 
   console.log("\n[6] a reload is redrawn by the host, not from the view's own copy");
   // With nothing to show, the reloaded view must be empty: what it had
@@ -340,6 +371,50 @@ try {
     await settle();
     const saved = fromView.slice(sentBefore).find((m) => m.type === "saveCsv");
     expect(saved?.csv === "code,amount\n9,12999.99\n100,2.0\n", `Python's CSV, not the cells shown: ${JSON.stringify(saved)}`);
+  }
+
+  console.log("\n[9] a reactor card is redrawn by each patch, and ticks while it is drawn and plays");
+  {
+    view.append({
+      kind: "reactor", id: "rx1", title: "counter", tickRate: 0.02, ticking: true, wantsKeys: false, wantsMouse: false,
+      register: null, frame: '<svg id="one"/>', index: 0, length: 1, atEnd: true, stopped: false,
+      valueRepr: "0", playing: false, connection: "none",
+    });
+    await page.waitForTimeout(100);
+    view.updateReactor("rx1", { frame: '<svg id="two"/>', index: 1, length: 2, valueRepr: "1" });
+    await settle();
+    const card = await page.evaluate(() => {
+      const el = [...document.querySelectorAll(".entry.reactor")].at(-1);
+      return {
+        picture: el?.querySelector(".rxStage svg")?.id,
+        value: el?.querySelector(".rxValue")?.textContent,
+        counter: el?.querySelector(".rxCounter")?.textContent,
+      };
+    });
+    expect(card.picture === "two" && card.value === "1" && card.counter === "frame 1 of 1",
+      `the new frame, its value and its place: ${JSON.stringify(card)}`);
+
+    // Its clock is the card's: it ticks while the card plays, and only while it is drawn.
+    const ticks = () => toHost.filter((m) => m.type === "reactorControl" && m.id === "rx1" && m.action === "tick").length;
+    const still = ticks();
+    await page.waitForTimeout(150);
+    expect(ticks() === still, `not playing, no ticks: ${ticks() - still}`);
+    view.updateReactor("rx1", { playing: true });
+    await page.waitForTimeout(200);
+    const playing = ticks();
+    expect(playing - still >= 3, `playing, a tick every 20ms: ${playing - still}`);
+    view.updateReactor("rx1", { playing: false });
+    await page.waitForTimeout(60);
+    const paused = ticks();
+    await page.waitForTimeout(150);
+    expect(ticks() === paused, `paused, none: ${ticks() - paused}`);
+    view.updateReactor("rx1", { playing: true });
+    await page.waitForTimeout(60);
+    view.show([], { title: "other.py", prompt: "primary", status: null, awaitingInput: false, inputPrefix: "" });
+    await page.waitForTimeout(60);
+    const away = ticks();
+    await page.waitForTimeout(150);
+    expect(ticks() === away, `another session shown, none: ${ticks() - away}`);
   }
 
   expect(problems.length === 0, `no script errors or CSP violations: ${problems.join("; ")}`);

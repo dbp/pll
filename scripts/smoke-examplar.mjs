@@ -18,7 +18,7 @@ import { expect, passed } from "./lib/check.mjs";
 import { importSource } from "./lib/bundle.mjs";
 
 async function load() {
-  const mod = await importSource(`export * from "./src/common/examplarSource";
+  const mod = await importSource(`export * from "./src/run/examplarSource";
 export { cacheDir, createFileStore } from "./src/cli/bundleStore";
 `);
   return mod;

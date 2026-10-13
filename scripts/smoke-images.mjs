@@ -39,7 +39,7 @@ async function main() {
   // Helper: extract the image-typed entries from a result.
   const imagesOf = (result) =>
     Array.isArray(result.displays)
-      ? result.displays.filter((d) => d.type === "image")
+      ? result.displays.filter((d) => d.kind === "image")
       : [];
 
   console.log("\n[1] run-file: samples/images.py - expect 6 images, no error");
@@ -47,18 +47,17 @@ async function main() {
     const result = py(callRunFile, [readPy("samples/images.py"), "images.py", SK]);
     const images = imagesOf(result);
     console.log(`    ok=${result.ok}, images=${images.length}`);
-    if (result.error_type) {
-      console.log(`    error: ${result.error_type}: ${result.error_message}`);
+    if (result.error?.errorType) {
+      console.log(`    error: ${result.error?.errorType}: ${result.error?.message}`);
     }
     expect(result.ok, "samples/images.py should run cleanly");
     expect(images.length === 6, `expected 6 images, got ${images.length}`);
     if (images.length >= 1) {
       const first = images[0];
-      expect(first.type === "image", "display.type === 'image'");
-      expect(first.format === "svg", "display.format === 'svg'");
-      expect(typeof first.data === "string" && first.data.startsWith("<svg "),
+      expect(first.kind === "image", "display.type === 'image'");
+      expect(typeof first.svg === "string" && first.svg.startsWith("<svg "),
         "first image data starts with <svg");
-      expect(first.data.includes("<circle"), "first image (circle) includes <circle>");
+      expect(first.svg.includes("<circle"), "first image (circle) includes <circle>");
       expect(first.width === 100 && first.height === 100,
         `circle(50) should be 100x100, got ${first.width}x${first.height}`);
     }
@@ -68,18 +67,18 @@ async function main() {
   {
     const result = py(callReplEval, [`circle(20, "solid", "blue")`, SK]);
     const images = imagesOf(result);
-    console.log(`    ok=${result.ok}, images=${images.length}, repr=${result.result_repr}`);
+    console.log(`    ok=${result.ok}, images=${images.length}, repr=${result.resultRepr}`);
     expect(result.ok, "repl-eval should succeed");
     expect(images.length === 1, "one image emitted");
-    expect(result.result_repr == null, "image takes the place of result_repr");
+    expect(result.resultRepr == null, "image takes the place of result_repr");
   }
 
   console.log("\n[3] repl-eval: non-image expression still uses result_repr");
   {
     const result = py(callReplEval, [`1 + 2`, SK]);
     const images = imagesOf(result);
-    console.log(`    repr=${result.result_repr}, images=${images.length}`);
-    expect(result.result_repr === "3", "1 + 2 -> '3'");
+    console.log(`    repr=${result.resultRepr}, images=${images.length}`);
+    expect(result.resultRepr === "3", "1 + 2 -> '3'");
     expect(images.length === 0, "no images for plain expressions");
   }
 
@@ -115,8 +114,8 @@ async function main() {
       // beside: width = sum (20 + 50 = 70), height = max(20, 50) = 50
       expect(img.width === 70, `beside width should be 70, got ${img.width}`);
       expect(img.height === 50, `beside height should be 50, got ${img.height}`);
-      expect(img.data.includes("<circle"), "contains circle");
-      expect(img.data.includes("<rect"), "contains square (rect)");
+      expect(img.svg.includes("<circle"), "contains circle");
+      expect(img.svg.includes("<rect"), "contains square (rect)");
     }
   }
 
@@ -128,7 +127,7 @@ async function main() {
 
     // REPL can still see `x` (REPL inherits the file's globals).
     const r1Repl = py(callReplEval, [`x`, SK]);
-    expect(r1Repl.ok && r1Repl.result_repr === "5", `REPL sees x=5, got ${r1Repl.result_repr}`);
+    expect(r1Repl.ok && r1Repl.resultRepr === "5", `REPL sees x=5, got ${r1Repl.resultRepr}`);
 
     // Image primitives must still be available after a file run.
     const r1Img = py(callReplEval, [`circle(10, "solid", "red")`, SK]);
@@ -141,13 +140,13 @@ async function main() {
 
     const r2X = py(callReplEval, [`x`, SK]);
     expect(
-      !r2X.ok && r2X.error_type === "NameError",
-      `expected NameError for x after reset, got ok=${r2X.ok} type=${r2X.error_type}`,
+      !r2X.ok && r2X.error?.errorType === "NameError",
+      `expected NameError for x after reset, got ok=${r2X.ok} type=${r2X.error?.errorType}`,
     );
 
     const r2Special = py(callReplEval, [`pll_special`, SK]);
     expect(
-      !r2Special.ok && r2Special.error_type === "NameError",
+      !r2Special.ok && r2Special.error?.errorType === "NameError",
       "expected NameError for pll_special after reset",
     );
 
@@ -157,7 +156,7 @@ async function main() {
 
     // The current file's defs are present.
     const r2Y = py(callReplEval, [`y`, SK]);
-    expect(r2Y.ok && r2Y.result_repr === "7", "REPL sees y=7 from second file");
+    expect(r2Y.ok && r2Y.resultRepr === "7", "REPL sees y=7 from second file");
   }
 
   console.log("\n[8] sessions are isolated: file A's defs don't leak into file B");
@@ -171,7 +170,7 @@ async function main() {
 
     // REPL in session A sees alpha.
     const rar = py(callReplEval, [`alpha`, SK_A]);
-    expect(rar.result_repr === "'from-A'", "session A sees alpha");
+    expect(rar.resultRepr === "'from-A'", "session A sees alpha");
 
     // Run file B in session B (different session). It defines `beta` and
     // does not mention alpha at all.
@@ -180,19 +179,19 @@ async function main() {
 
     // REPL in session B sees beta but NOT alpha.
     const rbr = py(callReplEval, [`beta`, SK_B]);
-    expect(rbr.result_repr === "'from-B'", "session B sees beta");
+    expect(rbr.resultRepr === "'from-B'", "session B sees beta");
     const rbAlpha = py(callReplEval, [`alpha`, SK_B]);
     expect(
-      !rbAlpha.ok && rbAlpha.error_type === "NameError",
+      !rbAlpha.ok && rbAlpha.error?.errorType === "NameError",
       "session B does NOT see alpha (per-file isolation)",
     );
 
     // Switching back to A, alpha is still defined and beta is not.
     const raAlpha = py(callReplEval, [`alpha`, SK_A]);
-    expect(raAlpha.result_repr === "'from-A'", "session A still has alpha");
+    expect(raAlpha.resultRepr === "'from-A'", "session A still has alpha");
     const raBeta = py(callReplEval, [`beta`, SK_A]);
     expect(
-      !raBeta.ok && raBeta.error_type === "NameError",
+      !raBeta.ok && raBeta.error?.errorType === "NameError",
       "session A does NOT see beta (per-file isolation)",
     );
 
@@ -256,11 +255,11 @@ async function main() {
     const code = `overlay_xy(square(50, "solid", "red"), -20, -20, square(30, "solid", "blue"))`;
     const img = imagesOf(py(callReplEval, [code, SK]))[0];
     // The blue square sits at the new origin and the red one is shifted in.
-    expect(/<rect x="0" y="0"[^>]*fill="blue"/.test(img.data), "image2 should land at the origin");
-    expect(/<rect x="20" y="20"[^>]*fill="red"/.test(img.data), "image1 should be shifted in by 20");
+    expect(/<rect x="0" y="0"[^>]*fill="blue"/.test(img.svg), "image2 should land at the origin");
+    expect(/<rect x="20" y="20"[^>]*fill="red"/.test(img.svg), "image1 should be shifted in by 20");
     // Painting order: the first argument ends up on top, so it is drawn last.
     expect(
-      img.data.indexOf("blue") < img.data.indexOf("red"),
+      img.svg.indexOf("blue") < img.svg.indexOf("red"),
       "overlay_xy should paint image1 last so it is on top",
     );
   }
@@ -269,21 +268,21 @@ async function main() {
   {
     const code = `beside(crop(0, 0, 10, 10, square(50, "solid", "red")), place_image(square(30, "solid", "blue"), 5, 5, empty_scene(40, 40)))`;
     const img = imagesOf(py(callReplEval, [code, SK]))[0];
-    const ids = [...new Set((img.data.match(/id="pll[0-9a-f]+c\d+"/g) || []))];
+    const ids = [...new Set((img.svg.match(/id="pll[0-9a-f]+c\d+"/g) || []))];
     expect(ids.length === 2, `two clip regions should get distinct ids, got ${ids.length}`);
-    expect(img.data.includes("clip-path"), "clipping should be applied");
+    expect(img.svg.includes("clip-path"), "clipping should be applied");
   }
 
   console.log("\n[13] a bad alignment name is a friendly ValueError");
   {
     const result = py(callReplEval, [`beside_align("sideways", square(10, "solid", "red"))`, SK]);
     expect(result.ok === false, "an invalid place should fail");
-    expect(result.error_type === "ValueError", `expected ValueError, got ${result.error_type}`);
+    expect(result.error?.errorType === "ValueError", `expected ValueError, got ${result.error?.errorType}`);
     expect(
-      /beside_align/.test(result.error_message || ""),
-      `the message should name the function, got ${result.error_message}`,
+      /beside_align/.test(result.error?.message || ""),
+      `the message should name the function, got ${result.error?.message}`,
     );
-    console.log(`    ${result.error_type}: ${result.error_message}`);
+    console.log(`    ${result.error?.errorType}: ${result.error?.message}`);
   }
 
   console.log("\n[14] load_image reads a picture and it composes like any other");
@@ -316,7 +315,7 @@ async function main() {
       'print(image_width(load_image("v.svg")), image_height(load_image("v.svg")))',
     ].join("\n");
     const result = py(callRunFile, [code, "loadimg.py", SK]);
-    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    expect(result.ok === true, `ran: ${result.error?.message ?? ""}`);
     const lines = (result.stdout ?? "").trim().split("\n");
     expect(lines[0] === "40 25", `png size from the header: ${lines[0]}`);
     expect(lines[1] === "80 50", `scales like a drawn shape: ${lines[1]}`);
@@ -347,9 +346,9 @@ async function main() {
     ]) {
       const result = py(callRunFile, [code, "liderr.py", SK]);
       expect(
-        result.ok === false && result.error_type === kind &&
-          (result.error_message ?? "").includes(needle),
-        `${kind}/${needle}, got ${result.error_type}: ${result.error_message}`,
+        result.ok === false && result.error?.errorType === kind &&
+          (result.error?.message ?? "").includes(needle),
+        `${kind}/${needle}, got ${result.error?.errorType}: ${result.error?.message}`,
       );
     }
     console.log("    five bad inputs, each named precisely");
@@ -375,15 +374,15 @@ async function main() {
     ]) {
       const result = py(callRunFile, [code, "color.py", SK]);
       expect(
-        result.ok === false && result.error_type === "ValueError" &&
-          (result.error_message ?? "").includes(needle),
-        `${code} -> ${needle}, got ${result.error_type}: ${result.error_message}`,
+        result.ok === false && result.error?.errorType === "ValueError" &&
+          (result.error?.message ?? "").includes(needle),
+        `${code} -> ${needle}, got ${result.error?.errorType}: ${result.error?.message}`,
       );
       // The message has to name the function the student called, not an
       // internal helper.
       expect(
-        (result.error_message ?? "").startsWith(code.split("(")[0] + "'s "),
-        `${code} should be blamed on its own call: ${result.error_message}`,
+        (result.error?.message ?? "").startsWith(code.split("(")[0] + "'s "),
+        `${code} should be blamed on its own call: ${result.error?.message}`,
       );
     }
     console.log("    nine bad colours and modes, each named by argument and position");
@@ -398,7 +397,7 @@ async function main() {
       "goodcolor.py",
       SK,
     ]);
-    expect(result.ok === true, `documented colours still work: ${result.error_message ?? ""}`);
+    expect(result.ok === true, `documented colours still work: ${result.error?.message ?? ""}`);
     expect(imagesOf(result).length === good.length + 1,
       `expected ${good.length + 1} images, got ${imagesOf(result).length}`);
     console.log(`    ${good.length} colour spellings still accepted`);
@@ -418,7 +417,7 @@ async function main() {
       "poly.py",
       SK,
     ]);
-    expect(sizes.ok === true, `ran: ${sizes.error_message ?? ""}`);
+    expect(sizes.ok === true, `ran: ${sizes.error?.message ?? ""}`);
     const got = sizes.stdout.trim().split("\n");
     // 3: 40 wide, 40*sqrt(3)/2 tall. 4: a square. 6: 2R across,
     // 2R*sqrt(3)/2 tall. 8: 40*(1+sqrt(2)) each way.
@@ -481,10 +480,10 @@ async function main() {
       [`circle(5, "solid", ${RED})`, "ValueError", "`color` (the 3rd argument) is an image, which is not a color"],
     ]) {
       const result = py(callRunFile, [code, "args.py", SK]);
-      const message = result.error_message ?? "";
+      const message = result.error?.message ?? "";
       expect(
-        result.ok === false && result.error_type === kind && message.includes(needle),
-        `${code} -> ${kind} "${needle}", got ${result.error_type}: ${message}`,
+        result.ok === false && result.error?.errorType === kind && message.includes(needle),
+        `${code} -> ${kind} "${needle}", got ${result.error?.errorType}: ${message}`,
       );
       // An internal class name sends a student looking for code they did
       // not write.
@@ -504,7 +503,7 @@ async function main() {
       `print(image_width(beside()))`,
     ]) {
       const result = py(callRunFile, [code, "fine.py", SK]);
-      expect(result.ok === true, `${code} should still work: ${result.error_message ?? ""}`);
+      expect(result.ok === true, `${code} should still work: ${result.error?.message ?? ""}`);
     }
     console.log("    zero sizes, negative offsets and no arguments at all still fine");
   }
@@ -516,7 +515,7 @@ async function main() {
     // exactly like a program that is broken somewhere else.
     const draw = 'def draw(n):\n    return circle(5, "solid", "red")\n\n\n';
     const idle = py(callRunFile, [`${draw}r = reactor(init=0, to_draw=draw)\nprint("built")\n`, "rx.py", SK]);
-    expect(idle.ok === true, `the program itself is fine: ${idle.error_message ?? ""}`);
+    expect(idle.ok === true, `the program itself is fine: ${idle.error?.message ?? ""}`);
     expect(idle.stdout === "built\n", `and runs to the end: ${JSON.stringify(idle.stdout)}`);
     expect(
       /note: a reactor was made but never started/.test(idle.stderr ?? ""),
@@ -529,7 +528,7 @@ async function main() {
 
     // Started, so nothing to say.
     const started = py(callRunFile, [`${draw}reactor(init=0, to_draw=draw).interact()\n`, "rx2.py", SK]);
-    expect(started.ok === true, `a started reactor runs: ${started.error_message ?? ""}`);
+    expect(started.ok === true, `a started reactor runs: ${started.error?.message ?? ""}`);
     expect(
       !/never started/.test(started.stderr ?? ""),
       `and gets no note: ${JSON.stringify(started.stderr)}`,
@@ -551,6 +550,24 @@ async function main() {
     ]);
     expect(tested.tests?.passed === 1, `its test runs: ${JSON.stringify(tested.tests)}`);
     expect(!/never started/.test(tested.stderr ?? ""), `and is what used it: ${JSON.stringify(tested.stderr)}`);
+    // A rate the clock cannot keep, which JSON could not carry to the host either.
+    for (const rate of ['float("nan")', 'float("inf")', "0"]) {
+      const bad = py(callRunFile, [`${draw}reactor(init=0, to_draw=draw, tick_rate=${rate}).interact()\n`, "rate.py", SK]);
+      expect(
+        bad.ok === false && /`tick_rate` must be a number of seconds above 0/.test(bad.error?.message ?? ""),
+        `tick_rate=${rate} is refused: ${bad.error?.message}`,
+      );
+    }
+    // And a NaN that reached a result anyway is refused before it crosses.
+    pyodide.runPython("_pll_nan_result = lambda: {'tick_rate': float('nan')}");
+    let crossed = null;
+    try {
+      crossed = pyodide.runPython('_pll_call("_pll_nan_result", "[]")');
+    } catch (err) {
+      crossed = String(err.message);
+    }
+    pyodide.runPython("del _pll_nan_result");
+    expect(/Out of range float values are not JSON compliant/.test(crossed), `a NaN does not cross: ${crossed}`);
     console.log("    noted when idle, silent when started or tested, and reset each run");
   }
 
@@ -558,7 +575,7 @@ async function main() {
   {
     const step = pyodide.globals.get("_pll_reactor_step");
     const seek = pyodide.globals.get("_pll_reactor_seek");
-    const idOf = (result) => result.displays.find((d) => d.type === "reactor")?.id;
+    const idOf = (result) => result.displays.find((d) => d.kind === "reactor")?.id;
     const draw = 'def draw(n):\n    return circle(5, "solid", "red")\n\n\n';
     const stops = py(callRunFile, [
       `${draw}reactor(init=0, to_draw=draw, on_tick=lambda n: n + 1, on_receive=lambda n, m: n + 100, stop_when=lambda n: n >= 1).interact()\n`,
@@ -566,12 +583,21 @@ async function main() {
     ]);
     const sid = idOf(stops);
     const first = py(step, [sid, '{"kind": "tick"}']);
-    expect(first.stopped === true && first.value_repr === "1", `it stops at 1: ${JSON.stringify(first)}`);
+    expect(first.stopped === true && first.valueRepr === "1", `it stops at 1: ${JSON.stringify(first)}`);
     for (const event of ['{"kind": "tick"}', '{"kind": "receive", "message": 5}']) {
       const after = py(step, [sid, event]);
-      expect(after.value_repr === "1" && after.length === first.length && after.messages.length === 0,
+      expect(after.valueRepr === "1" && after.length === first.length && after.messages.length === 0,
         `${event} changes nothing: ${JSON.stringify(after)}`);
     }
+
+    // A message a handler sends comes back with the step that sent it.
+    const sending = py(callRunFile, [
+      `${draw}reactor(init=0, to_draw=draw, on_key=lambda n, k: package(n + 1, {"hi": k})).interact()\n`,
+      "sending.py", SK,
+    ]);
+    const sent = py(step, [idOf(sending), '{"kind": "key", "key": "a"}']);
+    expect(sent.kind === "frame" && JSON.stringify(sent.messages.map((m) => JSON.parse(m))) === '[{"hi":"a"}]',
+      `the message goes with the step: ${JSON.stringify(sent.messages)}`);
 
     const sends = py(callRunFile, [
       `${draw}reactor(init=0, to_draw=draw, on_key=lambda n, k: package(n + 1, object())).interact()\n`,
@@ -579,10 +605,10 @@ async function main() {
     ]);
     const kid = idOf(sends);
     const refused = py(step, [kid, '{"kind": "key", "key": "a"}']);
-    expect(refused.ok === false && refused.error_type === "TypeError" && /package\(\.\.\.\) can only send/.test(refused.error_message),
-      `the message is refused: ${JSON.stringify(refused.error_message)}`);
+    expect(refused.kind === "raised" && refused.error?.errorType === "TypeError" && /package\(\.\.\.\) can only send/.test(refused.error?.message),
+      `the message is refused: ${JSON.stringify(refused.error?.message)}`);
     const where = py(seek, [kid, 0]);
-    expect(where.length === 1 && where.value_repr === "0", `and the reactor is where it was: ${JSON.stringify(where)}`);
+    expect(where.length === 1 && where.valueRepr === "0", `and the reactor is where it was: ${JSON.stringify(where)}`);
     step.destroy?.();
     seek.destroy?.();
     console.log("    a stopped world stays put; a message that cannot be sent leaves no frame");
@@ -603,14 +629,14 @@ async function main() {
     ]) {
       const result = py(callRunFile, [code, "badcolor.py", SK]);
       expect(
-        result.ok === false && result.error_type === "ValueError" &&
-          (result.error_message ?? "").includes(needle),
-        `${code} -> "${needle}", got ${result.error_type}: ${result.error_message}`,
+        result.ok === false && result.error?.errorType === "ValueError" &&
+          (result.error?.message ?? "").includes(needle),
+        `${code} -> "${needle}", got ${result.error?.errorType}: ${result.error?.message}`,
       );
       // The list of names is PLL's: Python itself knows no colours at all.
       expect(
-        (result.error_message ?? "").includes("which is not a color name PLL knows."),
-        `${code} should say whose names these are, got ${result.error_message}`,
+        (result.error?.message ?? "").includes("which is not a color name PLL knows."),
+        `${code} should say whose names these are, got ${result.error?.message}`,
       );
     }
 
@@ -647,7 +673,7 @@ async function main() {
       "casecolor.py",
       SK,
     ]);
-    expect(others.ok === true, `case and keywords still work: ${others.error_message ?? ""}`);
+    expect(others.ok === true, `case and keywords still work: ${others.error?.message ?? ""}`);
     console.log("    four misspellings named, all 148 CSS colours accepted");
   }
 
@@ -689,7 +715,7 @@ async function main() {
       'print(len({dot(3), circle(3, "solid", (255, 0, 0)), square(3, "solid", "red")}))',
     ];
     const result = py(callRunFile, [lines.join("\n"), "eq.py", SK]);
-    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    expect(result.ok === true, `ran: ${result.error?.message ?? ""}`);
     const out = (result.stdout ?? "").trim().split("\n");
     expect(out[0] === "True []", `drawn alike, equal: ${out[0]}`);
     expect(out[1] === "False []", `drawn differently, not: ${out[1]}`);
@@ -727,7 +753,7 @@ async function main() {
       "row",
     ].join("\n");
     const result = py(callRunFile, [code, "deep.py", SK]);
-    expect(result.ok === true, `no RecursionError: ${result.error_type}: ${result.error_message ?? ""}`);
+    expect(result.ok === true, `no RecursionError: ${result.error?.errorType}: ${result.error?.message ?? ""}`);
     const out = (result.stdout ?? "").trim().split("\n");
     // Thirty-six turns of ten degrees come back to where they started, at the same size.
     expect(out[0] === "12000 40 35", `sizes: ${out[0]}`);
@@ -763,7 +789,7 @@ async function main() {
       "print(round(math.dist(pts[1], centre) / math.dist(pts[0], centre), 3))",
     ].join("\n");
     const result = py(callRunFile, [code, "geom.py", SK]);
-    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    expect(result.ok === true, `ran: ${result.error?.message ?? ""}`);
     const out = (result.stdout ?? "").trim().split("\n");
     expect(out[0] === "(40, 40) (29, 29)", `a circle turned is as wide: ${out[0]}`);
     expect(out[1] === "(20, 40)", `two circles turned, measured by the circles: ${out[1]}`);
@@ -787,7 +813,7 @@ async function main() {
       'print(text("日本", 10, "black").width)',
     ].join("\n");
     const result = py(callRunFile, [code, "text.py", SK]);
-    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    expect(result.ok === true, `ran: ${result.error?.message ?? ""}`);
     const out = (result.stdout ?? "").trim().split("\n");
     expect(out[0] === "'WWW' 36.0 24.0" && out[1] === "'iii' 36.0 24.0", `every letter one width: ${out.slice(0, 2)}`);
     expect(out[2] === "'a   b' 60.0 24.0" && out[3] === "'' 0.0 24.0", `spaces count, nothing is nothing: ${out.slice(2, 4)}`);
@@ -819,7 +845,7 @@ async function main() {
       'print(circle(5, "solid", (255, 0, 0, 128)) == circle(5, "solid", (255, 0, 0, 128 / 255)), circle(5, "solid", (255, 0, 0, 1)) == circle(5, "solid", (255, 0, 0, 1.0)))',
     ].join("\n");
     const result = py(callRunFile, [code, "paint.py", SK]);
-    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    expect(result.ok === true, `ran: ${result.error?.message ?? ""}`);
     const out = (result.stdout ?? "").trim().split("\n");
     expect(out.slice(0, 4).every((l) => l === "refused"), `markup refused: ${out.slice(0, 4)}`);
     expect(
@@ -850,14 +876,14 @@ async function main() {
       ["Image()", "TypeError", "Image is the type of pictures, not a way to make one"],
     ]) {
       const result = py(callRunFile, [code, "nums.py", SK]);
-      const message = result.error_message ?? "";
-      expect(result.ok === false && result.error_type === kind && message.includes(needle), `${code} -> ${kind} "${needle}", got ${result.error_type}: ${message}`);
+      const message = result.error?.message ?? "";
+      expect(result.ok === false && result.error?.errorType === kind && message.includes(needle), `${code} -> ${kind} "${needle}", got ${result.error?.errorType}: ${message}`);
     }
     const numpy = py(callRunFile, [
       'import numpy as np\nprint(image_width(circle(np.int64(5), "solid", (np.int64(1), 2, 3))), image_width(rotate(np.float64(90), square(np.int32(4), "solid", "red"))))\nimport pydoc\nprint(pydoc.render_doc(circle).splitlines()[0])',
       "np.py", SK,
     ]);
-    expect(numpy.stdout === "10 4\nPython Library Documentation: function circle in module pll.image\n", `numpy's numbers are numbers, and help names pll.image: ${JSON.stringify(numpy.stdout)} ${numpy.error_message ?? ""}`);
+    expect(numpy.stdout === "10 4\nPython Library Documentation: function circle in module pll.image\n", `numpy's numbers are numbers, and help names pll.image: ${JSON.stringify(numpy.stdout)} ${numpy.error?.message ?? ""}`);
     console.log("    NaN, infinity, huge, 4.0 sides, bad stars, alignment, names - all PLL's words");
   }
 
@@ -885,7 +911,7 @@ async function main() {
       "    print(e)",
     ].join("\n");
     const result = py(callRunFile, [code, "svgsize.py", SK]);
-    expect(result.ok === true, `ran: ${result.error_message ?? ""}`);
+    expect(result.ok === true, `ran: ${result.error?.message ?? ""}`);
     const out = (result.stdout ?? "").trim().split("\n");
     expect(out[0] === "96 48", `width and height in units: ${out[0]}`);
     expect(out[1] === "30 20", `the viewBox: ${out[1]}`);
@@ -909,18 +935,18 @@ async function main() {
       'print("done")',
     ].join("\n");
     const result = py(callRunFile, [code, "plot.py", SK, "beginner"]);
-    expect(result.ok === true, `ran: ${result.error_type}: ${result.error_message ?? ""}`);
+    expect(result.ok === true, `ran: ${result.error?.errorType}: ${result.error?.message ?? ""}`);
     const images = imagesOf(result);
     // One for plt.show(), one for `fig`; plt's own return values are not printed.
     expect(images.length === 2, `two pictures: ${images.length}`);
     // A figure shown at top level is closed, so a show() after it does not repeat it.
     const once = py(callRunFile, ["import matplotlib.pyplot as plt\nfig = plt.figure()\nfig\nplt.show()\n", "once.py", SK, "beginner"]);
-    expect(imagesOf(once).length === 1, `shown once: ${imagesOf(once).length} ${once.error_message ?? ""}`);
-    expect(images.every((i) => i.width === 640 && i.height === 480 && i.data.includes("data:image/png;base64,")), "each a 640x480 PNG");
+    expect(imagesOf(once).length === 1, `shown once: ${imagesOf(once).length} ${once.error?.message ?? ""}`);
+    expect(images.every((i) => i.width === 640 && i.height === 480 && i.svg.includes("data:image/png;base64,")), "each a 640x480 PNG");
     expect(result.stdout === "done\n", `nothing of matplotlib's printed: ${JSON.stringify(result.stdout)}`);
     // At raw, as in Python, a value at top level is not shown - but plt.show() is a call.
     const raw = py(callRunFile, ["import matplotlib.pyplot as plt\nfig = plt.figure()\nfig\nplt.plot([1], [1])\nplt.show()\n", "raw.py", SK, "raw"]);
-    expect(raw.ok === true && imagesOf(raw).length === 1, `raw: show() only: ${imagesOf(raw).length} ${raw.error_message ?? ""}`);
+    expect(raw.ok === true && imagesOf(raw).length === 1, `raw: show() only: ${imagesOf(raw).length} ${raw.error?.message ?? ""}`);
     console.log("    show() and a top-level figure, each once, as a PNG");
   }
 

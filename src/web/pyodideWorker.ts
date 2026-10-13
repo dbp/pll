@@ -1,6 +1,6 @@
 /// <reference lib="WebWorker" />
-import { createWorkerHost, type PyodideInstance } from "../common/workerHost";
-import type { WorkerInbound } from "../common/workerProtocol";
+import { createWorkerHost, type PyodideInstance } from "../pyodide/worker";
+import type { WorkerInbound } from "../pyodide/protocol";
 
 declare const self: DedicatedWorkerGlobalScope & {
   loadPyodide?: (config: { indexURL: string }) => Promise<PyodideInstance>;

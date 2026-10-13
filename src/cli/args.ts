@@ -1,5 +1,5 @@
 import { parseArgs } from "node:util";
-import { errorText } from "../common/errorText";
+import { errorText } from "../core/errorText";
 
 /** An option the command line takes. */
 export interface CliOption {

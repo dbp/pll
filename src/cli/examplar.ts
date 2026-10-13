@@ -1,14 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type {
-  ExamplarBundle,
-  ExamplarImpl,
-  ExamplarOutcome,
-} from "../common/fromPython";
-import type { PythonRuntime } from "../common/types";
+import type { ExamplarBundle, ExamplarImpl, ExamplarOutcome } from "../run/types";
+import type { PythonRuntime } from "../run/python";
 import { EXIT } from "./run";
 import type { CliView } from "./view";
-import { errorText } from "../common/errorText";
+import { errorText } from "../core/errorText";
 import { parseCommandLine, type CliOption } from "./args";
 
 export const EXAMPLAR_USAGE = `pll examplar - author Examplar bundles

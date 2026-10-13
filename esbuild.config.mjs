@@ -225,7 +225,7 @@ function writeCliPackage() {
 /** Policy + MEMFS helpers for smoke tests (not part of the extension). */
 const testLibOptions = {
   ...baseOptions,
-  entryPoints: ["src/common/memfsWorkspace.ts", "src/common/workspaceFilePolicy.ts"],
+  entryPoints: ["src/pyodide/workspace.ts", "src/core/files.ts"],
   outdir: "out/test",
   platform: "node",
   format: "cjs",

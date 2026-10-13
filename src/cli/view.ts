@@ -1,11 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { SerializedFinding } from "../common/analyzers/findingLocation";
-import type { ExamplarEntry } from "../common/examplarPhase";
-import type { AnalysisFinding } from "../common/analyzers/types";
-import { formatFriendlyError } from "../common/errorFormatter";
-import type { ExecutionEvent } from "../common/types";
-import { errorText } from "../common/errorText";
+import { formatFriendlyError, type AnalysisFinding, type SerializedFinding } from "../run/finding";
+import type { ExamplarEntry } from "../run/examplar";
+import type { ExecutionEvent } from "../run/types";
+import { errorText } from "../core/errorText";
 
 /**
  * The CLI's "view": `ExecutionEvent`s as text.

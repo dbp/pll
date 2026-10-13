@@ -18,15 +18,15 @@ import { startWorker, talk } from "./lib/worker.mjs";
 /** Bundle the host-side analyzer so the rewritten messages can be checked. */
 async function loadAnalyzer() {
   const mod = await importSource(`
-export { findRuntimeFinding } from "./src/common/analyzers/registry";
-export { deliverRunResult, pythonErrorFrom } from "./src/common/fromPython";
-export { explainTestReport } from "./src/common/analyzers/runtimeFinding";
+export { findRuntimeFinding } from "./src/run/finding";
+export { deliverRunResult } from "./src/run/python";
+export { explainTestReport } from "./src/run/finding";
 `);
   return mod;
 }
 
 async function main() {
-  const { findRuntimeFinding, pythonErrorFrom, deliverRunResult, explainTestReport } = await loadAnalyzer();
+  const { findRuntimeFinding, deliverRunResult, explainTestReport } = await loadAnalyzer();
 
   /**
    * A run's test report as both hosts show it: translated, then each error
@@ -35,7 +35,7 @@ async function main() {
   const reportOf = (result, fileName, level, code) => {
     let report = null;
     deliverRunResult(result, (event) => {
-      if (event.kind === "testReport") report = explainTestReport(event, code, fileName, level);
+      if (event.kind === "testReport") report = explainTestReport(event, fileName, level);
     }, fileName);
     return report;
   };
@@ -72,7 +72,7 @@ async function main() {
         "def add(x: int, y: int) -> int:\n    return x + y\n\nprint(add(2, 3))\n",
       );
       console.log(`    ok=${r.ok} stdout=${JSON.stringify(r.stdout)}`);
-      expect(r.ok === true, "valid annotated code should run: " + (r.error_message || ""));
+      expect(r.ok === true, "valid annotated code should run: " + (r.error?.message || ""));
       expect(r.stdout === "5\n", "should print 5, got " + JSON.stringify(r.stdout));
     }
 
@@ -81,25 +81,22 @@ async function main() {
       const r = await run(
         "def add(x: int, y: int) -> int:\n    return x + y\n\nresult = add(2, \"three\")\n",
       );
-      console.log(`    ${r.error_type}: ${r.error_message}`);
-      console.log(`    line_number=${r.line_number}`);
+      console.log(`    ${r.error?.errorType}: ${r.error?.message}`);
+      console.log(`    line_number=${r.error?.lineNumber}`);
       expect(r.ok === false, "a bad argument should fail the run");
-      expect(r.error_type === "TypeCheckError", "expected TypeCheckError, got " + r.error_type);
+      expect(r.error?.errorType === "TypeCheckError", "expected TypeCheckError, got " + r.error?.errorType);
       expect(
-        /argument "y" \(str\) is not an instance of int/.test(r.error_message),
-        "message should name the argument and both types, got " + r.error_message,
+        /argument "y" \(str\) is not an instance of int/.test(r.error?.message),
+        "message should name the argument and both types, got " + r.error?.message,
       );
       // The `typeguard.TypeCheckError:` exception name is fine; what must
       // not appear is a *frame* inside the vendored checker.
-      const frames = r.traceback.split("\n").filter((l) => l.includes('File "'));
+      const frames = (r.error?.frames ?? []).map((f) => `${f.file}:${f.line}`);
       expect(
         !frames.some((l) => /pll_vendor|_checkers\.py|_functions\.py/.test(l)),
-        "traceback must not expose typeguard's own frames:\n" + frames.join("\n"),
+        "the frames must not expose typeguard's own:\n" + frames.join("\n"),
       );
-      expect(
-        /hello\.py", line 4/.test(r.traceback),
-        "traceback should include the call site (line 4):\n" + r.traceback,
-      );
+      expect(frames.includes("hello.py:4"), "the frames should include the call site (line 4):\n" + frames.join("\n"));
     }
 
     console.log("\n[4] wrong return type: reported at the return statement");
@@ -107,29 +104,29 @@ async function main() {
       const r = await run(
         "def label(n: int) -> str:\n    return n * 2\n\nlabel(5)\n",
       );
-      console.log(`    ${r.error_type}: ${r.error_message} (line ${r.line_number})`);
-      expect(r.error_type === "TypeCheckError", "expected TypeCheckError, got " + r.error_type);
+      console.log(`    ${r.error?.errorType}: ${r.error?.message} (line ${r.error?.lineNumber})`);
+      expect(r.error?.errorType === "TypeCheckError", "expected TypeCheckError, got " + r.error?.errorType);
       expect(
-        /the return value \(int\) is not an instance of str/.test(r.error_message),
-        "message should describe the return value, got " + r.error_message,
+        /the return value \(int\) is not an instance of str/.test(r.error?.message),
+        "message should describe the return value, got " + r.error?.message,
       );
-      expect(r.line_number === 2, "should point at the return statement, got " + r.line_number);
+      expect(r.error?.lineNumber === 2, "should point at the return statement, got " + r.error?.lineNumber);
     }
 
     console.log("\n[5] module-level annotated assignment (typeguard alone misses this)");
     {
       const r = await run('total: int = "not a number"\nprint(total)\n');
-      console.log(`    ${r.error_type}: ${r.error_message} (line ${r.line_number})`);
-      expect(r.error_type === "TypeCheckError", "top-level annassign should be checked, got " + r.error_type);
+      console.log(`    ${r.error?.errorType}: ${r.error?.message} (line ${r.error?.lineNumber})`);
+      expect(r.error?.errorType === "TypeCheckError", "top-level annassign should be checked, got " + r.error?.errorType);
       expect(
-        /value assigned to total \(str\) is not an instance of int/.test(r.error_message || ""),
-        "message should name the variable, got " + r.error_message,
+        /value assigned to total \(str\) is not an instance of int/.test(r.error?.message || ""),
+        "message should name the variable, got " + r.error?.message,
       );
-      expect(r.line_number === 1, "should point at the assignment, got " + r.line_number);
+      expect(r.error?.lineNumber === 1, "should point at the assignment, got " + r.error?.lineNumber);
     }
     {
       const r = await run("total: int = 7\nprint(total)\n");
-      expect(r.ok === true, "a valid top-level annassign should run: " + (r.error_message || ""));
+      expect(r.ok === true, "a valid top-level annassign should run: " + (r.error?.message || ""));
       expect(r.stdout === "7\n", "should still assign the value, got " + JSON.stringify(r.stdout));
     }
 
@@ -138,11 +135,11 @@ async function main() {
       const r = await run(
         "def total(nums: list[int]) -> int:\n    return sum(nums)\n\ntotal([1, 2, \"three\"])\n",
       );
-      console.log(`    ${r.error_type}: ${r.error_message}`);
-      expect(r.error_type === "TypeCheckError", "a bad item late in a list should be caught");
+      console.log(`    ${r.error?.errorType}: ${r.error?.message}`);
+      expect(r.error?.errorType === "TypeCheckError", "a bad item late in a list should be caught");
       expect(
-        /item 2 of argument "nums"/.test(r.error_message || ""),
-        "message should name the item index, got " + r.error_message,
+        /item 2 of argument "nums"/.test(r.error?.message || ""),
+        "message should name the item index, got " + r.error?.message,
       );
     }
 
@@ -152,13 +149,13 @@ async function main() {
         "def cost(n: int) -> float:\n    return n * 25\n\nprint(cost(2))\n",
       );
       console.log(`    ok=${r.ok} stdout=${JSON.stringify(r.stdout)}`);
-      expect(r.ok === true, "int for -> float must be allowed: " + (r.error_message || ""));
+      expect(r.ok === true, "int for -> float must be allowed: " + (r.error?.message || ""));
     }
 
     console.log("\n[8] unannotated code is untouched");
     {
       const r = await run("def add(x, y):\n    return x + y\n\nprint(add('a', 'b'))\n");
-      expect(r.ok === true, "unannotated code should be unaffected: " + (r.error_message || ""));
+      expect(r.ok === true, "unannotated code should be unaffected: " + (r.error?.message || ""));
       expect(r.stdout === "ab\n", "should print ab, got " + JSON.stringify(r.stdout));
     }
 
@@ -168,10 +165,10 @@ async function main() {
         "def add(x: int, y: int) -> int:\n    return x + y\n\nprint(add(2, \"three\"))\n",
         { level: "raw" },
       );
-      console.log(`    ok=${r.ok} error=${r.error_type || "(none)"}`);
-      expect(r.error_type !== "TypeCheckError", "raw must not check annotations");
+      console.log(`    ok=${r.ok} error=${r.error?.errorType || "(none)"}`);
+      expect(r.error?.errorType !== "TypeCheckError", "raw must not check annotations");
       // "2" + "three" is a TypeError from Python itself, not from typeguard.
-      expect(r.error_type === "TypeError", "plain Python should still fail its own way, got " + r.error_type);
+      expect(r.error?.errorType === "TypeError", "plain Python should still fail its own way, got " + r.error?.errorType);
 
       // And a request with no level at all must behave the same, because a
       // file with no header is raw.
@@ -183,10 +180,10 @@ async function main() {
           sessionKey: "tc-bare",
         })
       ).result;
-      console.log(`    no level at all -> ${bare.error_type}`);
+      console.log(`    no level at all -> ${bare.error?.errorType}`);
       expect(
-        bare.error_type === "TypeError",
-        "omitting the level should behave like raw, got " + bare.error_type,
+        bare.error?.errorType === "TypeError",
+        "omitting the level should behave like raw, got " + bare.error?.errorType,
       );
     }
 
@@ -195,9 +192,9 @@ async function main() {
       const r = await run(
         "def f(x: int) -> None:\n    label: str = x\n    print(label)\n\nf(3)\n",
       );
-      console.log(`    ${r.error_type}: ${r.error_message} (line ${r.line_number})`);
-      expect(r.error_type === "TypeCheckError", "in-function annassign should be checked");
-      expect(r.line_number === 2, "should point at the assignment, got " + r.line_number);
+      console.log(`    ${r.error?.errorType}: ${r.error?.message} (line ${r.error?.lineNumber})`);
+      expect(r.error?.errorType === "TypeCheckError", "in-function annassign should be checked");
+      expect(r.error?.lineNumber === 2, "should point at the assignment, got " + r.error?.lineNumber);
     }
 
     console.log("\n[11] tests still run, and type checks apply inside them");
@@ -223,7 +220,7 @@ async function main() {
         sessionKey: "tc-tests-11",
         level: "advanced",
       });
-      expect(reply.result.ok === true, `assert rewriting + instrumentation should coexist: ${reply.result.error_message}`);
+      expect(reply.result.ok === true, `assert rewriting + instrumentation should coexist: ${reply.result.error?.message}`);
       const r = reply.result.tests ?? {};
       console.log(`    passed=${r.passed} failed=${r.failed} errors=${r.errors}`);
       const names = (r.tests || []).map((t) => `${t.name}:${t.outcome}`);
@@ -278,12 +275,12 @@ async function main() {
         level: "advanced",
       });
       const r = reply.result;
-      console.log(`    ${r.error_type}: ${r.error_message}`);
-      expect(r.error_type === "TypeCheckError", "prompt calls should be checked, got " + r.error_type);
+      console.log(`    ${r.error?.errorType}: ${r.error?.message}`);
+      expect(r.error?.errorType === "TypeCheckError", "prompt calls should be checked, got " + r.error?.errorType);
       const good = (
         await send({ type: "replEval", code: "add(1, 2)", sessionKey: key, level: "advanced" })
       ).result;
-      expect(good.result_repr === "3", "a valid prompt call should work, got " + good.result_repr);
+      expect(good.resultRepr === "3", "a valid prompt call should work, got " + good.resultRepr);
     }
     console.log("\n[14] beginner/intermediate reject a bool where a number is annotated");
     {
@@ -298,15 +295,15 @@ async function main() {
         const strict = await run(code, { level: "beginner" });
         const loose = await run(code, { level: "advanced" });
         console.log(
-          `    ${label.padEnd(24)} beginner=${strict.error_type || "ok"} advanced=${loose.error_type || "ok"}`,
+          `    ${label.padEnd(24)} beginner=${strict.error?.errorType || "ok"} advanced=${loose.error?.errorType || "ok"}`,
         );
         expect(
-          strict.error_type === "TypeCheckError",
-          `${label} should be rejected at beginner, got ` + (strict.error_type || "no error"),
+          strict.error?.errorType === "TypeCheckError",
+          `${label} should be rejected at beginner, got ` + (strict.error?.errorType || "no error"),
         );
         expect(
           loose.ok === true,
-          `${label} must still be allowed at advanced: ` + (loose.error_message || ""),
+          `${label} must still be allowed at advanced: ` + (loose.error?.message || ""),
         );
       }
       // The rule must not leak into genuinely bool-typed code, or reject
@@ -315,12 +312,12 @@ async function main() {
         'def f(b: bool) -> bool:\n    return b\n\nf(True)\n',
         { level: "beginner" },
       );
-      expect(boolOk.ok === true, "bool for bool must still be fine: " + (boolOk.error_message || ""));
+      expect(boolOk.ok === true, "bool for bool must still be fine: " + (boolOk.error?.message || ""));
       const towerOk = await run(
         'def cost(n: int) -> float:\n    return n * 25\n\ncost(2)\n',
         { level: "beginner" },
       );
-      expect(towerOk.ok === true, "int for float must still be fine: " + (towerOk.error_message || ""));
+      expect(towerOk.ok === true, "int for float must still be fine: " + (towerOk.error?.message || ""));
     }
 
     console.log("\n[15] typeguard's wording is rewritten for students");
@@ -328,7 +325,7 @@ async function main() {
       /** Run `code`, then push it through the host-side analyzer. */
       const finding = async (code, level = "advanced") => {
         const r = await run(code, { level });
-        return findRuntimeFinding(code, "hello.py", level, pythonErrorFrom(r));
+        return findRuntimeFinding("hello.py", level, r.error);
       };
 
       const arg = await finding(
@@ -461,7 +458,7 @@ async function main() {
       ].join("\n");
 
       const ran = await run(recursive, { level: "beginner" });
-      expect(ran.ok === true, `the run phase should work: ${ran.error_message ?? ""}`);
+      expect(ran.ok === true, `the run phase should work: ${ran.error?.message ?? ""}`);
       expect(ran.stdout.trim() === "3", `expected 3, got ${JSON.stringify(ran.stdout)}`);
 
       const tested = await send({
@@ -472,7 +469,7 @@ async function main() {
         sessionKey: "tc-rec",
         level: "beginner",
       }).then((r) => r.result);
-      expect(tested.ok === true, `the run with tests must not crash: ${tested.error_type}: ${tested.error_message}`);
+      expect(tested.ok === true, `the run with tests must not crash: ${tested.error?.errorType}: ${tested.error?.message}`);
       expect(tested.tests?.passed === 1, `expected 1 passing test, got ${tested.tests?.passed}`);
       console.log("    a recursive dataclass runs and tests cleanly");
 
@@ -491,13 +488,13 @@ async function main() {
       const bad = await run(fields, { level: "beginner" });
       expect(bad.ok === false, "a dataclass field of the wrong type must be refused");
       expect(
-        (bad.error_message ?? "").includes("name"),
-        `the message should name the field, got ${bad.error_message}`,
+        (bad.error?.message ?? "").includes("name"),
+        `the message should name the field, got ${bad.error?.message}`,
       );
       const good = await run(fields.replace("Dog(5, 3)", 'Dog("Rex", 3)'), {
         level: "beginner",
       });
-      expect(good.ok === true, `a well-typed dataclass still works: ${good.error_message ?? ""}`);
+      expect(good.ok === true, `a well-typed dataclass still works: ${good.error?.message ?? ""}`);
 
       // And a recursive field is checked too, which needs the annotation
       // resolved in the student's own namespace rather than `__main__`.
@@ -510,7 +507,7 @@ async function main() {
 
       // At `#level raw` nothing is checked, so the same file has to run.
       const raw = await run(fields, { level: "raw" });
-      expect(raw.ok === true, `#level raw must not check fields: ${raw.error_message ?? ""}`);
+      expect(raw.ok === true, `#level raw must not check fields: ${raw.error?.message ?? ""}`);
       console.log("    and #level raw still checks nothing");
     }
 
@@ -657,10 +654,9 @@ async function main() {
         const result = await run(source, { level: "beginner", fileName: "none.py" });
         expect(result.ok === false, `${label}: should fail`);
         const finding = findRuntimeFinding(
-          source,
           "none.py",
           "beginner",
-          pythonErrorFrom(result),
+          result.error,
         );
         const text = `${finding.headline}\n${finding.howToFix.join("\n")}`;
         expect(wanted.test(finding.headline), `${label}: headline was ${finding.headline}`);
@@ -696,10 +692,9 @@ async function main() {
       const fieldRun = await run(field, { level: "beginner", fileName: "dc.py" });
       expect(fieldRun.ok === false, "a wrong field type should fail");
       const fieldFinding = findRuntimeFinding(
-        field,
         "dc.py",
         "beginner",
-        pythonErrorFrom(fieldRun),
+        fieldRun.error,
       );
       expect(
         fieldFinding.headline ===
@@ -722,10 +717,9 @@ async function main() {
       const columnRun = await run(column, { level: "beginner", fileName: "tc.py" });
       expect(columnRun.ok === false, "a row function on a column should fail");
       const columnFinding = findRuntimeFinding(
-        column,
         "tc.py",
         "beginner",
-        pythonErrorFrom(columnRun),
+        columnRun.error,
       );
       const advice = columnFinding.howToFix.join("\n");
       expect(
@@ -862,10 +856,9 @@ async function main() {
       const rowRun = await run(rows, { level: "beginner", fileName: "row.py" });
       expect(rowRun.ok === false, "a row passed to an int annotation should fail");
       const rowFinding = findRuntimeFinding(
-        rows,
         "row.py",
         "beginner",
-        pythonErrorFrom(rowRun),
+        rowRun.error,
       );
       const rowText = `${rowFinding.headline} ${rowFinding.howToFix.join(" ")}`;
       expect(!/\bRow\b/.test(rowText), `\`Row\` must not appear: ${rowText}`);
@@ -881,10 +874,9 @@ async function main() {
       const rxRun = await run(reactorSource, { level: "beginner", fileName: "rx.py" });
       expect(rxRun.ok === false, "a handler that does not fit init should fail");
       const rxFinding = findRuntimeFinding(
-        reactorSource,
         "rx.py",
         "beginner",
-        pythonErrorFrom(rxRun),
+        rxRun.error,
       );
       const rxText = rxFinding.howToFix.join(" ");
       expect(/`init`/.test(rxText), `it should say the state started as init: ${rxText}`);
@@ -910,10 +902,9 @@ async function main() {
       const result = await run(code, { level: "intermediate", fileName: "items.py" });
       expect(result.ok === false, "a list of strings for list[float] should fail");
       const finding = findRuntimeFinding(
-        code,
         "items.py",
         "intermediate",
-        pythonErrorFrom(result),
+        result.error,
       );
       expect(
         /but item 0 is the string "1"\.$/.test(finding.headline),
@@ -928,10 +919,9 @@ async function main() {
         'total({"tea": 2.5, "cake": "three"})\n';
       const dictRun = await run(dictCode, { level: "intermediate", fileName: "dict.py" });
       const dictFinding = findRuntimeFinding(
-        dictCode,
         "dict.py",
         "intermediate",
-        pythonErrorFrom(dictRun),
+        dictRun.error,
       );
       expect(
         /is the string "three"/.test(dictFinding.headline),
@@ -947,7 +937,7 @@ async function main() {
         "    name: str\n    singer: str\n    year: int\n\n\n";
       const findingFor = async (code, fileName) => {
         const result = await run(code, { level: "intermediate", fileName });
-        return findRuntimeFinding(code, fileName, "intermediate", pythonErrorFrom(result));
+        return findRuntimeFinding(fileName, "intermediate", result.error);
       };
 
       // Two values in each other's places: converting one would hide it.
@@ -966,7 +956,7 @@ async function main() {
       // An index error with the list's real length.
       const indexCode = "#level raw\nnums = [5, 1, 7]\nprint(nums[3])\n";
       const indexRun = await run(indexCode, { level: "raw", fileName: "idx.py" });
-      const indexFinding = findRuntimeFinding(indexCode, "idx.py", "raw", pythonErrorFrom(indexRun));
+      const indexFinding = findRuntimeFinding("idx.py", "raw", indexRun.error);
       expect(
         indexFinding.howToFix.some((l) => /`nums` has 3 items, numbered 0 to 2/.test(l)),
         `the real length: ${JSON.stringify(indexFinding.howToFix)}`,
@@ -985,69 +975,69 @@ async function main() {
       };
 
       const unknown = await described("total = 1\nprint(Total)\n");
-      expect(unknown.error_type === "NameError", `type: ${unknown.error_type}`);
-      expect(unknown.error_facts?.name === "Total", `the name: ${JSON.stringify(unknown.error_facts)}`);
+      expect(unknown.error?.errorType === "NameError", `type: ${unknown.error?.errorType}`);
+      expect(unknown.error?.facts?.name === "Total", `the name: ${JSON.stringify(unknown.error?.facts)}`);
       expect(
-        /Did you mean: 'total'\?/.test(unknown.error_message),
-        `Python's suggestion is part of the message it shows: ${unknown.error_message}`,
+        /Did you mean: 'total'\?/.test(unknown.error?.message),
+        `Python's suggestion is part of the message it shows: ${unknown.error?.message}`,
       );
-      expect(unknown.line_number === 2 && unknown.column === 6, `at 2:6, got ${unknown.line_number}:${unknown.column}`);
+      expect(unknown.error?.lineNumber === 2 && unknown.error?.column === 6, `at 2:6, got ${unknown.error?.lineNumber}:${unknown.error?.column}`);
 
       // A local read before it is assigned: Python sets no `name` for this
       // one, and the host still has to be told it.
       const local = await described("def f():\n    print(count)\n    count = 1\n\nf()\n");
-      expect(local.error_type === "UnboundLocalError", `type: ${local.error_type}`);
-      expect(local.error_facts?.name === "count", `the local's name: ${JSON.stringify(local.error_facts)}`);
+      expect(local.error?.errorType === "UnboundLocalError", `type: ${local.error?.errorType}`);
+      expect(local.error?.facts?.name === "count", `the local's name: ${JSON.stringify(local.error?.facts)}`);
       const free = await described(
         "def outer():\n    def inner():\n        return title\n    r = inner()\n    title = 1\n\nouter()\n",
       );
-      expect(free.error_facts?.name === "title", `the free variable's name: ${JSON.stringify(free.error_facts)}`);
+      expect(free.error?.facts?.name === "title", `the free variable's name: ${JSON.stringify(free.error?.facts)}`);
 
       // Python draws no caret under a name that is the whole line, so
       // there is no column to report.
       const whole = await described("totl\n");
-      expect(whole.column == null, `no column for a whole-line name, got ${whole.column}`);
+      expect(whole.error?.column == null, `no column for a whole-line name, got ${whole.error?.column}`);
 
       // Whose frames: the student's, and PLL's own around them.
       const nested = await described("def a(n):\n    return b(n)\n\ndef b(n):\n    return n / 0\n\na(1)\n");
-      const frames = (nested.error_frames ?? []).map((f) => `${f.user ? "user" : "pll"}:${f.function ?? "<module>"}:${f.line}`);
+      const frames = (nested.error?.frames ?? []).map((f) => `${f.user ? "user" : "pll"}:${f.function ?? "<module>"}:${f.line}`);
       expect(
         frames.filter((f) => f.startsWith("user")).join(",") === "user:<module>:7,user:a:2,user:b:5",
         `the student's frames, outermost first: ${frames.join(",")}`,
       );
       expect(frames[0]?.startsWith("pll:"), `PLL's own frame is there, and not the student's: ${frames[0]}`);
-      expect(nested.line_number === 5, `the error is at the innermost frame: ${nested.line_number}`);
+      expect(nested.error?.lineNumber === 5, `the error is at the innermost frame: ${nested.error?.lineNumber}`);
 
       // A recursion sends its innermost frames, not all thousand.
       const deep = await described("def f(n):\n    return f(n + 1)\n\nf(0)\n");
-      expect(deep.error_type === "RecursionError", `type: ${deep.error_type}`);
+      expect(deep.error?.errorType === "RecursionError", `type: ${deep.error?.errorType}`);
       expect(
-        deep.error_frames.length === 100 && deep.error_frames.every((f) => f.function === "f"),
-        `100 frames, all of f: ${deep.error_frames.length}`,
+        deep.error?.frames.length === 100 && deep.error?.frames.every((f) => f.function === "f"),
+        `100 frames, all of f: ${deep.error?.frames.length}`,
       );
 
       // A syntax error is where Python says, with its message as shown.
       const syntax = await described("x = 1\nif x = 1:\n    pass\n");
-      expect(syntax.error_type === "SyntaxError", `type: ${syntax.error_type}`);
-      expect(syntax.line_number === 2 && syntax.column === 3, `at 2:3, got ${syntax.line_number}:${syntax.column}`);
-      expect(!/hello\.py, line/.test(syntax.error_message), `no "(file, line)" in the message: ${syntax.error_message}`);
+      expect(syntax.error?.errorType === "SyntaxError", `type: ${syntax.error?.errorType}`);
+      expect(syntax.error?.lineNumber === 2 && syntax.error?.column === 3, `at 2:3, got ${syntax.error?.lineNumber}:${syntax.error?.column}`);
+      expect(!/hello\.py, line/.test(syntax.error?.message), `no "(file, line)" in the message: ${syntax.error?.message}`);
 
       // What was learned travels beside the message, not inside it.
       const index = await described("nums = [5, 1, 7]\nprint(nums[3])\n");
       expect(
-        index.error_facts?.sequence === "nums" && index.error_facts?.length === 3,
-        `the list and its length: ${JSON.stringify(index.error_facts)}`,
+        index.error?.facts?.sequence === "nums" && index.error?.facts?.length === 3,
+        `the list and its length: ${JSON.stringify(index.error?.facts)}`,
       );
-      expect(index.error_message === "list index out of range", `the message is Python's: ${index.error_message}`);
+      expect(index.error?.message === "list index out of range", `the message is Python's: ${index.error?.message}`);
       const element = await described(
         "def total(lst: list[float]) -> float:\n    return 0\n\ntotal([\"1\", 2.0])\n",
         "beginner",
       );
       expect(
-        element.error_facts?.element_value === 'the string "1"',
-        `the element that failed: ${JSON.stringify(element.error_facts)}`,
+        element.error?.facts?.element_value === 'the string "1"',
+        `the element that failed: ${JSON.stringify(element.error?.facts)}`,
       );
-      expect(!/->/.test(element.error_message), `and nothing appended to the message: ${element.error_message}`);
+      expect(!/->/.test(element.error?.message), `and nothing appended to the message: ${element.error?.message}`);
       const swapped = await described(
         [
           "from dataclasses import dataclass",
@@ -1059,8 +1049,8 @@ async function main() {
         ].join("\n") + "\n",
         "beginner",
       );
-      expect(swapped.error_facts?.swapped_with === "year", `the swap: ${JSON.stringify(swapped.error_facts)}`);
-      const swappedCheck = swapped.error_facts?.check;
+      expect(swapped.error?.facts?.swapped_with === "year", `the swap: ${JSON.stringify(swapped.error?.facts)}`);
+      const swappedCheck = swapped.error?.facts?.check;
       expect(
         swappedCheck?.kind === "field" &&
           swappedCheck.name === "title" &&
@@ -1073,7 +1063,7 @@ async function main() {
       );
 
       // typeguard's message, read into its parts once, by Python.
-      const parts = async (code) => (await described(code, "beginner")).error_facts?.check;
+      const parts = async (code) => (await described(code, "beginner")).error?.facts?.check;
       const same = (got, want) => JSON.stringify(got) === JSON.stringify(want);
       const typeguardShapes = [
         [
@@ -1114,8 +1104,8 @@ async function main() {
       );
       const keyValue = await described('def f(d: dict[str, int]) -> int:\n    return 0\n\nf({"a": "1"})\n', "beginner");
       expect(
-        keyValue.error_facts?.element_value === 'the string "1"',
-        `a value by its key: ${JSON.stringify(keyValue.error_facts)}`,
+        keyValue.error?.facts?.element_value === 'the string "1"',
+        `a value by its key: ${JSON.stringify(keyValue.error?.facts)}`,
       );
 
       // An IndexError in a file of its own, read from that file's line.
@@ -1128,15 +1118,15 @@ async function main() {
       });
       const sibling = await run("from helper import get\nnums = [1, 2]\nget(nums)\n", { level: "beginner" });
       expect(
-        sibling.error_facts?.sequence === "xs" && sibling.error_facts?.length === 2,
-        `the sibling's own line: ${JSON.stringify(sibling.error_facts)}`,
+        sibling.error?.facts?.sequence === "xs" && sibling.error?.facts?.length === 2,
+        `the sibling's own line: ${JSON.stringify(sibling.error?.facts)}`,
       );
 
       // What the names in an error are, from the definitions themselves.
       const definitions = async (code, files = []) => {
         await send({ type: "mountWorkspace", files: [{ name: "hello.py", contents: code }, ...files] });
         const result = await run(code, { level: "advanced" });
-        return { result, defs: result.error_facts?.definitions ?? {} };
+        return { result, defs: result.error?.facts?.definitions ?? {} };
       };
       // In another of their files, reached through its module.
       const area = await definitions("import shapes\nprint(shapes.area(3))\n", [
@@ -1146,7 +1136,7 @@ async function main() {
         same(area.defs.area, { kind: "function", parameters: ["w", "h"], required: ["w", "h"] }),
         `a function in another file: ${JSON.stringify(area.defs)}`,
       );
-      const areaFinding = findRuntimeFinding("import shapes\nprint(shapes.area(3))\n", "hello.py", "advanced", pythonErrorFrom(area.result));
+      const areaFinding = findRuntimeFinding("hello.py", "advanced", area.result.error);
       expect(
         areaFinding.headline === "`area` takes 2 arguments (`w` and `h`), but got 1.",
         `and its total is said: ${areaFinding.headline}`,
@@ -1186,27 +1176,27 @@ async function main() {
       // Where a name on the line was set, and the parameters of the function.
       const sorted = await definitions("def f(xs):\n    r = xs.sort()\n    return r.total\n\nf([1])\n");
       expect(
-        same(sorted.result.error_facts?.assigned?.r, { call: "xs.sort", line: 2 }),
-        `what a name was set from: ${JSON.stringify(sorted.result.error_facts?.assigned)}`,
+        same(sorted.result.error?.facts?.assigned?.r, { call: "xs.sort", line: 2 }),
+        `what a name was set from: ${JSON.stringify(sorted.result.error?.facts?.assigned)}`,
       );
       expect(
-        same(sorted.result.error_frames.at(-1)?.parameters, ["xs"]),
-        `a frame's parameters: ${JSON.stringify(sorted.result.error_frames.at(-1))}`,
+        same(sorted.result.error?.frames.at(-1)?.parameters, ["xs"]),
+        `a frame's parameters: ${JSON.stringify(sorted.result.error?.frames.at(-1))}`,
       );
       const twice = await definitions(
         "def make(xs):\n    return xs\n\ndef f(xs):\n    r = make(xs)\n    r = xs.sort()\n    return r.total\n\nf([1])\n",
       );
       expect(
-        same(twice.result.error_facts?.assigned?.r, { call: "xs.sort", line: 6 }),
-        `the last time it was set: ${JSON.stringify(twice.result.error_facts?.assigned)}`,
+        same(twice.result.error?.facts?.assigned?.r, { call: "xs.sort", line: 6 }),
+        `the last time it was set: ${JSON.stringify(twice.result.error?.facts?.assigned)}`,
       );
       // Set only after the line, by a loop that has gone round once.
       const looped = await definitions(
         "def find(i):\n    return None\n\nfor i in range(2):\n    if i:\n        print(x.total)\n    x = find(i)\n",
       );
       expect(
-        same(looped.result.error_facts?.assigned?.x, { call: "find", line: 7 }),
-        `or after it, in a loop: ${JSON.stringify(looped.result.error_facts?.assigned)}`,
+        same(looped.result.error?.facts?.assigned?.x, { call: "find", line: 7 }),
+        `or after it, in a loop: ${JSON.stringify(looped.result.error?.facts?.assigned)}`,
       );
 
       // A function from an earlier prompt line is read from that line's own
@@ -1216,12 +1206,12 @@ async function main() {
       await prompt("nums = [1, 2]");
       const later = (await prompt("print(get(nums))")).result;
       expect(
-        later.error_frames.at(-1)?.text === "    return xs[5]" && later.error_frames.at(-1)?.column === 11,
-        `its line and caret: ${JSON.stringify(later.error_frames.at(-1))}`,
+        later.error?.frames.at(-1)?.text === "    return xs[5]" && later.error?.frames.at(-1)?.column === 11,
+        `its line and caret: ${JSON.stringify(later.error?.frames.at(-1))}`,
       );
       expect(
-        later.error_facts?.sequence === "xs" && later.error_facts?.length === 2,
-        `and what is learned from it: ${JSON.stringify(later.error_facts)}`,
+        later.error?.facts?.sequence === "xs" && later.error?.facts?.length === 2,
+        `and what is learned from it: ${JSON.stringify(later.error?.facts)}`,
       );
 
       // Several lines submitted at once are judged as one input.
@@ -1242,8 +1232,8 @@ async function main() {
         return run(grader, { fileName: "grader.py", level: "raw" });
       };
       const refused = await graded("import student\n", "#level beginner\ntotal = 0\ntotal = 1\n");
-      const checks = refused.error_facts?.checks;
-      expect(refused.error_type === "ChecksFailed", `refused at the import: ${refused.error_type}`);
+      const checks = refused.error?.facts?.checks;
+      expect(refused.error?.errorType === "ChecksFailed", `refused at the import: ${refused.error?.errorType}`);
       expect(
         checks?.file === "student.py" && checks?.level === "beginner" &&
           checks.findings.map((f) => f.id).join() === "reassignment" && checks.header_problem === null,
@@ -1251,17 +1241,17 @@ async function main() {
       );
       const header = await graded("import student\n", "#level begginer\nx = 1\n");
       expect(
-        header.error_type === "ChecksFailed" && header.error_facts?.checks?.header_problem?.line === 1,
-        `a broken #level line refuses it too: ${JSON.stringify(header.error_facts?.checks)}`,
+        header.error?.errorType === "ChecksFailed" && header.error?.facts?.checks?.header_problem?.line === 1,
+        `a broken #level line refuses it too: ${JSON.stringify(header.error?.facts?.checks)}`,
       );
       const student = "#level beginner\ndef count(n: int) -> int:\n    return n\n\ndef dot() -> Image:\n    return circle(5, \"solid\", \"red\")\n";
       const strict = await graded("from student import count\nprint(count(True))\n", student);
       expect(
-        strict.error_type === "TypeCheckError" && strict.error_frames.at(-1)?.file === "student.py",
-        `checked at its level, in its file: ${strict.error_type} ${JSON.stringify(strict.error_frames.at(-1))}`,
+        strict.error?.errorType === "TypeCheckError" && strict.error?.frames.at(-1)?.file === "student.py",
+        `checked at its level, in its file: ${strict.error?.errorType} ${JSON.stringify(strict.error?.frames.at(-1))}`,
       );
-      expect(strict.error_facts?.check?.level === "beginner", `the check says whose level: ${JSON.stringify(strict.error_facts?.check)}`);
-      const strictFinding = findRuntimeFinding("from student import count\nprint(count(True))\n", "grader.py", "raw", pythonErrorFrom(strict));
+      expect(strict.error?.facts?.check?.level === "beginner", `the check says whose level: ${JSON.stringify(strict.error?.facts?.check)}`);
+      const strictFinding = findRuntimeFinding("grader.py", "raw", strict.error);
       expect(
         strictFinding.howToFix.some((l) => /not accepted as numbers/.test(l)),
         `explained at the student's level, not the grader's: ${JSON.stringify(strictFinding.howToFix)}`,
@@ -1269,16 +1259,16 @@ async function main() {
       // A warning is said when the file runs, and does not stop an import.
       const warned = await graded("import student\nprint(student.f())\n",
         '#level beginner\ndef f() -> int:\n    print("a".upper)\n    return 1\n');
-      expect(warned.ok && /1\n$/.test(warned.stdout), `a warning does not refuse it: ${warned.error_message ?? warned.stdout}`);
+      expect(warned.ok && /1\n$/.test(warned.stdout), `a warning does not refuse it: ${warned.error?.message ?? warned.stdout}`);
       const drawn = await graded("from student import dot\nprint(dot() is not None)\n", student);
-      expect(drawn.ok && drawn.stdout === "True\n", `with the names a run starts with: ${drawn.error_message ?? drawn.stdout}`);
+      expect(drawn.ok && drawn.stdout === "True\n", `with the names a run starts with: ${drawn.error?.message ?? drawn.stdout}`);
       // Its level, not the importer's: an advanced helper takes a bool.
       const lenient = await graded("#level beginner\nfrom student import count\nprint(count(True))\n",
         "#level advanced\ndef count(n: int) -> int:\n    return n\n");
-      expect(lenient.ok && lenient.stdout === "True\n", `an advanced file is advanced: ${lenient.error_message ?? lenient.stdout}`);
+      expect(lenient.ok && lenient.stdout === "True\n", `an advanced file is advanced: ${lenient.error?.message ?? lenient.stdout}`);
       // And a file with no header is plain Python.
       const plain = await graded("import student\nprint(student.f(\"x\"))\n", "def f(n: int) -> int:\n    return n\n\nf = f\n");
-      expect(plain.ok && plain.stdout === "x\n", `raw is unchecked: ${plain.error_message ?? plain.stdout}`);
+      expect(plain.ok && plain.stdout === "x\n", `raw is unchecked: ${plain.error?.message ?? plain.stdout}`);
       await send({ type: "mountWorkspace", files: [] });
       await send({ type: "mountWorkspace", files: [] });
       console.log("    names, frames, columns, facts and messages, each from the exception itself");
@@ -1287,7 +1277,7 @@ async function main() {
     {
       const explain = async (code, level = "beginner", fileName = "lib.py") => {
         const result = await run(code, { level, fileName });
-        const finding = findRuntimeFinding(code, fileName, level, pythonErrorFrom(result));
+        const finding = findRuntimeFinding(fileName, level, result.error);
         return { result, finding, text: finding ? [finding.headline, ...finding.howToFix].join("\n") : "" };
       };
       const cases = [
@@ -1339,9 +1329,9 @@ async function main() {
         "f(3)",
       ].join("\n");
       const result = await run(code, { level: "beginner", fileName: "ns.py" });
-      expect(result.ok === true && result.stdout === "[]\n3\n", `nothing of PLL's or typeguard's, and values still shown: ${JSON.stringify(result.stdout)} ${result.error_message ?? ""}`);
+      expect(result.ok === true && result.stdout === "[]\n3\n", `nothing of PLL's or typeguard's, and values still shown: ${JSON.stringify(result.stdout)} ${result.error?.message ?? ""}`);
       const checked = await run('#level beginner\ndef f(x: int) -> int:\n    return x\nf("a")\n', { level: "beginner", fileName: "ns2.py" });
-      expect(checked.error_type === "TypeCheckError", `and the checks still run: ${checked.error_type}`);
+      expect(checked.error?.errorType === "TypeCheckError", `and the checks still run: ${checked.error?.errorType}`);
       console.log("    dir() is the student's, and the checks still happen");
     }
 

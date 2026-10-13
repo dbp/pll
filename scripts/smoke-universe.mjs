@@ -104,7 +104,7 @@ async function loadTransport() {
   connectUniverse,
   validateUniverseUrl,
   UNIVERSE_CONNECT_HELP,
-} from "./src/common/universeClient";
+} from "./src/editor/reactors/universe";
 `);
   return mod;
 }

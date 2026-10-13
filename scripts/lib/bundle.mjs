@@ -9,7 +9,7 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
  * Import TypeScript from `src/` into a test.
  *
  * `entry` is the body of a module, with paths relative to the repository
- * root: `export { findRuntimeFinding } from "./src/common/analyzers/registry";`.
+ * root: `export { findRuntimeFinding } from "./src/run/finding";`.
  * It is bundled with the loaders the build itself uses, so a module that
  * reaches the Python sources or the vendored wheels imports the same way
  * here as in the extension. `vscodeStub`, when given, is the source of the

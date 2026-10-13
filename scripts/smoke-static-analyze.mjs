@@ -15,13 +15,7 @@ import { bootPll } from "./lib/pyodide.mjs";
 import { expect, passed } from "./lib/check.mjs";
 import { importSource } from "./lib/bundle.mjs";
 
-const { enrichStaticFindings, LEVEL_NAMES } = await importSource(`
-import { enrichStaticFindings as explainFindings } from "./src/common/analyzers/static/registry";
-import { staticFindingsFrom } from "./src/common/fromPython";
-/** Findings as Python sends them, through the runtime's translation. */
-export const enrichStaticFindings = (raw, level, fileName) => explainFindings(staticFindingsFrom(raw), level, fileName);
-export { LEVEL_NAMES } from "./src/common/level";
-`);
+const { LEVEL_NAMES } = await importSource('export { LEVEL_NAMES } from "./src/core/level";');
 import { ROOT } from "./lib/bundle.mjs";
 
 function readPy(rel) {
@@ -38,6 +32,15 @@ async function main() {
     proxy.destroy?.();
     return obj;
   };
+  const pllCall = pyodide.globals.get("_pll_call");
+  /**
+   * The findings as the student reads them: Python's wording of each.
+   * (`toJs` made each `None` undefined; it goes back as `null`.)
+   */
+  const wordStatic = (raw, level, fileName) =>
+    raw.map((finding) =>
+      JSON.parse(pllCall("_pll_word_static", JSON.stringify([finding, level, fileName], (_, v) => v ?? null))),
+    );
 
   console.log("\n[1] beginner_ok.py - expect 0 findings");
   {
@@ -693,8 +696,7 @@ _g = _pll_get_session("smoke-lib")
     );
     expect(fine.length === 0, `an ordinary comparison stays silent: ${JSON.stringify(fine)}`);
     // Every wrong annotation carries the name as written, which is what
-    // the host's wording is built from. (That wording is checked in
-    // smoke-explainers, which bundles the explainer.)
+    // its wording is built from.
     for (const written of ["table", "reactor", "image", "row", "string"]) {
       const code = `def f(x: ${written}) -> str:\n    return "x"\n`;
       const found = analyze(code, "beginner", "ann.py").find(
@@ -774,7 +776,7 @@ _g = _pll_get_session("smoke-lib")
     for (const written of names) {
       const raw = analyze(`def f(x: ${written}) -> int:\n    return 1\n`, "beginner", "ann.py")
         .filter((f) => f.id === "annotation-not-a-type");
-      const [finding] = enrichStaticFindings(raw, "beginner", "ann.py");
+      const [finding] = wordStatic(raw, "beginner", "ann.py");
       const type = /^Write `([^`]+)` instead\.$/.exec(finding?.howToFix?.[0] ?? "")?.[1];
       expect(type !== undefined, `\`${written}\` gets a replacement: ${JSON.stringify(finding?.howToFix)}`);
       if (type === undefined) continue;
@@ -783,6 +785,8 @@ _g = _pll_get_session("smoke-lib")
       suggested.push(`${written}->${type}`);
     }
     evaluate.destroy?.();
+    // The course's word for a row's type, not the class PLL makes rows with.
+    expect(suggested.includes("row->dict"), `a row is a dict: ${suggested.join(" ")}`);
     console.log(`    ${suggested.join(" ")}`);
   }
 
@@ -837,7 +841,7 @@ _g = _pll_get_session("smoke-lib")
   console.log("\n[23] the library-name and shadowing messages fit how the name is bound");
   {
     const explained = (code) =>
-      enrichStaticFindings(analyze(code, "beginner", "bind.py"), "beginner", "bind.py").map((f) =>
+      wordStatic(analyze(code, "beginner", "bind.py"), "beginner", "bind.py").map((f) =>
         [f.headline, ...f.howToFix].join("\n"),
       );
     // An import: the fix is `as`, not a rename of their own definition.
@@ -881,10 +885,26 @@ _g = _pll_get_session("smoke-lib")
         `${level}: two, not \`is None\`: ${JSON.stringify(isLiteral)}`,
       );
     }
-    const [finding] = enrichStaticFindings(analyze("x = 60.5\nassert x is 60.5\n", "beginner", "is.py"), "beginner", "is.py");
+    const [finding] = wordStatic(analyze("x = 60.5\nassert x is 60.5\n", "beginner", "is.py"), "beginner", "is.py");
     expect(finding?.howToFix?.[0] === "To compare with `60.5`, write `==` instead.", `the fix: ${JSON.stringify(finding)}`);
     expect(analyze("x = 1\nprint(x is 1)\n", "advanced", "is.py").length === 0, "advanced is Python");
     console.log("    `is 60.5` and `is not \"Ada\"`, and never `is None`");
+  }
+
+  console.log("\n[25] every kind of finding the checks make has its wording");
+  {
+    // Read from the checks' source: each `_pll_finding("kind", ...)`, and
+    // both kinds of one that chooses between two.
+    const source = readPy("src/python/bootstrap/staticAnalysis.py");
+    const kinds = new Set();
+    for (const m of source.matchAll(/_pll_finding\(\s*"([a-z-]+)"(?:\s+if [^"\n]*else\s+"([a-z-]+)")?/g)) {
+      kinds.add(m[1]);
+      if (m[2]) kinds.add(m[2]);
+    }
+    const worded = new Set(pyodide.runPython("sorted(_PLL_STATIC_WORDING)").toJs());
+    const unworded = [...kinds].filter((kind) => !worded.has(kind));
+    expect(kinds.size >= 17 && unworded.length === 0, `${kinds.size} kinds, without wording: ${unworded.join(", ")}`);
+    console.log(`    ${kinds.size} kinds, each worded`);
   }
 
   fn.destroy?.();

@@ -59,8 +59,8 @@ export { Uri };
 
 async function load() {
   const mod = await importSource(`
-export { registerNewFileLevel, headerFor } from "./src/common/newFileLevel";
-export { parseLevel } from "./src/common/level";
+export { registerNewFileLevel, headerFor } from "./src/editor/setup/newFileLevel";
+export { parseLevel } from "./src/core/level";
 export * as vscodeStub from "vscode";
 `, { vscodeStub: VSCODE_STUB });
   return mod;

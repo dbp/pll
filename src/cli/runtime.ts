@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { DesktopPyodideRuntime } from "../desktop/pyodideRuntime";
+import { desktopPython } from "../desktop/pyodideRuntime";
+import type { Python } from "../run/python";
 import { cacheRoot } from "./bundleStore";
 
 /**
@@ -14,8 +15,8 @@ import { cacheRoot } from "./bundleStore";
  * cannot be written to (`sudo npm i -g`, a Docker image) keeps them in the
  * user's cache instead.
  */
-export function createCliRuntime(): DesktopPyodideRuntime {
-  return new DesktopPyodideRuntime({
+export function createCliRuntime(): Python {
+  return desktopPython({
     indexUrlCandidates: pyodideDirectory(),
     workerPath: path.join(__dirname, "worker.cjs"),
     missingAssetsHint:

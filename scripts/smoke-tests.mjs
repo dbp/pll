@@ -77,7 +77,7 @@ def test_wrong():
     const fail = (result.tests || []).find((t) => t.outcome === "failed");
     expect(!!fail, "expected a failed test row");
     expect(typeof fail.message === "string" && fail.message.length > 0, "failed test needs a message");
-    expect(fail.line_number === 5, "failed test line should be the def (got " + fail.line_number + ")");
+    expect(fail.lineNumber === 5, "failed test line should be the def (got " + fail.lineNumber + ")");
     expect(!fail.message.includes("_pytest"), "failure message should not include pytest internals");
     expect(!fail.message.includes("pluggy"), "failure message should not include pluggy internals");
     expect(!fail.message.includes("site-packages"), "failure message should not include site-packages");
@@ -137,25 +137,25 @@ def test_add():
       "",
     ].join("\n");
     const result = run(src, "once.py", "session:once");
-    expect(result.ok === true, `the program ran: ${result.error_message}`);
+    expect(result.ok === true, `the program ran: ${result.error?.message}`);
     expect(result.stdout === "main block\n", `as __main__, once: ${JSON.stringify(result.stdout)}`);
     expect(result.tests?.passed === 2, `its tests see its names: ${JSON.stringify(result.tests?.tests?.map((t) => [t.name, t.outcome, t.message]))}`);
     // The session is the program's, so the prompt sees the same names - and
     // can call a test, whose rewritten asserts need pytest's helpers.
-    expect(call(replEval, ["total", "session:once"]).result_repr === "6", "the prompt sees the program's names");
+    expect(call(replEval, ["total", "session:once"]).resultRepr === "6", "the prompt sees the program's names");
     const again = call(replEval, ["test_total()", "session:once"]);
-    expect(again.ok === true, `a test can be called from the prompt: ${again.error_type} ${again.error_message}`);
+    expect(again.ok === true, `a test can be called from the prompt: ${again.error?.errorType} ${again.error?.message}`);
   }
 
   console.log("\n[5] a program that does not finish leaves its tests unrun");
   {
     const raised = run("def test_a():\n    assert True\n\n1 / 0\n", "raises.py");
-    expect(raised.error_type === "ZeroDivisionError", `the program's error: ${raised.error_type}`);
+    expect(raised.error?.errorType === "ZeroDivisionError", `the program's error: ${raised.error?.errorType}`);
     expect(raised.tests == null, `no tests: ${JSON.stringify(raised.tests)}`);
     const exited = run("import sys\ndef test_a():\n    assert True\n\nsys.exit(2)\n", "exits.py");
-    expect(exited.exit_code === 2 && exited.tests == null, `an exit ends it too: ${exited.exit_code} ${JSON.stringify(exited.tests)}`);
+    expect(exited.exitCode === 2 && exited.tests == null, `an exit ends it too: ${exited.exitCode} ${JSON.stringify(exited.tests)}`);
     const broken = run("def test_a(:\n    pass\n", "broken.py");
-    expect(broken.error_type === "SyntaxError" && broken.tests == null, `a file that does not parse: ${broken.error_type}`);
+    expect(broken.error?.errorType === "SyntaxError" && broken.tests == null, `a file that does not parse: ${broken.error?.errorType}`);
     const without = call(runFile, ["def test_a():\n    assert False\n", "off.py", "tests:off", "raw", false]);
     expect(without.ok === true && without.tests == null, "and none are run unless asked for");
   }

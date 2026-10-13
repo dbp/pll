@@ -1,5 +1,5 @@
 import { MessageChannel, type MessagePort, receiveMessageOnPort, Worker } from "node:worker_threads";
-import { INTERRUPT_SIGINT } from "../common/interruptBuffer";
+import { INTERRUPT_SIGINT } from "../pyodide/sharedMemory";
 
 export interface SyncHttpResult {
   status: number;

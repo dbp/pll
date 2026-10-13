@@ -1,37 +1,77 @@
 #!/usr/bin/env node
 /**
- * Smoke test for parseLevel + the static-finding explainers.
- *
- * This bundles the relevant TS modules with esbuild on the fly so we don't
- * need a separate build step.
+ * Smoke test for parseLevel and the explanations: the static findings'
+ * wording, from Python, and the runtime explainers, bundled with esbuild on
+ * the fly so no separate build step is needed.
  */
 import { expect, passed } from "./lib/check.mjs";
 import { importSource } from "./lib/bundle.mjs";
+import { bootPll } from "./lib/pyodide.mjs";
 
 const mod = await importSource(`
-import { parseLevel, levelHeaderProblem } from "./src/common/level";
-import { levelHeaderFinding } from "./src/common/analyzers/levelHeaderFinding";
-import { explainSyntaxError } from "./src/common/errors/syntaxExplainer";
-import { enrichStaticFindings as explainFindings } from "./src/common/analyzers/static/registry";
-import { staticFindingsFrom } from "./src/common/fromPython";
-/** Findings as Python sends them, through the runtime's translation. */
-const enrichStaticFindings = (raw, level, fileName) => explainFindings(staticFindingsFrom(raw), level, fileName);
-import { formatFriendlyError } from "./src/common/errorFormatter";
-import { findRuntimeFinding } from "./src/common/analyzers/registry";
+import { parseLevel, levelHeaderProblem } from "./src/core/level";
+import { levelHeaderFinding } from "./src/run/finding";
+import { formatFriendlyError } from "./src/run/finding";
+import { findRuntimeFinding } from "./src/run/finding";
 
 export {
   parseLevel,
   levelHeaderProblem,
   levelHeaderFinding,
-  explainSyntaxError,
-  enrichStaticFindings,
   formatFriendlyError,
   findRuntimeFinding,
 };
 `);
 
+const pyodide = await bootPll();
+const pllCall = pyodide.globals.get("_pll_call");
+
 /**
- * A `PythonError`, as `pythonErrorFrom` builds one from `_pll_error_info`.
+ * Static findings as `_pll_static_analyze` makes them, worded by Python
+ * (`explain/static.py`) as the host receives them.
+ */
+const wordStatic = (raw, level, fileName) =>
+  raw.map((finding) =>
+    JSON.parse(pllCall("_pll_word_static", JSON.stringify([{ severity: "error", ...finding }, level, fileName]))),
+  );
+
+let runs = 0;
+/** Run `source` as the file `fileName`, and give the finding Python made of its error. */
+function ran(source, fileName = "lab.py", level = "beginner") {
+  runs += 1;
+  const result = JSON.parse(pllCall("_pll_run_file", JSON.stringify([source, fileName, `run-${runs}`, level, false])));
+  return result.error?.finding ?? null;
+}
+
+/**
+ * The finding Python's rules make of `error` (as `pyError` describes it), in
+ * a run of `source` as `fileName` at `level` - completed as the host
+ * completes it.
+ */
+function explained(error, source, fileName, level) {
+  const finding = JSON.parse(pllCall("_pll_explain_error", JSON.stringify([error, [fileName, source], level])));
+  return { ...finding, fileName: finding.fileName ?? fileName, level };
+}
+
+/** The facts' own names, as Python spells them. */
+const SNAKE = {
+  elementValue: "element_value",
+  elementType: "element_type",
+  swappedWith: "swapped_with",
+  returnedNone: "returned_none",
+  fixedLength: "fixed_length",
+  hasList: "has_list",
+  headerProblem: "header_problem",
+};
+const snakeFacts = (value) =>
+  Array.isArray(value)
+    ? value.map(snakeFacts)
+    : value !== null && typeof value === "object"
+      ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [SNAKE[key] ?? key, snakeFacts(inner)]))
+      : value;
+
+/**
+ * An error as `_pll_error_info` describes it.
  *
  * `frames` are `[file, line, function]`, outermost first; a frame is the
  * student's unless its file is PLL's (`<pll:...>`) or a library's. The error is
@@ -43,22 +83,21 @@ function pyError(type, message, frames, { facts = {}, column = null } = {}) {
   return {
     errorType: type,
     message,
-    traceback: `${type}: ${message}`,
     fileName: innermost?.[0] ?? null,
     lineNumber: innermost?.[1] ?? null,
     column,
     text: null,
-    nameToken: facts.name ?? null,
-    frames: frames.map(([fileName, line, functionName = "<module>"]) => ({
-      fileName,
+    frames: frames.map(([file, line, functionName = "<module>"]) => ({
+      file,
       line,
       column: null,
-      functionName: functionName === "<module>" ? null : functionName,
+      function: functionName === "<module>" ? null : functionName,
       // As `_pll_is_students` decides.
-      user: fileName === "<repl>" || (!fileName.startsWith("<") && !/site-packages|\/lib\/python|_pytest|pluggy|pll_vendor/.test(fileName)),
+      user: file === "<repl>" || (!file.startsWith("<") && !/site-packages|\/lib\/python|_pytest|pluggy|pll_vendor/.test(file)),
       text: null,
+      parameters: null,
     })),
-    facts,
+    facts: snakeFacts(facts),
   };
 }
 
@@ -115,8 +154,8 @@ expect(mod.parseLevel("#level Beginner\nx=1") === "raw", "#level Beginner is not
 expect(mod.parseLevel("#level expert\nx=1") === "raw", "expert is not a level");
 expect(mod.parseLevel("#level\nx=1") === "raw", "a bare #level names nothing");
 
-console.log("[enrichStaticFindings]");
-const findings = mod.enrichStaticFindings(
+console.log("[static findings, worded]");
+const findings = wordStatic(
   [
     {
       id: "shadowing",
@@ -187,7 +226,7 @@ expect(
 
 console.log("[shadowing-library explainer]");
 {
-  const libFindings = mod.enrichStaticFindings(
+  const libFindings = wordStatic(
     [
       {
         id: "shadowing-library",
@@ -272,7 +311,7 @@ console.log("[shadowing-library explainer]");
 
 console.log("[explainers omit line 0 for preexisting session bindings]");
 {
-  const preexisting = mod.enrichStaticFindings(
+  const preexisting = wordStatic(
     [
       {
         id: "reassignment",
@@ -316,7 +355,7 @@ console.log("[explainers omit line 0 for preexisting session bindings]");
 }
 
 console.log("[disallowed-keyword explainer - global at intermediate]");
-const kwFindings = mod.enrichStaticFindings(
+const kwFindings = wordStatic(
   [
     {
       id: "disallowed-keyword",
@@ -382,22 +421,12 @@ expect(lines.some((l) => l.includes("How to fix:")), "shows How to fix section")
 
 console.log("[name errors: a name with no value is named, not called `this name`]");
 {
-  /** Build a finding from a traceback the way the hosts do. */
-  const finding = (error, source) =>
-    mod.findRuntimeFinding(source, "lab.py", "beginner", error);
 
   // The Lab 10 shape: an inner function reads a name the enclosing function
   // assigns later. The name is recovered from this wording too, not only
   // from `name 'x' is not defined`, or the report would read "Python doesn't
   // know what `this name` means", in a file where `title` is right there.
-  const free = finding(
-    pyErrorLine(
-      "NameError: cannot access free variable 'title' where it is not associated with a value",
-      [["lab.py", 3, "inner"]],
-      { column: 15 },
-    ),
-    "def outer():\n    def inner():\n        return title\n    inner()\n    title = 1\n",
-  );
+  const free = ran("def outer():\n    def inner():\n        return title\n    inner()\n    title = 1\n\n\nouter()\n");
   expect(free !== null, "a free-variable NameError should be explained");
   expect(free.nameToken === "title", `the name should be found, got ${free.nameToken}`);
   expect(/`title`/.test(free.headline), `the headline should name it: ${free.headline}`);
@@ -414,14 +443,7 @@ console.log("[name errors: a name with no value is named, not called `this name`
 
   // `UnboundLocalError` is the same mistake under a different type, and was
   // not handled at all - it fell through to a bare traceback.
-  const local = finding(
-    pyErrorLine(
-      "UnboundLocalError: cannot access local variable 'count' where it is not associated with a value",
-      [["lab.py", 2, "f"]],
-      { column: 10 },
-    ),
-    "def f():\n    print(count)\n    count = 1\n",
-  );
+  const local = ran("def f():\n    print(count)\n    count = 1\n\n\nf()\n");
   expect(local !== null, "an UnboundLocalError should be explained too");
   expect(local.nameToken === "count", `the name should be found, got ${local.nameToken}`);
   expect(local.errorType === "UnboundLocalError", `keep Python's type: ${local.errorType}`);
@@ -431,10 +453,7 @@ console.log("[name errors: a name with no value is named, not called `this name`
   );
 
   // A genuinely unknown name still gets the spelling advice.
-  const unknown = finding(
-    pyErrorLine("NameError: name 'Totl' is not defined", [["lab.py", 1]], { column: 6 }),
-    "print(Totl)\n",
-  );
+  const unknown = ran("print(Totl)\n");
   expect(unknown.nameToken === "Totl", `got ${unknown.nameToken}`);
   expect(/doesn't know what `Totl`/.test(unknown.headline), `headline: ${unknown.headline}`);
   expect(
@@ -442,6 +461,30 @@ console.log("[name errors: a name with no value is named, not called `this name`
     "an unknown name does want the spelling check",
   );
   console.log("    free, local and unknown names each named and advised correctly");
+}
+
+console.log("[an explanation that fails leaves Python's own words]");
+{
+  // A rule with a bug must not lose the error: it is said as Python said it, where it is.
+  pyodide.runPython("_pll_explain_error_kept = _pll_explain_error\ndef _pll_explain_error(info, run, level):\n    raise ValueError('a rule broke')\n");
+  let fallback = null;
+  try {
+    fallback = ran("x = 1\nprint(x / 0)\n");
+  } finally {
+    pyodide.runPython("_pll_explain_error = _pll_explain_error_kept\ndel _pll_explain_error_kept\n");
+  }
+  expect(
+    fallback?.headline === "division by zero" && fallback.fileName === "lab.py" && fallback.lineNumber === 2,
+    `Python's words, at the line: ${JSON.stringify(fallback)}`,
+  );
+  expect(ran("print(1 / 0)\n")?.headline === "division by zero.", "and the rules are back afterwards");
+  // In none of the student's files, the host puts the finding in the run's.
+  const placed = mod.findRuntimeFinding("lab.py", "beginner", {
+    errorType: "MemoryError",
+    message: "",
+    finding: { id: "runtime-error", errorType: "MemoryError", headline: "x", howToFix: [], fileName: null, lineNumber: null, column: null, nameToken: null, severity: "error", origin: "runtime" },
+  });
+  expect(placed.fileName === "lab.py" && placed.level === "beginner", `the run's file and level: ${JSON.stringify(placed)}`);
 }
 
 console.log("[a #level line that names nothing valid is an error, not silence]");
@@ -529,7 +572,10 @@ console.log("[a #level line that names nothing valid is an error, not silence]")
 
 console.log("[syntax errors: Python's wording where it is clear, better where it is not]");
 {
-  const explain = (type, message, line) => mod.explainSyntaxError(type, message, line);
+  const explain = (type, message, line) => {
+    const [headline, howToFix] = JSON.parse(pllCall("_pll_syntax_wording", JSON.stringify([type, message, line])));
+    return { headline, howToFix };
+  };
 
   // Python names the token that finally failed to parse, not the mistake:
   // `else if` parses `else` and then wants its colon.
@@ -587,8 +633,7 @@ console.log("[syntax errors: Python's wording where it is clear, better where it
 console.log("[stock messages: Python's own wording replaced with the course's]");
 {
   /** Build a finding the way the hosts do, from a traceback and the file. */
-  const finding = (error, source) =>
-    mod.findRuntimeFinding(source, "lab.py", "beginner", error);
+  const finding = (error, source) => explained(error, source, "lab.py", "beginner");
 
   /** A one-frame traceback pointing at `line` of `source`. */
   const raised = (source, line, fn, errorLine, facts = {}) =>
@@ -936,14 +981,29 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     `a dict in a file named pandas.py is not a DataFrame: ${notPandas.headline}`,
   );
 
+  // A module that is not there, said as why: each kind of reason its own.
+  const missingModule = (module) =>
+    finding(pyErrorLine(`ModuleNotFoundError: No module named '${module.name}'`, [["lab.py", 1]], { facts: { module } }),
+      `import ${module.name}\n`);
+  const said = (f) => `${f.headline}\n${f.howToFix.join("\n")}`;
+  const why = {
+    leftOut: missingModule({ name: "big", kind: "leftOut", why: "it is over 10 MB", close: null, package: null }),
+    notLoaded: missingModule({ name: "micropip", kind: "notLoaded", package: "micropip", close: null, why: null }),
+    notSeen: missingModule({ name: "sympy", kind: "notSeen", package: "sympy", close: null, why: null }),
+    close: missingModule({ name: "helpr", kind: "missing", close: "helper", why: null, package: null }),
+    missing: missingModule({ name: "flask", kind: "missing", close: null, why: null, package: null }),
+  };
+  expect(why.leftOut.headline === "`big.py` is next to your program, but it was not loaded: it is over 10 MB.", `left out: ${why.leftOut.headline}`);
+  expect(/could not be loaded before your program ran/.test(why.notLoaded.headline) &&
+    why.notLoaded.howToFix.some((l) => /downloads `micropip` the first time/.test(l)), `not loaded: ${said(why.notLoaded)}`);
+  expect(/PLL did not see it imported/.test(why.notSeen.headline) && why.notSeen.howToFix.some((l) => l.includes("`import sympy`")),
+    `not seen: ${said(why.notSeen)}`);
+  expect(why.close.howToFix.join() === "Did you mean `helper`, for `helper.py`?", `a close name: ${said(why.close)}`);
+  expect(/Pyodide, which has many packages/.test(said(why.missing)), `missing: ${said(why.missing)}`);
+
   // -- a class passed where one of its instances was wanted --------------
-  const classItself = finding(
-    pyErrorLine(
-      'TypeCheckError: argument "s" (class __main__.ITunesSong) is not an instance of __main__.ITunesSong',
-      [["lab.py", 12], ["lab.py", 11, "title"]],
-      { facts: { check: check("argument", "s", "class __main__.ITunesSong", ["__main__.ITunesSong"]) } },
-    ),
-    song + "\n\ndef title(s: ITunesSong) -> str:\n    return s.name\n\n\nprint(title(ITunesSong))\n",
+  const classItself = ran(
+    `${song.split("\n\n\ns = ")[0]}\n\n\ndef title(s: ITunesSong) -> str:\n    return s.name\n\n\nprint(title(ITunesSong))\n`,
   );
   expect(
     /the class `ITunesSong` itself/.test(classItself.headline),
@@ -1156,18 +1216,11 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
 
 console.log("[name errors: the hint that fits, not the one that always fits]");
 {
-  const finding = (error, source) =>
-    mod.findRuntimeFinding(source, "lab.py", "raw", error);
-  const raised = (source, line, errorLine) =>
-    finding(pyErrorLine(errorLine, [["lab.py", line]]), source);
+  const raised = (source) => ran(source, "lab.py", "raw");
 
   // A name an import provides. Python's own suggestion for `pd` is `id`,
   // a real built-in with nothing to do with pandas.
-  const pandas = raised(
-    'movies = pd.DataFrame({"a": [1]})\n',
-    1,
-    "NameError: name 'pd' is not defined. Did you mean: 'id'?",
-  );
+  const pandas = raised('movies = pd.DataFrame({"a": [1]})\n');
   expect(
     pandas.headline === "`pd` comes from an import, and this file has not imported it.",
     `an import-provided name: ${pandas.headline}`,
@@ -1183,11 +1236,7 @@ console.log("[name errors: the hint that fits, not the one that always fits]");
 
   // Defined, but further down. "Check the spelling" sends the student
   // looking for a mistake that is not there.
-  const later = raised(
-    "height = width * 3\nwidth = 10\nprint(height)\n",
-    1,
-    "NameError: name 'width' is not defined",
-  );
+  const later = raised("height = width * 3\nwidth = 10\nprint(height)\n");
   expect(
     later.headline === "`width` is defined on line 2, after this line.",
     `a name defined later: ${later.headline}`,
@@ -1199,9 +1248,7 @@ console.log("[name errors: the hint that fits, not the one that always fits]");
 
   // The missing name is a parameter of the function being passed.
   const parameter = raised(
-    'def below_1k(r):\n    return r["riders"] < 1000\n\n\nprint(t.filter(below_1k(r)))\n',
-    5,
-    "NameError: name 'r' is not defined",
+    'def below_1k(r):\n    return r["riders"] < 1000\n\n\nt = table(["riders"], [[5]])\nprint(t.filter(below_1k(r)))\n',
   );
   expect(
     /`filter` calls `below_1k` for you/.test(parameter.headline),
@@ -1218,8 +1265,6 @@ console.log("[name errors: the hint that fits, not the one that always fits]");
   // course, so the advice has to be the string form.
   const recursive = raised(
     "from dataclasses import dataclass\n\n\n@dataclass\nclass Link:\n    first: int\n    rest: NumList\n\n\nNumList = None | Link\n",
-    7,
-    "NameError: name 'NumList' is not defined",
   );
   expect(
     /an annotation is read as the file runs/.test(recursive.headline),
@@ -1235,11 +1280,7 @@ console.log("[name errors: the hint that fits, not the one that always fits]");
   );
 
   // A return annotation has no field to name it by.
-  const returned = raised(
-    "def rest(xs) -> NumList:\n    return xs\n\n\nNumList = int\nrest(1)\n",
-    1,
-    "NameError: name 'NumList' is not defined",
-  );
+  const returned = raised("def rest(xs) -> NumList:\n    return xs\n\n\nNumList = int\nrest(1)\n");
   expect(
     returned.howToFix.some((l) => /`-> "NumList"`/.test(l)),
     `a return type is shown as itself: ${JSON.stringify(returned.howToFix)}`,
@@ -1247,18 +1288,14 @@ console.log("[name errors: the hint that fits, not the one that always fits]");
 
   // An ordinary name defined later still gets "move it up", which for a
   // plain value is the right answer.
-  const ordinary = raised(
-    "height = width * 3\nwidth = 10\nprint(height)\n",
-    1,
-    "NameError: name 'width' is not defined",
-  );
+  const ordinary = raised("height = width * 3\nwidth = 10\nprint(height)\n");
   expect(
     ordinary.howToFix.some((l) => /Move the definition of `width`/.test(l)),
     `a value defined later is still moved: ${JSON.stringify(ordinary.howToFix)}`,
   );
 
   // A name that really is just unknown keeps the general advice.
-  const unknown = raised("print(Total)\n", 1, "NameError: name 'Total' is not defined");
+  const unknown = raised("print(Total)\n");
   expect(
     unknown.headline === "Python doesn't know what `Total` means.",
     `an unknown name: ${unknown.headline}`,
@@ -1273,7 +1310,7 @@ console.log("[name errors: the hint that fits, not the one that always fits]");
 console.log("[annotations: the function wording only where there is a function]");
 {
   const annotation = (written) =>
-    mod.enrichStaticFindings(
+    wordStatic(
       [
         {
           id: "annotation-not-a-type",
@@ -1321,8 +1358,7 @@ console.log("[annotations: the function wording only where there is a function]"
 
 console.log("[second review: advice that has to come from the program in hand]");
 {
-  const finding = (error, source, level = "raw") =>
-    mod.findRuntimeFinding(source, "lab.py", level, error);
+  const finding = (error, source, level = "raw") => explained(error, source, "lab.py", level);
   const raised = (source, line, errorLine, level = "raw", facts = {}) =>
     finding(
       pyErrorLine(errorLine, [["<pll:bootstrap/running>", 560, "run"], ["lab.py", line]], { facts }),
@@ -1447,7 +1483,7 @@ console.log("[second review: advice that has to come from the program in hand]")
 console.log("[second review: a wrong annotation says what will actually happen]");
 {
   const annotation = (written) =>
-    mod.enrichStaticFindings(
+    wordStatic(
       [
         {
           id: "annotation-not-a-type",
@@ -1480,7 +1516,7 @@ console.log("[second review: a wrong annotation says what will actually happen]"
     );
   }
   // `name = str` is quoted back as written, not as `name = int`.
-  const assigned = mod.enrichStaticFindings(
+  const assigned = wordStatic(
     [
       {
         id: "field-assigned-type",
@@ -1505,8 +1541,7 @@ console.log("[second review: a wrong annotation says what will actually happen]"
 
 console.log("[third review: the cases replayed from docs/error-review.md]");
 {
-  const finding = (error, source, level = "beginner") =>
-    mod.findRuntimeFinding(source, "student.py", level, error);
+  const finding = (error, source, level = "beginner") => explained(error, source, "student.py", level);
   const raised = (source, line, errorLine, frames = [], facts = {}) =>
     finding(
       pyErrorLine(errorLine, [["<pll:bootstrap/running>", 1, "_pll_run_file"], ["student.py", line], ...frames], {
@@ -1624,18 +1659,12 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
   );
 
   // loop-list-annotation: what item 0 *is*, read by Python from the frame.
-  const item = finding(
-    pyErrorLine(
-      'TypeCheckError: item 0 of argument "lst" (list) is not an instance of float',
-      [["student.py", 25], ["student.py", 2, "sum_list"]],
-      {
-        facts: {
-          check: check("argument", "lst", "list", ["float"], { element: "item 0" }),
-          elementValue: 'the string "1"',
-        },
-      },
-    ),
-    'def sum_list(lst: list[float]) -> float:\n    return 0\n',
+  const item = ran('def sum_list(lst: list[float]) -> float:\n    return 0\n\n\nsum_list(["1", 2.0])\n', "student.py");
+  // A `bool` for a `float` too: PLL's rule, said as one.
+  const truth = ran("def half(x: float) -> float:\n    return x / 2\n\n\nhalf(True)\n", "student.py");
+  expect(
+    truth.howToFix.some((l) => /`True` and `False` are not accepted as numbers/.test(l)),
+    `a bool is not a float here, and that is said: ${JSON.stringify(truth.howToFix)}`,
   );
   expect(
     /but item 0 is the string "1"\.$/.test(item.headline),
@@ -1643,37 +1672,23 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
   );
 
   // A dict's key in the quotes its value is described in, not Python's.
-  const keyed = (element, value) =>
-    finding(
-      pyErrorLine(
-        `TypeCheckError: ${element} of argument "d" (dict) is not an instance of int`,
-        [["student.py", 4], ["student.py", 2, "total"]],
-        {
-          facts: {
-            check: check("argument", "d", "dict", ["int"], { element }),
-            ...(value ? { elementValue: value } : {}),
-          },
-        },
-      ),
-      "def total(d: dict[str, int]) -> int:\n    return 0\n",
-    );
-  const valueOf = keyed("value of key 'a'", 'the string "1"');
+  const keyed = (annotation, value) =>
+    ran(`def total(d: ${annotation}) -> int:\n    return 0\n\n\ntotal(${value})\n`, "student.py");
+  const valueOf = keyed("dict[str, int]", '{"a": "1"}');
   expect(/the value for key "a" is the string "1"\.$/.test(valueOf.headline), `one kind of quote: ${valueOf.headline}`);
   expect(valueOf.howToFix.some((l) => l.includes('key "a"')), `in the advice too: ${JSON.stringify(valueOf.howToFix)}`);
-  expect(/key "b"/.test(keyed("key 'b'").headline), `a key itself: ${keyed("key 'b'").headline}`);
+  const keyB = keyed("dict[int, int]", '{"b": 1}');
+  expect(/key "b"/.test(keyB.headline), `a key itself: ${keyB.headline}`);
   // Not a string, or quoted the way it is because of what is in it: as Python wrote it.
-  expect(/key 1 /.test(keyed("value of key 1").headline), `a number key: ${keyed("value of key 1").headline}`);
-  expect(keyed(`value of key 'say "hi"'`).headline.includes(`key 'say "hi"'`),
-    `a key with a quote in it: ${keyed(`value of key 'say "hi"'`).headline}`);
+  const keyOne = keyed("dict[int, int]", '{1: "x"}');
+  expect(/key 1 /.test(keyOne.headline), `a number key: ${keyOne.headline}`);
+  const quoted = keyed("dict[str, int]", `{'say "hi"': "x"}`);
+  expect(quoted.headline.includes(`key 'say "hi"'`), `a key with a quote in it: ${quoted.headline}`);
 
   // mut-local-not-field: the line reads the field it meant to change.
-  const field = finding(
-    pyErrorLine(
-      "TypeCheckError: value assigned to ac (int) is not an instance of __main__.Account",
-      [["student.py", 14], ["student.py", 3, "deposit"]],
-      { facts: { check: check("variable", "ac", "int", ["__main__.Account"]) } },
-    ),
-    "def deposit(ac: Account, amt: float) -> None:\n    x = 1\n    ac = ac.balance + amt\n",
+  const field = ran(
+    "from dataclasses import dataclass\n\n\n@dataclass\nclass Account:\n    balance: float\n\n\ndef deposit(ac: Account, amt: float) -> None:\n    ac = ac.balance + amt\n\n\ndeposit(Account(1.0), 2.0)\n",
+    "student.py",
   );
   expect(
     field.howToFix.some((l) => /`ac\.balance = ac\.balance \+ amt`/.test(l)),
@@ -1686,27 +1701,16 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
 
   // dc-class-call-no-args: "not `ITunesSong`" next to "the class
   // `ITunesSong`" said the same name twice for opposite things.
-  const cls = finding(
-    pyErrorLine(
-      'TypeCheckError: argument "s" (class __main__.ITunesSong) is not an instance of __main__.ITunesSong',
-      [["student.py", 8], ["student.py", 5, "song_age"]],
-      { facts: { check: check("argument", "s", "class __main__.ITunesSong", ["__main__.ITunesSong"]) } },
-    ),
+  const cls = ran(
     "class ITunesSong:\n    pass\n\n\ndef song_age(s: ITunesSong) -> int:\n    return 1\n\n\nsong_age(ITunesSong)\n",
+    "student.py",
   );
   expect(/itself, not one made from it\.$/.test(cls.headline), `class itself: ${cls.headline}`);
 
   // rx-init-string: a capital, and the handler named.
-  const state = finding(
-    pyErrorLine('TypeCheckError: argument "x" (str) is not an instance of float', [
-      ["<pll:bootstrap/running>", 960, "_pll_run_file"],
-      ["student.py", 21],
-      ["<pll:reactor>", 223, "interact"],
-      ["<pll:reactor>", 431, "_pll_reactor_interact"],
-      ["<pll:reactor>", 396, "_pll_reactor_view"],
-      ["student.py", 5, "draw_dog"],
-    ], { facts: { check: check("argument", "x", "str", ["float"]) } }),
-    "#level beginner\n\n\n\ndef draw_dog(x: float) -> Image:\n    return x\n",
+  const state = ran(
+    '#level beginner\n\n\n\ndef draw_dog(x: float) -> Image:\n    return circle(x, "solid", "red")\n\n\nreactor(init="dog", to_draw=draw_dog).interact()\n',
+    "student.py",
   );
   expect(
     /^The reactor calls `draw_dog` with its state/.test(state.howToFix[0] ?? ""),
@@ -1715,7 +1719,7 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
   // dc-field-no-annotation: this is reported before the program runs, so
   // the NameError it would lead to is never shown - and must not be
   // referred to.
-  const noType = mod.enrichStaticFindings(
+  const noType = wordStatic(
     [
       {
         id: "field-no-type",
@@ -1743,17 +1747,16 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
 
 console.log("[fourth pass: every replayed case read for the same patterns]");
 {
-  const finding = (error, source, level = "beginner") =>
-    mod.findRuntimeFinding(source, "student.py", level, error);
+  const finding = (error, source, level = "beginner") => explained(error, source, "student.py", level);
   const raised = (source, line, errorLine, extra = []) =>
     finding(pyErrorLine(errorLine, [["student.py", line]], { facts: extra }), source);
   const text = (f) => `${f.headline}\n${f.howToFix.join("\n")}`;
 
   // One suggestion is "Did you mean", not "try one of those"; a case-only
   // difference says so; and the spelling and quotes bullets are moot.
-  const one = raised("print(widht)\n", 1, "NameError: name 'widht' is not defined. Did you mean: 'width'?");
+  const one = ran("width = 1\nprint(widht)\n", "student.py");
   expect(one.howToFix.join("|") === "Did you mean `width`?", `one suggestion: ${JSON.stringify(one.howToFix)}`);
-  const caseOnly = raised("x = boa\n", 1, "NameError: name 'boa' is not defined. Did you mean: 'Boa'?");
+  const caseOnly = ran("class Boa:\n    pass\n\n\nx = boa\n", "student.py");
   expect(/case-sensitive, so `boa` and `Boa` are different names/.test(text(caseOnly)), `case: ${text(caseOnly)}`);
   expect(!/put it in quotes/.test(text(caseOnly)), `no quotes advice beside a confident match: ${text(caseOnly)}`);
 
@@ -1796,30 +1799,20 @@ console.log("[fourth pass: every replayed case read for the same patterns]");
   expect(/different numbers of values/.test(uneven.headline), `uneven: ${uneven.headline}`);
 
   // "Return `Image`" read as returning the class: a class gets an article.
-  const returned = finding(
-    pyErrorLine("TypeCheckError: the return value (str) is not an instance of Image", [
-      ["student.py", 2, "flag"],
-    ], { facts: { check: check("return", null, "str", ["Image"]) } }),
-    'def flag() -> Image:\n    return "red"\n',
-  );
+  const returned = ran('def flag() -> Image:\n    return "red"\n\n\nflag()\n', "student.py");
   expect(returned.howToFix.includes("Return an `Image` from this line."), `article: ${JSON.stringify(returned.howToFix)}`);
 
   // Swapped values in a dataclass, as Python reports them.
-  const swapped = finding(
-    pyErrorLine("TypeCheckError: field 'singer' of 'Song' got 2015 (int), not str", [["student.py", 9]], {
-      facts: {
-        check: check("field", "singer", "int", ["str"], { owner: "Song", value: "2015" }),
-        swappedWith: "year",
-      },
-    }),
-    'class Song:\n    name: str\n    singer: str\n    year: int\n',
+  const swapped = ran(
+    'from dataclasses import dataclass\n\n\n@dataclass\nclass Song:\n    name: str\n    singer: str\n    year: int\n\n\nSong("Hello", 2015, "Adele")\n',
+    "student.py",
   );
   expect(/values for `singer` and `year` of `Song` look swapped/.test(swapped.headline), `swap: ${swapped.headline}`);
   expect(!/str\(\.\.\.\)/.test(text(swapped)), `no conversion advice, which would hide the swap: ${text(swapped)}`);
 
   // A value thrown away: the student's own expression.
   const thrown = (expression) =>
-    mod.enrichStaticFindings(
+    wordStatic(
       [
         {
           id: "unused-value",
@@ -1843,7 +1836,7 @@ console.log("[fourth pass: every replayed case read for the same patterns]");
     /`ac\.balance = ac\.balance \+ amt`/.test(thrown("ac.balance + amt").howToFix[0]),
     `field form: ${JSON.stringify(thrown("ac.balance + amt").howToFix)}`,
   );
-  const compared = mod.enrichStaticFindings(
+  const compared = wordStatic(
     [
       {
         id: "unused-comparison",

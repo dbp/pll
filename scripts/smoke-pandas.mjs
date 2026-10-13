@@ -16,7 +16,7 @@ import { bootPll } from "./lib/pyodide.mjs";
 
 const { installNodeXHR, PYODIDE_HTTP_PATCH_PY } = await importSource(
   'export { installNodeXHR } from "./src/desktop/xhrPolyfill";\n' +
-    'export { PYODIDE_HTTP_PATCH_PY } from "./src/common/pythonSources";',
+    'export { PYODIDE_HTTP_PATCH_PY } from "./src/pyodide/install";',
 );
 
 const CARS_CSV = "name,mpg\nvw,29\nhonda,33\nford,18\n";
