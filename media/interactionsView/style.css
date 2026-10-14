@@ -103,6 +103,7 @@ button:disabled {
 }
 .entry.echo .prompt {
   color: var(--vscode-terminal-ansiGreen, #6a9955);
+  /* `#inputRow`'s gap, so a line is shown where it was typed. */
   margin-right: 6px;
   flex: 0 0 auto;
   user-select: none;

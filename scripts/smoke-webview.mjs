@@ -417,6 +417,28 @@ try {
     expect(ticks() === away, `another session shown, none: ${ticks() - away}`);
   }
 
+  console.log("\n[10] a line typed at the prompt is shown where it was typed, so the next can be lined up under it");
+  {
+    // The echoed code starts where the input box does, under either
+    // prompt: one character to the right, and every indent after it is off by one.
+    view.append({ kind: "echo", prompt: ">>>", code: "def foo():" });
+    view.append({ kind: "echo", prompt: "...", code: "    return 1" });
+    const lefts = async (prompt) => {
+      view.setState({ title: "other.py", prompt, status: null, awaitingInput: false, inputPrefix: "" });
+      await settle();
+      return page.evaluate(() => ({
+        input: document.getElementById("input").getBoundingClientRect().left,
+        echoes: [...document.querySelectorAll(".entry.echo .code")].slice(-2).map((c) => c.getBoundingClientRect().left),
+        shown: [...document.querySelectorAll(".entry.echo")].slice(-2).map((e) => e.innerText),
+      }));
+    };
+    for (const prompt of ["primary", "continuation"]) {
+      const at = await lefts(prompt);
+      expect(at.echoes.length === 2 && at.echoes.every((left) => Math.abs(left - at.input) < 0.5),
+        `under the ${prompt} prompt, the echoed code starts with the input: ${JSON.stringify(at)}`);
+    }
+  }
+
   expect(problems.length === 0, `no script errors or CSP violations: ${problems.join("; ")}`);
 } finally {
   view.dispose();

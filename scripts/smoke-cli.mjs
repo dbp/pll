@@ -715,7 +715,7 @@ async function main() {
     writeFileSync(join(home, "data", "cars.csv"), "name\nvw\n");
     writeFileSync(join(home, "latin.dat"), Buffer.from([0xff, 0x00, 0x41]));
     writeFileSync(join(home, "old.txt"), "x\n");
-    writeFileSync(join(home, "history.txt"), "old\n".repeat(800_000));
+    writeFileSync(join(home, "history.txt"), "old\n".repeat(13_200_000));
     const main = fixture(
       "project/main.py",
       "import os, struct",
@@ -740,8 +740,8 @@ async function main() {
     );
     expect(!existsSync(join(home, "old.txt")) && /Deleted old\.txt next to main\.py\./.test(r.stderr), `a deletion is carried back: ${r.stderr}`);
     expect(
-      readFileSync(join(home, "history.txt"), "utf8").length === 3_200_000 &&
-        /Not loaded: history\.txt - each file can be at most 2 MB\./.test(r.stderr) &&
+      readFileSync(join(home, "history.txt"), "utf8").length === 52_800_000 &&
+        /Not loaded: history\.txt - each file can be at most 50 MB\./.test(r.stderr) &&
         /Not saved: history\.txt - it was not loaded, so saving it would replace a file the program never saw\./.test(r.stderr),
       `a file too big to load is not replaced by what the program appended: ${r.stderr}`,
     );
@@ -949,9 +949,9 @@ async function main() {
     expect(missing.code === 1 && /There is no module called `flask` here\./.test(missing.stderr) && /Pyodide/.test(missing.stderr),
       `a package Pyodide lacks, said so: ${missing.stderr}`);
     // A file kept back for its size is said to be, where it is read.
-    writeFileSync(join(folder, "big.csv"), "n\n" + "1\n".repeat(1_100_000));
+    writeFileSync(join(folder, "big.csv"), "n\n" + "1\n".repeat(26_500_000));
     const big = await run([at("big.py", "#level beginner", 'load_table("big.csv")')]);
-    expect(/"big\.csv" is next to your program, but it was not loaded: each file can be at most 2 MB\./.test(big.stderr),
+    expect(/"big\.csv" is next to your program, but it was not loaded: each file can be at most 50 MB\./.test(big.stderr),
       `not loaded, and why: ${big.stderr}`);
     // A matplotlib figure is a picture like any other.
     const figure = await run([at("plot.py", "#level beginner", "import matplotlib.pyplot as plt", "plt.plot([1, 2], [3, 4])", 'plt.title("t")', "plt.show()")]);

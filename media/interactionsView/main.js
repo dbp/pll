@@ -155,8 +155,10 @@
       case "banner":
         return h("div", { className: "entry banner" }, entry.text);
       case "echo":
+        // Spaced as the input row spaces its prompt, so a line is shown
+        // where it was typed, and the next can be lined up under it.
         return h("div", { className: "entry echo" },
-          h("span", { className: "prompt" }, entry.prompt + " "),
+          h("span", { className: "prompt" }, entry.prompt),
           h("span", { className: "code" }, entry.code));
       case "stdout":
       case "stderr":

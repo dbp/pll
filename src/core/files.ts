@@ -26,8 +26,15 @@ export interface WorkspaceChanges {
   deleted: string[];
 }
 
-export const MAX_FILE_BYTES = 2 * 1024 * 1024;
-export const MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+/**
+ * Big enough for the CSVs a course hands out, and small enough for Python
+ * to hold: a table takes about ten times its file's size in memory, and
+ * Pyodide has at most 4 GB. A 50 MB CSV loads with `load_table` in about
+ * six seconds, into about half a gigabyte; every file is copied to Python
+ * again for each run.
+ */
+export const MAX_FILE_BYTES = 50 * 1024 * 1024;
+export const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 export const MAX_FILES = 100;
 
 /** A file a limit or a rule kept back, and which. */

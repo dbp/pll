@@ -590,11 +590,11 @@ Some are never saved, and the panel names each one and why ("Not saved:
 Untitled editors (not yet saved to a folder) have no files around them to
 load or save.
 
-There are limits: at most 100 files are loaded, each at most 2 MB and 8 MB
-in all - those nearest the program first - and the same for the files
-saved afterwards. Hidden folders (`.git`) and tools' folders (`venv`,
+There are limits: at most 100 files are loaded, each at most 50 MB and 100
+MB in all - those nearest the program first - and the same for the files
+saved afterwards. A 50 MB CSV takes `load_table` about six seconds. Hidden folders (`.git`) and tools' folders (`venv`,
 `node_modules`, `__pycache__`) are left out. A file left out by a limit is
-named in the panel ("Not loaded: ... - each file can be at most 2 MB."),
+named in the panel ("Not loaded: ... - each file can be at most 50 MB."),
 so a program that cannot open or import it is not left failing for no
 reason you can see.
 

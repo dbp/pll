@@ -136,18 +136,23 @@ async function testPolicy() {
     note === "Not loaded: f105.csv, f106.csv, deep/f0.csv, deep/f1.csv, deep/f2.csv and 2 more - at most 100 files next to a program are.",
     `said once, naming them, the subfolder's last: ${note}`,
   );
+  // As many files just under the size limit as the total holds, and one more.
   const almost = "x".repeat(policy.MAX_FILE_BYTES - 10);
+  const fit = Math.floor(policy.MAX_TOTAL_BYTES / almost.length);
   const total = await policy.readSiblingFiles(
-    fakeFolder(Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`b${i}.csv`, almost]))).folder,
+    fakeFolder(Object.fromEntries(Array.from({ length: fit + 1 }, (_, i) => [`b${i}.csv`, almost]))).folder,
   );
   expect(
-    total.files.length === 4 && total.leftOut.map((f) => `${f.name}:${f.reason}`).join() === "b4.csv:total",
+    total.files.length === fit && total.leftOut.map((f) => `${f.name}:${f.reason}`).join() === `b${fit}.csv:total`,
     `the total kept: ${JSON.stringify(total.leftOut)}`,
   );
   expect(
-    policy.leftOutNotes(total.leftOut, "loaded")[0] === "Not loaded: b4.csv - the files together can be at most 8 MB.",
+    policy.leftOutNotes(total.leftOut, "loaded")[0] === `Not loaded: b${fit}.csv - the files together can be at most 100 MB.`,
     `and said: ${policy.leftOutNotes(total.leftOut, "loaded")[0]}`,
   );
+  // A CSV of the size a course hands out is given to the program.
+  const course = await policy.readSiblingFiles(fakeFolder({ "trips.csv": "x".repeat(40 * 1024 * 1024) }).folder);
+  expect(course.files.length === 1 && course.leftOut.length === 0, `40 MB is loaded: ${JSON.stringify(course.leftOut)}`);
 
   console.log("\n[1b] saving what a run changed");
   const home = fakeFolder(

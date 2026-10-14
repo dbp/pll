@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+- **Files beside a program can be much bigger**: each up to 50 MB, and
+  100 MB in all, where it was 2 MB and 8 MB - so a course's CSVs load.
+  A 50 MB CSV takes `load_table` about six seconds.
+
+### Fixed
+- **A line typed at the prompt is shown where it was typed**: each echoed
+  line sat one character to the right of the input box, so the next line of
+  a function could not be lined up under it.
+
 ## 0.5.0 (2026-10-14)
 
 ### Breaking

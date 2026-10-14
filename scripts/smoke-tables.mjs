@@ -971,10 +971,10 @@ table(["i"], [[i] for i in range(500)])
 
   console.log("\n[25] a file kept back for its size is said to be, not missing");
   {
-    pyodide.runPython('_pll_note_left_out(\'[{"name": "big.csv", "why": "each file can be at most 2 MB"}]\')');
+    pyodide.runPython('_pll_note_left_out(\'[{"name": "big.csv", "why": "each file can be at most 50 MB"}]\')');
     const result = py(callRunFile, 'load_table("big.csv")', "big.py", SK);
     expect(result.error?.errorType === "FileNotFoundError" &&
-      result.error?.message === '"big.csv" is next to your program, but it was not loaded: each file can be at most 2 MB.',
+      result.error?.message === '"big.csv" is next to your program, but it was not loaded: each file can be at most 50 MB.',
       `why it is not there: ${result.error?.message}`);
     // The same file by another way of writing its name - and not a file
     // somewhere else that happens to share its name.

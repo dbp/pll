@@ -631,11 +631,13 @@ both, which are given to the program:
 - **As bytes.** A Latin-1 CSV, a `.dat` of packed integers or a PNG
   arrives exactly as it is on disk, and what the program writes is saved
   exactly as written.
-- **Limits.** At most 100 files, each at most 2 MB, 8 MB in all - nearest
-  first, so a limit keeps back what is furthest away. A size the listing
-  shows is too big is never read. Every file kept back is named, as a
-  problem ("Not loaded: ... - each file can be at most 2 MB."), so a
-  program that cannot open one is never left without a reason.
+- **Limits.** At most 100 files, each at most 50 MB, 100 MB in all -
+  nearest first, so a limit keeps back what is furthest away. A size the
+  listing shows is too big is never read. Every file kept back is named,
+  as a problem ("Not loaded: ... - each file can be at most 50 MB."), so a
+  program that cannot open one is never left without a reason. The sizes
+  are what Python can hold: a table is about ten times its CSV in memory,
+  and Pyodide has at most 4 GB.
 
 The worker writes them into `/home/pyodide/pll_workspace` and `chdir`s
 there, and `__file__` is the program's path in it, so

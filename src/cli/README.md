@@ -261,7 +261,7 @@ folder as the script or a folder inside it (`open("data/2024.csv")`), and
 `__file__` is set, so `Path(__file__).parent` works. Files the program
 writes appear there afterwards, and files it deletes are deleted — the same
 as in the editor, with the same limits: at most 100 files, each at most
-2 MB and 8 MB in all, nearest first; hidden and tools' folders (`.git`,
+50 MB and 100 MB in all, nearest first; hidden and tools' folders (`.git`,
 `venv`, `node_modules`) are left out. Files move as bytes, so a CSV in
 another encoding or a picture arrives exactly as it is.
 
