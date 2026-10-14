@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 (2026-10-14)
+
 ### Breaking
 - **Fewer ways to write a colour as text**: `"rgb(10 20 30 / 50%)"`,
   percentages inside `rgb()`, `deg`, `#rgba`, `#rrggbbaa` and
