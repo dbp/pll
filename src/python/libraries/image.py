@@ -1,21 +1,19 @@
 # PLL image library.
 #
 # A small, immutable, HtDP-style image library inspired by Racket's
-# `2htdp/image` and Pyret's `image-lib`. Every primitive and combinator
-# returns a new `Image`; nothing mutates.
+# `2htdp/image`. Every primitive and combinator returns a new `Image`;
+# nothing mutates.
 #
-# An image is a tree: shapes at the leaves, combinators above them. Each
-# node knows its size when it is made, and where its children sit inside it
-# (`_parts`). Drawing walks the tree once, with a stack rather than
-# recursion, into a flat list of shapes in the picture's own coordinates
-# (`_pll_flatten`). That list is what is rendered as SVG, what `rotate`
-# measures its box from, and what `==` compares: two images are equal when
-# they draw the same shapes, in the same places, in the same colours.
+# An image is a tree: shapes at the leaves, `_Group`s above them. Each node
+# knows its size when it is made, and a group where its children sit inside
+# it. Drawing walks the tree once, with a stack rather than recursion, into a
+# flat list of shapes in the picture's own coordinates (`_pll_flatten`).
+# That list is what is rendered as SVG, what `rotate` measures its box from,
+# and what `==` compares: two images are equal when they draw the same
+# shapes, in the same places, in the same colours.
 #
-# This module is loaded into Pyodide after the bootstrap (`bootstrap/`).
-# The install step then copies the public names into each session's
-# globals, so a beginner can write `circle(50, "solid", "red")` with no
-# import (matching the HtDP/Pyret experience).
+# The install step copies the public names into each session's globals, so
+# a beginner can write `circle(50, "solid", "red")` with no import.
 
 import base64 as _pll_img_b64
 import heapq as _pll_img_heapq
@@ -35,8 +33,7 @@ import unicodedata as _pll_img_unicodedata
 #: value, so `"red"` and `(255, 0, 0)` are the same colour to `==`. There are
 #: 148 names; the count is asserted by the smoke tests, so dropping one fails
 #: loudly rather than rejecting a colour that works.
-_PLL_CSS_COLORS = {}
-_pll_color_words = """
+_pll_color_words = iter("""
     aliceblue f0f8ff  antiquewhite faebd7  aqua 00ffff  aquamarine 7fffd4
     azure f0ffff  beige f5f5dc  bisque ffe4c4  black 000000
     blanchedalmond ffebcd  blue 0000ff  blueviolet 8a2be2  brown a52a2a
@@ -78,26 +75,15 @@ _pll_color_words = """
     steelblue 4682b4  tan d2b48c  teal 008080  thistle d8bfd8
     tomato ff6347  turquoise 40e0d0  violet ee82ee  wheat f5deb3
     white ffffff  whitesmoke f5f5f5  yellow ffff00  yellowgreen 9acd32
-""".split()
-for _pll_i in range(0, len(_pll_color_words), 2):
-    _pll_hex = _pll_color_words[_pll_i + 1]
-    _PLL_CSS_COLORS[_pll_color_words[_pll_i]] = (
-        int(_pll_hex[0:2], 16),
-        int(_pll_hex[2:4], 16),
-        int(_pll_hex[4:6], 16),
-    )
-del _pll_color_words, _pll_i, _pll_hex
-_PLL_CSS_COLOR_NAMES = frozenset(_PLL_CSS_COLORS)
+""".split())
+_PLL_CSS_COLORS = {name: tuple(bytes.fromhex(code)) for name, code in zip(_pll_color_words, _pll_color_words)}
+del _pll_color_words
 
-#: A colour *name*, once spaces, hyphens and underscores are taken out:
-#: shaped like a word, and then checked against the list above.
-_PLL_COLOR_NAME_RE = _pll_img_re.compile(r"^[a-z]+$")
-_PLL_COLOR_HEX_RE = _pll_img_re.compile(r"^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$")
-_PLL_COLOR_FN_RE = _pll_img_re.compile(r"^(rgba?|hsla?)\s*\((.*)\)$", _pll_img_re.S)
-#: One argument of `rgb(...)` or `hsl(...)`: a number, maybe with a unit.
-_PLL_COLOR_ARG_RE = _pll_img_re.compile(
-    r"^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(%|deg)?$"
-)
+#: A colour written as text, besides a name: `#rgb`, `#rrggbb`, and
+#: `rgb(...)`, `rgba(...)`, `hsl(...)` and `hsla(...)` with commas.
+_PLL_COLOR_HEX_RE = _pll_img_re.compile(r"#([0-9a-f]{3}|[0-9a-f]{6})")
+_PLL_COLOR_FN_RE = _pll_img_re.compile(r"(rgb|hsl)a?\(([^()]*)\)")
+_PLL_COLOR_NUMBER_RE = _pll_img_re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)")
 
 _PLL_MODES = ("solid", "outline")
 
@@ -116,9 +102,7 @@ class _Paint:
     def __init__(self, css, rgb, alpha):
         self.css = css
         self.alpha = alpha
-        # `currentColor` is whatever colour the text around it is, which is
-        # the same as no other colour.
-        self.key = (tuple(rgb) if rgb is not None else (-1, -1, -1)) + (round(alpha, 4),)
+        self.key = tuple(rgb) + (round(alpha, 4),)
 
 
 def _pll_hex_css(rgb):
@@ -158,9 +142,8 @@ def _pll_check_image(value, who, index):
     """One argument of a combining function.
 
     Checked when the function is called, so `beside(a, "austria")` fails
-    there, naming `beside` and the argument, rather than later inside the
-    rendering code - after the broken picture has been displayed - with
-    "'str' object has no attribute 'width'".
+    there, naming `beside` and the argument, rather than inside the
+    rendering code after the broken picture has been displayed.
     """
     if isinstance(value, Image):
         return value
@@ -197,99 +180,52 @@ def _pll_real(value):
     return isinstance(value, _pll_img_numbers.Real) and not isinstance(value, bool)
 
 
-def _pll_check_number(value, who, param):
-    """A number, which may be negative - an offset or an angle - as a float.
+def _pll_check_number(value, who, param, least=None, above=None, whole=False):
+    """`value` as a number: a float, or an int when it has to be `whole`;
+    at least `least` and more than `above`, when they are given.
 
-    NaN and the infinities are numbers to Python and nothing to draw with;
-    let through, they failed much later, in Python's words.
+    A string size (`rectangle("20", 20, ...)`), a negative one, NaN and the
+    infinities would each draw the wrong thing or nothing, or fail much
+    later in Python's words, so each is refused here, naming the argument.
     """
-    if not _pll_real(value):
-        raise TypeError(
-            "%s's `%s`%s must be a number, but it is %s.%s"
-            % (who, param, _pll_where(who, param), _pll_describe(value), _pll_contract(who))
+
+    def refuse(kind, says):
+        return kind(
+            "%s's `%s`%s %s.%s" % (who, param, _pll_where(who, param), says, _pll_contract(who))
         )
+
+    if not _pll_real(value):
+        raise refuse(TypeError, "must be a number, but it is %s" % _pll_describe(value))
     try:
         number = float(value)
     except OverflowError:
-        raise ValueError(
-            "%s's `%s`%s is a number too big to draw with.%s"
-            % (who, param, _pll_where(who, param), _pll_contract(who))
-        ) from None
-    if number != number:
-        raise ValueError(
-            "%s's `%s`%s is NaN (\"not a number\"), which cannot be drawn with.%s"
-            % (who, param, _pll_where(who, param), _pll_contract(who))
-        )
-    if number in (_math.inf, -_math.inf):
-        raise ValueError(
-            "%s's `%s`%s cannot be infinite, but it is %s.%s"
-            % (who, param, _pll_where(who, param), _pll_number(number), _pll_contract(who))
-        )
-    return number
-
-
-def _pll_check_size(value, who, param, least=0):
-    """A size in pixels: a number, and never negative.
-
-    A string size (`rectangle("20", 20, ...)`) and a negative one were both
-    accepted, and drew the wrong thing or nothing at all without a word.
-    """
-    number = _pll_check_number(value, who, param)
-    if number < least:
-        raise ValueError(
-            "%s's `%s`%s cannot be %s, but it is %s.%s"
-            % (
-                who,
-                param,
-                _pll_where(who, param),
-                "negative" if least == 0 else "less than %s" % _pll_number(least),
-                _pll_number(value),
-                _pll_contract(who),
+        number = _math.inf
+    if not _math.isfinite(number):
+        raise refuse(ValueError, "has to be a finite number, but it is %s" % _pll_number(number))
+    if whole:
+        if not isinstance(value, _pll_img_numbers.Integral):
+            raise refuse(
+                TypeError,
+                "has to be a whole number, but it is %r%s"
+                % (number, ": write %d" % number if number.is_integer() else ""),
             )
+        number = int(value)
+    if least is not None and number < least:
+        raise refuse(
+            ValueError,
+            "cannot be %s, but it is %s"
+            % ("negative" if least == 0 else "less than %s" % _pll_number(least), _pll_number(value)),
         )
+    if above is not None and number <= above:
+        raise refuse(ValueError, "has to be more than %s, but it is %s" % (_pll_number(above), _pll_number(value)))
     return number
-
-
-def _pll_check_positive(value, who, param):
-    """A number that has to be more than zero, like a scale factor."""
-    number = _pll_check_number(value, who, param)
-    if number <= 0:
-        raise ValueError(
-            "%s's `%s`%s has to be more than 0, but it is %s.%s"
-            % (who, param, _pll_where(who, param), _pll_number(value), _pll_contract(who))
-        )
-    return number
-
-
-def _pll_check_count(value, who, param, least):
-    """How many of something: a whole number, at least `least`."""
-    if isinstance(value, _pll_img_numbers.Integral) and not isinstance(value, bool):
-        count = int(value)
-    elif isinstance(value, float) and value.is_integer():
-        raise TypeError(
-            "%s's `%s`%s has to be a whole number, but it is %s: write %d.%s"
-            % (who, param, _pll_where(who, param), value, int(value), _pll_contract(who))
-        )
-    else:
-        _pll_check_number(value, who, param)
-        raise TypeError(
-            "%s's `%s`%s has to be a whole number, but it is %s.%s"
-            % (who, param, _pll_where(who, param), _pll_describe(value), _pll_contract(who))
-        )
-    if count < least:
-        raise ValueError(
-            "%s's `%s`%s cannot be less than %d, but it is %d.%s"
-            % (who, param, _pll_where(who, param), least, count, _pll_contract(who))
-        )
-    return count
 
 
 def _pll_check_order(first, second, who, param):
     """The two arguments the other way round.
 
-    `rotate(image, 45)` fails inside the arithmetic with "float() argument
-    must be a string or a real number, not '_Frame'", which names an
-    internal class and not the mistake.
+    `rotate(image, 45)` would fail inside the arithmetic, naming an internal
+    class and not the mistake.
     """
     if isinstance(first, Image) and _pll_real(second):
         raise TypeError(
@@ -298,123 +234,91 @@ def _pll_check_order(first, second, who, param):
         )
 
 
+_PLL_COLOR_FORMS = ' Use a name like "red", a hex code like "#ff0000", or (red, green, blue) numbers from 0 to 255.'
+
+
 def _pll_check_color(color, who):
     """The colour `color` names, as a `_Paint`; anything else is an error.
 
     SVG ignores a paint value it cannot parse, so an unchecked
     `rectangle(30, 40, "solid", 50)` would draw an invisible rectangle and
-    say nothing at all. Checked here, at construction, rather than when the
-    picture renders, so the error points at the line that made the mistake.
+    say nothing at all. Checked when the shape is made, so the error points
+    at the line that made the mistake.
 
     A *name* is checked against the CSS colours, which are the names SVG
-    accepts, so a misspelling is caught rather than drawn as nothing. The
-    list is the whole of CSS Color 4 and its length is asserted by the
-    tests: rejecting a colour that works would be worse than the typo.
+    accepts, so a misspelling is caught rather than drawn as nothing. Any
+    other text is turned into numbers, which are checked as a tuple is.
     """
+    numbers = color
     if isinstance(color, str):
-        return _pll_color_string(color, who)
-    if isinstance(color, (tuple, list)) and len(color) in (3, 4):
-        return _pll_color_numbers(list(color), who)
-    raise ValueError(_pll_not_a_colour(who, color))
+        text = color.strip().lower()
+        if text in ("transparent", "none"):
+            return _PLL_TRANSPARENT
+        if text in _PLL_CSS_COLORS:
+            return _Paint(text, _PLL_CSS_COLORS[text], 1.0)
+        numbers = _pll_color_text(text)
+        # "light blue", "light-blue": CSS writes every name as one word.
+        squeezed = _pll_img_re.sub(r"[\s_-]+", "", text)
+        if numbers is None and _pll_img_re.fullmatch("[a-z]+", squeezed):
+            suggestion = squeezed if squeezed in _PLL_CSS_COLORS else _pll_closest_name(squeezed, _PLL_CSS_COLORS)
+            raise ValueError(
+                "%s's `color`%s is %s, which is not a color name PLL knows.%s"
+                % (
+                    who,
+                    _pll_where(who, "color"),
+                    _pll_describe(color),
+                    ' Did you mean "%s"?' % suggestion if suggestion is not None else _PLL_COLOR_FORMS,
+                )
+            )
+    # The fourth number is the opacity, told by its type: a whole number
+    # runs from 0 to 255 like the others, a fraction from 0.0 to 1.0. So
+    # `(255, 0, 0, 128)` and `(255, 0, 0, 0.5)` are both half see-through.
+    if (
+        isinstance(numbers, (tuple, list))
+        and len(numbers) in (3, 4)
+        and all(_pll_real(n) and 0 <= n <= 255 for n in numbers)
+    ):
+        alpha = numbers[3] if len(numbers) == 4 else 1.0
+        alpha = int(alpha) / 255.0 if isinstance(alpha, _pll_img_numbers.Integral) else float(alpha)
+        if alpha <= 1:
+            rgb = [int(round(float(n))) for n in numbers[:3]]
+            return _Paint(_pll_hex_css(rgb), rgb, alpha)
+    shown = repr(color) if isinstance(color, (tuple, list)) and len(color) <= 4 else _pll_describe(color)
+    raise ValueError(
+        "%s's `color`%s is %s, which is not a color.%s" % (who, _pll_where(who, "color"), shown, _PLL_COLOR_FORMS)
+    )
 
 
-def _pll_color_string(color, who):
-    text = color.strip().lower()
-    if text in _PLL_CSS_COLORS:
-        return _Paint(text, _PLL_CSS_COLORS[text], 1.0)
-    if text in ("transparent", "none"):
-        return _PLL_TRANSPARENT
-    if text == "currentcolor":
-        return _Paint("currentColor", None, 1.0)
-    found = _PLL_COLOR_HEX_RE.match(text)
+
+def _pll_color_text(text):
+    """The numbers a colour written as text stands for, or None."""
+    found = _PLL_COLOR_HEX_RE.fullmatch(text)
     if found:
         digits = found.group(1)
-        if len(digits) <= 4:
+        if len(digits) == 3:
             digits = "".join(d * 2 for d in digits)
-        rgb = tuple(int(digits[i:i + 2], 16) for i in (0, 2, 4))
-        alpha = int(digits[6:8], 16) / 255.0 if len(digits) == 8 else 1.0
-        return _Paint(_pll_hex_css(rgb), rgb, alpha)
-    found = _PLL_COLOR_FN_RE.match(text)
-    if found:
-        return _pll_color_function(found.group(1), found.group(2), color, who)
-    # "light blue", "light-blue": CSS writes every name as one word.
-    squeezed = _pll_img_re.sub(r"[\s_-]+", "", text)
-    if _PLL_COLOR_NAME_RE.match(squeezed):
-        raise ValueError(_pll_unknown_colour(who, color, squeezed))
-    raise ValueError(_pll_not_a_colour(who, color))
-
-
-def _pll_color_function(kind, inner, color, who):
-    """`rgb(...)`, `rgba(...)`, `hsl(...)` or `hsla(...)`, read strictly.
-
-    Only numbers, with `%` or `deg` where CSS allows them, separated as CSS
-    separates them: by commas, or by spaces with the opacity after a `/`.
-    """
-    example = '"rgb(255, 0, 0)"' if kind.startswith("rgb") else '"hsl(0, 100%, 50%)"'
-    bad = ValueError(
-        "%s's `color`%s is %s, which is not a color. Write %s(...) with three "
-        "numbers, like %s."
-        % (who, _pll_where(who, "color"), _pll_describe(color), kind.rstrip("a"), example)
-    )
-    inner = inner.strip()
-    if "," in inner:
-        parts = [part.strip() for part in inner.split(",")]
-        alpha = parts.pop() if len(parts) == 4 else None
-    else:
-        main, slash, alpha = inner.partition("/")
-        parts = main.split()
-        alpha = alpha.strip() if slash else None
-    if len(parts) != 3:
-        raise bad
-    args = [_PLL_COLOR_ARG_RE.match(part) for part in parts + ([alpha] if alpha is not None else [])]
-    if None in args:
-        raise bad
-    values = [(float(arg.group(1)), arg.group(2)) for arg in args]
-
-    def out_of_range(i, low, high, unit=""):
-        return ValueError(
-            "%s's `color`%s: the %s part runs from %s%s to %s%s, but it is %s%s."
-            % (
-                who,
-                _pll_where(who, "color"),
-                ("red green blue" if kind.startswith("rgb") else "hue saturation lightness").split()[i]
-                if i < 3
-                else "opacity",
-                low, unit, high, unit,
-                _pll_number(values[i][0]),
-                values[i][1] or "",
-            )
-        )
-
-    if kind.startswith("rgb"):
-        rgb = []
-        for i, (number, unit) in enumerate(values[:3]):
-            if unit == "deg":
-                raise bad
-            if unit == "%":
-                if not 0 <= number <= 100:
-                    raise out_of_range(i, 0, 100, "%")
-                number = number * 255 / 100
-            elif not 0 <= number <= 255:
-                raise out_of_range(i, 0, 255)
-            rgb.append(int(round(number)))
-    else:
-        (hue, hue_unit), (sat, sat_unit), (light, light_unit) = values[:3]
-        if hue_unit == "%" or sat_unit == "deg" or light_unit == "deg":
-            raise bad
-        for i, value in ((1, sat), (2, light)):
-            if not 0 <= value <= 100:
-                raise out_of_range(i, 0, 100, "%")
-        rgb = _pll_hsl_to_rgb(hue % 360, sat / 100, light / 100)
-    opacity = 1.0
-    if alpha is not None:
-        number, unit = values[3]
-        if unit == "deg":
-            raise bad
-        opacity = number / 100 if unit == "%" else number
-        if not 0 <= opacity <= 1:
-            raise out_of_range(3, 0, 100, "%") if unit == "%" else out_of_range(3, 0, 1)
-    return _Paint(_pll_hex_css(rgb), rgb, opacity)
+        return tuple(bytes.fromhex(digits))
+    found = _PLL_COLOR_FN_RE.fullmatch(text)
+    if not found:
+        return None
+    parts = [part.strip() for part in found.group(2).split(",")]
+    if len(parts) not in (3, 4):
+        return None
+    hsl = found.group(1) == "hsl"
+    if hsl:
+        # Saturation and lightness are percentages.
+        if not (parts[1].endswith("%") and parts[2].endswith("%")):
+            return None
+        parts[1], parts[2] = parts[1][:-1], parts[2][:-1]
+    if not all(_PLL_COLOR_NUMBER_RE.fullmatch(part) for part in parts):
+        return None
+    numbers = [float(part) for part in parts]
+    if hsl:
+        hue, sat, light = numbers[:3]
+        if not (0 <= sat <= 100 and 0 <= light <= 100):
+            return None
+        numbers[:3] = _pll_hsl_to_rgb(hue % 360, sat / 100, light / 100)
+    return tuple(numbers)
 
 
 def _pll_hsl_to_rgb(hue, sat, light):
@@ -428,83 +332,9 @@ def _pll_hsl_to_rgb(hue, sat, light):
     return tuple(int(round(channel(n) * 255)) for n in (0, 8, 4))
 
 
-def _pll_color_numbers(parts, who):
-    """`(red, green, blue)` or `(red, green, blue, opacity)`.
-
-    The opacity is written either way, and which is told by its type: a
-    whole number runs from 0 to 255 like the others, a fraction from 0.0 to
-    1.0. So `(255, 0, 0, 128)` and `(255, 0, 0, 0.5)` are both half see-
-    through, and `(255, 0, 0, 1)` is almost invisible where `1.0` is solid.
-    """
-    names = ("red", "green", "blue", "opacity")
-    for part in parts:
-        if not _pll_real(part):
-            raise ValueError(
-                "%s's `color`%s has a part that is not a number: %s."
-                % (who, _pll_where(who, "color"), _pll_describe(part))
-            )
-    rgb = []
-    for i, part in enumerate(parts[:3]):
-        if not 0 <= part <= 255:
-            raise ValueError(
-                "%s's `color`%s: the %s part runs from 0 to 255, but it is %s."
-                % (who, _pll_where(who, "color"), names[i], _pll_number(part))
-            )
-        rgb.append(int(round(float(part))))
-    alpha = 1.0
-    if len(parts) == 4:
-        part = parts[3]
-        if isinstance(part, _pll_img_numbers.Integral):
-            if not 0 <= part <= 255:
-                raise ValueError(
-                    "%s's `color`%s: the opacity part runs from 0 to 255 as a whole "
-                    "number, or from 0.0 to 1.0 as a fraction, but it is %s."
-                    % (who, _pll_where(who, "color"), _pll_number(part))
-                )
-            alpha = int(part) / 255.0
-        else:
-            if not 0 <= part <= 1:
-                raise ValueError(
-                    "%s's `color`%s: the opacity part is a fraction from 0.0 to 1.0 "
-                    "(or a whole number from 0 to 255), but it is %s."
-                    % (who, _pll_where(who, "color"), _pll_number(part))
-                )
-            alpha = float(part)
-    return _Paint(_pll_hex_css(rgb), rgb, alpha)
-
-
-def _pll_not_a_colour(who, color):
-    """The one wording for "that is not a colour", wherever it is noticed."""
-    return (
-        "%s's `color`%s is %s, which is not a color. Use a name like \"red\", "
-        "a hex code like \"#ff0000\", or (red, green, blue) numbers from 0 to 255."
-        % (who, _pll_where(who, "color"), _pll_describe(color))
-    )
-
-
-def _pll_unknown_colour(who, color, squeezed):
-    """A word that is shaped like a colour name and is not one."""
-    if squeezed in _PLL_CSS_COLORS:
-        suggestion = squeezed
-    else:
-        suggestion = _pll_closest_name(squeezed, _PLL_CSS_COLOR_NAMES)
-    return "%s's `color`%s is %s, which is not a color name PLL knows.%s" % (
-        who,
-        _pll_where(who, "color"),
-        _pll_describe(color),
-        ' Did you mean "%s"?' % suggestion
-        if suggestion is not None
-        else ' Use a name like "red", a hex code like "#ff0000", or '
-        "(red, green, blue) numbers from 0 to 255.",
-    )
-
-
 def _pll_check_mode(mode, who):
-    """`solid` or `outline`, and nothing else.
-
-    Anything else is an error, as a bad colour is: falling through to solid
-    would quietly fill the shape for a misspelled "outilne".
-    """
+    """`solid` or `outline`, and nothing else: falling through to solid
+    would quietly fill the shape for a misspelled "outilne"."""
     if mode not in _PLL_MODES:
         raise ValueError(
             "%s's `mode`%s should be \"solid\" or \"outline\", but it is %s.%s"
@@ -516,9 +346,9 @@ def _pll_check_mode(mode, who):
 def _pll_px(value):
     """A size in whole pixels, with trigonometry's rounding error removed.
 
-    Rounded before the ceiling. A hexagon of side 40 is exactly 80 across,
-    but the cosines that build it give 80.00000000000001, and `ceil` turned
-    that into an 81-pixel box with a blank column down one side.
+    Rounded before the ceiling: a hexagon of side 40 is exactly 80 across,
+    but the cosines that build it give 80.00000000000001, which would be an
+    81-pixel box with a blank column down one side.
 
     Zero stays zero: `empty_image` is 0x0, and `beside` and friends do
     arithmetic with that. Only an `<svg>` viewport needs a floor of 1, and
@@ -571,99 +401,95 @@ def _pll_bounds(points):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
+def _pll_edges(points):
+    """Each corner of a polygon with the next one round."""
+    return zip(points, points[1:] + points[:1])
+
+
 def _pll_area(points):
     """Twice the signed area; positive when the points turn one way."""
     total = 0.0
-    n = len(points)
-    for i in range(n):
-        x1, y1 = points[i]
-        x2, y2 = points[(i + 1) % n]
+    for (x1, y1), (x2, y2) in _pll_edges(points):
         total += x1 * y2 - x2 * y1
     return total
 
 
-def _pll_convex_and(subject, clipper):
-    """The part of convex polygon `subject` inside convex polygon `clipper`.
+def _pll_near(p, q):
+    return abs(p[0] - q[0]) <= 1e-9 and abs(p[1] - q[1]) <= 1e-9
 
-    Sutherland-Hodgman, edge by edge. Empty when they do not meet.
-    """
+
+def _pll_distinct(points):
+    """The corners, without one repeated beside itself or at both ends."""
+    out = []
+    for p in points:
+        if not out or not _pll_near(p, out[-1]):
+            out.append(p)
+    while len(out) > 1 and _pll_near(out[0], out[-1]):
+        out.pop()
+    return out
+
+
+def _pll_convex_and(subject, clipper):
+    """The part of convex polygon `subject` inside convex polygon `clipper`:
+    Sutherland-Hodgman, edge by edge. Empty when they do not meet."""
     turn = 1.0 if _pll_area(clipper) >= 0 else -1.0
     out = list(subject)
-    n = len(clipper)
-    for i in range(n):
-        if not out:
-            break
-        ax, ay = clipper[i]
-        bx, by = clipper[(i + 1) % n]
+    for (ax, ay), (bx, by) in _pll_edges(clipper):
 
         def side(p):
             return turn * ((bx - ax) * (p[1] - ay) - (by - ay) * (p[0] - ax))
 
-        given = out
-        out = []
-        prev = given[-1]
-        prev_side = side(prev)
-        for cur in given:
-            cur_side = side(cur)
-            if cur_side >= -1e-9:
-                if prev_side < -1e-9:
-                    t = prev_side / (prev_side - cur_side)
-                    out.append((prev[0] + t * (cur[0] - prev[0]), prev[1] + t * (cur[1] - prev[1])))
-                out.append(cur)
-            elif prev_side >= -1e-9:
+        given, out = out, []
+        for prev, cur in zip(given[-1:] + given[:-1], given):
+            prev_side, cur_side = side(prev), side(cur)
+            # Where the edge crosses the clipper's line, then the corner if inside.
+            if (prev_side < -1e-9) != (cur_side < -1e-9):
                 t = prev_side / (prev_side - cur_side)
                 out.append((prev[0] + t * (cur[0] - prev[0]), prev[1] + t * (cur[1] - prev[1])))
-            prev, prev_side = cur, cur_side
-    kept = []
-    for p in out:
-        if not kept or abs(p[0] - kept[-1][0]) > 1e-9 or abs(p[1] - kept[-1][1]) > 1e-9:
-            kept.append(p)
-    if len(kept) > 1 and abs(kept[0][0] - kept[-1][0]) <= 1e-9 and abs(kept[0][1] - kept[-1][1]) <= 1e-9:
-        kept.pop()
+            if cur_side >= -1e-9:
+                out.append(cur)
+    kept = _pll_distinct(out)
     return tuple(kept) if len(kept) >= 3 else ()
 
 
 def _pll_inside(polygon, points):
     """Whether every one of `points` is inside convex `polygon`."""
     turn = 1.0 if _pll_area(polygon) >= 0 else -1.0
-    n = len(polygon)
-    for i in range(n):
-        ax, ay = polygon[i]
-        bx, by = polygon[(i + 1) % n]
-        for px, py in points:
-            if turn * ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) < -1e-6:
-                return False
-    return True
+    return all(
+        turn * ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) >= -1e-6
+        for (ax, ay), (bx, by) in _pll_edges(polygon)
+        for px, py in points
+    )
 
 
-# An item is one shape, ready to draw: its kind, the convex polygon it is
-# clipped to (or None), and the kind's own geometry, all in the coordinates
-# of the picture being drawn:
+# An item is one shape, ready to draw, in the coordinates of the picture
+# being drawn: its kind, the convex polygon it is clipped to (or None), its
+# paint, and the kind's own geometry:
 #
-#   ("poly", clip, points, mode, paint)
-#   ("ellipse", clip, cx, cy, rx, ry, degrees, mode, paint)  rx along degrees
-#   ("line", clip, x1, y1, x2, y2, paint)
-#   ("text", clip, matrix, text, size, width, height, paint)
-#   ("bitmap", clip, matrix, width, height, loaded_image)
-#   ("svg", clip, matrix, width, height, markup)
-#   ("box", clip, points)    nothing drawn: a box `rotate` measures, as 2htdp
-#                            counts a crop's own edges
+#   ("poly", clip, paint, mode, points)
+#   ("ellipse", clip, paint, mode, cx, cy, rx, ry, degrees)  rx along degrees
+#   ("line", clip, paint, x1, y1, x2, y2)
+#   ("text", clip, paint, matrix, width, height, text, size)
+#   ("picture", clip, paint, matrix, width, height, picture)  paint opaque
+#
+# The edges of a crop or a scene are a transparent polygon: nothing is drawn,
+# but `rotate` measures it, as 2htdp counts a crop's own edges.
 
 
 def _pll_raw_extent(item):
     """The box an item covers, ignoring its clip."""
     kind = item[0]
-    if kind == "poly" or kind == "box":
-        return _pll_bounds(item[2])
+    if kind == "poly":
+        return _pll_bounds(item[4])
     if kind == "ellipse":
-        _, _, cx, cy, rx, ry, degrees = item[:7]
+        cx, cy, rx, ry, degrees = item[4:]
         rad = _math.radians(degrees)
         cos, sin = _math.cos(rad), _math.sin(rad)
         ex = _math.hypot(rx * cos, ry * sin)
         ey = _math.hypot(rx * sin, ry * cos)
         return (cx - ex, cy - ey, cx + ex, cy + ey)
     if kind == "line":
-        x0, y0, x1, y1 = _pll_bounds((item[2:4], item[4:6]))
+        x0, y0, x1, y1 = _pll_bounds((item[3:5], item[5:7]))
         # A line is at least a pixel across, as its own box is.
         if x1 - x0 < 1:
             mid = (x0 + x1) / 2
@@ -672,9 +498,7 @@ def _pll_raw_extent(item):
             mid = (y0 + y1) / 2
             y0, y1 = mid - 0.5, mid + 0.5
         return (x0, y0, x1, y1)
-    m = item[2]
-    w, h = (item[5], item[6]) if kind == "text" else (item[3], item[4])
-    return _pll_bounds(_pll_corners(m, w, h))
+    return _pll_bounds(_pll_corners(*item[3:6]))
 
 
 def _pll_extent(item):
@@ -718,15 +542,14 @@ def _pll_flatten(image, m=_PLL_IDENTITY):
     stack = [(image, m, None)]
     while stack:
         node, m, clip = stack.pop()
-        parts = node._parts()
-        if parts is None:
+        if node._children is None:
             for item in node._items(m, clip):
                 item = _pll_settle(item)
                 if item is not None:
                     out.append(item)
             continue
         # Pushed last first, so the bottom part is drawn first.
-        for child, local, local_clip in reversed(parts):
+        for child, local, local_clip in reversed(node._children):
             child_m = m if local is None else _pll_compose(m, local)
             child_clip = clip
             if local_clip is not None:
@@ -751,34 +574,21 @@ def _pll_point_key(p):
 
 
 def _pll_polygon_key(points):
-    """The same polygon whichever corner it starts at and whichever way round."""
-    pts = []
-    for p in points:
-        p = _pll_point_key(p)
-        if not pts or pts[-1] != p:
-            pts.append(p)
-    while len(pts) > 1 and pts[0] == pts[-1]:
-        pts.pop()
-    if not pts:
-        return ()
-    lowest = min(pts)
-    best = None
-    for seq in (pts, pts[::-1]):
-        for i, p in enumerate(seq):
-            if p == lowest:
-                candidate = tuple(seq[i:] + seq[:i])
-                if best is None or candidate < best:
-                    best = candidate
-    return best
+    """The same polygon whichever corner it starts at and whichever way round.
+
+    Its corners, sorted: every polygon PLL draws is convex or star-shaped
+    about its centre, so its corners alone say what it is.
+    """
+    return tuple(sorted(set(map(_pll_point_key, points))))
 
 
 def _pll_item_key(item):
     """What `==` compares of one item."""
-    kind = item[0]
+    kind, clip, paint = item[:3]
     if kind == "poly":
-        shape = ("poly", item[3], item[4].key, _pll_polygon_key(item[2]))
+        shape = (item[3], _pll_polygon_key(item[4]))
     elif kind == "ellipse":
-        _, _, cx, cy, rx, ry, degrees, mode, paint = item
+        mode, cx, cy, rx, ry, degrees = item[3:]
         big, small = max(rx, ry), min(rx, ry)
         if big - small < 0.005:
             axis = (0.0, 0.0)
@@ -787,36 +597,18 @@ def _pll_item_key(item):
             ax, ay = _pll_r(big * _math.cos(rad)), _pll_r(big * _math.sin(rad))
             # A diameter, so either end names it.
             axis = (ax, ay) if ax > 0 or (ax == 0 and ay > 0) else (_pll_r(-ax), _pll_r(-ay))
-        shape = ("ellipse", mode, paint.key, _pll_r(cx), _pll_r(cy), _pll_r(big), _pll_r(small), axis)
+        shape = (mode, _pll_r(cx), _pll_r(cy), _pll_r(big), _pll_r(small), axis)
     elif kind == "line":
-        ends = sorted((_pll_point_key(item[2:4]), _pll_point_key(item[4:6])))
-        shape = ("line", item[6].key, tuple(ends))
+        shape = tuple(sorted((_pll_point_key(item[3:5]), _pll_point_key(item[5:7]))))
     else:
-        m = item[2]
-        w, h = (item[5], item[6]) if kind == "text" else (item[3], item[4])
-        corners = tuple(
-            _pll_point_key(p) for p in (_pll_apply(m, 0, 0), _pll_apply(m, w, 0), _pll_apply(m, 0, h))
-        )
-        if kind == "text":
-            shape = ("text", item[7].key, item[3], corners)
-        elif kind == "bitmap":
-            shape = ("bitmap", corners, item[5]._media_type, item[5]._data)
-        else:
-            shape = ("svg", corners, item[5])
-    return (shape, _pll_polygon_key(item[1]) if item[1] else ())
+        m, w, h = item[3:6]
+        corners = tuple(_pll_point_key(_pll_apply(m, x, y)) for x, y in ((0, 0), (w, 0), (0, h)))
+        shape = (corners, item[6]) if kind == "text" else (corners, item[6]._media_type, item[6]._data)
+    return (kind, paint.key, shape, _pll_polygon_key(clip) if clip else ())
 
 
 def _pll_visible(item):
-    kind = item[0]
-    if kind == "box":
-        return False
-    if kind in ("poly", "ellipse"):
-        return item[-1].alpha > 0
-    if kind == "line":
-        return item[6].alpha > 0
-    if kind == "text":
-        return item[7].alpha > 0 and item[3] != ""
-    return True
+    return item[2].alpha > 0 and not (item[0] == "text" and item[6] == "")
 
 
 def _pll_canonical(items):
@@ -902,10 +694,6 @@ def _pll_outline(paint):
     return ' fill="none"%s stroke-width="1" stroke-miterlimit="10"' % _pll_paint(paint, "stroke")
 
 
-def _pll_is_translation(m):
-    return m[0] == 1 and m[1] == 0 and m[2] == 0 and m[3] == 1
-
-
 def _pll_matrix(m):
     return "matrix(%s)" % " ".join(
         ("%.6f" % v).rstrip("0").rstrip(".") if i < 4 else _pll_n(v) for i, v in enumerate(m)
@@ -932,51 +720,40 @@ def _pll_inset(points, d):
     stays within its box, and two outlined squares side by side each keep
     their own edge.
     """
-    pts = []
-    for p in points:
-        if not pts or abs(p[0] - pts[-1][0]) > 1e-9 or abs(p[1] - pts[-1][1]) > 1e-9:
-            pts.append(p)
-    while len(pts) > 1 and abs(pts[0][0] - pts[-1][0]) <= 1e-9 and abs(pts[0][1] - pts[-1][1]) <= 1e-9:
-        pts.pop()
-    n = len(pts)
-    if n < 3:
-        return None
+    pts = _pll_distinct(points)
     area = _pll_area(pts)
-    if abs(area) < 1e-9:
+    if len(pts) < 3 or abs(area) < 1e-9:
         return None
     turn = 1.0 if area > 0 else -1.0
     edges = []
-    for i in range(n):
-        (px, py), (qx, qy) = pts[i], pts[(i + 1) % n]
+    for (px, py), (qx, qy) in _pll_edges(pts):
         dx, dy = qx - px, qy - py
         length = _math.hypot(dx, dy)
         nx, ny = -turn * dy / length, turn * dx / length
         edges.append((px + nx * d, py + ny * d, dx, dy))
+    # Each corner where the edges either side of it, moved in, meet.
     out = []
-    for i in range(n):
-        ax, ay, adx, ady = edges[i - 1]
-        bx, by, bdx, bdy = edges[i]
+    for (ax, ay, adx, ady), (bx, by, bdx, bdy) in zip(edges[-1:] + edges[:-1], edges):
         den = adx * bdy - ady * bdx
         if abs(den) < 1e-12 * max(1.0, _math.hypot(adx, ady) * _math.hypot(bdx, bdy)):
             out.append((bx, by))
-            continue
-        t = ((bx - ax) * bdy - (by - ay) * bdx) / den
-        out.append((ax + t * adx, ay + t * ady))
+        else:
+            t = ((bx - ax) * bdy - (by - ay) * bdx) / den
+            out.append((ax + t * adx, ay + t * ady))
     inner = _pll_area(out)
     if inner * area <= 0 or abs(inner) < 1e-6:
         return None
-    for i in range(n):
-        dx = out[(i + 1) % n][0] - out[i][0]
-        dy = out[(i + 1) % n][1] - out[i][1]
-        if dx * edges[i][2] + dy * edges[i][3] <= 0:
+    # Gone inside out: an edge that now runs the other way.
+    for ((px, py), (qx, qy)), edge in zip(_pll_edges(out), edges):
+        if (qx - px) * edge[2] + (qy - py) * edge[3] <= 0:
             return None
     return out
 
 
 def _pll_svg_poly(item):
-    _, _, points, mode, paint = item
+    _, _, paint, mode, points = item
+    rect = _pll_axis_rect(points)
     if mode == "outline":
-        rect = _pll_axis_rect(points)
         if rect is not None and rect[2] > 1 and rect[3] > 1:
             x, y, w, h = rect
             return '<rect x="%s" y="%s" width="%s" height="%s"%s/>' % (
@@ -986,7 +763,6 @@ def _pll_svg_poly(item):
         if inner is not None:
             return '<polygon points="%s"%s/>' % (_pll_points(inner), _pll_outline(paint))
         # Too small to have an inside: the pen fills it.
-    rect = _pll_axis_rect(points)
     if rect is not None:
         return '<rect x="%s" y="%s" width="%s" height="%s"%s/>' % (
             _pll_n(rect[0]), _pll_n(rect[1]), _pll_n(rect[2]), _pll_n(rect[3]), _pll_paint(paint, "fill"),
@@ -995,7 +771,7 @@ def _pll_svg_poly(item):
 
 
 def _pll_svg_ellipse(item):
-    _, _, cx, cy, rx, ry, degrees, mode, paint = item
+    _, _, paint, mode, cx, cy, rx, ry, degrees = item
     style = _pll_paint(paint, "fill")
     if mode == "outline" and rx > 0.5 and ry > 0.5:
         rx, ry = rx - 0.5, ry - 0.5
@@ -1011,7 +787,7 @@ def _pll_svg_ellipse(item):
 
 
 def _pll_svg_line(item):
-    _, _, x1, y1, x2, y2, paint = item
+    _, _, paint, x1, y1, x2, y2 = item
     if abs(x1 - x2) < 1e-9 and abs(y1 - y2) < 1e-9:
         return ""
     return '<line x1="%s" y1="%s" x2="%s" y2="%s"%s stroke-width="1"/>' % (
@@ -1038,75 +814,45 @@ def _pll_text_cells(text):
 
 
 def _pll_svg_text(item):
-    _, _, m, text, size, w, h, paint = item
+    _, _, paint, m, w, h, text, size = item
     if w <= 0:
         return ""
-    attrs = (
-        'font-family="monospace" font-size="%s" textLength="%s" '
-        'lengthAdjust="spacingAndGlyphs" xml:space="preserve"%s'
-    ) % (_pll_n(size), _pll_n(w), _pll_paint(paint, "fill"))
-    baseline = size * _PLL_TEXT_BASELINE
-    if _pll_is_translation(m):
-        return '<text x="%s" y="%s" %s>%s</text>' % (
-            _pll_n(m[4]), _pll_n(m[5] + baseline), attrs, _pll_xml_escape(text),
-        )
-    return '<text x="0" y="%s" %s transform="%s">%s</text>' % (
-        _pll_n(baseline), attrs, _pll_matrix(m), _pll_xml_escape(text),
+    return (
+        '<text x="0" y="%s" font-family="monospace" font-size="%s" textLength="%s" '
+        'lengthAdjust="spacingAndGlyphs" xml:space="preserve"%s transform="%s">%s</text>'
+    ) % (
+        _pll_n(size * _PLL_TEXT_BASELINE), _pll_n(size), _pll_n(w), _pll_paint(paint, "fill"),
+        _pll_matrix(m), _pll_xml_escape(text),
     )
 
 
-def _pll_placed(m):
-    """Attributes that put something drawn at (0, 0) where `m` puts it."""
-    if _pll_is_translation(m):
-        return ' x="%s" y="%s"' % (_pll_n(m[4]), _pll_n(m[5]))
-    return ' x="0" y="0" transform="%s"' % _pll_matrix(m)
-
-
-def _pll_svg_markup(item):
-    m, markup = item[2], item[5]
-    if m == _PLL_IDENTITY:
-        return markup
-    return '<g transform="%s">%s</g>' % (_pll_matrix(m), markup)
+_PLL_SVG_SHAPES = {"poly": _pll_svg_poly, "ellipse": _pll_svg_ellipse, "line": _pll_svg_line, "text": _pll_svg_text}
 
 
 def _pll_render(items):
     """The SVG elements that draw `items`, with whatever `<defs>` they need.
 
-    A picture loaded once and used many times is embedded once and drawn
-    with `<use>`; shapes that share a clip share one group.
+    A picture is embedded once, however many times it is drawn, each with
+    `<use>`; shapes that share a clip share one group.
     """
-    uses = {}
-    for item in items:
-        if item[0] == "bitmap":
-            uses[id(item[5])] = uses.get(id(item[5]), 0) + 1
     defs = []
     body = []
-    shared = {}
+    pictures = {}
     clip = None
     for item in items:
-        kind = item[0]
-        if kind == "box":
+        if item[2].alpha == 0:
             continue
-        if kind == "poly":
-            markup = _pll_svg_poly(item) if item[4].alpha > 0 else ""
-        elif kind == "ellipse":
-            markup = _pll_svg_ellipse(item) if item[8].alpha > 0 else ""
-        elif kind == "line":
-            markup = _pll_svg_line(item) if item[6].alpha > 0 else ""
-        elif kind == "text":
-            markup = _pll_svg_text(item) if item[7].alpha > 0 else ""
-        elif kind == "bitmap":
-            picture = item[5]
-            size = ' width="%s" height="%s" preserveAspectRatio="none"' % (_pll_n(item[3]), _pll_n(item[4]))
-            if uses[id(picture)] == 1:
-                markup = '<image%s%s href="%s"/>' % (_pll_placed(item[2]), size, picture._href())
-            else:
-                if id(picture) not in shared:
-                    shared[id(picture)] = _pll_svg_id("i")
-                    defs.append('<image id="%s"%s href="%s"/>' % (shared[id(picture)], size, picture._href()))
-                markup = '<use href="#%s"%s/>' % (shared[id(picture)], _pll_placed(item[2]))
+        if item[0] == "picture":
+            picture = item[6]
+            if id(picture) not in pictures:
+                pictures[id(picture)] = _pll_svg_id("i")
+                defs.append(
+                    '<image id="%s" width="%s" height="%s" preserveAspectRatio="none" href="%s"/>'
+                    % (pictures[id(picture)], _pll_n(item[4]), _pll_n(item[5]), picture._href())
+                )
+            markup = '<use href="#%s" transform="%s"/>' % (pictures[id(picture)], _pll_matrix(item[3]))
         else:
-            markup = _pll_svg_markup(item)
+            markup = _PLL_SVG_SHAPES[item[0]](item)
         if not markup:
             continue
         if item[1] != clip:
@@ -1124,7 +870,7 @@ def _pll_render(items):
 
 
 # -----------------------------------------------------------------------------
-# Image base class
+# Images: the base class, the shapes and the group
 # -----------------------------------------------------------------------------
 
 class Image:
@@ -1137,6 +883,9 @@ class Image:
 
     _w = 0.0
     _h = 0.0
+    #: A group's `(child, transform, clip)` for each child, bottom first;
+    #: None for a shape, which has `_items` instead.
+    _children = None
     #: The flattened drawing and what `==` compares, worked out once each.
     _flat = None
     _key = None
@@ -1155,14 +904,6 @@ class Image:
     @property
     def height(self):
         return self._h
-
-    def _parts(self):
-        """`(child, transform, clip)` for each child, bottom first; None for a shape."""
-        return None
-
-    def _items(self, m, clip):
-        """A shape's items, drawn with `m` and clipped to `clip`."""
-        return ()
 
     def _drawing(self):
         if self._flat is None:
@@ -1208,11 +949,8 @@ class Image:
         return "<Image %dx%d>" % (_pll_px(self._w), _pll_px(self._h))
 
     def __add__(self, other):
-        """`a + b` on images, which looks plausible and is not a thing.
-
-        Without this, Python's own message names the private classes:
-        "unsupported operand type(s) for +: '_Rectangle' and '_Rectangle'".
-        """
+        """`a + b` on images, which looks plausible and is not a thing, and
+        in Python's words would name PLL's private classes."""
         raise TypeError(
             "Images cannot be joined with `+`. Use `beside(a, b)` to put them "
             "side by side, `above(a, b)` to stack them, or `overlay(a, b)` to "
@@ -1220,62 +958,6 @@ class Image:
         )
 
     __radd__ = __add__
-
-
-# -----------------------------------------------------------------------------
-# Shapes
-# -----------------------------------------------------------------------------
-
-class _Rectangle(Image):
-    def __init__(self, width, height, mode, paint):
-        self._w = float(width)
-        self._h = float(height)
-        self._mode = mode
-        self._paint = paint
-
-    def _items(self, m, clip):
-        return (("poly", clip, _pll_corners(m, self._w, self._h), self._mode, self._paint),)
-
-
-def _pll_ellipse_item(m, clip, cx, cy, rx, ry, mode, paint):
-    """The ellipse with radii `rx`, `ry` about (cx, cy), drawn with `m`.
-
-    What a transform makes of an ellipse is another ellipse, whose radii
-    and turn are the singular values and rotation of the transform's linear
-    part (a closed form for 2x2).
-    """
-    x, y = _pll_apply(m, cx, cy)
-    a00, a10 = m[0] * rx, m[1] * rx
-    a01, a11 = m[2] * ry, m[3] * ry
-    e, f = (a00 + a11) / 2, (a00 - a11) / 2
-    g, h = (a10 + a01) / 2, (a10 - a01) / 2
-    q, r = _math.hypot(e, h), _math.hypot(f, g)
-    turn = (_math.atan2(h, e) + _math.atan2(g, f)) / 2
-    return ("ellipse", clip, x, y, q + r, abs(q - r), _math.degrees(turn), mode, paint)
-
-
-class _Circle(Image):
-    def __init__(self, radius, mode, paint):
-        self._radius = float(radius)
-        self._w = self._h = self._radius * 2
-        self._mode = mode
-        self._paint = paint
-
-    def _items(self, m, clip):
-        r = self._radius
-        return (_pll_ellipse_item(m, clip, r, r, r, r, self._mode, self._paint),)
-
-
-class _Ellipse(Image):
-    def __init__(self, width, height, mode, paint):
-        self._w = float(width)
-        self._h = float(height)
-        self._mode = mode
-        self._paint = paint
-
-    def _items(self, m, clip):
-        rx, ry = self._w / 2, self._h / 2
-        return (_pll_ellipse_item(m, clip, rx, ry, rx, ry, self._mode, self._paint),)
 
 
 class _Polygon(Image):
@@ -1290,7 +972,37 @@ class _Polygon(Image):
         self._paint = paint
 
     def _items(self, m, clip):
-        return (("poly", clip, tuple(_pll_apply(m, x, y) for x, y in self._points), self._mode, self._paint),)
+        return (("poly", clip, self._paint, self._mode, tuple(_pll_apply(m, x, y) for x, y in self._points)),)
+
+
+def _pll_rectangle(width, height, mode, paint):
+    return _Polygon(((0, 0), (width, 0), (width, height), (0, height)), mode, paint)
+
+
+def _pll_box_region(w, h):
+    return ((0.0, 0.0), (w, 0.0), (w, h), (0.0, h))
+
+
+class _Ellipse(Image):
+    def __init__(self, width, height, mode, paint):
+        self._w = float(width)
+        self._h = float(height)
+        self._mode = mode
+        self._paint = paint
+
+    def _items(self, m, clip):
+        """The ellipse drawn with `m`: another ellipse, whose radii and turn
+        are the singular values and rotation of the transform's linear part
+        (a closed form for 2x2)."""
+        rx, ry = self._w / 2, self._h / 2
+        x, y = _pll_apply(m, rx, ry)
+        a00, a10 = m[0] * rx, m[1] * rx
+        a01, a11 = m[2] * ry, m[3] * ry
+        e, f = (a00 + a11) / 2, (a00 - a11) / 2
+        g, h = (a10 + a01) / 2, (a10 - a01) / 2
+        q, r = _math.hypot(e, h), _math.hypot(f, g)
+        turn = (_math.atan2(h, e) + _math.atan2(g, f)) / 2
+        return (("ellipse", clip, self._paint, self._mode, x, y, q + r, abs(q - r), _math.degrees(turn)),)
 
 
 class _Line(Image):
@@ -1307,7 +1019,7 @@ class _Line(Image):
         x1 = (0.0 if self._dx >= 0 else -self._dx) + (self._w - abs(self._dx)) / 2
         y1 = (0.0 if self._dy >= 0 else -self._dy) + (self._h - abs(self._dy)) / 2
         (ax, ay), (bx, by) = _pll_apply(m, x1, y1), _pll_apply(m, x1 + self._dx, y1 + self._dy)
-        return (("line", clip, ax, ay, bx, by, self._paint),)
+        return (("line", clip, self._paint, ax, ay, bx, by),)
 
 
 class _Text(Image):
@@ -1321,177 +1033,11 @@ class _Text(Image):
         self._paint = paint
 
     def _items(self, m, clip):
-        return (("text", clip, m, self._text, self._size, self._w, self._h, self._paint),)
+        return (("text", clip, self._paint, m, self._w, self._h, self._text, self._size),)
 
 
-class _Drawing(Image):
-    """A ready-made SVG of a known size - a chart - as an image like any other."""
-
-    def __init__(self, markup, width, height):
-        self._markup = markup
-        self._w = float(width)
-        self._h = float(height)
-
-    def _items(self, m, clip):
-        return (("svg", clip, m, self._w, self._h, self._markup),)
-
-    def to_svg(self):
-        return self._markup
-
-
-class _PllBox(Image):
-    """Nothing to see: the edges of a crop or a scene, for `rotate` to measure."""
-
-    def __init__(self, width, height):
-        self._w = float(width)
-        self._h = float(height)
-
-    def _items(self, m, clip):
-        return (("box", clip, _pll_corners(m, self._w, self._h)),)
-
-
-# -----------------------------------------------------------------------------
-# Loading a picture from a file or a URL
-# -----------------------------------------------------------------------------
-
-def _pll_png_size(data):
-    if not data.startswith(b"\x89PNG\r\n\x1a\n") or data[12:16] != b"IHDR":
-        return None
-    return (
-        int.from_bytes(data[16:20], "big"),
-        int.from_bytes(data[20:24], "big"),
-    )
-
-
-def _pll_gif_size(data):
-    if not data.startswith((b"GIF87a", b"GIF89a")):
-        return None
-    return (
-        int.from_bytes(data[6:8], "little"),
-        int.from_bytes(data[8:10], "little"),
-    )
-
-
-def _pll_jpeg_size(data):
-    """Walk the segment chain to the frame header that carries the size."""
-    if not data.startswith(b"\xff\xd8"):
-        return None
-    i = 2
-    end = len(data)
-    while i + 3 < end:
-        if data[i] != 0xFF:
-            i += 1
-            continue
-        marker = data[i + 1]
-        # Standalone markers: no length field to skip.
-        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7 or marker == 0x01:
-            i += 2
-            continue
-        length = int.from_bytes(data[i + 2:i + 4], "big")
-        # Any SOFn except the four that are not frame headers.
-        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC, 0xD8):
-            if i + 9 > end:
-                return None
-            return (
-                int.from_bytes(data[i + 7:i + 9], "big"),
-                int.from_bytes(data[i + 5:i + 7], "big"),
-            )
-        i += 2 + max(length, 2)
-    return None
-
-
-def _pll_webp_size(data):
-    if not (data.startswith(b"RIFF") and data[8:12] == b"WEBP"):
-        return None
-    kind = data[12:16]
-    if kind == b"VP8 ":
-        return (
-            int.from_bytes(data[26:28], "little") & 0x3FFF,
-            int.from_bytes(data[28:30], "little") & 0x3FFF,
-        )
-    if kind == b"VP8L":
-        bits = int.from_bytes(data[21:25], "little")
-        return ((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1)
-    if kind == b"VP8X":
-        return (
-            int.from_bytes(data[24:27], "little") + 1,
-            int.from_bytes(data[27:30], "little") + 1,
-        )
-    return None
-
-
-#: Pixels in one of each absolute CSS unit.
-_PLL_SVG_UNITS = {
-    "": 1.0, "px": 1.0, "pt": 4 / 3, "pc": 16.0, "in": 96.0,
-    "cm": 96 / 2.54, "mm": 96 / 25.4, "q": 96 / 101.6,
-}
-_PLL_SVG_TAG_RE = _pll_img_re.compile(r"<svg\b([^>]*)>", _pll_img_re.I)
-_PLL_SVG_ATTR_RE = _pll_img_re.compile(r"""([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
-_PLL_SVG_LENGTH_RE = _pll_img_re.compile(r"^\s*([0-9]*\.?[0-9]+(?:e[+-]?\d+)?)\s*([a-z]*)\s*$", _pll_img_re.I)
-
-
-def _pll_svg_size(data):
-    """An SVG's size, from its own `<svg>` tag: `width` and `height`, or the viewBox.
-
-    Read from that tag only, so a `stroke-width` or a child's `width` is not
-    taken for the picture's, and with each unit turned into pixels. A size
-    in `%` or `em` says nothing on its own, so the viewBox decides.
-    """
-    try:
-        head = data[:65536].decode("utf-8", "replace")
-    except Exception:
-        return None
-    # Past the prologue: comments can hold anything, an `<svg` included.
-    head = _pll_img_re.sub(r"<!--.*?-->", "", head, flags=_pll_img_re.S)
-    tag = _PLL_SVG_TAG_RE.search(head)
-    if tag is None:
-        return None
-    attrs = {}
-    for name, double, single in _PLL_SVG_ATTR_RE.findall(tag.group(1)):
-        attrs[name.lower()] = double if double or not single else single
-
-    def length(name):
-        found = _PLL_SVG_LENGTH_RE.match(attrs.get(name, ""))
-        if not found or found.group(2).lower() not in _PLL_SVG_UNITS:
-            return None
-        return float(found.group(1)) * _PLL_SVG_UNITS[found.group(2).lower()]
-
-    w, h = length("width"), length("height")
-    box = None
-    numbers = _pll_img_re.split(r"[\s,]+", attrs.get("viewbox", "").strip())
-    if len(numbers) == 4:
-        try:
-            box = (float(numbers[2]), float(numbers[3]))
-        except ValueError:
-            box = None
-    if w and h:
-        return (w, h)
-    if box and box[0] > 0 and box[1] > 0:
-        # One side given: the other follows the viewBox's shape.
-        if w:
-            return (w, w * box[1] / box[0])
-        if h:
-            return (h * box[0] / box[1], h)
-        return box
-    return None
-
-
-#: Sniffers in the order they are tried, with the media type each implies.
-_PLL_IMAGE_KINDS = (
-    ("image/png", _pll_png_size),
-    ("image/jpeg", _pll_jpeg_size),
-    ("image/gif", _pll_gif_size),
-    ("image/webp", _pll_webp_size),
-    ("image/svg+xml", _pll_svg_size),
-)
-
-#: The largest picture `load_image` reads, from a file or an address: the
-#: limit on a file beside the program.
-_PLL_MAX_PICTURE_BYTES = 2 * 1024 * 1024
-
-
-class _LoadedImage(Image):
-    """A picture read from a file or a URL, carried as a data URI.
+class _Picture(Image):
+    """A picture made elsewhere - a file, a URL, a chart - carried as a data URI.
 
     Its bytes are embedded rather than linked, so the picture keeps working
     in a saved SVG, in the interactions panel and in a `.svg` written by
@@ -1515,10 +1061,151 @@ class _LoadedImage(Image):
         return self._encoded
 
     def _items(self, m, clip):
-        return (("bitmap", clip, m, self._w, self._h, self),)
+        return (("picture", clip, _PLL_BLACK, m, self._w, self._h, self),)
 
     def __repr__(self):
         return "<image %gx%g from %s>" % (self._w, self._h, self._source)
+
+
+#: While a group is being freed, the children of the groups inside it, each
+#: waiting its turn (`_Group.__del__`).
+_pll_freeing = None
+
+
+class _Group(Image):
+    """Pictures put together: each child with the transform that places it
+    (None for none) and the region it is clipped to (or None), bottom first."""
+
+    def __init__(self, width, height, children):
+        self._w = width
+        self._h = height
+        self._children = children
+
+    def __del__(self):
+        """The groups inside freed one at a time rather than each inside the
+        last: freed the usual way, a picture a few thousand groups deep runs
+        out of the browser's stack, which ends Python."""
+        global _pll_freeing
+        # Straight into the list, with no name of their own here: one would
+        # keep them until this returns, and free them inside it.
+        if _pll_freeing is not None:
+            _pll_freeing.append(self.__dict__.pop("_children", None))
+            return
+        _pll_freeing = [self.__dict__.pop("_children", None)]
+        try:
+            while _pll_freeing:
+                _pll_freeing.pop()
+        finally:
+            _pll_freeing = None
+
+
+# -----------------------------------------------------------------------------
+# Loading a picture from a file or a URL
+# -----------------------------------------------------------------------------
+
+def _pll_jpeg_size(data, number):
+    """The size in a JPEG's frame header, found by walking its segments."""
+    i = 2
+    while i + 3 < len(data):
+        marker = data[i + 1]
+        if data[i] != 0xFF:
+            i += 1
+        elif marker in (0x01, 0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+            # Standalone: no length to skip.
+            i += 2
+        elif 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            # A frame header: any SOFn but the three that are not.
+            return (number(i + 7, i + 9), number(i + 5, i + 7)) if i + 9 <= len(data) else None
+        else:
+            i += 2 + max(number(i + 2, i + 4), 2)
+    return None
+
+
+def _pll_webp_size(data, number):
+    kind = data[12:16]
+    if kind == b"VP8 ":
+        return (number(26, 28) & 0x3FFF, number(28, 30) & 0x3FFF)
+    if kind == b"VP8L":
+        bits = number(21, 25)
+        return ((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1)
+    if kind == b"VP8X":
+        return (number(24, 27) + 1, number(27, 30) + 1)
+    return None
+
+
+#: Pixels in one of each absolute CSS unit.
+_PLL_SVG_UNITS = {
+    "": 1.0, "px": 1.0, "pt": 4 / 3, "pc": 16.0, "in": 96.0,
+    "cm": 96 / 2.54, "mm": 96 / 25.4, "q": 96 / 101.6,
+}
+_PLL_SVG_TAG_RE = _pll_img_re.compile(r"<svg\b([^>]*)>", _pll_img_re.I)
+_PLL_SVG_ATTR_RE = _pll_img_re.compile(r"""([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+_PLL_SVG_LENGTH_RE = _pll_img_re.compile(r"\s*([0-9]*\.?[0-9]+(?:e[+-]?\d+)?)\s*([a-z]*)\s*", _pll_img_re.I)
+
+
+def _pll_svg_size(data):
+    """An SVG's size, from its own `<svg>` tag: `width` and `height`, or the viewBox.
+
+    Read from that tag only, so a `stroke-width` or a child's `width` is not
+    taken for the picture's, and with each unit turned into pixels. A size
+    in `%` or `em` says nothing on its own, so the viewBox decides.
+    """
+    # Past the prologue: comments can hold anything, an `<svg` included.
+    head = _pll_img_re.sub(r"<!--.*?-->", "", data[:65536].decode("utf-8", "replace"), flags=_pll_img_re.S)
+    tag = _PLL_SVG_TAG_RE.search(head)
+    if tag is None:
+        return None
+    attrs = {name.lower(): double or single for name, double, single in _PLL_SVG_ATTR_RE.findall(tag.group(1))}
+
+    def length(name):
+        found = _PLL_SVG_LENGTH_RE.fullmatch(attrs.get(name, ""))
+        unit = found and _PLL_SVG_UNITS.get(found.group(2).lower())
+        return float(found.group(1)) * unit if unit else None
+
+    w, h = length("width"), length("height")
+    try:
+        box = [float(n) for n in _pll_img_re.split(r"[\s,]+", attrs.get("viewbox", "").strip())][2:]
+    except ValueError:
+        box = []
+    if w and h:
+        return (w, h)
+    if len(box) == 2 and box[0] > 0 and box[1] > 0:
+        # One side given: the other follows the viewBox's shape.
+        if w:
+            return (w, w * box[1] / box[0])
+        if h:
+            return (h * box[0] / box[1], h)
+        return tuple(box)
+    return None
+
+
+def _pll_picture_kind(data):
+    """`(media type, (width, height))` for the picture in `data`, or None.
+
+    The size may be None, for a picture whose header could not be read.
+    """
+
+    def number(start, end, order="little"):
+        return int.from_bytes(data[start:end], order)
+
+    def big(start, end):
+        return number(start, end, "big")
+
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and data[12:16] == b"IHDR":
+        return ("image/png", (big(16, 20), big(20, 24)))
+    if data.startswith(b"\xff\xd8"):
+        return ("image/jpeg", _pll_jpeg_size(data, big))
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return ("image/gif", (number(6, 8), number(8, 10)))
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return ("image/webp", _pll_webp_size(data, number))
+    size = _pll_svg_size(data)
+    return ("image/svg+xml", size) if size else None
+
+
+#: The largest picture `load_image` reads, from a file or an address: the
+#: limit on a file beside the program.
+_PLL_MAX_PICTURE_BYTES = 2 * 1024 * 1024
 
 
 def load_image(source):
@@ -1537,18 +1224,16 @@ def load_image(source):
     data = _pll_read_source(source, "load_image", binary=True, limit=_PLL_MAX_PICTURE_BYTES)
     if not data:
         raise ValueError("%r is empty, so there is no picture in it." % source)
-    for media_type, sniff in _PLL_IMAGE_KINDS:
-        size = sniff(data)
-        if size is None:
-            continue
-        width, height = size
-        if width <= 0 or height <= 0:
-            raise ValueError("%r says it is %gx%g, which is not a picture." % (source, width, height))
-        return _LoadedImage(width, height, media_type, data, source)
-    raise ValueError(
-        "%r is not a picture PLL can read. It understands PNG, JPEG, GIF, "
-        "WebP and SVG files." % source
-    )
+    media_type, size = _pll_picture_kind(data) or (None, None)
+    if size is None:
+        raise ValueError(
+            "%r is not a picture PLL can read. It understands PNG, JPEG, GIF, "
+            "WebP and SVG files." % source
+        )
+    width, height = size
+    if width <= 0 or height <= 0:
+        raise ValueError("%r says it is %gx%g, which is not a picture." % (source, width, height))
+    return _Picture(width, height, media_type, data, source)
 
 
 def _pll_figure_image(figure):
@@ -1559,7 +1244,7 @@ def _pll_figure_image(figure):
     out = _pll_img_io.BytesIO()
     figure.savefig(out, format="png", dpi=figure.dpi * 2)
     width, height = figure.get_size_inches() * figure.dpi
-    return _LoadedImage(width, height, "image/png", out.getvalue(), "a figure")
+    return _Picture(width, height, "image/png", out.getvalue(), "a figure")
 
 
 def _pll_show_figure(figure):
@@ -1572,29 +1257,16 @@ def _pll_show_figure(figure):
 
 
 # -----------------------------------------------------------------------------
-# Combinators
+# Putting pictures together
 # -----------------------------------------------------------------------------
 
 _PLL_X_PLACES = ("left", "center", "middle", "right")
 _PLL_Y_PLACES = ("top", "center", "middle", "bottom")
 
-#: How each aligned combinator is written, for the message that says so.
-_PLL_ALIGNED_EXAMPLES = {
-    "beside_align": 'beside_align("top", image1, image2)',
-    "above_align": 'above_align("left", image1, image2)',
-    "overlay_align": 'overlay_align("left", "top", image1, image2)',
-    "underlay_align": 'underlay_align("left", "top", image1, image2)',
-}
-
 
 def _pll_check_place(place, allowed, who, param):
     if isinstance(place, str) and place in allowed:
         return place
-    if isinstance(place, Image):
-        raise TypeError(
-            "%s takes the alignment first, then the images: write %s."
-            % (who, _PLL_ALIGNED_EXAMPLES[who])
-        )
     suggestion = _pll_closest_name(place.lower(), allowed) if isinstance(place, str) else None
     raise ValueError(
         "%s's `%s`%s should be \"%s\", \"%s\" or \"%s\", but it is %s.%s"
@@ -1620,205 +1292,49 @@ def _pll_offset(place, outer, inner):
     return (outer - inner) / 2.0
 
 
-class _Beside(Image):
-    """Children left to right, aligned vertically by `y_place`."""
-
-    def __init__(self, children, y_place="center"):
-        self._children = list(children)
-        self._y_place = y_place
-        self._w = sum(c._w for c in self._children)
-        self._h = max((c._h for c in self._children), default=0.0)
-
-    def _parts(self):
-        parts = []
-        x = 0.0
-        for child in self._children:
-            parts.append((child, _pll_translate(x, _pll_offset(self._y_place, self._h, child._h)), None))
-            x += child._w
-        return parts
-
-
-class _Above(Image):
-    """Children top to bottom, aligned horizontally by `x_place`."""
-
-    def __init__(self, children, x_place="center"):
-        self._children = list(children)
-        self._x_place = x_place
-        self._w = max((c._w for c in self._children), default=0.0)
-        self._h = sum(c._h for c in self._children)
-
-    def _parts(self):
-        parts = []
-        y = 0.0
-        for child in self._children:
-            parts.append((child, _pll_translate(_pll_offset(self._x_place, self._w, child._w), y), None))
-            y += child._h
-        return parts
+def _pll_line_up(images, across, place="center"):
+    """`images` left to right (`across`) or top to bottom, lined up by `place`."""
+    if across:
+        w = sum(i._w for i in images)
+        h = max((i._h for i in images), default=0.0)
+    else:
+        w = max((i._w for i in images), default=0.0)
+        h = sum(i._h for i in images)
+    children = []
+    at = 0.0
+    for image in images:
+        if across:
+            children.append((image, _pll_translate(at, _pll_offset(place, h, image._h)), None))
+            at += image._w
+        else:
+            children.append((image, _pll_translate(_pll_offset(place, w, image._w), at), None))
+            at += image._h
+    return _Group(w, h, children)
 
 
-class _Overlay(Image):
-    """First child on top. Children aligned by (`x_place`, `y_place`)."""
-
-    def __init__(self, children, x_place="center", y_place="center"):
-        self._children = list(children)
-        self._x_place = x_place
-        self._y_place = y_place
-        self._w = max(c._w for c in self._children)
-        self._h = max(c._h for c in self._children)
-
-    def _parts(self):
-        return [
-            (
-                child,
-                _pll_translate(
-                    _pll_offset(self._x_place, self._w, child._w),
-                    _pll_offset(self._y_place, self._h, child._h),
-                ),
-                None,
-            )
-            for child in reversed(self._children)
-        ]
+def _pll_overlay(images, x_place="center", y_place="center"):
+    """`images` on top of one another, the first on top, lined up by the places."""
+    w = max(i._w for i in images)
+    h = max(i._h for i in images)
+    return _Group(w, h, [
+        (i, _pll_translate(_pll_offset(x_place, w, i._w), _pll_offset(y_place, h, i._h)), None)
+        for i in reversed(images)
+    ])
 
 
-class _LayeredXY(Image):
+def _pll_layer_xy(first, dx, dy, second, first_on_top):
     """`first` at the origin, `second` offset by (dx, dy).
 
-    Negative offsets move `second` left / up, which grows the bounding box
-    in that direction: both children move right / down by however far the
-    box grew, so the picture's own top-left stays at (0, 0).
+    Negative offsets move `second` left / up, which grows the box that way:
+    both move right / down by however far it grew, so the picture's own
+    top-left stays at (0, 0).
     """
-
-    def __init__(self, first, dx, dy, second, first_on_top):
-        self._first = first
-        self._second = second
-        self._dx = float(dx)
-        self._dy = float(dy)
-        self._first_on_top = first_on_top
-        left, top = min(0.0, self._dx), min(0.0, self._dy)
-        self._w = max(first._w, self._dx + second._w) - left
-        self._h = max(first._h, self._dy + second._h) - top
-
-    def _parts(self):
-        shift_x = -min(0.0, self._dx)
-        shift_y = -min(0.0, self._dy)
-        first = (self._first, _pll_translate(shift_x, shift_y), None)
-        second = (self._second, _pll_translate(shift_x + self._dx, shift_y + self._dy), None)
-        return [second, first] if self._first_on_top else [first, second]
-
-
-def _pll_box_region(w, h):
-    return ((0.0, 0.0), (w, 0.0), (w, h), (0.0, h))
-
-
-class _Crop(Image):
-    """The `width` x `height` region of `image` starting at (`x`, `y`)."""
-
-    def __init__(self, x, y, width, height, image):
-        self._x = float(x)
-        self._y = float(y)
-        self._w = float(width)
-        self._h = float(height)
-        self._image = image
-
-    def _parts(self):
-        return [
-            (self._image, _pll_translate(-self._x, -self._y), _pll_box_region(self._w, self._h)),
-            (_PllBox(self._w, self._h), None, None),
-        ]
-
-
-class _PlaceImage(Image):
-    """`image` centred at (cx, cy) on `scene`, cropped to the scene."""
-
-    def __init__(self, image, cx, cy, scene):
-        self._image = image
-        self._cx = float(cx)
-        self._cy = float(cy)
-        self._scene = scene
-        self._w = scene._w
-        self._h = scene._h
-
-    def _parts(self):
-        region = _pll_box_region(self._w, self._h)
-        at = _pll_translate(self._cx - self._image._w / 2.0, self._cy - self._image._h / 2.0)
-        return [
-            (self._scene, None, region),
-            (self._image, at, region),
-            (_PllBox(self._w, self._h), None, None),
-        ]
-
-
-class _Frame(Image):
-    """`image` with a thin black outline around its bounding box."""
-
-    def __init__(self, image):
-        self._image = image
-        self._w = image._w
-        self._h = image._h
-
-    def _parts(self):
-        return [
-            (self._image, None, None),
-            (_Rectangle(self._w, self._h, "outline", _PLL_BLACK), None, None),
-        ]
-
-
-class _Rotate(Image):
-    """`image` turned `angle` degrees counter-clockwise (HtDP convention).
-
-    Its box is the turned shapes' own, as 2htdp's is: a circle stays as wide
-    as it was, and turning a picture again and again does not grow it.
-    """
-
-    def __init__(self, angle, image):
-        self._angle = angle % 360.0
-        if self._angle % 90 == 0:
-            # Exactly, so a quarter turn does not leave 6e-17 behind.
-            cos, sin = ((1, 0), (0, 1), (-1, 0), (0, -1))[int(self._angle // 90)]
-        else:
-            rad = _math.radians(self._angle)
-            cos, sin = _math.cos(rad), _math.sin(rad)
-        # Counter-clockwise on a screen, where y grows downward.
-        turn = (float(cos), float(-sin), float(sin), float(cos), 0.0, 0.0)
-        boxes = [_pll_extent(item) for item in _pll_flatten(image, turn)]
-        if boxes:
-            left = min(b[0] for b in boxes)
-            top = min(b[1] for b in boxes)
-            self._w = max(b[2] for b in boxes) - left
-            self._h = max(b[3] for b in boxes) - top
-        else:
-            left = top = 0.0
-            self._w = self._h = 0.0
-        self._image = image
-        self._turn = _pll_compose(_pll_translate(-left, -top), turn)
-
-    def _parts(self):
-        return [(self._image, self._turn, None)]
-
-
-class _Scale(Image):
-    def __init__(self, factor, image):
-        self._factor = float(factor)
-        self._image = image
-        self._w = image._w * self._factor
-        self._h = image._h * self._factor
-
-    def _parts(self):
-        f = self._factor
-        return [(self._image, (f, 0.0, 0.0, f, 0.0, 0.0), None)]
-
-
-class _Flip(Image):
-    def __init__(self, image, horizontal):
-        self._image = image
-        self._horizontal = horizontal
-        self._w = image._w
-        self._h = image._h
-
-    def _parts(self):
-        if self._horizontal:
-            return [(self._image, (-1.0, 0.0, 0.0, 1.0, self._w, 0.0), None)]
-        return [(self._image, (1.0, 0.0, 0.0, -1.0, 0.0, self._h), None)]
+    left, top = min(0.0, dx), min(0.0, dy)
+    w = max(first._w, dx + second._w) - left
+    h = max(first._h, dy + second._h) - top
+    under = (first, _pll_translate(-left, -top), None)
+    over = (second, _pll_translate(-left + dx, -top + dy), None)
+    return _Group(w, h, [over, under] if first_on_top else [under, over])
 
 
 # -----------------------------------------------------------------------------
@@ -1827,52 +1343,44 @@ class _Flip(Image):
 
 def circle(radius, mode, color):
     """A circle: `mode` is "solid" or "outline"."""
-    radius = _pll_check_size(radius, "circle", "radius")
-    return _Circle(radius, _pll_check_mode(mode, "circle"), _pll_check_color(color, "circle"))
+    radius = _pll_check_number(radius, "circle", "radius", least=0)
+    return _Ellipse(radius * 2, radius * 2, _pll_check_mode(mode, "circle"), _pll_check_color(color, "circle"))
 
 
 def square(side, mode, color):
     """A square with sides `side` long."""
-    side = _pll_check_size(side, "square", "side")
-    return _Rectangle(
-        side, side, _pll_check_mode(mode, "square"), _pll_check_color(color, "square")
-    )
+    side = _pll_check_number(side, "square", "side", least=0)
+    return _pll_rectangle(side, side, _pll_check_mode(mode, "square"), _pll_check_color(color, "square"))
 
 
 def rectangle(width, height, mode, color):
     """A rectangle `width` across and `height` high."""
-    width = _pll_check_size(width, "rectangle", "width")
-    height = _pll_check_size(height, "rectangle", "height")
-    return _Rectangle(
-        width, height,
-        _pll_check_mode(mode, "rectangle"), _pll_check_color(color, "rectangle"),
+    width = _pll_check_number(width, "rectangle", "width", least=0)
+    height = _pll_check_number(height, "rectangle", "height", least=0)
+    return _pll_rectangle(
+        width, height, _pll_check_mode(mode, "rectangle"), _pll_check_color(color, "rectangle")
     )
 
 
 def ellipse(width, height, mode, color):
     """An ellipse `width` across and `height` high."""
-    width = _pll_check_size(width, "ellipse", "width")
-    height = _pll_check_size(height, "ellipse", "height")
-    return _Ellipse(
-        width, height,
-        _pll_check_mode(mode, "ellipse"), _pll_check_color(color, "ellipse"),
-    )
+    width = _pll_check_number(width, "ellipse", "width", least=0)
+    height = _pll_check_number(height, "ellipse", "height", least=0)
+    return _Ellipse(width, height, _pll_check_mode(mode, "ellipse"), _pll_check_color(color, "ellipse"))
 
 
 def triangle(side, mode, color):
     """An equilateral triangle pointing up, with sides `side` long."""
-    side = _pll_check_size(side, "triangle", "side")
+    side = _pll_check_number(side, "triangle", "side", least=0)
     h = side * _math.sqrt(3) / 2.0
     points = [(side / 2.0, 0.0), (side, h), (0.0, h)]
-    return _Polygon(
-        points, _pll_check_mode(mode, "triangle"), _pll_check_color(color, "triangle")
-    )
+    return _Polygon(points, _pll_check_mode(mode, "triangle"), _pll_check_color(color, "triangle"))
 
 
 def right_triangle(width, height, mode, color):
     """A right triangle: legs `width` along the bottom and `height` up the left."""
-    width = _pll_check_size(width, "right_triangle", "width")
-    height = _pll_check_size(height, "right_triangle", "height")
+    width = _pll_check_number(width, "right_triangle", "width", least=0)
+    height = _pll_check_number(height, "right_triangle", "height", least=0)
     mode = _pll_check_mode(mode, "right_triangle")
     paint = _pll_check_color(color, "right_triangle")
     # The right angle at the bottom left, as 2htdp draws it.
@@ -1881,26 +1389,21 @@ def right_triangle(width, height, mode, color):
 
 def regular_polygon(side, sides, mode, color):
     """A regular polygon with `sides` sides, each `side` long."""
-    side = _pll_check_size(side, "regular_polygon", "side")
-    sides = _pll_check_count(sides, "regular_polygon", "sides", 3)
+    side = _pll_check_number(side, "regular_polygon", "side", least=0)
+    sides = _pll_check_number(sides, "regular_polygon", "sides", least=3, whole=True)
     mode = _pll_check_mode(mode, "regular_polygon")
     paint = _pll_check_color(color, "regular_polygon")
     radius = side / (2 * _math.sin(_math.pi / sides))
-    # Oriented with a *side* along the bottom, which is what a regular
-    # polygon is expected to look like. With an odd number of sides a
-    # vertex at the top already gives that - a triangle points up - but
-    # with an even number it puts a vertex at the bottom too, so
-    # `regular_polygon(40, 4, ...)` would be a 57x57 diamond instead of a
-    # 40x40 square. Half a step of rotation fixes the even cases and leaves
-    # the odd ones alone.
+    # With a *side* along the bottom, as a regular polygon is expected to
+    # look. A vertex at the top gives that when the number of sides is odd -
+    # a triangle points up - but when it is even puts a vertex at the bottom
+    # too, so a square would be a diamond; half a step of turn fixes those.
     offset = 0.0 if sides % 2 else _math.pi / sides
     points = []
     for i in range(sides):
-        # start at the top and go clockwise
+        # Starting at the top, going clockwise.
         angle = -_math.pi / 2.0 + offset + i * 2 * _math.pi / sides
         points.append((radius + radius * _math.cos(angle), radius + radius * _math.sin(angle)))
-    # `_Polygon` measures the points it is given, so the box is the shape's
-    # real extent rather than the circle it was cut from.
     return _Polygon(points, mode, paint)
 
 
@@ -1923,7 +1426,7 @@ def _pll_star_points(side, count, step):
 
 def star(side, mode, color):
     """A five-pointed star, its points the corners of a pentagon with sides `side` long."""
-    side = _pll_check_size(side, "star", "side")
+    side = _pll_check_number(side, "star", "side", least=0)
     mode = _pll_check_mode(mode, "star")
     paint = _pll_check_color(color, "star")
     return _Polygon(_pll_star_points(side, 5, 2), mode, paint)
@@ -1932,22 +1435,11 @@ def star(side, mode, color):
 def star_polygon(side, points_count, step, mode, color):
     """A star with `points_count` points, joining every `step`-th corner of a
     regular polygon with sides `side` long: (40, 5, 2, ...) is the usual star."""
-    side = _pll_check_size(side, "star_polygon", "side")
-    count = _pll_check_count(points_count, "star_polygon", "points_count", 3)
-    step = _pll_check_count(step, "star_polygon", "step", 1)
-    if step * 2 >= count:
-        raise ValueError(
-            "star_polygon's `step`%s has to be less than half of `points_count`, "
-            "but it is %d with %d points - joining every %s corner of %d makes no star.%s"
-            % (
-                _pll_where("star_polygon", "step"),
-                step,
-                count,
-                _pll_ordinal(step - 1),
-                count,
-                _pll_contract("star_polygon"),
-            )
-        )
+    side = _pll_check_number(side, "star_polygon", "side", least=0)
+    step = _pll_check_number(step, "star_polygon", "step", least=1, whole=True)
+    # Joining every `step`-th corner makes a star only when that is less
+    # than half the way round.
+    count = _pll_check_number(points_count, "star_polygon", "points_count", least=2 * step + 1, whole=True)
     mode = _pll_check_mode(mode, "star_polygon")
     paint = _pll_check_color(color, "star_polygon")
     return _Polygon(_pll_star_points(side, count, step), mode, paint)
@@ -1967,60 +1459,54 @@ def text(value, size, color):
             "text's `value` (the 1st argument) must be a string, but it is %s."
             " The arguments are: text(value, size, color)." % _pll_describe(value)
         )
-    size = _pll_check_positive(size, "text", "size")
+    size = _pll_check_number(size, "text", "size", above=0)
     return _Text(value, size, _pll_check_color(color, "text"))
 
 
 def beside(*images):
     """The images side by side, left to right, lined up on their centres."""
-    return _Beside(_pll_check_images(images, "beside"))
+    return _pll_line_up(_pll_check_images(images, "beside"), True)
 
 
 def above(*images):
     """The images one above the other, top to bottom, lined up on their centres."""
-    return _Above(_pll_check_images(images, "above"))
+    return _pll_line_up(_pll_check_images(images, "above"), False)
 
 
 def overlay(*images):
     """The images on top of one another, centred; the first is on top."""
-    return _Overlay(_pll_check_images(images, "overlay", least=1))
+    return _pll_overlay(_pll_check_images(images, "overlay", least=1))
 
 
 def underlay(*images):
     """Like overlay, but the first image is on the bottom."""
-    return _Overlay(list(reversed(_pll_check_images(images, "underlay", least=1))))
+    return _pll_overlay(_pll_check_images(images, "underlay", least=1)[::-1])
 
 
 def beside_align(y_place, *images):
     """Like `beside`, lined up by "top", "center" or "bottom"."""
-    return _Beside(
-        _pll_check_images(images, "beside_align", 1),
-        _pll_check_place(y_place, _PLL_Y_PLACES, "beside_align", "y_place"),
-    )
+    images = _pll_check_images(images, "beside_align", 1)
+    return _pll_line_up(images, True, _pll_check_place(y_place, _PLL_Y_PLACES, "beside_align", "y_place"))
 
 
 def above_align(x_place, *images):
     """Like `above`, lined up by "left", "center" or "right"."""
-    return _Above(
-        _pll_check_images(images, "above_align", 1),
-        _pll_check_place(x_place, _PLL_X_PLACES, "above_align", "x_place"),
-    )
+    images = _pll_check_images(images, "above_align", 1)
+    return _pll_line_up(images, False, _pll_check_place(x_place, _PLL_X_PLACES, "above_align", "x_place"))
 
 
 def overlay_align(x_place, y_place, *images):
     """Like `overlay`, with both ways of lining up given."""
     x_place = _pll_check_place(x_place, _PLL_X_PLACES, "overlay_align", "x_place")
     y_place = _pll_check_place(y_place, _PLL_Y_PLACES, "overlay_align", "y_place")
-    return _Overlay(_pll_check_images(images, "overlay_align", 2, least=1), x_place, y_place)
+    return _pll_overlay(_pll_check_images(images, "overlay_align", 2, least=1), x_place, y_place)
 
 
 def underlay_align(x_place, y_place, *images):
     """Like `overlay_align`, but the first image is on the bottom."""
     x_place = _pll_check_place(x_place, _PLL_X_PLACES, "underlay_align", "x_place")
     y_place = _pll_check_place(y_place, _PLL_Y_PLACES, "underlay_align", "y_place")
-    return _Overlay(
-        list(reversed(_pll_check_images(images, "underlay_align", 2, least=1))), x_place, y_place
-    )
+    return _pll_overlay(_pll_check_images(images, "underlay_align", 2, least=1)[::-1], x_place, y_place)
 
 
 def overlay_xy(image1, dx, dy, image2):
@@ -2033,7 +1519,7 @@ def overlay_xy(image1, dx, dy, image2):
     dx = _pll_check_number(dx, "overlay_xy", "dx")
     dy = _pll_check_number(dy, "overlay_xy", "dy")
     _pll_check_image(image2, "overlay_xy", 3)
-    return _LayeredXY(image1, dx, dy, image2, first_on_top=True)
+    return _pll_layer_xy(image1, dx, dy, image2, first_on_top=True)
 
 
 def underlay_xy(image1, dx, dy, image2):
@@ -2042,7 +1528,7 @@ def underlay_xy(image1, dx, dy, image2):
     dx = _pll_check_number(dx, "underlay_xy", "dx")
     dy = _pll_check_number(dy, "underlay_xy", "dy")
     _pll_check_image(image2, "underlay_xy", 3)
-    return _LayeredXY(image1, dx, dy, image2, first_on_top=False)
+    return _pll_layer_xy(image1, dx, dy, image2, first_on_top=False)
 
 
 def place_image(image, x, y, scene):
@@ -2051,53 +1537,84 @@ def place_image(image, x, y, scene):
     x = _pll_check_number(x, "place_image", "x")
     y = _pll_check_number(y, "place_image", "y")
     _pll_check_image(scene, "place_image", 3)
-    return _PlaceImage(image, x, y, scene)
+    w, h = scene._w, scene._h
+    region = _pll_box_region(w, h)
+    at = _pll_translate(x - image._w / 2.0, y - image._h / 2.0)
+    edges = _pll_rectangle(w, h, "solid", _PLL_TRANSPARENT)
+    return _Group(w, h, [(scene, None, region), (image, at, region), (edges, None, None)])
 
 
 def crop(x, y, width, height, image):
     """The `width` x `height` piece of `image` starting at (x, y)."""
     x = _pll_check_number(x, "crop", "x")
     y = _pll_check_number(y, "crop", "y")
-    width = _pll_check_size(width, "crop", "width")
-    height = _pll_check_size(height, "crop", "height")
+    width = _pll_check_number(width, "crop", "width", least=0)
+    height = _pll_check_number(height, "crop", "height", least=0)
     _pll_check_image(image, "crop", 4)
-    return _Crop(x, y, width, height, image)
+    edges = _pll_rectangle(width, height, "solid", _PLL_TRANSPARENT)
+    return _Group(width, height, [
+        (image, _pll_translate(-x, -y), _pll_box_region(width, height)),
+        (edges, None, None),
+    ])
 
 
 def frame(image):
     """`image` with a thin outline around it, to show its bounding box."""
-    return _Frame(_pll_check_image(image, "frame", 0))
+    image = _pll_check_image(image, "frame", 0)
+    outline = _pll_rectangle(image._w, image._h, "outline", _PLL_BLACK)
+    return _Group(image._w, image._h, [(image, None, None), (outline, None, None)])
 
 
 def empty_scene(width, height):
     """A blank white scene with an outline, to use with `place_image`."""
-    width = _pll_check_size(width, "empty_scene", "width")
-    height = _pll_check_size(height, "empty_scene", "height")
-    return _Frame(_Rectangle(width, height, "solid", _PLL_WHITE))
+    width = _pll_check_number(width, "empty_scene", "width", least=0)
+    height = _pll_check_number(height, "empty_scene", "height", least=0)
+    return frame(_pll_rectangle(width, height, "solid", _PLL_WHITE))
 
 
 def rotate(angle, image):
-    """`image` turned `angle` degrees counter-clockwise."""
+    """`image` turned `angle` degrees counter-clockwise, as HtDP turns it.
+
+    Its box is the turned shapes' own, as 2htdp's is: a circle stays as wide
+    as it was, and turning a picture again and again does not grow it.
+    """
     _pll_check_order(angle, image, "rotate", "angle")
-    angle = _pll_check_number(angle, "rotate", "angle")
-    return _Rotate(angle, _pll_check_image(image, "rotate", 1))
+    angle = _pll_check_number(angle, "rotate", "angle") % 360.0
+    image = _pll_check_image(image, "rotate", 1)
+    if angle % 90 == 0:
+        # Exactly, so a quarter turn does not leave 6e-17 behind.
+        cos, sin = ((1, 0), (0, 1), (-1, 0), (0, -1))[int(angle // 90)]
+    else:
+        rad = _math.radians(angle)
+        cos, sin = _math.cos(rad), _math.sin(rad)
+    # Counter-clockwise on a screen, where y grows downward.
+    turn = (float(cos), float(-sin), float(sin), float(cos), 0.0, 0.0)
+    boxes = [_pll_extent(item) for item in _pll_flatten(image, turn)]
+    left = min((b[0] for b in boxes), default=0.0)
+    top = min((b[1] for b in boxes), default=0.0)
+    w = max((b[2] for b in boxes), default=0.0) - left
+    h = max((b[3] for b in boxes), default=0.0) - top
+    return _Group(w, h, [(image, _pll_compose(_pll_translate(-left, -top), turn), None)])
 
 
 def scale(factor, image):
     """`image` made `factor` times bigger (or smaller, below 1)."""
     _pll_check_order(factor, image, "scale", "factor")
-    factor = _pll_check_positive(factor, "scale", "factor")
-    return _Scale(factor, _pll_check_image(image, "scale", 1))
+    factor = _pll_check_number(factor, "scale", "factor", above=0)
+    image = _pll_check_image(image, "scale", 1)
+    return _Group(image._w * factor, image._h * factor, [(image, (factor, 0.0, 0.0, factor, 0.0, 0.0), None)])
 
 
 def flip_horizontal(image):
     """`image` mirrored left to right."""
-    return _Flip(_pll_check_image(image, "flip_horizontal", 0), horizontal=True)
+    image = _pll_check_image(image, "flip_horizontal", 0)
+    return _Group(image._w, image._h, [(image, (-1.0, 0.0, 0.0, 1.0, image._w, 0.0), None)])
 
 
 def flip_vertical(image):
     """`image` mirrored top to bottom."""
-    return _Flip(_pll_check_image(image, "flip_vertical", 0), horizontal=False)
+    image = _pll_check_image(image, "flip_vertical", 0)
+    return _Group(image._w, image._h, [(image, (1.0, 0.0, 0.0, -1.0, 0.0, image._h), None)])
 
 
 def image_width(image):
@@ -2110,48 +1627,18 @@ def image_height(image):
     return _pll_px(_pll_check_image(image, "image_height", 0)._h)
 
 
-empty_image = _Rectangle(0, 0, "solid", _PLL_TRANSPARENT)
+empty_image = _pll_rectangle(0.0, 0.0, "solid", _PLL_TRANSPARENT)
 
 
-# Names exported into user globals by the install step. Keep this list explicit
-# so we don't accidentally leak helpers (anything starting with `_` would
-# already be filtered, but being explicit avoids drift).
-PLL_IMAGE_EXPORTS = [
-    "Image",
-    "circle",
-    "square",
-    "rectangle",
-    "ellipse",
-    "triangle",
-    "right_triangle",
-    "regular_polygon",
-    "star",
-    "star_polygon",
-    "line",
-    "text",
-    "beside",
-    "above",
-    "overlay",
-    "underlay",
-    "beside_align",
-    "above_align",
-    "overlay_align",
-    "underlay_align",
-    "overlay_xy",
-    "underlay_xy",
-    "place_image",
-    "crop",
-    "frame",
-    "empty_scene",
-    "rotate",
-    "scale",
-    "flip_horizontal",
-    "flip_vertical",
-    "image_width",
-    "image_height",
-    "empty_image",
-    "load_image",
-]
+#: The names the install step copies into the student's globals.
+PLL_IMAGE_EXPORTS = """
+    Image circle square rectangle ellipse triangle right_triangle
+    regular_polygon star star_polygon line text beside above overlay underlay
+    beside_align above_align overlay_align underlay_align overlay_xy
+    underlay_xy place_image crop frame empty_scene rotate scale
+    flip_horizontal flip_vertical image_width image_height empty_image
+    load_image
+""".split()
 
 
 # Argument names, read off the functions above rather than written out a
@@ -2164,8 +1651,5 @@ for _pll_exported in PLL_IMAGE_EXPORTS:
     if not callable(_pll_value) or isinstance(_pll_value, type):
         continue
     _pll_value.__module__ = "pll.image"
-    _PLL_PARAMS[_pll_exported] = tuple(
-        _name
-        for _name in _pll_value.__code__.co_varnames[: _pll_value.__code__.co_argcount]
-    )
+    _PLL_PARAMS[_pll_exported] = _pll_value.__code__.co_varnames[: _pll_value.__code__.co_argcount]
 del _pll_exported, _pll_value

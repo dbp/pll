@@ -1,22 +1,22 @@
 #!/usr/bin/env node
 /**
  * Packages and URLs: what a program imports is found and loaded the way
- * the worker does it, and URLs are read through the desktop's own network
- * path - its XMLHttpRequest polyfill, fetching on a helper thread, under
- * pyodide-http with PLL's transport (`http.py`).
+ * the worker does it, and URLs are read through the desktop's own network,
+ * fetching on a helper thread (`syncHttp.ts`), under urllib and pandas
+ * (`http.py`).
  *
  * URL reads hit a local HTTP server, in a child process: this thread
  * blocks while it waits for an answer, so a server in it would never reply.
  */
 import { spawn } from "node:child_process";
+import { Worker } from "node:worker_threads";
 
 import { importSource } from "./lib/bundle.mjs";
 import { expect, passed } from "./lib/check.mjs";
 import { bootPll } from "./lib/pyodide.mjs";
 
-const { installNodeXHR, PYODIDE_HTTP_PATCH_PY } = await importSource(
-  'export { installNodeXHR } from "./src/desktop/xhrPolyfill";\n' +
-    'export { PYODIDE_HTTP_PATCH_PY } from "./src/pyodide/install";',
+const { nodeHttp, PLL_HTTP_PY } = await importSource(
+  'export { nodeHttp } from "./src/desktop/syncHttp";\n' + 'export { PLL_HTTP_PY } from "./src/pyodide/install";',
 );
 
 const CARS_CSV = "name,mpg\nvw,29\nhonda,33\nford,18\n";
@@ -24,7 +24,8 @@ const CARS_CSV = "name,mpg\nvw,29\nhonda,33\nford,18\n";
 /**
  * A server with a CSV in UTF-8 whose letters are among the eight bytes
  * Latin-1 and ISO-8859-15 disagree on, every byte value in a file, a 404,
- * and an address that never answers.
+ * an address that never answers, one that says what it was sent, and a
+ * compressed CSV.
  */
 function startServer() {
   return new Promise((resolveServer, reject) => {
@@ -36,6 +37,22 @@ const server = http.createServer((req, res) => {
   if (req.url === "/cities.csv") { res.writeHead(200, { "Content-Type": "text/csv; charset=utf-8" }); return res.end("city,pop\\nZürich,400000\\n€ Šž Œœ Ÿ,1\\n"); }
   if (req.url === "/bytes") { res.writeHead(200, { "Content-Type": "application/octet-stream" }); return res.end(all); }
   if (req.url === "/hang") { return; }
+  if (req.url === "/echo") {
+    const parts = [];
+    req.on("data", (part) => parts.push(part));
+    return req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end(req.method + " " + (req.headers["x-pll"] || "") + " " + Buffer.concat(parts).toString());
+    });
+  }
+  if (req.url === "/slow" || req.url === "/slower") {
+    const late = req.url === "/slow";
+    return setTimeout(() => { res.writeHead(200, { "Content-Type": "text/plain" }); res.end(late ? "late" : "second"); }, late ? 1000 : 1500);
+  }
+  if (req.url === "/gz.csv") {
+    res.writeHead(200, { "Content-Type": "text/csv", "Content-Encoding": "gzip" });
+    return res.end(require("node:zlib").gzipSync(${JSON.stringify(CARS_CSV)}));
+  }
   res.writeHead(404, { "Content-Type": "text/html" });
   res.end("<!DOCTYPE html><html><body>Not Found</body></html>");
 });
@@ -50,8 +67,7 @@ server.listen(0, "127.0.0.1", () => process.stdout.write(String(server.address()
 }
 
 async function main() {
-  installNodeXHR();
-  const pyodide = await bootPll();
+  const pyodide = await bootPll({ http: nodeHttp(null) });
   const py = (code) => pyodide.runPython(code);
   const found = (code, siblings = []) =>
     py(`_pll_package_imports(${JSON.stringify(code)}, ${JSON.stringify(JSON.stringify(siblings))})`).toJs({
@@ -72,6 +88,9 @@ async function main() {
       // Not at the start of a line, and not first in its statement.
       ["x = 1; import numpy\n", [], ["numpy"], false],
       ["import numpy as np, urllib.request\n", [], ["numpy", "urllib"], true],
+      // A table's `to_pandas()` imports pandas inside itself.
+      ["t.to_pandas()\n", [], ["pandas"], true],
+      ["to_pandas(t)\n", [], [], false],
       ["def f():\n    import matplotlib.pyplot as plt\n", [], ["matplotlib"], false],
       // Named to importlib or __import__ in so many words.
       ['import importlib\nimportlib.import_module("micropip")\n', [], ["importlib", "micropip"], false],
@@ -105,8 +124,7 @@ async function main() {
 
   console.log("\n[3] an import that finds nothing says why");
   {
-    await pyodide.loadPackage("pyodide-http");
-    py(PYODIDE_HTTP_PATCH_PY.source);
+    py(PLL_HTTP_PY.source);
     const why = (code) => {
       const result = py(`
 try:
@@ -119,13 +137,12 @@ _r`);
       return result?.toJs?.({ dict_converter: Object.fromEntries }) ?? result;
     };
     expect(why("import flask")?.kind === "missing", `flask: Pyodide has none: ${JSON.stringify(why("import flask"))}`);
-    // Asked for and not loaded, as it would be offline.
-    found("import micropip\n");
-    expect(why("import micropip")?.kind === "notLoaded", `asked for, not loaded: ${JSON.stringify(why("import micropip"))}`);
-    // Loaded by nothing, since no import PLL read named it.
-    found("x = 1\n");
+    // Pyodide has it, and it was not loaded: offline, or named as it ran.
+    expect(why("import micropip")?.kind === "notLoaded", `not loaded: ${JSON.stringify(why("import micropip"))}`);
     const unseen = why('import importlib\nimportlib.import_module("micro" + "pip")');
-    expect(unseen?.kind === "notSeen" && unseen?.package === "micropip", `named as it ran: ${JSON.stringify(unseen)}`);
+    expect(unseen?.kind === "notLoaded" && unseen?.package === "micropip", `named as it ran: ${JSON.stringify(unseen)}`);
+    // Loaded, so a failure is not about loading.
+    expect(why("import pandas") === undefined, `pandas is there: ${JSON.stringify(why("import pandas"))}`);
     // A submodule of something that is there is Python's to explain.
     expect(why("import pandas.nonsense") === undefined, `a part of pandas: ${JSON.stringify(why("import pandas.nonsense"))}`);
   }
@@ -187,6 +204,84 @@ except OSError as e:
       libraries[1] === "load_table could not read http://nowhere.invalid/x.csv: could not connect to nowhere.invalid (ENOTFOUND).",
       `no CORS advice off the web: ${libraries[1]}`,
     );
+    // A request with a method, a body and a header, by urllib and by
+    // requests - set up once it is loaded - and a compressed answer, read
+    // as the text it is.
+    await pyodide.loadPackage("requests");
+    py(PLL_HTTP_PY.source);
+    const echo = JSON.stringify(base + "/echo");
+    const sent = run(`
+_req = urllib.request.Request(${echo}, data=b"a=1", headers={"X-Pll": "yes"}, method="PUT")
+import requests
+_r = requests.post(${echo}, json={"b": 2}, headers={"X-Pll": "too"}, timeout=5)
+[urllib.request.urlopen(_req).read().decode(), _r.status_code, _r.text,
+ requests.get(${JSON.stringify(base + "/cities.csv")}).text.splitlines()[1], requests.get(${JSON.stringify(base + "/missing")}).status_code,
+ pd.read_csv(${JSON.stringify(base + "/gz.csv")}).name.tolist(), urllib.request.urlopen(${JSON.stringify(base + "/gz.csv")}).read().decode().splitlines()[1],
+ urllib.request.urlopen(${JSON.stringify(base + "/gz.csv")}).headers["Content-Length"]]`);
+    expect(sent[0] === "PUT yes a=1", `urllib sends what a Request holds: ${JSON.stringify(sent[0])}`);
+    expect(sent[1] === 200 && sent[2] === 'POST too {"b": 2}', `requests sends its body and headers: ${JSON.stringify(sent.slice(1, 3))}`);
+    expect(sent[3] === "Zürich,400000" && sent[4] === 404, `requests reads text and statuses: ${JSON.stringify(sent.slice(3, 5))}`);
+    expect(sent[5].join(",") === "vw,honda,ford" && sent[6] === "vw,29", `a compressed answer is its text: ${JSON.stringify(sent.slice(5, 7))}`);
+    expect(sent[7] === String(CARS_CSV.length), `and its length is the text's: ${sent[7]}`);
+    const refused = run(`
+_out = []
+for _call in (lambda: requests.get("http://nowhere.invalid/x"), lambda: requests.get(${JSON.stringify(base + "/hang")}, timeout=0.5)):
+    try:
+        _call()
+    except requests.RequestException as e:
+        _out.append([type(e).__name__, str(e)])
+_out`);
+    expect(
+      JSON.stringify(refused) ===
+        JSON.stringify([
+          ["ConnectionError", "could not connect to nowhere.invalid (ENOTFOUND)"],
+          ["ConnectTimeout", `${base.slice("http://".length)} did not answer within 0.5 seconds`],
+        ]),
+      `requests' own exceptions, in a sentence: ${JSON.stringify(refused)}`,
+    );
+    // The helper that was still waiting was ended; the next request has
+    // another, and never the answer the first was waiting for.
+    expect(py(`requests.get(${JSON.stringify(base + "/cars.csv")}).text.splitlines()[0]`) === "name,mpg", "and the next request is answered");
+    const second = py(`
+try:
+    urllib.request.urlopen(${JSON.stringify(base + "/slow")}, timeout=0.3)
+except urllib.error.URLError:
+    pass
+urllib.request.urlopen(${JSON.stringify(base + "/slower")}).read().decode()`);
+    expect(second === "second", `the answer to its own request, not one given up on: ${second}`);
+
+    console.log("\n[5] a Stop during a URL wait is the Stop, at the program's line");
+    {
+      // Sent as the hosts send one - stored, and stored again every 15 ms
+      // until acknowledged - from another thread, as this one waits, to a
+      // fresh Python. Left in the buffer, Pyodide raised it as the host's
+      // call returned, never acknowledged, and the one sent again landed in
+      // PLL's own code.
+      const interruptBuffer = new SharedArrayBuffer(2);
+      const interrupt = new Uint8Array(interruptBuffer);
+      const fresh = await bootPll({ http: nodeHttp(interrupt), interruptBuffer });
+      fresh.runPython(PLL_HTTP_PY.source);
+      new Worker(
+        `const { workerData } = require("node:worker_threads");
+        const view = new Uint8Array(workerData);
+        setTimeout(() => {
+          Atomics.store(view, 1, 0);
+          Atomics.store(view, 0, 2);
+          const again = setInterval(() => (Atomics.load(view, 1) ? clearInterval(again) : Atomics.store(view, 0, 2)), 15);
+        }, 3000);`,
+        { eval: true, workerData: interruptBuffer },
+      ).unref();
+      const runFile = fresh.globals.get("_pll_run_file");
+      const stopped = runFile(
+        `import urllib.request\nprint("asking")\nurllib.request.urlopen(${JSON.stringify(base + "/hang")})\nprint("never")\n`,
+        "waits.py", "pandas:stop", "advanced",
+      ).toJs({ dict_converter: Object.fromEntries });
+      runFile.destroy?.();
+      const finding = stopped.error?.finding;
+      expect(finding?.headline === "The program was stopped." && finding?.lineNumber === 3 && stopped.stdout === "asking\n",
+        `the Stop, at line 3, after what it printed: ${JSON.stringify(finding)} ${JSON.stringify(stopped.stdout)}`);
+      expect(Atomics.load(interrupt, 0) === 0, "and nothing left in the buffer");
+    }
   } finally {
     close();
   }

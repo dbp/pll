@@ -3,7 +3,7 @@
 #
 # Pyodide has to download a package before Python can import it, and a
 # download cannot happen in the middle of a run, so the host loads them
-# first (`loadPackages` in pyodide/worker.ts), from what `_pll_package_imports`
+# first (`ensurePackages` in run/python.ts), from what `_pll_package_imports`
 # finds here: every import, wherever it is in the program or in the
 # student's files beside it, and the modules named to `importlib` or
 # `__import__` in so many words.
@@ -11,9 +11,6 @@
 import ast as _pll_pkg_ast
 import json as _pll_pkg_json
 import sys as _pll_pkg_sys
-
-#: The top-level names the last run's files import, as found before it ran.
-_pll_packages_requested = set()
 
 #: The modules that read URLs: when one is imported, PLL routes urllib and
 #: requests through the host's network (`http.py`). pandas, because its
@@ -38,7 +35,8 @@ def _pll_own_modules(siblings):
 
 
 def _pll_imported_names(code):
-    """The top-level modules `code` imports, by any statement or a literal name."""
+    """The top-level modules `code` imports, by any statement or a literal
+    name - and pandas for a table's `to_pandas()`, whose import is inside it."""
     try:
         # Quietly: the run parses the file too, and says its warnings once.
         with _pll_without_syntax_warnings():
@@ -52,12 +50,14 @@ def _pll_imported_names(code):
         elif isinstance(node, _pll_pkg_ast.ImportFrom):
             if node.level == 0 and node.module:
                 names.add(node.module.split(".")[0])
-        elif isinstance(node, _pll_pkg_ast.Call) and node.args:
+        elif isinstance(node, _pll_pkg_ast.Call):
             func = node.func
             called = func.id if isinstance(func, _pll_pkg_ast.Name) else (
                 func.attr if isinstance(func, _pll_pkg_ast.Attribute) else None
             )
-            first = node.args[0]
+            if isinstance(func, _pll_pkg_ast.Attribute) and func.attr == "to_pandas":
+                names.add("pandas")
+            first = node.args[0] if node.args else None
             if (
                 called in ("import_module", "__import__")
                 and isinstance(first, _pll_pkg_ast.Constant)
@@ -89,8 +89,6 @@ def _pll_package_imports(code, siblings_json):
                 pending.extend(own[module])
     names -= set(own)
     names -= _PLL_NEVER_LOADED
-    _pll_packages_requested.clear()
-    _pll_packages_requested.update(names)
     return {
         "modules": sorted(names),
         "network": bool(names & _PLL_NETWORK_MODULES),
@@ -106,9 +104,8 @@ def _pll_pyodide_package(module):
     if _pll_import_packages is None:
         try:
             import pyodide_js
-            from js import JSON
 
-            packages = _pll_pkg_json.loads(JSON.stringify(pyodide_js.lockfile.packages))
+            packages = pyodide_js.lockfile.packages.to_py()
         except Exception:
             packages = {}
         _pll_import_packages = {}
@@ -130,13 +127,11 @@ def _pll_package_loaded(package):
 def _pll_enrich_module_not_found(exc):
     """Say why a top-level import found nothing (`module`).
 
-    - `missing`: Pyodide has no such package, and it is not one of the
-      student's files - perhaps one misspelt (`close`);
-    - `leftOut`: it is one of their files, and a limit kept it back (`why`);
-    - `notLoaded`: Pyodide has it, PLL asked for it, and it did not load -
-      which takes the internet the first time;
-    - `notSeen`: Pyodide has it, and no import PLL could read before the
-      run named it.
+    - `leftOut`: it is one of the student's files, and a limit kept it back
+      (`why`);
+    - `notLoaded`: Pyodide has it, and it was not loaded before the run -
+      which takes the internet the first time, and an import PLL can read;
+    - `missing`: Pyodide has no such package.
     """
     if type(exc) is not ModuleNotFoundError or not isinstance(getattr(exc, "name", None), str):
         return
@@ -146,30 +141,13 @@ def _pll_enrich_module_not_found(exc):
         # message is the whole story.
         return
     why = _pll_left_out.get(module + ".py")
-    if why is not None:
-        _pll_add_facts(exc, module={"name": module, "kind": "leftOut", "why": why})
-        return
     package = _pll_pyodide_package(module) if module not in _PLL_NEVER_LOADED else None
-    if package is None:
-        import os as _pll_pkg_os
-
-        # Not a file the import is in: the program does not import itself.
-        running = {
-            _pll_pkg_os.path.basename(frame.f_code.co_filename) for frame, _ in _pll_student_frames(exc)
-        }
-        try:
-            files = [n[:-3] for n in _pll_pkg_os.listdir(".") if n.endswith(".py") and n not in running]
-        except OSError:
-            files = []
-        _pll_add_facts(
-            exc,
-            module={"name": module, "kind": "missing", "close": _pll_closest_name(module, files)},
-        )
-        return
-    if module not in _pll_packages_requested:
-        kind = "notSeen"
+    if why is not None:
+        facts = {"kind": "leftOut", "why": why}
+    elif package is None:
+        facts = {"kind": "missing"}
     elif not _pll_package_loaded(package):
-        kind = "notLoaded"
+        facts = {"kind": "notLoaded", "package": package}
     else:
         return
-    _pll_add_facts(exc, module={"name": module, "kind": kind, "package": package})
+    _pll_add_facts(exc, module=dict(facts, name=module))

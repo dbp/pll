@@ -119,7 +119,7 @@ t.tail(2)
     );
   }
 
-  console.log("\n[4] aggregations: sum / mean / min / max / count");
+  console.log("\n[4] aggregations: sum / mean / min / max / length");
   {
     const code = `
 t = table(["v"], [[1], [2], [3], [4]])
@@ -127,7 +127,7 @@ print("sum=", t.sum("v"))
 print("mean=", t.mean("v"))
 print("min=", t.min("v"))
 print("max=", t.max("v"))
-print("count=", t.count())
+print("length=", t.length())
 `;
     const result = py(callRunFile, code, "agg.py", SK);
     expect(result.ok === true, "ok");
@@ -135,7 +135,7 @@ print("count=", t.count())
     expect(result.stdout.includes("mean= 2.5"), "mean=2.5");
     expect(result.stdout.includes("min= 1"), "min=1");
     expect(result.stdout.includes("max= 4"), "max=4");
-    expect(result.stdout.includes("count= 4"), "count=4");
+    expect(result.stdout.includes("length= 4"), "length=4");
   }
 
   console.log("\n[5] charts return image displays");
@@ -414,7 +414,7 @@ table(["i"], [[i] for i in range(500)])
       [`with open("${name}", "w") as f:`, `    f.write(${JSON.stringify(body)})`, ""].join("\n");
     for (const [code, kind, needle] of [
       ['load_table("nope.csv")', "FileNotFoundError", "no file called"],
-      ['load_table("ftp://h/a.csv")', "ValueError", "not a ftp:// one"],
+      ['load_table("ftp://h/a.csv")', "FileNotFoundError", 'no file called "ftp://h/a.csv"'],
       ["load_table(42)", "TypeError", "as a string"],
       [write("e.csv", "") + 'load_table("e.csv")', "ValueError", "no rows"],
       [write("d.csv", "a,a\n1,2\n") + 'load_table("d.csv")', "ValueError", "two columns called"],
@@ -489,12 +489,6 @@ table(["i"], [[i] for i in range(500)])
         "filter calls your function with one row at a time",
       ],
       [
-        "filter function takes two",
-        `${T}def below(r, limit):\n    return r["riders"] < limit\n\nt.filter(below)`,
-        "TypeError",
-        "filter calls `below` with one row, but `below` takes 2 parameters",
-      ],
-      [
         "filter returns a number",
         `${T}def below(r):\n    return r["riders"]\n\nt.filter(below)`,
         "TypeError",
@@ -550,7 +544,7 @@ table(["i"], [[i] for i in range(500)])
         "histogram with no bins",
         `${T}t.histogram("riders", bins=0)`,
         "ValueError",
-        "histogram's `bins` has to be 1 or more",
+        "histogram's `bins` cannot be less than 1, but it is 0.",
       ],
       // The value as the student wrote it, not rounded the way a cell is.
       [
@@ -609,7 +603,15 @@ table(["i"], [[i] for i in range(500)])
         `${label}: wanted ${kind} "${needle}", got ${result.error?.errorType}: ${message}`,
       );
     }
-    console.log("    twenty-nine table, row, CSV and chart messages name the fix");
+    // A function with the wrong number of parameters fails in Python's
+    // words, and the explanation says who called it with what.
+    const arity = py(callRunFile, `${T}def below(r, limit):\n    return r["riders"] < limit\n\nt.filter(below)`, "f6.py", SK);
+    expect(
+      arity.error?.errorType === "TypeError" &&
+        arity.error?.finding?.howToFix?.[0] === "`filter` calls your function with one row at a time, so give it one parameter: `def below(r: dict):`.",
+      `the explanation names filter: ${JSON.stringify(arity.error?.finding)}`,
+    );
+    console.log("    twenty-eight table, row, CSV and chart messages name the fix; a function's parameters, by who calls it");
 
     // A missing file lists the ones that are there, which is usually the
     // whole answer.
@@ -724,7 +726,7 @@ table(["i"], [[i] for i in range(500)])
     console.log("    lines as the file has them, blank cells kept, trailing blanks not rows");
   }
 
-  console.log("\n[19] sums of whole numbers are whole, and True is not a number at the teaching levels");
+  console.log("\n[19] sums of whole numbers are whole, and True is not a number in a table at the teaching levels");
   {
     const code = [
       't = table(["n", "ok"], [[10**17, True], [1, False], [2, True]])',
@@ -743,6 +745,26 @@ table(["i"], [[i] for i in range(500)])
     }
     const advanced = py(callRunFile, 't = table(["ok"], [[True], [True], [False]])\nprint(t.sum("ok"), t.mean("ok"))', "bools.py", SK, "advanced");
     expect(advanced.stdout === "2 0.6666666666666666\n", `advanced counts them, as Python does: ${JSON.stringify(advanced.stdout)}`);
+    // Nor anywhere else in a table: not drawn, fitted or sorted as 1 and 0.
+    const mixed = 't = table(["x", "ok"], [[1, True], [2, False], [3, True]])\n';
+    for (const [call, needle] of [
+      ['t.bar_chart("x", "ok")', "bar_chart needs a column of numbers"],
+      ['t.scatter_plot("x", "ok")', "scatter_plot needs a column of numbers"],
+      ['t.histogram("ok")', "histogram needs a column of numbers"],
+      ['t.linear_regression("x", "ok")', "linear_regression needs a column of numbers"],
+      ["function_plot(lambda x: x > 0, -1, 1)", "function_plot needs your function to give back numbers"],
+    ]) {
+      const refused = py(callRunFile, mixed + call, "bools.py", SK, "intermediate");
+      expect(refused.ok === false && refused.error?.message.includes(needle) && /True and False are not numbers\.$/.test(refused.error.message),
+        `${call} refuses True: ${refused.error?.message}`);
+      const drawn = py(callRunFile, mixed + call, "bools.py", SK, "advanced");
+      expect(drawn.ok === true, `${call} at advanced draws them as 1 and 0: ${drawn.error?.message ?? ""}`);
+    }
+    const sorted = 't = table(["v"], [[3], [True], [1]])\nprint(t.order_by("v").column("v"), t.min("v"), t.max("v"))';
+    const own = py(callRunFile, sorted, "sort.py", SK, "beginner");
+    expect(own.stdout === "[1, 3, True] 1 True\n", `beginner sorts them after the numbers, as their own kind: ${JSON.stringify(own.stdout)}`);
+    const one = py(callRunFile, sorted, "sort.py", SK, "advanced");
+    expect(one.stdout === "[True, 1, 3] True 3\n", `advanced sorts True as 1: ${JSON.stringify(one.stdout)}`);
     console.log("    exact int sums, -> int fits, True refused where it is not a number");
   }
 
@@ -757,9 +779,14 @@ table(["i"], [[i] for i in range(500)])
     const CSV = 'with open("n.csv", "w") as f:\n    f.write("n\\n9\\n100\\n41\\n")\nc = load_table("n.csv")\n';
     for (const call of ['c.max("n")', 'c.min("n")', 'c.order_by("n")']) {
       const result = py(callRunFile, CSV + call, "text.py", SK);
-      expect(result.error?.errorType === "TypeError" && /as text "100" comes before "9"/.test(result.error?.message ?? "") &&
+      // The first two out of order as text: "100", "41", "9".
+      expect(result.error?.errorType === "TypeError" && /as text "100" comes before "41"/.test(result.error?.message ?? "") &&
         /transform_column\("n", int\)/.test(result.error?.message ?? ""), `${call}: ${result.error?.message}`);
     }
+    // "1", "9", "100": the smallest as a number and as text are both "1".
+    const ONES = 'with open("o.csv", "w") as f:\n    f.write("n\\n1\\n9\\n100\\n")\nc = load_table("o.csv")\n';
+    const ones = py(callRunFile, ONES + 'c.max("n")', "text.py", SK);
+    expect(/as text "100" comes before "9"/.test(ones.error?.message ?? ""), `two that really are out of order: ${ones.error?.message}`);
     // Text that sorts the same either way, like zip codes, is left alone.
     const zips = py(callRunFile, 't = table(["zip"], [["02115"], ["10001"], ["02134"]])\nprint(t.order_by("zip").column("zip"), t.max("zip"))', "zip.py", SK);
     expect(zips.stdout === "['02115', '02134', '10001'] 10001\n", `zip codes sort as text: ${JSON.stringify(zips.stdout)} ${zips.error?.message ?? ""}`);
@@ -776,7 +803,7 @@ table(["i"], [[i] for i in range(500)])
       "print(image_width(pic), image_height(pic) > 320, chart(t) == chart(t))",
       'print(t.histogram("n", bin_width=5).to_svg().count("<rect"))',
       "import re",
-      "print(re.findall(r'text-anchor=\"middle\" fill=\"#444\">([^<]*)<', table(['n'], [[10], [9], [100], [9]]).freq_bar_chart('n').to_svg()))",
+      "print(re.findall(r'<text [^>]*y=\"290\"[^>]*>([^<]*)<', table(['n'], [[10], [9], [100], [9]]).freq_bar_chart('n').to_svg()))",
       "print(function_plot(lambda x: 1 / x, -3, 3).to_svg().count(' M '))",
       "import math",
       "print(function_plot(math.sqrt, -3, 3) is not None)",
@@ -793,6 +820,59 @@ table(["i"], [[i] for i in range(500)])
     const notFn = py(callRunFile, "function_plot(3, -3, 3)", "fp.py", SK);
     expect(/function_plot needs a function, but got the number 3/.test(notFn.error?.message ?? ""), `checked: ${notFn.error?.message}`);
     console.log("    above(title, chart), -> Image, bin_width, number order, gaps");
+  }
+
+  console.log("\n[21a] what the charts work out: keys, quartiles, the fit, ticks, the line's order");
+  {
+    const code = [
+      "import re",
+      "def labels(n):",
+      "    return table(['g', 'x', 'y'], [[str(i % n), i, i * i] for i in range(12)])",
+      "print('stroke=\"#ddd\"' in labels(3).labeled_scatter_plot('g', 'x', 'y').to_svg(), 'stroke=\"#ddd\"' in labels(9).labeled_scatter_plot('g', 'x', 'y').to_svg())",
+      "print(re.search(r'min [^<]*', table(['v'], [[v] for v in range(1, 9)]).box_plot('v').to_svg()).group(0))",
+      "print([round(v, 6) for v in table(['x', 'y'], [[1, 3], [2, 5], [3, 6], [4, 9]]).linear_regression('x', 'y')])",
+      "print('>2000000<' in table(['l', 'v'], [['a', 2000000], ['b', 500000]]).bar_chart('l', 'v').to_svg())",
+      "path = re.search(r'<path d=\"([^\"]*)\"', table(['x', 'y'], [[3, 1], [1, 2], [2, 3]]).line_chart('x', 'y').to_svg()).group(1).split()",
+      "xs = [float(path[i]) for i in range(1, len(path), 3)]",
+      "print(xs == sorted(xs), len(xs))",
+    ].join("\n");
+    const result = py(callRunFile, code, "details.py", SK);
+    expect(result.ok === true, `ran: ${result.error?.message ?? ""}`);
+    const out = (result.stdout ?? "").trim().split("\n");
+    expect(out[0] === "True False", `a key for three groups, none for nine: ${out[0]}`);
+    expect(out[1] === "min 1  q1 2.75  median 4.5  q3 6.25  max 8", `quartiles as statistics.quantiles gives them, inclusive: ${out[1]}`);
+    expect(out[2] === "[1.9, 1.0, 0.962667]", `slope, intercept and r-squared: ${out[2]}`);
+    expect(out[3] === "True", `a tick of two million is written out: ${out[3]}`);
+    expect(out[4] === "True 3", `a line chart runs left to right: ${out[4]}`);
+    console.log("    the key, the box, the fit, the ticks and the line");
+  }
+
+  console.log("\n[21b] what no chart can draw: no rows, too many bars, one x");
+  {
+    const E = 'e = table(["l", "x", "y"], [])\n';
+    for (const call of [
+      'e.bar_chart("l", "y")', 'e.scatter_plot("x", "y")', 'e.scatter_chart("x", "y")', 'e.line_chart("x", "y")',
+      'e.labeled_scatter_plot("l", "x", "y")', 'e.pie_chart("l", "y")', 'e.dot_plot("x")', 'e.labeled_dot_plot("l", "x")',
+      'e.box_plot("x")', 'e.lr_plot("x", "y")', 'e.labeled_lr_plot("l", "x", "y")', 'e.histogram("x")',
+    ]) {
+      const result = py(callRunFile, E + call, "empty.py", SK);
+      const who = call.slice(2, call.indexOf("("));
+      expect(result.error?.errorType === "ValueError" && result.error?.message === `${who} needs at least one row, but the table has none, so there is nothing to draw.`,
+        `${call} is refused: ${result.error?.message}`);
+    }
+    const freq = py(callRunFile, E + 'e.freq_bar_chart("l")', "empty.py", SK);
+    expect(/freq_bar_chart needs at least one row/.test(freq.error?.message ?? ""), `freq_bar_chart too: ${freq.error?.message}`);
+    const T = 't = table(["x", "y"], [[0.1, 1], [0.1, 5], [0.1, 3]])\n';
+    for (const [call, needle] of [
+      ['t.histogram("y", bins=10**7)', "histogram would draw 10000000 bars, and at most 1000 fit: ask for fewer bins."],
+      ['t.histogram("y", bin_width=0.001)', "histogram would draw 4000 bars, and at most 1000 fit: use a wider bin_width."],
+      // Three equal x values, which a sum of squares can make look different.
+      ['t.lr_plot("x", "y")', "a line of best fit needs the x values to vary; they are all 0.1"],
+    ]) {
+      const result = py(callRunFile, T + call, "many.py", SK);
+      expect(result.error?.errorType === "ValueError" && result.error?.message === needle, `${call}: ${result.error?.message}`);
+    }
+    console.log("    every chart refuses an empty table; bars capped at 1000; one x is no line");
   }
 
   console.log("\n[22] an error in the student's own function is theirs, not transform_column's");
@@ -830,14 +910,15 @@ table(["i"], [[i] for i in range(500)])
       ['table_from_columns([1, 2])', "TypeError", "takes one dictionary"],
       ['table_from_columns({"a": "abc"})', "TypeError", 'needs a list of values for each column, but "a" is the string "abc"'],
       ['table_from_columns({"a": [1, 2, 3], "b": [1, 2]})', "ValueError", '"a" has 3 values and "b" has 2'],
+      ['table_from_columns({"a": [1], "b": [1, 2]})', "ValueError", '"a" has 1 value and "b" has 2'],
       [`${T}t.select_columns(["name", "name"])`, "ValueError", 'given "name" more than once'],
       [`${T}t.column(["name"])`, "TypeError", "a column is named by a string"],
       [`${T}t.row(1.0)`, "TypeError", "got 1.0, which is a float: write row(1)"],
       [`${T}t.head(-1)`, "ValueError", "cannot be negative"],
-      [`${T}t.tail("2")`, "TypeError", "as a whole number like tail(5)"],
+      [`${T}t.tail("2")`, "TypeError", 'tail\'s `n` must be a number, but it is the string "2"'],
       [`${T}t.add_column("x", 0)`, "TypeError", "add_column needs a list of values"],
       ['table(["age"], []).mean("age")', "ValueError", "mean needs at least one row"],
-      ['table(["name", "age"], [{"nmae": "Ada", "age": 3}])', "ValueError", '"nmae", which is not one of the columns (name, age). Did you mean "name"?'],
+      ['table(["name", "age"], [{"nmae": "Ada", "age": 3}])', "ValueError", 'the 1st row: the table has no column "nmae" (it has: name, age). Did you mean "name"?'],
       [`${T}t.histogram("age", bins=2.5)`, "TypeError", "`bins` has to be a whole number"],
       [`${T}t.scatter_plot("name", "age")`, "TypeError", "scatter_plot needs a column of numbers"],
       ['table(["l", "v"], [["a", -1]]).pie_chart("l", "v")', "ValueError", 'column "v" holds -1 in the 1st row'],
@@ -852,7 +933,9 @@ table(["i"], [[i] for i in range(500)])
       expect(result.ok === false && result.error?.errorType === kind && message.includes(needle),
         `${code.split("\n").at(-1)}: wanted ${kind} "${needle}", got ${result.error?.errorType}: ${message}`);
     }
-    console.log("    twenty-one mistakes, each with the fix");
+    const built = py(callRunFile, 'print(table_from_columns({"a": [1, 2], "b": ["x", "y"]}) == table(["a", "b"], [[1, "x"], [2, "y"]]), table_from_columns({}).length(), table_from_columns({"a": []}).columns())', "tfc.py", SK);
+    expect(built.stdout === "True 0 ['a']\n", `table_from_columns makes the table: ${JSON.stringify(built.stdout)} ${built.error?.message ?? ""}`);
+    console.log("    twenty-two mistakes, each with the fix");
   }
 
   console.log("\n[24] add_row, Row, and help in pll.table");
@@ -893,8 +976,14 @@ table(["i"], [[i] for i in range(500)])
     expect(result.error?.errorType === "FileNotFoundError" &&
       result.error?.message === '"big.csv" is next to your program, but it was not loaded: each file can be at most 2 MB.',
       `why it is not there: ${result.error?.message}`);
+    // The same file by another way of writing its name - and not a file
+    // somewhere else that happens to share its name.
+    const dotted = py(callRunFile, 'load_table("./big.csv")', "big.py", SK);
+    expect(/^"\.\/big\.csv" is next to your program, but it was not loaded/.test(dotted.error?.message ?? ""), `./big.csv: ${dotted.error?.message}`);
+    const above = py(callRunFile, 'load_table("../big.csv")', "big.py", SK);
+    expect(/^There is no file called "\.\.\/big\.csv"/.test(above.error?.message ?? ""), `../big.csv is not it: ${above.error?.message}`);
     pyodide.runPython("_pll_note_left_out('[]')");
-    console.log("    not loaded, and why");
+    console.log("    not loaded, and why; by its own name only");
   }
 
   callRunFile.destroy?.();

@@ -2,17 +2,63 @@
 
 ## Unreleased
 
+### Breaking
+- **Fewer ways to write a colour as text**: `"rgb(10 20 30 / 50%)"`,
+  percentages inside `rgb()`, `deg`, `#rgba`, `#rrggbbaa` and
+  `"currentColor"` are refused. Names, `#rgb`, `#rrggbb`, `rgb()`, `rgba()`,
+  `hsl()`, `hsla()` and tuples work as before.
+- **A table's `count()` is gone**: it was another name for `length()`.
+- **A chart of a table with no rows is refused**, by every chart, where four
+  drew an empty frame; and `histogram(bins=...)` above 1,000 bars is
+  refused, as `bin_width=` already was.
+- **On the desktop and the command line, Python has no `XMLHttpRequest`**,
+  so Pyodide's own `pyodide.http.open_url` does not work there; urllib,
+  requests and pandas read URLs as before.
+
 ### Fixed
+- **A picture built from thousands of `beside`s or `place_image`s no longer
+  ends Python when it is freed**: past about 4,000, freeing one ran out of
+  stack, which Pyodide reports as a fatal error.
+- **`min`, `max` and `order_by` on numbers left as text name two that are
+  out of order**: for "1", "9" and "100" they said `"1" comes before "1"`.
+- **`load_table("../cars.csv")` says the file is not there**, where a
+  `cars.csv` beside the program that was kept back for its size made it
+  say that one was not loaded.
+- **A line of best fit through x values that are all the same is
+  refused**, where rounding could make three 0.1s look different and give
+  a flat line.
 - **A package that failed to download is tried again** by the next run:
-  pytest or pyodide-http failing once, offline, was remembered as loaded,
-  so a file's tests or its URLs failed until the window was reloaded.
+  pytest or a package a program imports failing once, offline, was
+  remembered as loaded, so a file's tests or its imports failed until the
+  window was reloaded.
 - **A package that could not be loaded says so**, in the panel as on the
   command line ("Could not load libraries (...)"), where in the editor it
   went only to the log and the program then failed at its `import`.
 - **A reactor's `tick_rate` of NaN or infinity is refused**, with the
   message any other bad rate gets, where it was accepted.
+- **At `beginner` and `intermediate`, `True` and `False` are not numbers
+  anywhere in a table**: the charts, `linear_regression` and
+  `function_plot` refuse them as `sum` and `mean` already did, where they
+  drew and fitted them as 1 and 0, and `min`, `max` and `order_by` put them
+  after the numbers rather than among them.
 
 ### Changed
+- **Reading a URL needs no download first**: urllib, requests and pandas go
+  through the host's network directly, where PLL first downloaded
+  pyodide-http. In the browser, an address that does not allow other sites
+  to read it is named as the likely cause for urllib and requests too.
+- **Some messages are worded differently**: a colour out of range is shown
+  as written (`is (300, 0, 0), which is not a color`); NaN and infinity get
+  one message; a star whose step is too large says how many points it
+  needs; an image where an alignment belongs is said to be one; `head`,
+  `tail`, `bins`, `bin_width` and `function_plot` word their numbers as
+  the image functions do; a function given to `filter`, `transform_column`
+  or `add_column` with the wrong number of parameters is explained by what
+  calls it; a module Pyodide has that was not loaded before the run is one
+  message, saying both reasons it may not have been, and a module that is
+  not there no longer suggests a file of yours with a name like it; and
+  `load_table` or `load_image` given an address that is not `http://` or
+  `https://`, like `ftp://...`, says there is no file of that name.
 - **A reactor advances only while its card is on screen**: while the panel
   is hidden, or shows another file, it waits where it is, and carries on
   when it is shown again. Its clock is now the card's.
@@ -22,8 +68,10 @@
   a static finding - is now made in Python (`src/python/explain/`), beside
   the exception; the host calls Python through one request, `call`, and
   Python returns its results in the host's own shapes; the panel's header
-  and input row are one state, drawn by a smaller page script. Nothing a
-  student reads changes: the golden corpus is unchanged.
+  and input row are one state, drawn by a smaller page script. The image
+  library has one kind of node for every combinator; every chart is drawn
+  by one set of axes, scales and keys, its quartiles and line of best fit
+  from `statistics`.
 
 ## 0.4.0 (2026-10-09)
 

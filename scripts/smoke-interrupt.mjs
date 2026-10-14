@@ -477,6 +477,50 @@ async function main() {
       expect(failure !== null && /KeyboardInterrupt/.test(failure), `the check ends as a Stop: ${failure}`);
       console.log("    stopped once, and the second implementation never ran its loop");
     }
+
+    console.log("\n[13] a Stop during a URL wait is the Stop, at the program's line");
+    {
+      // The host's own wait ends at the Stop. Taken from the buffer and
+      // acknowledged there, it is delivered by Python at the program's line;
+      // left for Pyodide, it was raised as the host's call returned, never
+      // acknowledged, and the Stop sent again landed in PLL's own code.
+      const { createServer } = await import("node:http");
+      const server = createServer((req, res) => {
+        if (req.url === "/ok") res.end("answered");
+      });
+      await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+      const base = `http://127.0.0.1:${server.address().port}`;
+      try {
+        await session.send({ type: "load", modules: [], network: true });
+        const waiting = session.send({
+          type: "runFile",
+          code: `import urllib.request\nprint("asking")\nurllib.request.urlopen("${base}/hang")\nprint("never")\n`,
+          fileName: "waits.py",
+          sessionKey: "s1",
+          level: "advanced",
+        });
+        await session.waitForOutput("asking");
+        await sleep(300);
+        stop(waiting);
+        const { result } = await withDeadline(waiting, INTERRUPT_DEADLINE_MS, "stopped URL wait");
+        expect(
+          result.error?.finding?.headline === "The program was stopped." && result.error?.finding?.lineNumber === 3,
+          `the Stop, at line 3: ${JSON.stringify(result.error?.finding)}`,
+        );
+        const next = await session.send({
+          type: "runFile",
+          code: `import urllib.request\nprint(urllib.request.urlopen("${base}/ok").read().decode())\n`,
+          fileName: "next.py",
+          sessionKey: "s1",
+          level: "advanced",
+        });
+        expect(next.result.stdout === "answered\n", `and the next request is answered: ${JSON.stringify(next.result)}`);
+      } finally {
+        server.closeAllConnections?.();
+        server.close();
+      }
+      console.log("    stopped at the program's line; the next request answered");
+    }
   } finally {
     await worker.terminate();
   }

@@ -988,17 +988,15 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
   const said = (f) => `${f.headline}\n${f.howToFix.join("\n")}`;
   const why = {
     leftOut: missingModule({ name: "big", kind: "leftOut", why: "it is over 10 MB", close: null, package: null }),
-    notLoaded: missingModule({ name: "micropip", kind: "notLoaded", package: "micropip", close: null, why: null }),
-    notSeen: missingModule({ name: "sympy", kind: "notSeen", package: "sympy", close: null, why: null }),
-    close: missingModule({ name: "helpr", kind: "missing", close: "helper", why: null, package: null }),
-    missing: missingModule({ name: "flask", kind: "missing", close: null, why: null, package: null }),
+    notLoaded: missingModule({ name: "micropip", kind: "notLoaded", package: "micropip", why: null }),
+    missing: missingModule({ name: "flask", kind: "missing", why: null, package: null }),
   };
   expect(why.leftOut.headline === "`big.py` is next to your program, but it was not loaded: it is over 10 MB.", `left out: ${why.leftOut.headline}`);
-  expect(/could not be loaded before your program ran/.test(why.notLoaded.headline) &&
-    why.notLoaded.howToFix.some((l) => /downloads `micropip` the first time/.test(l)), `not loaded: ${said(why.notLoaded)}`);
-  expect(/PLL did not see it imported/.test(why.notSeen.headline) && why.notSeen.howToFix.some((l) => l.includes("`import sympy`")),
-    `not seen: ${said(why.notSeen)}`);
-  expect(why.close.howToFix.join() === "Did you mean `helper`, for `helper.py`?", `a close name: ${said(why.close)}`);
+  // Offline the first time, or imported in a way that could not be read
+  // before the run: both are said, the connection first.
+  expect(why.notLoaded.headline === "`micropip` was not loaded before your program ran." &&
+    /downloads `micropip` the first time/.test(why.notLoaded.howToFix[0]) && why.notLoaded.howToFix[1].includes("add `import micropip`"),
+    `not loaded: ${said(why.notLoaded)}`);
   expect(/Pyodide, which has many packages/.test(said(why.missing)), `missing: ${said(why.missing)}`);
 
   // -- a class passed where one of its instances was wanted --------------

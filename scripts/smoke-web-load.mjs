@@ -11,13 +11,12 @@
  *    (`workspaceFiles.ts`, over `vscode.workspace.fs`), which is a
  *    different code path from the CLI's `cli/files.ts`. Both had to learn
  *    to carry bytes instead of decoding them as text.
- *  - A **URL** is fetched with synchronous `XMLHttpRequest`, and the real
- *    one decodes with `x-user-defined`, remapping every byte above 0x7f to
- *    U+F780-U+F7FF for `_pll_fetch_bytes` to mask back. The desktop
- *    polyfill *ignores* that request and returns one character per byte, so
- *    the mask is a no-op there: every command-line test passed without the
- *    mapping ever running. A PNG's first byte is 0x89, squarely inside the
- *    remapped range.
+ *  - A **URL** is fetched by the web worker's own synchronous
+ *    `XMLHttpRequest` (`webHttp` in `web/pyodideWorker.ts`), which only a
+ *    browser has: the desktop fetches on a helper thread instead. A PNG's
+ *    first byte is 0x89, which any reading of the bytes as text would
+ *    change. A server that does not allow other sites to read it fails
+ *    here, and only here, and the message says that is the likely cause.
  *
  * So the checks here are about bytes surviving, not just about sizes
  * looking plausible.
@@ -113,6 +112,13 @@ writeFileSync(
     `report("png", load_image("http://127.0.0.1:${DATA_PORT}/cat.png"))`,
     `t = load_table("http://127.0.0.1:${DATA_PORT}/w.csv")`,
     'print("csv", t.columns(), t.row(1))',
+    "import urllib.request",
+    `raw = urllib.request.urlopen("http://127.0.0.1:${DATA_PORT}/cat.png").read()`,
+    "print('urllib', len(raw), raw[:8] == b'\\x89PNG\\r\\n\\x1a\\n')",
+    "try:",
+    `    load_table("http://127.0.0.1:${DATA_PORT}/nocors.csv")`,
+    "except OSError as e:",
+    '    print("cors", "may not allow other sites to read it" in str(e))',
     "",
   ].join("\n"),
 );
@@ -129,6 +135,11 @@ const data = createServer((req, res) => {
   if (req.method === "OPTIONS") {
     res.writeHead(204, cors);
     res.end();
+    return;
+  }
+  if (req.url === "/nocors.csv") {
+    res.writeHead(200, { "Content-Type": "text/csv" });
+    res.end(CSV);
     return;
   }
   if (req.url === "/cat.png") {
@@ -224,16 +235,17 @@ try {
     if (passed()) console.log(`    png ${png.byteLength} bytes intact, svg sized, csv as text`);
   }
 
-  console.log("\n[2] the same two over http, where a browser decodes the bytes");
+  console.log("\n[2] the same two over http, where a browser fetches the bytes, and urllib too");
   {
-    const got = await runFile("remote.py", /^csv/);
-    // The assertion this file exists for: a browser hands back
-    // `x-user-defined` text, and 0x89 is in the range that remaps.
+    const got = await runFile("remote.py", /^cors/);
+    // The assertion this file exists for: the bytes as they were sent.
     expect(got.png === `512 512 ${png.byteLength} True`,
-      `a fetched png must survive the browser's decoding. Panel said:\n${got.__all__}`);
+      `a fetched png must arrive as it was sent. Panel said:\n${got.__all__}`);
     expect(got.csv === "['city', 'temp'] {'city': 'Providence, RI', 'temp': '52'}",
       `csv over http: ${got.csv}`);
-    if (passed()) console.log(`    png ${png.byteLength} bytes intact over http, csv parsed`);
+    expect(got.urllib === `${png.byteLength} True`, `urllib reads the same bytes: ${got.urllib}`);
+    expect(got.cors === "True", `a server that does not allow it is named as the likely cause: ${got.cors}`);
+    if (passed()) console.log(`    png ${png.byteLength} bytes intact over http, by load_image and urllib; csv parsed; CORS said`);
   }
 
   console.log("\n[3] os._exit ends the program, and Python carries on");

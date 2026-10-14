@@ -22,9 +22,9 @@ export interface Requests {
   /** `fn(*args)` in Python. `live`: its output streams to the host as it runs. */
   call: { send: { fn: string; args: unknown[]; live: boolean }; reply: unknown };
   /**
-   * Load the packages Pyodide has for these modules; `network` adds
-   * pyodide-http, and routes `urllib` and `requests` through it. Fails if
-   * Pyodide could not load one.
+   * Load the packages Pyodide has for these modules; `network` routes
+   * `urllib` and `requests` through the host's network. Fails if Pyodide
+   * could not load one.
    */
   load: { send: { modules: string[]; network: boolean }; reply: null };
   mount: { send: { files: WorkspaceFile[]; leftOut: LeftOut[] }; reply: null };

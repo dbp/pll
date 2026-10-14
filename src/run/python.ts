@@ -12,7 +12,7 @@ import type {
 } from "./types";
 import { DEFAULT_LEVEL } from "../core/level";
 import type { LeftOut, WorkspaceChanges, WorkspaceFile } from "../core/files";
-import { PANDAS_METHOD_RE, type SiblingSource } from "./packages";
+import type { SiblingSource } from "./packages";
 import type { AnalysisFinding } from "./finding";
 
 /**
@@ -61,18 +61,10 @@ export class Python extends WorkerConnection {
       code,
       JSON.stringify(siblings),
     ]);
-    // `to_pandas` keeps its import inside the method, so it is asked for
-    // by the call.
-    const pandas = [code, ...siblings.map((sibling) => sibling.text)].some((text) => PANDAS_METHOD_RE.test(text));
-    const modules = pandas ? [...found.modules, "pandas"] : found.modules;
-    await this.request("load", { modules, network: found.network || modules.includes("pandas") });
+    await this.request("load", found);
   }
 
-  /**
-   * Load pytest; needs network the first time. Not through
-   * `_pll_package_imports`, whose record of what the program asked for
-   * the explanation of a missing module reads.
-   */
+  /** Load pytest; needs network the first time. */
   async ensurePytest(): Promise<void> {
     await this.request("load", { modules: ["pytest"], network: false });
   }

@@ -314,11 +314,12 @@ def test_dot():
     assert dot(3) == circle(3, "solid", "red")
 ```
 
-Colors can be names (`"red"`), hex (`"#ff0000"`), `"rgb(255, 0, 0)"` or
-`"hsl(0, 100%, 50%)"`, or tuples `(red, green, blue)` with values from 0 to
-255. A fourth number is how solid it is: a whole number from 0 to 255, or a
-fraction from 0.0 to 1.0, so `(255, 0, 0, 128)` and `(255, 0, 0, 0.5)` are
-both half see-through. Names are checked against the CSS colours, which are
+Colors can be names (`"red"`), hex (`"#ff0000"` or `"#f00"`),
+`"rgb(255, 0, 0)"` or `"hsl(0, 100%, 50%)"`, or tuples `(red, green, blue)`
+with values from 0 to 255. A fourth number is how solid it is: in a tuple, a
+whole number from 0 to 255, or a fraction from 0.0 to 1.0, so
+`(255, 0, 0, 128)` and `(255, 0, 0, 0.5)` are both half see-through; in
+`"rgba(255, 0, 0, 0.5)"` and `"hsla(...)"`, a fraction. Names are checked against the CSS colours, which are
 the names a browser understands, so a misspelling is an error that suggests
 what you meant (`"rd"` → "Did you mean `red`?", `"light blue"` → "Did you
 mean `lightblue`?") rather than an invisible shape. `"transparent"` works
@@ -400,7 +401,9 @@ deviation or anything else of that sort, use a column with Python's own
 `statistics` module. A row is a `Row`, which is a `dict`.
 
 `sum` of whole numbers is a whole number. At `beginner` and `intermediate`,
-`True` and `False` are not numbers to `sum` and `mean`. `min`, `max` and
+`True` and `False` are not numbers to a table: `sum`, `mean`, the charts,
+`linear_regression` and `function_plot` refuse them, and `min`, `max` and
+`order_by` put them after the numbers. `min`, `max` and
 `order_by` refuse a column of numbers that is still text when comparing it
 as text would give a different answer (`"9"` comes after `"100"`), and say
 to convert it first.
@@ -426,7 +429,8 @@ which row is the first to differ.
 
 `labeled_scatter_plot`, `labeled_dot_plot` and `labeled_lr_plot` take an
 extra first argument: a column to colour the points by, with a key. Every
-chart takes an optional `title=`. `linear_regression(x, y)` gives you the
+chart takes an optional `title=`, and needs a table with at least one row; a
+histogram has at most 1,000 bars. `linear_regression(x, y)` gives you the
 slope, intercept and r² as numbers instead of a picture.
 
 To draw a function rather than a table, `function_plot` takes the function

@@ -26,7 +26,6 @@ def _pll_on_sigint(signum, frame):
     A new press clears byte 1 first, so a program that caught the first
     `KeyboardInterrupt` and carried on can still be stopped.
     """
-    global _pll_stops_delivered
     view = _pll_interrupt_view
     if view is not None:
         try:
@@ -37,6 +36,12 @@ def _pll_on_sigint(signum, frame):
             # A buffer without the second byte: an older host. Behave as
             # Python always has.
             pass
+    _pll_deliver_stop()
+
+
+def _pll_deliver_stop():
+    """Raise a Stop the host has taken and acknowledged, as `KeyboardInterrupt`."""
+    global _pll_stops_delivered
     _pll_stops_delivered += 1
     stop = KeyboardInterrupt()
     _pll_add_facts(stop, stop=True)

@@ -8,7 +8,7 @@
 # it goes wrong.
 
 import numbers as _pll_src_numbers
-import re as _pll_src_re
+import os as _pll_src_os
 
 _PLL_ORDINALS = ("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th")
 
@@ -137,64 +137,70 @@ def _pll_closest_name(name, candidates):
     return best if best_distance <= max(1, len(best) // 3) else None
 
 
-_PLL_SCHEME_RE = _pll_src_re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*)://")
-
-
 def _pll_source_is_url(source):
     """True when `source` names an address rather than a file."""
-    match = _PLL_SCHEME_RE.match(source)
-    return match is not None and match.group(1).lower() in ("http", "https")
+    return source.lower().startswith(("http://", "https://"))
+
+
+#: Headers a request does not pass on, or an answer does not keep: the
+#: connection's own, which the host's network deals with itself, and
+#: `user-agent`, which a browser refuses to send on a page's behalf.
+_PLL_HTTP_HOP_HEADERS = frozenset(
+    ("connection", "keep-alive", "transfer-encoding", "content-encoding", "content-length", "host", "user-agent")
+)
+
+
+def _pll_http_request(method, url, headers=None, body=None, timeout=None):
+    """One request through the host's network: `(status, headers, body)`.
+
+    `_pll_host_http`, which the host sets (`installPll`), makes it: on the
+    desktop on a helper thread, in a browser with a synchronous XHR, the
+    bytes as they were sent, and a Stop ends the wait on the desktop. A
+    request that gets no answer raises `TimeoutError` or `ConnectionError`,
+    with what went wrong in a sentence.
+    """
+    host = globals().get("_pll_host_http")
+    if host is None:
+        raise ConnectionError("this Python has no network")
+    from js import Object
+    from pyodide.ffi import JsException, to_js
+
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    elif body is not None and not isinstance(body, (bytes, bytearray)):
+        body = body.read() if hasattr(body, "read") else b"".join(body)
+    sent = {k: str(v) for k, v in (headers or {}).items() if k.lower() not in _PLL_HTTP_HOP_HEADERS}
+    failure = None
+    try:
+        answer = host(
+            method, url, to_js(sent, dict_converter=Object.fromEntries), to_js(body) if body else None,
+            int(timeout * 1000) if timeout else 0,
+        )
+    except JsException as e:
+        failure = (getattr(e, "name", ""), str(getattr(e, "message", "") or e))
+    if failure is not None:
+        kind, message = failure
+        raise (TimeoutError if kind == "TimeoutError" else ConnectionError)(message)
+    if answer is None:
+        # A Stop, which the host took and acknowledged: delivered here, at
+        # the program's line.
+        _pll_deliver_stop()
+    data = bytes(answer.body.to_bytes())
+    kept = {k: v for k, v in answer.headers.to_py().items() if k.lower() not in _PLL_HTTP_HOP_HEADERS}
+    # Of the body as it arrived: the host has already undone any compression.
+    kept["content-length"] = str(len(data))
+    return answer.status, kept, data
 
 
 def _pll_fetch_bytes(url, what):
-    """GET `url` synchronously and return the body as bytes.
-
-    `XMLHttpRequest` with an `arraybuffer` response, so the bytes arrive as
-    they were sent, picture or text, in a browser's worker and in the
-    desktop's polyfill alike. Synchronous XHR is fine here: Pyodide runs in
-    a worker, never on a page's main thread.
-    """
+    """GET `url` and return the body as bytes."""
     try:
-        from js import XMLHttpRequest as _Xhr
-    except ImportError:
-        raise OSError(
-            "%s cannot reach the network, so it cannot read %s." % (what, url)
-        ) from None
-    desktop = getattr(_Xhr, "pllNode", False)
-    view = globals().get("_pll_interrupt_view")
-    xhr = _Xhr.new()
-    failure = None
-    try:
-        xhr.open("GET", url, False)
-        xhr.responseType = "arraybuffer"
-        if desktop and view is not None:
-            # So a Stop ends the wait for the answer.
-            xhr.pllInterrupt = view
-        xhr.send(None)
-    except Exception as e:
-        failure = (getattr(e, "name", ""), str(getattr(e, "message", "") or e).split("\n")[0])
-    if failure is not None:
-        kind, reason = failure
-        if kind == "AbortError":
-            # Outside the `except`: raised from the JavaScript error, the
-            # Stop would be placed in PLL's worker.
-            view[0] = 0
-            _pll_on_sigint(2, None)
-        if desktop:
-            # The desktop's XHR says what went wrong, in a sentence.
-            raise OSError("%s could not read %s: %s." % (what, url, reason))
-        # In a browser a failed cross-origin request looks like this, and it
-        # is the likeliest cause by far.
-        raise OSError(
-            "%s could not reach %s (%s). If that address is not your own, it "
-            "may not allow other sites to read it." % (what, url, reason)
-        )
-    if xhr.status != 200:
-        raise OSError(
-            "%s could not read %s: the server answered %d."
-            % (what, url, xhr.status)
-        )
-    return bytes(xhr.response.to_bytes())
+        status, _, data = _pll_http_request("GET", url)
+    except OSError as e:
+        raise OSError("%s could not read %s: %s." % (what, url, e)) from None
+    if status != 200:
+        raise OSError("%s could not read %s: the server answered %d." % (what, url, status))
+    return data
 
 
 #: Files beside the program that were kept back when it was given its
@@ -256,14 +262,12 @@ def _pll_nearby_files(wanted):
     Only files with the same extension are listed, so asking for a CSV
     does not produce a directory listing of the whole project.
     """
-    import os as _pll_os
-
-    folder = _pll_os.path.dirname(wanted) or "."
-    _, extension = _pll_os.path.splitext(wanted)
+    folder = _pll_src_os.path.dirname(wanted) or "."
+    _, extension = _pll_src_os.path.splitext(wanted)
     try:
         names = sorted(
             name
-            for name in _pll_os.listdir(folder)
+            for name in _pll_src_os.listdir(folder)
             if not extension or name.lower().endswith(extension.lower())
         )
     except OSError:
@@ -271,7 +275,7 @@ def _pll_nearby_files(wanted):
     if not names:
         return ""
     # A misspelling is the usual reason, and then one name is the answer.
-    close = _pll_closest_name(_pll_os.path.basename(wanted), names)
+    close = _pll_closest_name(_pll_src_os.path.basename(wanted), names)
     if close is not None:
         return ' Did you mean "%s"?' % close
     shown = names[:8]
@@ -301,17 +305,11 @@ def _pll_read_source(source, what, binary=False, limit=None):
     if _pll_source_is_url(stripped):
         data = _pll_fetch_bytes(stripped, what)
     else:
-        scheme = _PLL_SCHEME_RE.match(stripped)
-        if scheme is not None:
-            raise ValueError(
-                "%s can read an https:// address or a file next to your "
-                "program, but not a %s:// one." % (what, scheme.group(1))
-            )
         try:
             with open(stripped, "rb") as handle:
                 data = handle.read()
         except FileNotFoundError:
-            why = _pll_left_out.get(stripped.lstrip("./"))
+            why = _pll_left_out.get(_pll_src_os.path.normpath(stripped))
             if why is not None:
                 raise FileNotFoundError(
                     '"%s" is next to your program, but it was not loaded: %s.'

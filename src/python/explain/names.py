@@ -157,7 +157,7 @@ def _pll_name_wording(e):
                     hyphen, "` minus `".join(hyphen.split("-"))
                 ), ["Write `%s`, with an underscore." % hyphen.replace("-", "_")]
         # A table's method, called as if it were a function of its own.
-        if name in _PLL_TABLE_METHODS:
+        if _pll_table_method(name):
             method = _pll_src_re.search(r"\b%s\s*\(\s*([A-Za-z_][\w.]*)\s*(?:,\s*([^)]*))?\)" % name, line)
             if method:
                 return "`%s` is a method of a table, so it is called on one." % name, [

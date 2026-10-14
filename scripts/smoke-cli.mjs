@@ -979,7 +979,7 @@ async function main() {
       const started = Date.now();
       const r = await run([file], { signalAfter: "asking", signalDelay: 500 });
       expect(Date.now() - started < 30_000, `ended by the Stop, not the time limit: ${Date.now() - started} ms`);
-      expect(!/never/.test(r.stdout) && /stopped/i.test(r.stderr) && /waits32\.py:4/.test(r.stderr) && !/\.cjs/.test(r.stderr),
+      expect(!/never/.test(r.stdout) && /KeyboardInterrupt: The program was stopped\.\n\s+at .*waits32\.py:4/.test(r.stderr) && !/\.cjs/.test(r.stderr),
         `stopped at the student's line: ${r.code} ${r.stderr}`);
     } finally {
       server.closeAllConnections?.();

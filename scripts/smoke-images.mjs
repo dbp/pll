@@ -264,6 +264,28 @@ async function main() {
     );
   }
 
+  console.log("\n[11b] the aligned combinators line up by the edge they are given");
+  {
+    const RED_TALL = 'rectangle(20, 60, "solid", "red")';
+    const RED_WIDE = 'rectangle(60, 20, "solid", "red")';
+    const BLUE = 'square(20, "solid", "blue")';
+    for (const [code, blue] of [
+      [`beside_align("top", ${RED_TALL}, ${BLUE})`, 'x="20" y="0"'],
+      [`beside_align("bottom", ${RED_TALL}, ${BLUE})`, 'x="20" y="40"'],
+      [`beside(${RED_TALL}, ${BLUE})`, 'x="20" y="20"'],
+      [`above_align("right", ${RED_WIDE}, ${BLUE})`, 'x="40" y="20"'],
+      [`above_align("left", ${RED_WIDE}, ${BLUE})`, 'x="0" y="20"'],
+      [`overlay_align("right", "bottom", ${RED_WIDE}, ${BLUE})`, 'x="40" y="0"'],
+    ]) {
+      const svg = imagesOf(py(callReplEval, [code, SK]))[0]?.svg ?? "";
+      expect(svg.includes(`<rect ${blue} width="20" height="20" fill="blue"/>`), `${code}: the square at ${blue}: ${svg}`);
+    }
+    // An outline of a polygon is its pen just inside it: the corners moved in.
+    const outline = imagesOf(py(callReplEval, ['triangle(40, "outline", "red")', SK]))[0]?.svg ?? "";
+    expect(/<polygon points="20,1 39\.13,34\.14 0\.87,34\.14" fill="none" stroke="red"/.test(outline), `the pen inside the triangle: ${outline}`);
+    console.log("    top, bottom, centre, left and right, and an outline inside its polygon");
+  }
+
   console.log("\n[12] place_image and crop clip with distinct ids");
   {
     const code = `beside(crop(0, 0, 10, 10, square(50, "solid", "red")), place_image(square(30, "solid", "blue"), 5, 5, empty_scene(40, 40)))`;
@@ -271,6 +293,9 @@ async function main() {
     const ids = [...new Set((img.svg.match(/id="pll[0-9a-f]+c\d+"/g) || []))];
     expect(ids.length === 2, `two clip regions should get distinct ids, got ${ids.length}`);
     expect(img.svg.includes("clip-path"), "clipping should be applied");
+    // A crop of a crop is clipped to where the two overlap, and only there.
+    const nested = imagesOf(py(callReplEval, ['crop(10, 10, 20, 20, crop(0, 0, 25, 25, circle(20, "solid", "red")))', SK]))[0];
+    expect(/<clipPath id="[^"]+"><polygon points="0,15 0,0 15,0 15,15"\/><\/clipPath>/.test(nested?.svg ?? ""), `the overlap of two crops: ${nested?.svg}`);
   }
 
   console.log("\n[13] a bad alignment name is a friendly ValueError");
@@ -331,7 +356,7 @@ async function main() {
   {
     for (const [code, kind, needle] of [
       ['load_image("nope.png")', "FileNotFoundError", "no file called"],
-      ['load_image("gopher://h/a.png")', "ValueError", "not a gopher:// one"],
+      ['load_image("gopher://h/a.png")', "FileNotFoundError", 'no file called "gopher://h/a.png"'],
       ["load_image(7)", "TypeError", "as a string"],
       [
         ['with open("t.txt", "w") as f:', '    f.write("not a picture")', 'load_image("t.txt")'].join("\n"),
@@ -364,8 +389,10 @@ async function main() {
       ['circle(10, "solid", None)', "`color` (the 3rd argument) is None, which is not a color"],
       ['text("hi", 12, 7)', "`color` (the 3rd argument) is the number 7, which is not a color"],
       ["line(5, 5, {})", "is a dictionary, which is not a color"],
-      ['circle(10, "solid", ("r", 0, 0))', 'has a part that is not a number: the string "r"'],
-      ['circle(10, "solid", (300, 0, 0))', "the red part runs from 0 to 255, but it is 300"],
+      ['circle(10, "solid", ("r", 0, 0))', "is ('r', 0, 0), which is not a color. Use a name"],
+      ['circle(10, "solid", (300, 0, 0))', "is (300, 0, 0), which is not a color. Use a name"],
+      ['circle(10, "solid", "rgb(300, 0, 0)")', 'is the string "rgb(300, 0, 0)", which is not a color'],
+      ['circle(10, "solid", "hsl(0, 100, 50)")', 'is the string "hsl(0, 100, 50)", which is not a color'],
       ['circle(10, "sloid", "red")', '`mode` (the 2nd argument) should be "solid" or "outline"'],
       [
         'regular_polygon(10, 5, "filled", "red")',
@@ -385,7 +412,7 @@ async function main() {
         `${code} should be blamed on its own call: ${result.error?.message}`,
       );
     }
-    console.log("    nine bad colours and modes, each named by argument and position");
+    console.log("    eleven bad colours and modes, each named by argument and position");
 
     // And every documented form still works.
     const good = [
@@ -648,12 +675,12 @@ async function main() {
       .runPython(
         [
           "bad = []",
-          "for name in sorted(_PLL_CSS_COLOR_NAMES):",
+          "for name in sorted(_PLL_CSS_COLORS):",
           "    try:",
           '        circle(1, "solid", name)',
           "    except Exception:",
           "        bad.append(name)",
-          "[len(_PLL_CSS_COLOR_NAMES), bad]",
+          "[len(_PLL_CSS_COLORS), bad]",
         ].join("\n"),
       )
       .toJs();
@@ -762,7 +789,24 @@ async function main() {
     expect(out[2] === "True True", `compared and in time: ${out[2]}`);
     expect(out[3] === "True", `copied as itself: ${out[3]}`);
     expect(imagesOf(result).length === 1, "and shown");
-    console.log("    3000 besides, 2000 place_images and 36 nested rotations");
+
+    // Freed a level at a time: freed the usual way, a picture this deep
+    // ran out of stack, which ended Python itself.
+    const freed = py(callRunFile, [
+      [
+        "row = empty_image",
+        "for i in range(30000):",
+        '    row = beside(row, circle(1, "solid", "blue"))',
+        "scene = empty_scene(40, 40)",
+        "for i in range(30000):",
+        '    scene = place_image(circle(1, "solid", "red"), i % 40, i % 30, scene)',
+        "del row, scene",
+        'print("freed")',
+      ].join("\n"),
+      "freed.py", SK,
+    ]);
+    expect(freed.ok === true && freed.stdout === "freed\n", `a deep picture is freed: ${freed.error?.message ?? freed.stdout}`);
+    console.log("    3000 besides, 2000 place_images and 36 nested rotations; 30000 freed");
   }
 
   console.log("\n[24] the geometry is 2htdp's");
@@ -835,7 +879,7 @@ async function main() {
       "    except ValueError as e:",
       '        print("refused")',
       "import re",
-      'svg = beside(circle(5, "solid", "rgb(10 20 30 / 50%)"), circle(5, "solid", "hsl(120, 100%, 25%)"), circle(5, "solid", (1, 2, 3, 0.25)), circle(5, "outline", "#ABC"), text("x", 9, "Navy")).to_svg()',
+      'svg = beside(circle(5, "solid", "rgba(10, 20, 30, 0.5)"), circle(5, "solid", "hsl(120, 100%, 25%)"), circle(5, "solid", (1, 2, 3, 0.25)), circle(5, "outline", "#ABC"), text("x", 9, "Navy")).to_svg()',
       'print(sorted(set(re.findall(r\'(?:fill|stroke)="([^"]*)"\', svg))))',
       "col = [255, 0, 0]",
       'pic = circle(5, "solid", col)',
@@ -843,6 +887,8 @@ async function main() {
       'print(pic == circle(5, "solid", "red"))',
       // The fourth number: a whole number from 0 to 255, or a fraction.
       'print(circle(5, "solid", (255, 0, 0, 128)) == circle(5, "solid", (255, 0, 0, 128 / 255)), circle(5, "solid", (255, 0, 0, 1)) == circle(5, "solid", (255, 0, 0, 1.0)))',
+      // In text, as in CSS, every opacity is a fraction.
+      'print(circle(5, "solid", "rgba(255, 0, 0, 1)") == circle(5, "solid", "red"), circle(5, "solid", "hsla(0, 100%, 50%, 0.5)") == circle(5, "solid", (255, 0, 0, 0.5)))',
     ].join("\n");
     const result = py(callRunFile, [code, "paint.py", SK]);
     expect(result.ok === true, `ran: ${result.error?.message ?? ""}`);
@@ -854,6 +900,7 @@ async function main() {
     );
     expect(out[5] === "True", `a list changed later changes nothing drawn: ${out[5]}`);
     expect(out[6] === "True False", `1 is out of 255, 1.0 is solid: ${out[6]}`);
+    expect(out[7] === "True True", `rgba() and hsla() take a fraction: ${out[7]}`);
     console.log("    markup refused, colours rewritten, lists copied, opacity by type");
   }
 
@@ -861,14 +908,16 @@ async function main() {
   {
     await pyodide.loadPackage("numpy");
     for (const [code, kind, needle] of [
-      ['circle(float("nan"), "solid", "red")', "ValueError", 'circle\'s `radius` (the 1st argument) is NaN ("not a number")'],
-      ['rectangle(-float("inf"), 3, "solid", "red")', "ValueError", "rectangle's `width` (the 1st argument) cannot be infinite, but it is -inf"],
-      ['circle(10**400, "solid", "red")', "ValueError", "is a number too big to draw with"],
+      ['circle(float("nan"), "solid", "red")', "ValueError", "circle's `radius` (the 1st argument) has to be a finite number, but it is nan"],
+      ['rectangle(-float("inf"), 3, "solid", "red")', "ValueError", "rectangle's `width` (the 1st argument) has to be a finite number, but it is -inf"],
+      ['circle(10**400, "solid", "red")', "ValueError", "`radius` (the 1st argument) has to be a finite number, but it is inf"],
       ['regular_polygon(20, 4.0, "solid", "red")', "TypeError", "`sides` (the 2nd argument) has to be a whole number, but it is 4.0: write 4"],
       ['star_polygon(20, 2, 1, "solid", "red")', "ValueError", "`points_count` (the 2nd argument) cannot be less than 3, but it is 2"],
-      ['star_polygon(20, 5, 3, "solid", "red")', "ValueError", "`step` (the 3rd argument) has to be less than half of `points_count`"],
+      // Every 3rd corner makes a star only with 7 or more.
+      ['star_polygon(20, 5, 3, "solid", "red")', "ValueError", "`points_count` (the 2nd argument) cannot be less than 7, but it is 5"],
+      ['star_polygon(20, 7, 0, "solid", "red")', "ValueError", "`step` (the 3rd argument) cannot be less than 1, but it is 0"],
       ['star(20, "solidd", "red")', "ValueError", "star's `mode` (the 2nd argument)"],
-      ['beside_align(circle(5, "solid", "red"), circle(5, "solid", "red"))', "TypeError", 'beside_align takes the alignment first, then the images: write beside_align("top", image1, image2)'],
+      ['beside_align(circle(5, "solid", "red"), circle(5, "solid", "red"))', "ValueError", 'beside_align\'s `y_place` (the 1st argument) should be "top", "center" or "bottom", but it is an image'],
       ['beside_align("cener", circle(5, "solid", "red"))', "ValueError", "`y_place` (the 1st argument) should be \"top\", \"center\" or \"bottom\", but it is the string \"cener\". Did you mean \"center\"?"],
       ["underlay()", "TypeError", "underlay needs at least one image"],
       ['circle(5, "solid", "light blue")', "ValueError", 'Did you mean "lightblue"?'],
@@ -948,6 +997,33 @@ async function main() {
     const raw = py(callRunFile, ["import matplotlib.pyplot as plt\nfig = plt.figure()\nfig\nplt.plot([1], [1])\nplt.show()\n", "raw.py", SK, "raw"]);
     expect(raw.ok === true && imagesOf(raw).length === 1, `raw: show() only: ${imagesOf(raw).length} ${raw.error?.message ?? ""}`);
     console.log("    show() and a top-level figure, each once, as a PNG");
+  }
+
+  console.log("\n[30] load_image reads JPEG, GIF and WebP, sized from their headers");
+  {
+    await pyodide.loadPackage("pillow");
+    const code = [
+      "from PIL import Image as Pil",
+      // A see-through lossy WebP is the extended kind, VP8X.
+      "kinds = [('jpeg', 'RGB', {}), ('jpeg', 'RGB', {'progressive': True}), ('gif', 'RGB', {}), ('webp', 'RGB', {}), ('webp', 'RGB', {'lossless': True}), ('webp', 'RGBA', {})]",
+      "for kind, mode, how in kinds:",
+      "    Pil.new(mode, (123, 45), (200, 10, 10, 128)[:len(mode)]).save('pic.' + kind, kind, **how)",
+      "    with open('pic.' + kind, 'rb') as f:",
+      "        head = f.read(16)",
+      "    pic = load_image('pic.' + kind)",
+      "    print(kind, head[12:16] if kind == 'webp' else '', image_width(pic), image_height(pic), ('data:image/%s;base64,' % kind) in pic.to_svg())",
+    ].join("\n");
+    const result = py(callRunFile, [code, "formats.py", SK]);
+    expect(result.ok === true, `ran: ${result.error?.errorType}: ${result.error?.message ?? ""}`);
+    expect(
+      result.stdout ===
+        [
+          "jpeg  123 45 True", "jpeg  123 45 True", "gif  123 45 True",
+          "webp b'VP8 ' 123 45 True", "webp b'VP8L' 123 45 True", "webp b'VP8X' 123 45 True", "",
+        ].join("\n"),
+      `each kind measured and embedded as itself: ${JSON.stringify(result.stdout)}`,
+    );
+    console.log("    baseline and progressive JPEG, GIF, and WebP in all three of its forms");
   }
 
   console.log("\n[21] the prompt says a compile warning once too");

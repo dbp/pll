@@ -427,22 +427,13 @@ def _pll_missing_module(m, e):
             "A file that was not loaded cannot be imported."
         ]
     if kind == "notLoaded":
-        return "`%s` could not be loaded before your program ran." % name, [
+        return "`%s` was not loaded before your program ran." % name, [
             "PLL downloads `%s` the first time a program imports it, so this needs the internet once; after that it"
-            " is kept." % module.get("package"),
-            "Check the connection, and run the program again.",
-        ]
-    if kind == "notSeen":
-        return "`%s` was not loaded, because PLL did not see it imported." % name, [
-            "PLL loads a package before the program runs, from its `import` lines - and this import is made another"
-            " way, with a name worked out as it runs.",
-            "Add `import %s` near the top of the file." % name,
+            " is kept. Check the connection, and run the program again." % module.get("package"),
+            "PLL loads a package from the `import` lines it reads before the program runs: if this import is made"
+            " another way, with a name worked out as it runs, add `import %s` near the top of the file." % name,
         ]
     if kind == "missing":
-        if module.get("close") is not None:
-            return "There is no module called `%s` - and no file `%s.py` next to your program." % (name, name), [
-                "Did you mean `%s`, for `%s.py`?" % (module["close"], module["close"])
-            ]
         return "There is no module called `%s` here." % name, [
             "PLL runs Python with Pyodide, which has many packages - numpy, pandas, matplotlib, requests and more -"
             " but not `%s`." % name,
@@ -639,7 +630,7 @@ def _pll_too_few_arguments(m, e):
         return "`%s` is a test, so it cannot take any parameters." % name, [
             "Write `def %s():` with nothing in the brackets, and make the values it needs inside it." % name
         ]
-    check = "Check the call on this line - one value is needed for each parameter."
+    check = _pll_arity_check(e, name, "Check the call on this line - one value is needed for each parameter.")
     # Wherever it was defined: the student's file, another of theirs, or
     # PLL's own library.
     names = _pll_parameters_of(e, name, "required")
@@ -652,6 +643,15 @@ def _pll_too_few_arguments(m, e):
     ] + _pll_library_hint(name)
 
 
+def _pll_arity_check(e, name, otherwise):
+    """What to look at for a wrong number of values: the call on this line,
+    or - when a table method made the call - the function's parameters."""
+    taker = _PLL_FUNCTION_TAKERS.get(_pll_library_caller(e.frames))
+    if taker is None or "param" not in taker:
+        return otherwise
+    return "%s, so give it one parameter: `def %s(%s):`." % (taker["calls"], name, taker["param"])
+
+
 @_pll_stock("TypeError", r"^(\w+)\(\) takes (\d+) positional arguments? but (\d+) (?:was|were) given")
 def _pll_too_many_arguments(m, e):
     """`f() takes 1 positional argument but 2 were given`"""
@@ -660,9 +660,13 @@ def _pll_too_many_arguments(m, e):
     names = _pll_parameters_of(e, name, "parameters")
     extra = given - (len(names) if names is not None else takes)
     return "`%s` %s, but got %d." % (name, _pll_takes_clause(names, takes), given), [
-        "Check the call on this line - there are %d values too many." % extra
-        if extra > 1
-        else "Check the call on this line - there is one value too many."
+        _pll_arity_check(
+            e,
+            name,
+            "Check the call on this line - there are %d values too many." % extra
+            if extra > 1
+            else "Check the call on this line - there is one value too many.",
+        )
     ] + _pll_library_hint(name)
 
 

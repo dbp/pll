@@ -1,6 +1,6 @@
 import { collectChangedWorkspaceFiles, mountWorkspaceFiles } from "./workspace";
 import { whyNotLoaded, type WorkspaceFile } from "../core/files";
-import { installPll, PYODIDE_HTTP_PATCH_PY, type PyCallable, type PyodideCore } from "./install";
+import { installPll, PLL_HTTP_PY, type HostHttp, type PyCallable, type PyodideCore } from "./install";
 import type { DisplayData } from "../run/types";
 import { clearInterrupt, waitForStdin } from "./sharedMemory";
 import type { Requests, RequestType, WorkerErrorKind, WorkerInbound, WorkerOutbound } from "./protocol";
@@ -28,6 +28,8 @@ export interface WorkerHostAdapter {
   loadPyodide(indexUrl: string, packageCacheDir?: string): Promise<PyodideInstance>;
   /** Raised by `input()` when the host could not provide a SharedArrayBuffer. */
   stdinUnavailableMessage: string;
+  /** Python's network: requests made and waited for, a Stop in `interrupt` ending the wait where it can. */
+  http(interrupt: Uint8Array | null): HostHttp;
 }
 
 /** Why a request failed, for the runtime to act on rather than read. */
@@ -296,7 +298,10 @@ export function createWorkerHost(
       if (interruptBuffer) {
         instance.setInterruptBuffer(new Uint8Array(interruptBuffer));
       }
-      installPll(instance, { interruptBuffer });
+      installPll(instance, {
+        interruptBuffer,
+        http: adapter.http(interruptBuffer ? new Uint8Array(interruptBuffer) : null),
+      });
       pythonCall = instance.globals.get("_pll_call");
       pyodide = instance;
       return null;
@@ -306,13 +311,12 @@ export function createWorkerHost(
       return data.live ? withLiveEmit(data.id, run) : run();
     },
     async load(data) {
-      const modules = data.network ? [...data.modules, "pyodide_http"] : data.modules;
-      if (modules.length > 0) {
-        await loadModules(modules);
+      if (data.modules.length > 0) {
+        await loadModules(data.modules);
       }
       if (data.network) {
-        // Every time, so a `requests` loaded since the last is patched too.
-        ready().runPython(PYODIDE_HTTP_PATCH_PY.source, { filename: PYODIDE_HTTP_PATCH_PY.file });
+        // Every time, so a `requests` loaded since the last is set up too.
+        ready().runPython(PLL_HTTP_PY.source, { filename: PLL_HTTP_PY.file });
       }
       return null;
     },

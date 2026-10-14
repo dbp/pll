@@ -1482,7 +1482,7 @@ stderr:
 === img-colour-range (exit 1)
 stderr:
   student.py [raw]
-  ValueError: circle's `color` (the 3rd argument): the red part runs from 0 to 255, but it is 300.
+  ValueError: circle's `color` (the 3rd argument) is (300, 0, 0), which is not a color. Use a name like "red", a hex code like "#ff0000", or (red, green, blue) numbers from 0 to 255.
     at student.py:1
 
 === img-mode (exit 1)
@@ -1620,8 +1620,11 @@ stderr:
 === tbl-filter-arity (exit 1)
 stderr:
   student.py [raw]
-  TypeError: filter calls `keep` with one row, but `keep` takes 2 parameters.
+  TypeError: `keep` takes 2 arguments (`r` and `x`), but got 1.
     at student.py:4
+  
+  How to fix:
+    - `filter` calls your function with one row at a time, so give it one parameter: `def keep(r: dict):`.
 
 === tbl-filter-not-function (exit 1)
 stderr:

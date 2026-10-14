@@ -164,7 +164,7 @@ export const CASES = [
   { name: "st-unused-value", code: [B, "def order(order_amt: float) -> float:", "    order_amt + 8", "    return order_amt"] },
   { name: "st-unused-value-field", code: [B, ...dataclass("@dataclass", "class Account:", "    balance: float", "", "def deposit(ac: Account, amt: float) -> Account:", "    ac.balance + amt", "    return ac")] },
   { name: "st-assert-tuple", code: [B, "def test_total():", "    assert(1, 2)"] },
-  { name: "st-method-not-called", code: [B, 'movies = table(["rating"], [[1], [2]])', "def avg() -> int:", "    return movies.count", "print(avg())"] },
+  { name: "st-method-not-called", code: [B, 'movies = table(["rating"], [[1], [2]])', "def avg() -> int:", "    return movies.length", "print(avg())"] },
   { name: "st-annotation-not-a-type", code: [B, "def f(t: table) -> int:", "    return 1"] },
   { name: "st-annotation-row", code: [B, "def f(r: row) -> int:", "    return 1"] },
   { name: "st-test-not-named", code: [B, "def double(n: int) -> int:", "    return n * 2", "", "def check_double():", "    assert double(2) == 4", "", 'print("ran")'] },
@@ -175,7 +175,7 @@ export const CASES = [
   { name: "st-duplicate-function", code: [B, "def f():", "    return 1", "", "def f():", "    return 2"] },
   { name: "st-duplicate-class", code: [B, ...dataclass("@dataclass", "class A:", "    x: int", "@dataclass", "class A:", "    y: int")] },
   { name: "st-several", code: [B, "total = 1", "total = 2", "list = 3", "def test_x():", "    assert(1, 2)"] },
-  { name: "st-warning-and-error", code: [B, 'm = table(["r"], [[1]])', "def avg():", "    return m.count", "total = 1", "total = 2"] },
+  { name: "st-warning-and-error", code: [B, 'm = table(["r"], [[1]])', "def avg():", "    return m.length", "total = 1", "total = 2"] },
 
   // ---- images ---------------------------------------------------------------
   { name: "img-colour-typo", code: ['rectangle(30, 40, "solid", "bleu")'] },

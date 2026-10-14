@@ -345,14 +345,12 @@ _PLL_LIBRARY_HINTS = {
     ],
 }
 
-#: The methods of a table, which are called on one: `people.order_by(...)`.
-_PLL_TABLE_METHODS = (
-    "columns", "length", "column", "row", "rows", "filter", "transform_column", "add_column", "add_row",
-    "select_columns", "order_by", "head", "tail", "sum", "mean", "min", "max", "count", "bar_chart",
-    "scatter_chart", "scatter_plot", "line_chart", "histogram", "labeled_scatter_plot", "pie_chart", "dot_plot",
-    "labeled_dot_plot", "freq_bar_chart", "box_plot", "lr_plot", "labeled_lr_plot", "linear_regression",
-    "to_pandas",
-)
+def _pll_table_method(name):
+    """Whether `name` is a method of a table, which is called on one:
+    `people.order_by(...)`. Read off `Table` when asked: the table library
+    loads after this file."""
+    table = globals().get("Table")
+    return isinstance(table, type) and not name.startswith("_") and callable(vars(table).get(name))
 
 
 def _pll_library_caller(frames):

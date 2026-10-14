@@ -44,7 +44,8 @@ src/
 │   │   ├── stock.py               Python's own messages, reworded for a beginner
 │   │   └── static.py              each static finding's wording
 │   ├── libraries/                 image, table (and charts), reactor, examplar,
-│   │                              http (pyodide-http's transport), matplotlibBackend
+│   │                              http (urllib and requests on the host's network),
+│   │                              matplotlibBackend
 │   └── install.py                 registers `pll.image` / `pll.table` / `pll.reactor`
 ├── pyodide/                       the worker and the one contract with it
 │   ├── protocol.ts                five requests (init, call, load, mount, collect)
@@ -86,8 +87,7 @@ src/
 │   └── setup/                     newFileLevel.ts, extensionGuard.ts, clipboard.ts
 ├── cli/                           the `pll-python` command line
 ├── desktop/                       extension.ts, pyodideWorker.ts, pyodideRuntime.ts
-│                                  (`desktopPython`, shared with the CLI), xhrPolyfill.ts,
-│                                  syncHttp.ts
+│                                  (`desktopPython`, shared with the CLI), syncHttp.ts
 └── web/                           extension.ts, pyodideWorker.ts, pyodideRuntime.ts
 
 vendor/python/                     typeguard and typing_extensions wheels, inlined by esbuild
@@ -133,8 +133,8 @@ calls into Python made over it.
 
 - **Five requests.** `init` starts Pyodide; `call` calls a Python function
   by name, `fn(*args)`; `load` loads the packages Pyodide has for some
-  modules (and, for the network, pyodide-http and PLL's transport over
-  it); `mount` and `collect` move the files beside a program in and out of
+  modules (and, for the network, routes urllib and requests through the
+  host's); `mount` and `collect` move the files beside a program in and out of
   MEMFS, which their bytes do not cross as JSON. Everything else is a
   `call`: `run/python.ts` has one method per Python entry point, saying
   what it takes and what it returns, and a new one is written in two
@@ -258,11 +258,16 @@ edit nobody asked for.
 ## Images
 
 `libraries/image.py` follows HtDP's `2htdp/image`, geometry included. An `Image`
-is a tree: shapes at the leaves, combinators above them. Each node works out
-its size when it is made (`_w`, `_h`, from its children's, in constant
-time), and says where its children sit inside it - `_parts()`, each child
+is a tree: shapes at the leaves (`_Polygon` - a rectangle is one - `_Ellipse`,
+`_Line`, `_Text`, and `_Picture` for a loaded picture, a chart or a figure),
+and `_Group`s above them. Each node works out its size when it is made (`_w`,
+`_h`, from its children's, in constant time), and every combinator makes a
+group, which says where its children sit inside it - `_children`, each child
 with a transform (SVG's `matrix(a b c d e f)`) and, for `crop` and
-`place_image`, a rectangle to clip it to.
+`place_image`, a rectangle to clip it to. A group frees the groups inside
+it a level at a time (`_Group.__del__`): freed the usual way, by C
+recursion, a picture a few thousand groups deep runs out of the browser's
+stack, which ends Python.
 
 `_pll_flatten` walks the tree once, with a stack rather than recursion, into
 a flat list of *items* - each shape with its own geometry in the picture's
@@ -280,14 +285,17 @@ The flat list is what three things use:
   coordinates. An outline is a 1-pixel pen just inside the shape, at any
   scale (the polygon moved in by half a pixel, `_pll_inset`); text is set in
   a monospace font held to its width with `textLength`, spaces kept, so its
-  size is known rather than guessed. Clip paths and a picture used more than
-  once go in `<defs>`, with ids from a per-interpreter prefix, so two
-  pictures in one panel never share one. Colours are read when a shape is
-  made (`_Paint`) and written by PLL - a name from the CSS list or
-  `#rrggbb` - so nothing of the student's string reaches the SVG.
+  size is known rather than guessed. Clip paths and every picture go in
+  `<defs>` - a picture once however often it is drawn - with ids from a
+  per-interpreter prefix, so two pictures in one panel never share one.
+  Colours are read when a shape is made (`_Paint`): text is turned into
+  numbers and checked as a tuple is, and written by PLL - a name from the
+  CSS list or `#rrggbb` - so nothing of the student's string reaches the
+  SVG.
 - **`rotate`.** Its box is the turned shapes' own, as 2htdp's is: the child
-  is flattened turned, and the box is what its items cover (`_PllBox` marks
-  a crop's or a scene's edges, which count though nothing is drawn there).
+  is flattened turned, and the box is what its items cover (a transparent
+  rectangle marks a crop's or a scene's edges, which count though nothing
+  is drawn there).
 - **`==`.** Two images are equal when they are the same size and draw the
   same items, compared to a hundredth of a pixel, colours by their value
   (`"red"` is `(255, 0, 0)`). Painting order counts only where shapes
@@ -295,12 +303,16 @@ The flat list is what three things use:
   next, so every way of drawing a picture gives the same list. `__hash__`
   agrees with it.
 
-Charts are images too: `_Drawing` is a ready-made SVG of a known size, and
-`libraries/table.py`'s `_PllChart` is one. A matplotlib figure becomes a
-`_LoadedImage` of its PNG (`_pll_figure_image`).
+Charts are images too: `libraries/table.py`'s `_PllChart` is a `_Picture` of
+its own SVG, shown as it is and drawn inside other pictures like any loaded
+one. Every chart is drawn by the same few pieces - `_Scale` maps values onto
+pixels along an axis, with round-numbered ticks (`_ticks`); `_axis` draws one
+along the bottom or up the left; `_chart` is the white box with the title
+and the axes' names; `_legend` the colour key. A matplotlib figure becomes a
+`_Picture` of its PNG (`_pll_figure_image`).
 
-Adding a combinator means three edits: the `_Foo(Image)` class, the public
-wrapper, and the name in `PLL_IMAGE_EXPORTS` (that list is what injects it
+Adding a combinator means two edits: the public function, which makes a
+`_Group`, and its name in `PLL_IMAGE_EXPORTS` (that list is what injects it
 into student globals with no import, via the install step, `install.py`).
 
 ## Third-party packages
@@ -314,15 +326,16 @@ anywhere in the program, a module named to `importlib.import_module` or
 `__import__` in so many words, and the imports of the student's modules
 the program imports, and theirs in turn - but not another program in the
 same folder. The student's own module names are not packages, and Pyodide's
-`test` (CPython's own tests, which would hide a `test.py`) is never loaded.
-The names go to Pyodide's `loadPackagesFromImports`, which maps them to
-packages in `pyodide-lock.json` and loads those it has. `packages.ts` only
-gates the round-trip: code with no `import` in it never pays one.
+`test` (CPython's own tests, which would hide a `test.py`) is never loaded;
+a table's `to_pandas()` counts as importing pandas, which it does inside
+itself. The names go to Pyodide's `loadPackagesFromImports`, which maps them
+to packages in `pyodide-lock.json` and loads those it has. `packages.ts`
+only gates the round-trip: code with no `import` in it never pays one.
 
 When an import still finds nothing, `_pll_enrich_module_not_found` says why
-(`module` fact): Pyodide has no such package, or it is a misspelt file of
-theirs; their file was kept back by a limit; Pyodide has it and it did not
-load (offline, the first time); or no import PLL read named it.
+(`module` fact): Pyodide has no such package; their file was kept back by a
+limit; or Pyodide has it and it was not loaded before the run - offline,
+the first time, or imported in a way no import PLL read named.
 
 Pyodide's Node loader **writes wheels it downloads back into `indexURL`**,
 which for the desktop host is `vendor/pyodide`. So running a pandas lab
@@ -340,26 +353,30 @@ as `MPLBACKEND`): Agg to draw, and `show()` puts each open figure where the
 program's pictures go. Pyodide's own backend draws into a page's `document`,
 which a worker has none of.
 
-Pyodide does not connect Python's `urllib` to the host network, so
-`pd.read_csv(url)` / `requests` / `urllib` otherwise fail with "unknown
-url type: https". When a program imports a module that reads URLs
-(pandas, requests, urllib, ...), the worker loads `pyodide-http` once and
-runs `http.py` - idempotent, so each time, and `requests` is patched once it
-is loaded too. `http.py` puts PLL's own transport under pyodide-http's
-patches: an `arraybuffer` response, so the bytes arrive as sent; the
-timeout a program gives; `urlopen` raising `HTTPError` for 400 and above
-and `URLError` when nothing answers, as CPython's does; requests'
-`ConnectionError` with what went wrong. `load_table` and `load_image` read
-the same way (`_pll_fetch_bytes`).
+Pyodide's Python has no sockets, so `pd.read_csv(url)` / `requests` /
+`urllib` would fail with "unknown url type: https". The host gives Python
+one function instead, `_pll_host_http` (`HostHttp`, set by `installPll`):
+one request, waited for, its answer's bytes as they were sent. Every URL
+read goes through `_pll_http_request` (`bootstrap/libraryHelpers.py`) over
+it - `load_table` and `load_image` directly, and, when a program imports a
+module that reads URLs (pandas, requests, urllib, ...), urllib and requests
+too: the worker runs `http.py`, which puts a `urlopen` and a requests
+adapter on it - idempotent, so each time, and `requests` is set up once it
+is loaded. They behave as CPython's do: the timeout a program gives;
+`HTTPError` for 400 and above, `URLError` (or requests' `ConnectionError`)
+when nothing answers, with what went wrong.
 
-The web worker uses the browser's synchronous XHR; browser requests need
-CORS. The desktop worker installs a Node `XMLHttpRequest` polyfill
-(`xhrPolyfill.ts`) over `syncHttp.ts`: a helper thread fetches, and the
-Pyodide thread waits for its answer in 20 ms slices - so a Stop written to
-the interrupt buffer ends the wait, as does the time limit (60 seconds when
-the program gives none) - and takes it with `receiveMessageOnPort`. Errors
-carry a browser's names (`NetworkError`, `TimeoutError`, `AbortError`) and
-a sentence, never the helper's code.
+The web worker's `HostHttp` is a synchronous XHR (`web/pyodideWorker.ts`);
+browser requests need CORS, and a failure says that is the likely cause.
+The desktop's (`nodeHttp`, `syncHttp.ts`) is a helper thread that fetches,
+while the Pyodide thread waits for its answer in 20 ms slices - so a Stop
+written to the interrupt buffer ends the wait, as does the time limit (60
+seconds when the program gives none), each ending the helper too, which
+the next request replaces - and takes it with `receiveMessageOnPort`.
+Errors carry a browser's names (`NetworkError`, `TimeoutError`) and a
+sentence, never the helper's code; a Stop is no answer at all: the
+host takes it from the interrupt buffer and acknowledges it, and Python
+delivers it at the program's line.
 
 ## From an exception to a finding
 
@@ -887,17 +904,14 @@ Documentation rots, and this is documentation that a change to a wheat could
 quietly break.
 
 `pnpm run test-web:load` covers `load_table` and `load_image` in a real
-workbench, from files beside the program and from a URL. Two of those four
-paths exist only in a browser and nothing else reaches them: a local
-picture arrives through the editor's own collector (`workspaceFiles.ts`,
-over `vscode.workspace.fs`), a different code path from the CLI's; and a
-fetched one is decoded by a real `XMLHttpRequest`, which honours the
-`x-user-defined` request and remaps every byte above 0x7f for
-`_pll_fetch_bytes` to mask back. The desktop polyfill ignores that request
-and returns one character per byte, so the mask is a no-op there and every
-command-line test passed without the mapping ever running - on a PNG, whose
-first byte is 0x89. The test therefore pulls the data URI back out of the
-rendered SVG and checks the byte count and signature, rather than trusting
+workbench, from files beside the program and from a URL, and urllib over
+http. Two of those paths exist only in a browser and nothing else reaches
+them: a local picture arrives through the editor's own collector
+(`workspaceFiles.ts`, over `vscode.workspace.fs`), a different code path from
+the CLI's; and a fetched one comes through the web worker's synchronous XHR,
+which only a browser has. A PNG's first byte is 0x89, which any reading of
+the bytes as text would change, so the test pulls the data URI back out of
+the rendered SVG and checks the byte count and signature, rather than trusting
 that a plausible-looking width means the bytes survived.
 
 `pnpm run test-web:examplar` is the only test that sees the two halves meet.

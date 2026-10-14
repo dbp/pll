@@ -18,7 +18,7 @@ export const PLL_LIBRARY_FILES = {
 /** The install step, run after the libraries. */
 export const PLL_INSTALL_FILE = "<pll:install>";
 
-/** PLL's transport for urllib, requests and pandas, under pyodide-http. */
+/** urllib, requests and pandas reading URLs through the host's network. */
 export const PLL_HTTP_FILE = "<pll:http>";
 
 /** A bootstrap file, by its name in `src/python/bootstrap/`. */

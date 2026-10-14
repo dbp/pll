@@ -1306,7 +1306,7 @@ async function main() {
           ["one *value* from the column, not a row"]],
         // A package Pyodide has not got, and a file that is not there.
         ["import flask\n", ["There is no module called `flask` here.", "Pyodide, which has many packages"]],
-        ['import importlib\nimportlib.import_module("micro" + "pip")\n', ["`micropip` was not loaded, because PLL did not see it imported.", "Add `import micropip`"]],
+        ['import importlib\nimportlib.import_module("micro" + "pip")\n', ["`micropip` was not loaded before your program ran.", "add `import micropip` near the top of the file"]],
       ];
       for (const [code, needles] of cases) {
         const { text } = await explain(`#level beginner\n${code}`);

@@ -109,13 +109,36 @@ const PLL_LIBRARIES_PY: ReadonlyArray<PythonSource> = [
 
 /**
  * Routes `urllib`/`requests` (and therefore pandas URL readers) through the
- * host's network, after the `pyodide-http` package is loaded (`http.py`).
- * Idempotent, and run each time a program imports one of those modules, so
- * `requests` is patched once it is loaded too. In the web worker this uses
- * synchronous XHR; on desktop a Node XMLHttpRequest polyfill does the same
- * job, fetching on a helper thread (`syncHttp.ts`).
+ * host's network (`http.py`). Idempotent, and run each time a program
+ * imports one of those modules, so `requests` is set up once it is loaded.
  */
-export const PYODIDE_HTTP_PATCH_PY: PythonSource = { file: PLL_HTTP_FILE, source: httpSource };
+export const PLL_HTTP_PY: PythonSource = { file: PLL_HTTP_FILE, source: httpSource };
+
+/** What a request through the host's network gives back. */
+export interface HttpAnswer {
+  status: number;
+  headers: Record<string, string>;
+  body: Uint8Array;
+}
+
+/**
+ * One request through the host's network, waited for: Python's only way to
+ * the network (`_pll_http_request` in libraryHelpers.py). No answer
+ * (`undefined`, Python's None) when a Stop ended the wait: the host has
+ * taken the Stop from the interrupt buffer and acknowledged it, for Python
+ * to deliver at the program's line - left there, Pyodide would raise it as
+ * the call returns, unacknowledged. A request that gets no answer throws an
+ * `Error` named as a browser's XHR names them, `NetworkError` or
+ * `TimeoutError`, with what went wrong in a few words. A `timeoutMs` of 0
+ * is the host's own limit.
+ */
+export type HostHttp = (
+  method: string,
+  url: string,
+  headers: Record<string, string>,
+  body: Uint8Array | null | undefined,
+  timeoutMs: number,
+) => HttpAnswer | undefined;
 
 /**
  * Pure-Python wheels bundled into the extension so runtime type checking
@@ -161,10 +184,13 @@ export interface PyCallable {
  */
 export function installPll(
   instance: PyodideCore,
-  { interruptBuffer = null }: { interruptBuffer?: SharedArrayBuffer | null } = {},
+  { interruptBuffer = null, http = null }: { interruptBuffer?: SharedArrayBuffer | null; http?: HostHttp | null } = {},
 ): void {
   for (const python of [...PLL_BOOTSTRAP_PY, ...PLL_EXPLAIN_PY]) {
     run(instance, python);
+  }
+  if (http) {
+    instance.globals.set("_pll_host_http", http);
   }
   if (interruptBuffer) {
     // PLL's SIGINT handler acknowledges a delivered Stop here, so the host

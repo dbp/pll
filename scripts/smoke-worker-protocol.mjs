@@ -501,12 +501,19 @@ console.log("\n[9] requests before initialize() still initialize first");
   );
 }
 
-console.log("\n[10] packages: what the program imports, with pandas for to_pandas and the network for URLs");
+console.log("\n[10] packages: what Python finds the program imports is loaded, and the network if it reads URLs");
 {
+  // Python finds pandas for `to_pandas()` (smoke-pandas [1]); the host loads what it is told.
   const h = makeRuntime(
     autoInit((msg, hs) => {
       if (calls(msg, "_pll_package_imports")) {
-        answer(hs, msg, msg.args[0].includes("requests") ? { modules: ["requests"], network: true } : { modules: [], network: false });
+        answer(
+          hs,
+          msg,
+          msg.args[0].includes("requests")
+            ? { modules: ["requests"], network: true }
+            : { modules: msg.args[0].includes("to_pandas") ? ["pandas"] : [], network: msg.args[0].includes("to_pandas") },
+        );
       } else {
         answer(hs, msg);
       }
@@ -558,9 +565,11 @@ function fakePyodide({ python = () => null, loadPackages = async () => [] } = {}
   const pllCall = Object.assign((fn, argsJson) => JSON.stringify(python(fn, JSON.parse(argsJson)) ?? null), {
     destroy() {},
   });
+  const set = new Map();
   const fake = {
     ran,
     stops: 0,
+    globals: set,
     instance: {
       runPython(code) {
         ran.push(code);
@@ -569,7 +578,10 @@ function fakePyodide({ python = () => null, loadPackages = async () => [] } = {}
       setStdin() {},
       setInterruptBuffer() {},
       loadPackagesFromImports: loadPackages,
-      globals: { get: (name) => (name === "_pll_call" ? pllCall : Object.assign(() => undefined, { destroy() {} })), set() {} },
+      globals: {
+        get: (name) => (name === "_pll_call" ? pllCall : Object.assign(() => undefined, { destroy() {} })),
+        set: (name, value) => set.set(name, value),
+      },
       FS: new Proxy({}, { get: () => () => ({ isDir: () => true, mode: 0 }) }),
     },
   };
@@ -579,12 +591,16 @@ function fakePyodide({ python = () => null, loadPackages = async () => [] } = {}
 /** The worker, over `fake`; `posted` is everything it sends back. */
 async function startWorkerHost(fake) {
   const posted = [];
+  const network = () => ({ status: 200, headers: {}, body: new Uint8Array(0) });
   const handle = createWorkerHost({
     post: (msg) => posted.push(msg),
     loadPyodide: async () => fake.instance,
     stdinUnavailableMessage: "no stdin",
+    http: () => network,
   });
   await handle({ id: 1, type: "init", indexUrl: "/x/" });
+  // The host's network is Python's from the start.
+  expect(fake.globals.get("_pll_host_http") === network, "the network is handed to Python");
   return { handle, posted };
 }
 
@@ -637,7 +653,7 @@ console.log("\n[12a] a Stop while a package installs is a Stop, not a package th
   expect(reply.type === "error" && reply.kind === "interrupted", `the load ends as stopped: ${JSON.stringify(reply)}`);
 }
 
-console.log("\n[12b] a load that uses the network loads pyodide-http and patches after it");
+console.log("\n[12b] a load that uses the network loads nothing for it, and routes urllib after the packages");
 {
   const asked = [];
   const fake = fakePyodide({
@@ -650,10 +666,10 @@ console.log("\n[12b] a load that uses the network loads pyodide-http and patches
   await handle({ id: 2, type: "load", modules: ["pandas"], network: true });
   await handle({ id: 3, type: "load", modules: [], network: false });
   expect(
-    JSON.stringify(asked) === JSON.stringify(["import pandas\nimport pyodide_http"]),
-    `with the network, pyodide-http too; with nothing, Pyodide is not asked: ${JSON.stringify(asked)}`,
+    JSON.stringify(asked) === JSON.stringify(["import pandas"]),
+    `with the network, no package for it; with nothing, Pyodide is not asked: ${JSON.stringify(asked)}`,
   );
-  expect(fake.ran.some((code) => /pyodide_http/.test(code)), "and the patch runs");
+  expect(fake.ran.filter((code) => /_pll_urlopen/.test(code)).length === 1, "and urllib is routed once, for the load that asked");
   expect(posted.filter((m) => m.type === "reply").length === 3, "each answered");
 }
 

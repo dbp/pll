@@ -1,7 +1,7 @@
 import { parentPort } from "node:worker_threads";
 import { createWorkerHost, type PyodideInstance } from "../pyodide/worker";
 import type { WorkerInbound } from "../pyodide/protocol";
-import { installNodeXHR } from "./xhrPolyfill";
+import { nodeHttp } from "./syncHttp";
 
 if (!parentPort) {
   throw new Error("desktop pyodide worker must be started as a worker_thread");
@@ -28,11 +28,9 @@ function ensureStdioFds(): void {
 const handle = createWorkerHost({
   post: (msg) => port.postMessage(msg),
   stdinUnavailableMessage: "input() is unavailable (SharedArrayBuffer was not provided).",
+  http: nodeHttp,
   async loadPyodide(indexUrl, packageCacheDir) {
     ensureStdioFds();
-    // Installed up front so the `pyodide-http` shim has an XMLHttpRequest to
-    // patch if the program later reads a URL.
-    installNodeXHR();
     const { loadPyodide } = await import("pyodide");
     return (await loadPyodide({
       indexURL: indexUrl,
