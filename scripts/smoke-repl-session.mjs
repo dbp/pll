@@ -62,6 +62,7 @@ export const stamps = new Map();
 const bytesOf = (contents) => (typeof contents === "string" ? new TextEncoder().encode(contents) : contents);
 let activeEditorListener = null;
 let closeListener = null;
+let editListener = null;
 
 export const FileType = { File: 1, Directory: 2, SymbolicLink: 64 };
 export const UIKind = { Desktop: 1, Web: 2 };
@@ -126,6 +127,10 @@ export const workspace = {
     closeListener = cb;
     return { dispose() { closeListener = null; } };
   },
+  onDidChangeTextDocument(cb) {
+    editListener = cb;
+    return { dispose() { editListener = null; } };
+  },
   getConfiguration: () => ({ get: () => undefined, update: async () => undefined }),
   fs: {
     async readDirectory(folder) {
@@ -185,6 +190,11 @@ export const opened = [];
 /** Test hook: VS Code closed \`document\`. */
 export function __closeDocument(document) {
   if (closeListener) closeListener(document);
+}
+
+/** Test hook: \`document\` was edited. */
+export function __editDocument(document) {
+  if (editListener) editListener({ document, contentChanges: [] });
 }
 
 /** Test hook: pretend the user focused a different editor. */
@@ -1096,7 +1106,7 @@ console.log("\n[18] each file keeps its own session, swapped with the active edi
   __setActiveEditor({ document: b });
   await settle();
   console.log(`    after switch: title=${view.title} entries=${view.entries.length}`);
-  expect(view.title === "b.py", "switching editors should retitle the view");
+  expect(view.title === "b.py [raw]", "switching editors should retitle the view");
   expect(view.entries.length === 0, "b.py has its own, empty session");
 
   view.handlers.onSubmit("1");
@@ -2765,7 +2775,7 @@ console.log("\n[65] closing a file ends its session, once its run is over");
   // Opening it again starts afresh.
   __setActiveEditor({ document: doc });
   expect(view.entries.length === 0, `a new session: ${JSON.stringify(view.entries)}`);
-  expect(view.title === "closing.py", `with no level yet: ${view.title}`);
+  expect(view.title === "closing.py [raw]", `at its #level line's level, before it has run: ${view.title}`);
 
   // Closed and reopened at once, as a change of language mode does: kept.
   vscodeStub.workspace.textDocuments.push(doc);
@@ -3024,7 +3034,7 @@ console.log("\n[74] prompt lines with no file open: a session of their own, at b
   // A file takes over the panel; Start REPL brings the session back, as it was.
   const doc = makeDoc("later.py", "y = 2\n");
   __setActiveEditor({ document: doc });
-  expect(view.title === "later.py", `the file's session: ${view.title}`);
+  expect(view.title === "later.py [raw]", `the file's session: ${view.title}`);
   repl.showNoFileSession();
   expect(view.title === "No file [beginner]", `back to the one with no file: ${view.title}`);
   expect(view.entries.some((e) => e.kind === "echo" && e.code === "x = 1"), "with what was typed in it");
@@ -3123,13 +3133,13 @@ console.log("\n[76] a diff or a notebook cell is not a file: no session, and no 
 {
   const doc = makeDoc("hw.py", "x = 1\n");
   const { repl, view, runtime } = await harness({ events: () => [{ kind: "done" }] }, doc);
-  expect(view.title === "hw.py", `the file's session: ${view.title}`);
+  expect(view.title === "hw.py [raw]", `the file's session: ${view.title}`);
   const diff = { ...makeDoc("hw.py", "x = 0\n"), uri: new Uri("git", "/work/hw.py") };
   __setActiveEditor({ document: diff });
-  expect(view.title === "hw.py", `a git: view of it leaves the panel alone: ${view.title}`);
+  expect(view.title === "hw.py [raw]", `a git: view of it leaves the panel alone: ${view.title}`);
   const cell = { ...makeDoc("nb.ipynb", "print(1)\n"), uri: new Uri("vscode-notebook-cell", "/work/nb.ipynb") };
   __setActiveEditor({ document: cell });
-  expect(view.title === "hw.py", `so does a notebook cell: ${view.title}`);
+  expect(view.title === "hw.py [raw]", `so does a notebook cell: ${view.title}`);
   // And Run File refuses it, with a reason.
   const context = { subscriptions: [] };
   registerCommands(context, { repl, view });
@@ -3145,7 +3155,7 @@ console.log("\n[76] a diff or a notebook cell is not a file: no session, and no 
   vscodeStub.workspace.workspaceFolders = [{ uri: new Uri("vscode-vfs", "/github/course") }];
   const repoFile = { ...makeDoc("lab.py", "x = 1\n"), uri: new Uri("vscode-vfs", "/github/course/lab.py") };
   __setActiveEditor({ document: repoFile });
-  expect(view.title === "lab.py", `a repository's file has a session: ${view.title}`);
+  expect(view.title === "lab.py [raw]", `a repository's file has a session: ${view.title}`);
   vscodeStub.workspace.workspaceFolders = undefined;
   repl.dispose();
 }
@@ -3177,6 +3187,38 @@ console.log("\n[78] before a file's first run, its prompt is at its #level line'
   await settle();
   const [line] = runtime.calls.filter((c) => c[0] === "replEval");
   expect(line?.[3] === "beginner", `the header's level, not raw: ${JSON.stringify(line)}`);
+  vscodeStub.workspace.textDocuments.length = 0;
+  repl.dispose();
+}
+
+console.log("\n[79] the header names the level the prompt is at, before the first run as after");
+{
+  let code = "#level intermediate\nx = 1\n";
+  const doc = { ...makeDoc("unrun2.py"), getText: () => code };
+  vscodeStub.workspace.textDocuments.push(doc);
+  const { repl, view, runtime } = await harness({ events: () => [{ kind: "done" }] }, doc);
+  await settle();
+  expect(view.title === "unrun2.py [intermediate]", `its #level line's, before it has run: ${view.title}`);
+  // Edited, and the header follows - and so does the prompt.
+  code = "#level beginner\nx = 1\n";
+  vscodeStub.__editDocument(doc);
+  await settle();
+  expect(view.title === "unrun2.py [beginner]", `the line as it is now: ${view.title}`);
+  view.handlers.onSubmit("y = 2");
+  await settle();
+  const [line] = runtime.calls.filter((c) => c[0] === "replEval");
+  expect(line?.[3] === "beginner", `and the prompt is at it: ${JSON.stringify(line)}`);
+  code = "x = 1\n";
+  vscodeStub.__editDocument(doc);
+  await settle();
+  expect(view.title === "unrun2.py [raw]", `no #level line, plain Python: ${view.title}`);
+  // Once it has run, the run's level, whatever the line says since.
+  await repl.runFile("#level intermediate\nx = 1\n", "unrun2.py", doc);
+  await settle();
+  code = "#level beginner\nx = 1\n";
+  vscodeStub.__editDocument(doc);
+  await settle();
+  expect(view.title === "unrun2.py [intermediate]", `after a run, that run's: ${view.title}`);
   vscodeStub.workspace.textDocuments.length = 0;
   repl.dispose();
 }

@@ -78,9 +78,8 @@ interface Session {
   /**
    * Language level of the most recent Run File on this session - always
    * `beginner` for the session with no file. `null` until the file has been
-   * run at least once. We surface this in the header (e.g. `hello.py
-   * [beginner]`) so it's easy to tell which rule set is currently in effect
-   * after a run.
+   * run at least once; until then its prompt is at its `#level` line's
+   * (`promptLevel`).
    */
   lastLevel: Level | null;
   /**
@@ -139,6 +138,7 @@ export class ReplSession implements vscode.Disposable {
 
   private readonly editorWatcher: vscode.Disposable;
   private readonly closeWatcher: vscode.Disposable;
+  private readonly editWatcher: vscode.Disposable;
 
   /**
    * Session whose file is currently executing `input()`. Either runtime
@@ -199,6 +199,12 @@ export class ReplSession implements vscode.Disposable {
     this.closeWatcher = vscode.workspace.onDidCloseTextDocument((document) =>
       this.handleDocumentClosed(document),
     );
+    // Before a file's first run its prompt is at its `#level` line's level,
+    // which the header shows, so an edit to that line changes the header.
+    this.editWatcher = vscode.workspace.onDidChangeTextDocument(({ document }) => {
+      const session = this.sessions.get(document.uri.toString());
+      if (session && session.lastLevel === null) this.refreshState(session);
+    });
 
     // Eagerly start Pyodide so first interaction isn't blocked by load time.
     void this.ensureInitialized();
@@ -248,6 +254,7 @@ export class ReplSession implements vscode.Disposable {
     this.reactors.disposeAll();
     this.editorWatcher.dispose();
     this.closeWatcher.dispose();
+    this.editWatcher.dispose();
   }
 
   /* -------- Init -------- */
@@ -396,8 +403,8 @@ export class ReplSession implements vscode.Disposable {
   }
 
   /**
-   * What the header and the input row show for `session`. Its level is in
-   * the title once it has run, so it is easy to tell which rules are in
+   * What the header and the input row show for `session`. The title names
+   * the level its prompt is at, so it is easy to tell which rules are in
    * effect; until Python has started, every session is loading it - but a
    * *failed* start is not loading, or the view would spin forever with no
    * way out.
@@ -406,7 +413,7 @@ export class ReplSession implements vscode.Disposable {
     const loading = !this.initialized && this.initError === null;
     const waiting = this.stdinPending?.session === session ? this.stdinPending : null;
     return {
-      title: session.lastLevel ? `${session.fileName} [${session.lastLevel}]` : session.fileName,
+      title: `${session.fileName} [${this.promptLevel(session)}]`,
       prompt: session.continuationLines.length > 0 ? "continuation" : "primary",
       status: loading ? "Loading Python..." : session.status,
       awaitingInput: waiting !== null,
@@ -714,12 +721,11 @@ export class ReplSession implements vscode.Disposable {
   /* -------- Execution -------- */
 
   /**
-   * Run a prompt line, at the level of the file's last run - or, before
-   * its first, of its `#level` line. The steps - packages, sibling files,
-   * the checks, the run - are `runInputPlan`'s.
+   * Run a prompt line, at the level its session's header shows. The steps
+   * - packages, sibling files, the checks, the run - are `runInputPlan`'s.
    */
   private async executeRepl(session: Session, code: string): Promise<void> {
-    const level = session.lastLevel ?? this.headerLevel(session);
+    const level = this.promptLevel(session);
     session.runSeq += 1;
     this.resetStreamBudget(session);
     this.setStatus(session, "Starting...");
@@ -727,6 +733,14 @@ export class ReplSession implements vscode.Disposable {
     await this.runWithSession(session, program, undefined, (host) =>
       runInputPlan(this.deps.runtime, host, { code, sessionKey: session.key, level }),
     );
+  }
+
+  /**
+   * The level of `session`'s prompt: that of the file's last run - or,
+   * before its first, of its `#level` line.
+   */
+  private promptLevel(session: Session): Level {
+    return session.lastLevel ?? this.headerLevel(session);
   }
 
   /** The level the `#level` line of `session`'s file names, as it is in the editor. */

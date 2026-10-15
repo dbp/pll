@@ -92,9 +92,9 @@ the window in that case.
 
 ## Language levels
 
-The first non-blank line of a file chooses how strict PLL is. After you
-run the file, the current level is shown in the interactions header (for
-example `hello.py [beginner]`).
+The first non-blank line of a file chooses how strict PLL is. The level
+the panel's prompt is at is shown in the interactions header (for example
+`hello.py [beginner]`).
 
 ```python
 #level beginner
@@ -126,8 +126,9 @@ starts with that level line already written in, so you do not have to
 remember it. You can always change or delete the line.
 
 The prompt at the bottom of the interactions panel uses the **same**
-level as the last run (the one shown in the header). If you have not run
-the file yet, it uses the level the file's `#level` line names.
+level as the last run. If you have not run the file yet, it uses the level
+the file's `#level` line names, as it is now. Either way, the header shows
+it.
 
 ## Type annotations are checked as your program runs
 

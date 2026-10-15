@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Changed
+- **The header shows the prompt's level before the file has run**: the
+  level its `#level` line names, as it is now (`[raw]` with none), where
+  the header showed no level until the first run.
 - **Files beside a program can be much bigger**: each up to 50 MB, and
   100 MB in all, where it was 2 MB and 8 MB - so a course's CSVs load.
   A 50 MB CSV takes `load_table` about six seconds.
