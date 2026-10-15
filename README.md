@@ -110,13 +110,6 @@ blank.
 | `#level intermediate` | Same rules about hiding names and `global` / `nonlocal`, but you **may** reassign variables inside a function. That is useful for introducing for loops, where you need mutable accumulators. Reassigning at the top of the file is still flagged. Annotations are checked. |
 | `#level advanced` | No extra checks before the file runs. Annotations are still checked as the program runs, but by Python's own rules (so `True` counts as `1`). |
 
-At both of those levels a `match` is checked too. A `case` naming a class
-the program does not have (`case Aardvark(b):`) stops the file, because
-Python would only say so when that case is tried. A `case` for a class the
-subject's annotation never allows (`case Rock():` when `a: Animal` and
-`Animal = Boa | Armadillo`) is a warning, because it never matches. Either
-way, PLL says what the subject can be.
-
 The level is the only thing that decides what gets checked — there is no
 separate setting to keep in sync with it.
 
@@ -600,7 +593,7 @@ load or save.
 
 There are limits: at most 100 files are loaded, each at most 50 MB and 100
 MB in all - those nearest the program first - and the same for the files
-saved afterwards. A 50 MB CSV takes `load_table` about six seconds. Hidden folders (`.git`) and tools' folders (`venv`,
+saved afterwards. Hidden folders (`.git`) and tools' folders (`venv`,
 `node_modules`, `__pycache__`) are left out. A file left out by a limit is
 named in the panel ("Not loaded: ... - each file can be at most 50 MB."),
 so a program that cannot open or import it is not left failing for no
