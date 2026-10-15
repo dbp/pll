@@ -999,6 +999,45 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     `not loaded: ${said(why.notLoaded)}`);
   expect(/Pyodide, which has many packages/.test(said(why.missing)), `missing: ${said(why.missing)}`);
 
+  // -- a `case` pattern's class that nothing defines, as the program runs --
+  // At advanced, where no static check stops it first: from the running
+  // program, so an alias a static reading could not follow is read too.
+  {
+    const PETS = [
+      "from dataclasses import dataclass", "", "@dataclass", "class Boa:", "    name: str", "",
+      "@dataclass", "class Armadillo:", "    name: str", "", "Animal = Boa | Armadillo",
+      "type Beast = Boa | Armadillo", "",
+    ].join("\n");
+    const caught = (annotation, pattern) =>
+      ran(`${PETS}\ndef name_of(a${annotation}) -> str:\n    match a:\n        case ${pattern}:\n            return "?"\n    return ""\n\nprint(name_of(Boa("Ayisha")))\n`, "pets.py", "advanced");
+    const alias = caught(": Animal", "Aardvark(b)");
+    expect(
+      alias?.headline === "There is no class `Aardvark`: an `Animal` is a `Boa` or an `Armadillo`." &&
+        alias?.howToFix.join("|") ===
+          "Match one of them: `case Boa(...)` or `case Armadillo(...)`.|If an `Aardvark` is a new kind of `Animal`, define `class Aardvark` and add it: `Animal = Boa | Armadillo | Aardvark`." &&
+        alias?.lineNumber === 16,
+      `the subject's variants, at the case: ${said(alias ?? { headline: "", howToFix: [] })} ${alias?.lineNumber}`,
+    );
+    for (const [annotation, headline] of [
+      [": Beast", "There is no class `Aardvark`: a `Beast` is a `Boa` or an `Armadillo`."],
+      [': "Animal"', "There is no class `Aardvark`: an `Animal` is a `Boa` or an `Armadillo`."],
+      [": Boa | Armadillo", "There is no class `Aardvark`: `a` is a `Boa` or an `Armadillo`."],
+      ["", "There is no class `Aardvark` for this `case` to match."],
+    ]) {
+      expect(caught(annotation, "Aardvark()")?.headline === headline, `a${annotation}: ${caught(annotation, "Aardvark()")?.headline}`);
+    }
+    expect(caught("", "Aardvark()")?.howToFix[0] === "The classes this program has are `Armadillo` and `Boa`.",
+      `the classes the program has: ${JSON.stringify(caught("", "Aardvark()")?.howToFix)}`);
+    expect(caught(": Animal", "Armadilo()")?.howToFix.join("|") === "Did you mean `Armadillo`?",
+      `a misspelling: ${JSON.stringify(caught(": Animal", "Armadilo()")?.howToFix)}`);
+    // A name that is not a pattern's class is the ordinary NameError still.
+    const plain = ran(`${PETS}\ndef f(a: Animal) -> str:\n    match a:\n        case Boa(n):\n            return nme\n    return ""\n\nprint(f(Boa("x")))\n`, "pets.py", "advanced");
+    expect(plain?.headline === "Python doesn't know what `nme` means.", `not a pattern: ${plain?.headline}`);
+    // Nor one in a guard on the pattern's own line.
+    const guard = ran(`${PETS}\ndef f(a: Animal) -> str:\n    match a:\n        case Boa(n) if n == nam:\n            return n\n    return ""\n\nprint(f(Boa("x")))\n`, "pets.py", "advanced");
+    expect(guard?.headline === "Python doesn't know what `nam` means.", `a guard's name: ${guard?.headline}`);
+  }
+
   // -- a class passed where one of its instances was wanted --------------
   const classItself = ran(
     `${song.split("\n\n\ns = ")[0]}\n\n\ndef title(s: ITunesSong) -> str:\n    return s.name\n\n\nprint(title(ITunesSong))\n`,

@@ -110,6 +110,13 @@ blank.
 | `#level intermediate` | Same rules about hiding names and `global` / `nonlocal`, but you **may** reassign variables inside a function. That is useful for introducing for loops, where you need mutable accumulators. Reassigning at the top of the file is still flagged. Annotations are checked. |
 | `#level advanced` | No extra checks before the file runs. Annotations are still checked as the program runs, but by Python's own rules (so `True` counts as `1`). |
 
+At both of those levels a `match` is checked too. A `case` naming a class
+the program does not have (`case Aardvark(b):`) stops the file, because
+Python would only say so when that case is tried. A `case` for a class the
+subject's annotation never allows (`case Rock():` when `a: Animal` and
+`Animal = Boa | Armadillo`) is a warning, because it never matches. Either
+way, PLL says what the subject can be.
+
 The level is the only thing that decides what gets checked — there is no
 separate setting to keep in sync with it.
 

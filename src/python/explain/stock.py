@@ -70,10 +70,14 @@ def _pll_friendly(type_name):
 
 def _pll_list_names(names):
     """`a`, `b` and `c` - for listing names in prose."""
-    quoted = ["`%s`" % name for name in names]
-    if len(quoted) <= 1:
-        return "".join(quoted)
-    return "%s and %s" % (", ".join(quoted[:-1]), quoted[-1])
+    return _pll_listed(["`%s`" % name for name in names])
+
+
+def _pll_listed(items, joined="and"):
+    """a, b and c - or "or" - for listing anything in prose."""
+    if len(items) <= 1:
+        return "".join(items)
+    return "%s %s %s" % (", ".join(items[:-1]), joined, items[-1])
 
 
 def _pll_takes_clause(names, count):

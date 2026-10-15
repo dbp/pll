@@ -1313,6 +1313,41 @@ stderr:
   
   Static analysis found 1 problem. The file was not run.
 
+=== st-pattern-unknown-class (exit 2)
+stderr:
+  student.py [beginner]
+  NameError: There is no class `Aardvark`: an `Animal` is a `Boa` or an `Armadillo`.
+    at student.py:22:14
+  
+  How to fix:
+    - Match one of them: `case Boa(...)` or `case Armadillo(...)`.
+    - If an `Aardvark` is a new kind of `Animal`, define `class Aardvark` and add it: `Animal = Boa | Armadillo | Aardvark`.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-pattern-never-matches (exit 0)
+stdout:
+  Ayisha
+stderr:
+  student.py [beginner]
+  NeverMatches: This `case` never matches: an `Animal` is a `Boa` or an `Armadillo`, never a `Rock`.
+    at student.py:24:14
+  
+  How to fix:
+    - Match one of them: `case Boa(...)` or `case Armadillo(...)`.
+    - If a `Rock` is a new kind of `Animal`, define `class Rock` and add it: `Animal = Boa | Armadillo | Rock`.
+  
+
+=== pattern-unknown-class (exit 1)
+stderr:
+  student.py [advanced]
+  NameError: There is no class `Aardvark`: an `Animal` is a `Boa` or an `Armadillo`.
+    at student.py:22:14
+  
+  How to fix:
+    - Match one of them: `case Boa(...)` or `case Armadillo(...)`.
+    - If an `Aardvark` is a new kind of `Animal`, define `class Aardvark` and add it: `Animal = Boa | Armadillo | Aardvark`.
+
 === st-method-not-called (exit 1)
 stderr:
   student.py [beginner]

@@ -58,6 +58,9 @@ def _pll_is_students_class(cls):
 
 def _pll_union_members(obj):
     """The types a union is made of, by name, or None if `obj` is not one."""
+    # `type Animal = Boa | Armadillo` is an alias, and the union its value.
+    if isinstance(obj, getattr(_pll_typing, "TypeAliasType", ())):
+        obj = obj.__value__
     if not (isinstance(obj, _pll_types.UnionType) or _pll_typing.get_origin(obj) is _pll_typing.Union):
         return None
     names = []
@@ -302,6 +305,11 @@ def _pll_assigned(frame, lineno, tree, names):
 
 def _pll_union_named(annotation, frame):
     """The members of the union an annotation names, or None."""
+    if isinstance(annotation, _ast.Constant) and isinstance(annotation.value, str):
+        try:
+            annotation = _ast.parse(annotation.value, mode="eval").body
+        except SyntaxError:
+            return None
     if isinstance(annotation, _ast.Name):
         value = frame.f_globals.get(annotation.id, frame.f_builtins.get(annotation.id))
         return _pll_union_members(value)
@@ -390,6 +398,41 @@ def _pll_trailing_match(node, source, frame):
     }
 
 
+def _pll_pattern_class(name, frame, lineno, tree, source):
+    """For a `case` pattern's class nothing defines - `case Aardvark(b):` -
+    what the `match`'s subject can be, when it is a parameter annotated
+    with a union, and the classes the program has; or None when `name` is
+    no such class."""
+    node = _pll_function_node(tree, frame.f_code, lineno) if frame.f_code.co_name != "<module>" else None
+    for match in _ast.walk(node or tree):
+        if not isinstance(match, _ast.Match):
+            continue
+        if not any(
+            isinstance(p, _ast.MatchClass) and isinstance(p.cls, _ast.Name) and p.cls.id == name and p.cls.lineno == lineno
+            for case in match.cases
+            for p in _ast.walk(case.pattern)
+        ):
+            continue
+        subject = match.subject
+        annotation = None
+        if node is not None and isinstance(subject, _ast.Name):
+            arguments = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+            annotation = next((a.annotation for a in arguments if a.arg == subject.id), None)
+        members = _pll_union_named(annotation, frame) if annotation is not None else None
+        written = annotation.value.strip() if isinstance(annotation, _ast.Constant) else _pll_dotted(annotation)
+        return {
+            "name": name,
+            "subject": _ast.get_source_segment(source, subject),
+            # The union's own name, when the annotation is one: `Animal`.
+            "union": written if members and written is not None and written.isidentifier() else None,
+            "members": members if members and len(members) > 1 else None,
+            "classes": sorted(
+                n for n, v in frame.f_globals.items() if isinstance(v, type) and _pll_is_students_class(v)
+            ),
+        }
+    return None
+
+
 def _pll_blocks(body):
     """Every block of statements in a function body, the body included,
     not into the functions and classes it defines."""
@@ -443,8 +486,9 @@ def _pll_returned_none(frame, lineno, tree, source):
 
 def _pll_code_facts(exc, run):
     """The facts about the student's code that explaining `exc` needs, for
-    `_pll_error_info`: `definitions`, `assigned`, and - for a function
-    annotated to return something that returned `None` - `returned_none`."""
+    `_pll_error_info`: `definitions`, `assigned`; for a `case` pattern's
+    class nothing defines, `pattern_class`; and for a function annotated to
+    return something that returned `None`, `returned_none`."""
     if isinstance(exc, SyntaxError):
         return {}
     frames = _pll_student_frames(exc)
@@ -458,6 +502,10 @@ def _pll_code_facts(exc, run):
         return facts
     names = {chain.split(".")[0] for chain in _pll_line_names(text or "")}
     facts["assigned"] = _pll_assigned(frame, lineno, tree, names)
+    if type(exc) is NameError and isinstance(exc.name, str):
+        pattern = _pll_pattern_class(exc.name, frame, lineno, tree, source)
+        if pattern is not None:
+            facts["pattern_class"] = pattern
     check = (getattr(exc, "_pll_facts", None) or {}).get("check")
     if check is not None and check["kind"] == "return" and check["actual"] in ("None", "NoneType"):
         returned = _pll_returned_none(frame, lineno, tree, source)

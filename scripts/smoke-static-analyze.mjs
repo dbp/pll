@@ -907,6 +907,82 @@ _g = _pll_get_session("smoke-lib")
     console.log(`    ${kinds.size} kinds, each worded`);
   }
 
+  console.log("\n[26] a `case` pattern's class: one nothing defines, and one the subject never is");
+  {
+    const CLASSES = [
+      "from dataclasses import dataclass",
+      "@dataclass",
+      "class Pet:\n    name: str",
+      "@dataclass",
+      "class Boa(Pet):\n    length: float",
+      "@dataclass",
+      "class Armadillo(Pet):\n    alive: bool",
+      "@dataclass",
+      "class Rock:\n    weight: float",
+      "Animal = Boa | Armadillo",
+      "",
+    ].join("\n");
+    const matching = (annotation, ...cases) =>
+      `${CLASSES}\ndef f(a${annotation}) -> str:\n    match a:\n${cases.map((c) => `        case ${c}:\n            return "x"\n`).join("")}    return ""\n`;
+    const found = (code, level = "beginner") => {
+      const raw = analyze(code, level, "pets.py");
+      return raw.map((f, i) => ({ ...f, said: wordStatic([f], level, "pets.py")[0] }));
+    };
+    // Your example: the variants from the parameter's annotation, the alias set at the top.
+    const [unknown] = found(matching(": Animal", "Aardvark(b)", "Boa(n, l)", "Armadillo(n, l)"));
+    expect(
+      unknown?.id === "unknown-pattern-class" && unknown.severity === "error" && unknown.name_token === "Aardvark" &&
+        unknown.said.headline === "There is no class `Aardvark`: an `Animal` is a `Boa` or an `Armadillo`." &&
+        unknown.said.howToFix.join("|") ===
+          "Match one of them: `case Boa(...)` or `case Armadillo(...)`.|If an `Aardvark` is a new kind of `Animal`, define `class Aardvark` and add it: `Animal = Boa | Armadillo | Aardvark`.",
+      `a class nothing defines, said with the subject's variants: ${JSON.stringify(unknown)}`,
+    );
+    // Every way an annotation writes the union, and a misspelling.
+    for (const [annotation, headline] of [
+      [": Boa | Armadillo", "There is no class `Aardvark`: `a` is a `Boa` or an `Armadillo`."],
+      [': "Animal"', "There is no class `Aardvark`: an `Animal` is a `Boa` or an `Armadillo`."],
+      [": Union[Boa, Armadillo]", "There is no class `Aardvark`: `a` is a `Boa` or an `Armadillo`."],
+      [": Optional[Boa]", "There is no class `Aardvark`: `a` is a `Boa` or `None`."],
+      ["", "There is no class `Aardvark` for this `case` to match."],
+    ]) {
+      const [f] = found(`from typing import Optional, Union\n${matching(annotation, "Aardvark()")}`);
+      expect(f?.said.headline === headline, `a${annotation}: ${f?.said.headline}`);
+    }
+    const [typo] = found(matching(": Animal", "Armadilo()"));
+    expect(typo?.said.howToFix.join("|") === "Did you mean `Armadillo`?", `a misspelling, just that: ${JSON.stringify(typo?.said.howToFix)}`);
+    const [none] = found(matching("", "Lizard()"));
+    expect(none?.said.howToFix[0] === "The classes this program has are `Armadillo`, `Boa`, `Pet` and `Rock`.", `no annotation, the classes there are: ${JSON.stringify(none?.said.howToFix)}`);
+    // A class that exists but that the subject never is: a warning, since it runs.
+    const [never] = found(matching(": Animal", "Rock()", "Boa(n, l)"));
+    expect(
+      never?.id === "pattern-never-matches" && never.severity === "warning" &&
+        never.said.headline === "This `case` never matches: an `Animal` is a `Boa` or an `Armadillo`, never a `Rock`.",
+      `a case that never matches: ${JSON.stringify(never)}`,
+    );
+    // Not found: a base of a variant, a built-in, an import, a star import,
+    // a dotted class, a name the session has, and anything at advanced.
+    for (const [label, code, session] of [
+      ["a base of the variants", matching(": Animal", "Pet(name=n)")],
+      ["built-ins", matching(": Animal", "int() | str()")],
+      ["an import", `from shapes import Circle\n${matching(": Animal", "Circle()")}`],
+      ["a star import", `from shapes import *\n${matching(": Animal", "Circle()")}`],
+      ["a dotted class", `import shapes\n${matching(": Animal", "shapes.Circle()")}`],
+      ["a library's class", matching("", "Table()")],
+    ]) {
+      const ids = found(code).map((f) => f.id);
+      expect(ids.length === 0, `${label}: nothing, got ${ids.join(" ")}`);
+    }
+    expect(found(matching(": Animal", "Aardvark()"), "advanced").length === 0, "advanced has no static checks");
+    // At the prompt, a class an earlier line defined is one.
+    pyodide.runPython("_pll_sessions.setdefault('pets:repl', __import__('types').ModuleType('__main__')).__dict__['Lizard'] = type('Lizard', (), {})");
+    const prompt = analyze("match 3:\n    case Lizard():\n        pass\n", "beginner", "<repl>", "pets:repl");
+    expect(prompt.length === 0, `the session's own class: ${JSON.stringify(prompt.map((f) => f.id))}`);
+    const top = analyze("match 3:\n    case Gecko():\n        pass\n", "beginner", "<repl>", "pets:repl");
+    expect(top.map((f) => f.id).join() === "unknown-pattern-class", `and one it does not have: ${JSON.stringify(top.map((f) => f.id))}`);
+    pyodide.runPython("_pll_sessions.pop('pets:repl', None)");
+    console.log("    the class nothing defines, with the variants; the case that never matches; nothing else");
+  }
+
   fn.destroy?.();
 
   console.log(passed() ? "\nALL SMOKE TESTS PASSED" : "\nFAILED");

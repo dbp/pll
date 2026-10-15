@@ -384,3 +384,62 @@ def _pll_word_compared_with_class(f, level):
         "Use `match` to tell the kinds apart: `case %s(...):`." % name,
         "`%s` is the blueprint; a value made from it is never equal to it." % name,
     ]
+
+
+# -- a `case` pattern's class --------------------------------------------------
+
+
+def _pll_pattern_variants(subject, union, members):
+    """"an `Animal` is a `Boa` or an `Armadillo`", or "`a` is ..." for a
+    union written in the annotation itself."""
+    kinds = _pll_listed([_pll_with_article("`%s`" % m) for m in members], "or")
+    return "%s is %s" % (_pll_with_article("`%s`" % union) if union else "`%s`" % subject, kinds)
+
+
+def _pll_pattern_fixes(name, subject, union, members):
+    """Match one of them, or make `name` one of them."""
+    classes = [m for m in members if m != "None"]
+    cases = _pll_listed(["`case %s(...)`" % m for m in classes], "or")
+    widened = " | ".join(members + [name])
+    added = (
+        "If %s is a new kind of `%s`, define `class %s` and add it: `%s = %s`."
+        % (_pll_with_article("`%s`" % name), union, name, union, widened)
+        if union
+        else "If `%s` can be %s too, define `class %s` and add it to the annotation: `%s`."
+        % (subject, _pll_with_article("`%s`" % name), name, widened)
+    )
+    return ["Match %s: %s." % ("one of them" if len(classes) > 1 else "it", cases), added]
+
+
+def _pll_pattern_class_wording(name, subject, union, members, classes):
+    """A `case` pattern naming a class nothing defines: what the subject can
+    be, when its annotation says, or else the classes the program has."""
+    if members:
+        close = _pll_closest_name(name, [m for m in members if m != "None"])
+        # A misspelling: the one answer, not the ways round it.
+        return "There is no class `%s`: %s." % (name, _pll_pattern_variants(subject, union, members)), (
+            ["Did you mean `%s`?" % close] if close else _pll_pattern_fixes(name, subject, union, members)
+        )
+    headline = "There is no class `%s` for this `case` to match." % name
+    close = _pll_closest_name(name, classes)
+    if close:
+        return headline, ["Did you mean `%s`?" % close]
+    return headline, (["The classes this program has are %s." % _pll_list_names(classes)] if classes else []) + [
+        "If `%s` should be a class of its own, define it: `class %s:`." % (name, name)
+    ]
+
+
+@_pll_words("unknown-pattern-class")
+def _pll_word_unknown_pattern_class(f, level):
+    """`case Aardvark(b):` with no `Aardvark` anywhere: a NameError whenever
+    the case is tried, which a program can go a long time without doing."""
+    return _pll_pattern_class_wording(f["name_token"], f["subject"], f["union"], f["members"], f["classes"])
+
+
+@_pll_words("pattern-never-matches")
+def _pll_word_pattern_never_matches(f, level):
+    """`case Circle():` on a value annotated `Light`: a class it is never."""
+    name = f["name_token"]
+    return "This `case` never matches: %s, never %s." % (
+        _pll_pattern_variants(f["subject"], f["union"], f["members"]), _pll_with_article("`%s`" % name)
+    ), _pll_pattern_fixes(name, f["subject"], f["union"], f["members"])

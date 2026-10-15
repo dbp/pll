@@ -14,6 +14,15 @@ const CARS = "name,mpg\nvw,29\nhonda,33\nford,18\n";
 const RIDES = "month,riders\nJan,900\nFeb,1200\nMar,\n";
 
 const dataclass = (...lines) => ["from dataclasses import dataclass", "", ...lines];
+const PETS = (...match) =>
+  dataclass(
+    "@dataclass", "class Boa:", "    name: str", "    length: float", "",
+    "@dataclass", "class Armadillo:", "    name: str", "    liveness: bool", "",
+    "@dataclass", "class Rock:", "    weight: float", "",
+    "Animal = Boa | Armadillo", "",
+    "def animal_name(a: Animal) -> str:", "    match a:", ...match, '    return ""', "",
+    'print(animal_name(Boa("Ayisha", 10)))',
+  );
 
 export const CASES = [
   // ---- runtime: the catch-all and the stock rules -----------------------
@@ -164,6 +173,9 @@ export const CASES = [
   { name: "st-unused-value", code: [B, "def order(order_amt: float) -> float:", "    order_amt + 8", "    return order_amt"] },
   { name: "st-unused-value-field", code: [B, ...dataclass("@dataclass", "class Account:", "    balance: float", "", "def deposit(ac: Account, amt: float) -> Account:", "    ac.balance + amt", "    return ac")] },
   { name: "st-assert-tuple", code: [B, "def test_total():", "    assert(1, 2)"] },
+  { name: "st-pattern-unknown-class", code: [B, ...PETS("        case Aardvark(b):", "            return b", "        case Boa(n, l):", "            return n", "        case Armadillo(n, l):", "            return n")] },
+  { name: "st-pattern-never-matches", code: [B, ...PETS("        case Boa(n, l):", "            return n", "        case Rock(w):", '            return "a rock"')] },
+  { name: "pattern-unknown-class", code: [A, ...PETS("        case Aardvark(b):", "            return b", "        case Boa(n, l):", "            return n")] },
   { name: "st-method-not-called", code: [B, 'movies = table(["rating"], [[1], [2]])', "def avg() -> int:", "    return movies.length", "print(avg())"] },
   { name: "st-annotation-not-a-type", code: [B, "def f(t: table) -> int:", "    return 1"] },
   { name: "st-annotation-row", code: [B, "def f(r: row) -> int:", "    return 1"] },

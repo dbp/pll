@@ -134,6 +134,11 @@ def _pll_name_wording(e):
             if unbound.group(1) == "local"
             else "The `%s` here belongs to the function around this one, which sets it after this line runs." % name,
         ]
+    pattern = e.facts.get("pattern_class")
+    if pattern is not None:
+        return _pll_pattern_class_wording(
+            name, pattern["subject"], pattern["union"], pattern["members"], pattern["classes"]
+        )
     if named and line is not None:
         escaped = _pll_src_re.escape(name)
         # A function's parameter, used where the function itself belonged:

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+- **A `case` naming a class the program does not have is caught before the
+  run** at `beginner` and `intermediate`, where it was a NameError only
+  once that case was tried. It says what the subject can be - "There is no
+  class `Aardvark`: an `Animal` is a `Boa` or an `Armadillo`" - from the
+  parameter's annotation and the union it names. At every level, the same
+  NameError while the program runs is explained the same way.
+- **A `case` for a class the subject's annotation never allows is a
+  warning**: it never matches.
+
 ### Changed
 - **The header shows the prompt's level before the file has run**: the
   level its `#level` line names, as it is now (`[raw]` with none), where

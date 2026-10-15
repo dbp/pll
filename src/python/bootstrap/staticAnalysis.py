@@ -278,7 +278,7 @@ class _PllScopeBuilder:
 
 #: The kinds that are said but do not stop the code running: each can be
 #: right as written. Every other kind is an error, which does.
-_PLL_WARNING_KINDS = frozenset(("method-not-called", "test-not-named"))
+_PLL_WARNING_KINDS = frozenset(("method-not-called", "test-not-named", "pattern-never-matches"))
 
 
 def _pll_finding(kind, error_type, line, column, name_token=None, **extras):
@@ -372,6 +372,40 @@ _PLL_TYPE_NAMES = frozenset(("int", "float", "str", "bool", "list", "dict", "tup
 _PLL_METHOD_TYPES = frozenset(("str", "int", "float", "list", "dict", "set", "tuple", "bytes", "frozenset"))
 
 
+def _pll_union_written(annotation, aliases, seen=()):
+    """The classes a union annotation names, read from the code: `A | B`,
+    `Union[A, B]`, `Optional[A]`, a name the file sets to one of those, or
+    any of them in quotes - or None for one that cannot be read so."""
+    if isinstance(annotation, _ast.Constant) and isinstance(annotation.value, str):
+        try:
+            annotation = _ast.parse(annotation.value, mode="eval").body
+        except SyntaxError:
+            return None
+    if isinstance(annotation, _ast.Constant) and annotation.value is None:
+        return ["None"]
+    if isinstance(annotation, _ast.Name):
+        if annotation.id in aliases and annotation.id not in seen:
+            return _pll_union_written(aliases[annotation.id], aliases, seen + (annotation.id,))
+        return [annotation.id]
+    if isinstance(annotation, _ast.BinOp) and isinstance(annotation.op, _ast.BitOr):
+        parts = [annotation.left, annotation.right]
+    elif isinstance(annotation, _ast.Subscript) and _pll_dotted(annotation.value) in (
+        "Union", "typing.Union", "Optional", "typing.Optional"
+    ):
+        parts = list(annotation.slice.elts) if isinstance(annotation.slice, _ast.Tuple) else [annotation.slice]
+        if _pll_dotted(annotation.value).endswith("Optional"):
+            parts.append(_ast.Constant(value=None))
+    else:
+        return None
+    members = []
+    for part in parts:
+        named = _pll_union_written(part, aliases, seen)
+        if named is None:
+            return None
+        members.extend(m for m in named if m not in members)
+    return members
+
+
 def _pll_names_type(annotation):
     """Whether an annotation is `type` or `type[...]`."""
     if isinstance(annotation, _ast.Subscript):
@@ -397,7 +431,10 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         makes no field and goes wrong somewhere else entirely;
       - a class with fields and no `@dataclass`, whose constructor then
         "takes no arguments";
-      - `a == Boa`, which is always False.
+      - `a == Boa`, which is always False;
+      - a `case` pattern naming a class nothing defines, which fails only
+        when that case is tried, or one the subject's annotation never
+        allows, which never matches.
 
     Only inside a function for the first one: at the top level a bare
     expression is displayed, and the course relies on that.
@@ -413,9 +450,13 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         "_classes",
         "_fields",
         "_type_valued",
+        "_known",
+        "_aliases",
+        "_bases",
+        "_functions",
     )
 
-    def __init__(self, code, defined):
+    def __init__(self, code, defined, known=frozenset()):
         self.found = []
         # The student's text, so advice can quote `return order_amt + 4`
         # rather than say "`return` it".
@@ -439,6 +480,17 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         # A finding for each function that contains an `assert` and is not
         # a test - reported only if nothing calls it, which is known at the end.
         self._asserting = []
+        # Every name something can find: bound anywhere in the file, a
+        # built-in, or one of the libraries'. A `case` pattern's class
+        # outside it is a NameError whenever that case is tried.
+        self._known = known
+        # The top-level names set to a type, by what they are set to:
+        # `Animal = Boa | Armadillo`, for the classes a `match` can meet.
+        self._aliases = {}
+        # Each class's bases, by name.
+        self._bases = {}
+        # The functions being visited, innermost last.
+        self._functions = []
 
     # ---- functions ----
 
@@ -454,14 +506,23 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
             if not isinstance(node, _ast.ClassDef):
                 continue
             self._classes.add(node.name)
+            self._bases[node.name] = [_pll_dotted(base) for base in node.bases]
             for stmt in node.body:
                 if isinstance(stmt, _ast.AnnAssign) and isinstance(stmt.target, _ast.Name):
                     self._fields.add(stmt.target.id)
+        for stmt in tree.body:
+            if isinstance(stmt, _ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], _ast.Name):
+                self._aliases[stmt.targets[0].id] = stmt.value
+            elif isinstance(stmt, _ast.AnnAssign) and isinstance(stmt.target, _ast.Name) and stmt.value is not None:
+                self._aliases[stmt.target.id] = stmt.value
+            elif isinstance(stmt, getattr(_ast, "TypeAlias", ())) and isinstance(stmt.name, _ast.Name):
+                self._aliases[stmt.name.id] = stmt.value
         self.visit(tree)
         self.found.extend(f for f in self._asserting if f["name_token"] not in self._called)
         return self.found
 
     def _function(self, node):
+        self._functions.append(node)
         self._depth += 1
         self._type_valued.append({
             arg.arg
@@ -471,6 +532,7 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         self.generic_visit(node)
         self._type_valued.pop()
         self._depth -= 1
+        self._functions.pop()
         if self._contains_assert(node) and not node.name.startswith("test_"):
             self._asserting.append(
                 _pll_finding("test-not-named", "NeverRun", node.lineno, node.col_offset, node.name)
@@ -563,6 +625,70 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
                 _pll_finding("class-needs-dataclass", "NotADataclass", node.lineno, node.col_offset, node.name)
             )
         self.generic_visit(node)
+
+    # ---- `match` ----
+
+    def visit_Match(self, node):
+        """Each `case` class pattern's class: one nothing defines, and one
+        the subject can never be.
+
+        `case Aardvark(b):` fails only when it is tried, so a program whose
+        values always match an earlier `case` hides it; and a class the
+        subject's annotation does not allow is a `case` that never matches.
+        """
+        members, union = self._variants(node.subject)
+        facts = {
+            "subject": _ast.get_source_segment(self._code, node.subject),
+            "union": union,
+            "members": members,
+            "classes": sorted(self._classes),
+        }
+        for case in node.cases:
+            for pattern in _ast.walk(case.pattern):
+                if not (isinstance(pattern, _ast.MatchClass) and isinstance(pattern.cls, _ast.Name)):
+                    continue
+                cls = pattern.cls
+                if cls.id not in self._known and "*" not in self._known:
+                    self.found.append(
+                        _pll_finding("unknown-pattern-class", "NameError", cls.lineno, cls.col_offset, cls.id, **facts)
+                    )
+                elif members and cls.id not in members and self._never_matches(cls.id, members):
+                    self.found.append(
+                        _pll_finding("pattern-never-matches", "NeverMatches", cls.lineno, cls.col_offset, cls.id, **facts)
+                    )
+        self.generic_visit(node)
+
+    def _variants(self, subject):
+        """The classes `subject` can be, and the name of their union - when
+        it is a parameter annotated with a union this file writes out."""
+        if not (isinstance(subject, _ast.Name) and self._functions):
+            return None, None
+        args = self._functions[-1].args
+        annotation = next(
+            (a.annotation for a in args.posonlyargs + args.args + args.kwonlyargs if a.arg == subject.id), None
+        )
+        members = _pll_union_written(annotation, self._aliases) if annotation is not None else None
+        if not members or len(members) < 2:
+            return None, None
+        written = annotation.value.strip() if isinstance(annotation, _ast.Constant) else _pll_dotted(annotation)
+        return members, written if written in self._aliases else None
+
+    def _never_matches(self, name, members):
+        """Whether a value that is one of `members` can never be a `name`:
+        both are this file's classes, and `name` is no member's base."""
+        if name not in self._classes or not all(m in self._classes or m == "None" for m in members):
+            return False
+        pending = [m for m in members if m != "None"]
+        seen = set()
+        while pending:
+            member = pending.pop()
+            if member == name:
+                return False
+            if member in seen:
+                continue
+            seen.add(member)
+            pending.extend(b for b in self._bases.get(member, []) if b is not None)
+        return True
 
     def _class_valued(self, side):
         """Whether `side` is a class itself, which a class can equal:
@@ -952,7 +1078,8 @@ def _pll_static_analyze(code, level, filename, session_key=None):
             ))
 
     # ---- mistakes that would otherwise run without a word ----
-    findings.extend(_PllSilenceVisitor(code, set(builder.scopes[0].bindings)).scan(tree))
+    known = set().union(*(scope.bindings for scope in builder.scopes)) | builtins_set | set(library_names)
+    findings.extend(_PllSilenceVisitor(code, set(builder.scopes[0].bindings), known).scan(tree))
 
     findings.sort(key=lambda f: (f["line_number"] or 0, f["column"] or 0))
     return findings
