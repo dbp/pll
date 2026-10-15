@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.1 (2026-10-15)
+
 ### Added
 - **A `case` naming a class the program does not have is caught before the
   run** at `beginner` and `intermediate`, where it was a NameError only
