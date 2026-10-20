@@ -1279,6 +1279,25 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
     console.log(`    ${CASES.length} programs: built-ins, the libraries' names, two definitions, a reassignment, scopes, levels`);
   }
 
+  console.log("\n[30] a name that shadows another and is then reassigned is both, said at each line");
+  {
+    const CASES = [
+      ["a parameter, given a new value", "beginner", "x = 10\n\ndef f(x: int) -> None:\n    x = 20\n", ["shadowing@3", "reassignment@4"]],
+      ["a local, assigned twice", "beginner", "count = 0\n\ndef f() -> None:\n    count = 1\n    count = 2\n", ["shadowing@4", "reassignment@5"]],
+      ["a built-in, assigned twice", "beginner", "list = [1]\nlist = [2]\n", ["shadowing-builtin@1", "reassignment@2"]],
+      ["at intermediate, a function may change it", "intermediate", "x = 10\n\ndef f(x: int) -> None:\n    x = 20\n", ["shadowing@3"]],
+      ["a pll import and one assignment: the library's, once", "beginner", "from pll.image import circle\ncircle = 5\n", ["shadowing-library@2"]],
+      ["a pll import and two assignments", "beginner", "from pll.image import circle\ncircle = 5\ncircle = 6\n", ["shadowing-library@2", "reassignment@3"]],
+    ];
+    for (const [label, level, code, want] of CASES) {
+      const got = analyze(code, level, "both.py")
+        .filter((f) => /^(shadowing|reassignment)/.test(f.id))
+        .map((f) => `${f.id}@${f.line_number}`);
+      expect(got.join(" ") === want.join(" "), `${label}: ${got.join(" ")}, not ${want.join(" ")}`);
+    }
+    console.log(`    ${CASES.length} programs`);
+  }
+
   fn.destroy?.();
 
   console.log(passed() ? "\nALL SMOKE TESTS PASSED" : "\nFAILED");

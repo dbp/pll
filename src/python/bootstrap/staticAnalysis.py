@@ -10,9 +10,8 @@
 #     2. Reassignment:     a name bound more than once within the *same*
 #                          scope - or, for a `def`, `class` or `type`
 #                          written twice (or a `class` and a `type`), a
-#                          duplicate definition. Suppressed for names
-#                          already flagged as shadowing in that scope (fix
-#                          the shadow first).
+#                          duplicate definition. Said whether or not the
+#                          name shadows another as well.
 #     3. Disallowed kw:    `global` and `nonlocal` statements.
 #     4. Unbinding:        `del` of a name. `del` of an item - `del d[key]`,
 #                          `del xs[0]` - changes a value, not a name, and is
@@ -1048,9 +1047,7 @@ def _pll_teaching_findings(tree, code, level, session_key):
                 enclosing[outer_name] = (outer_first[0], outer_first[1], cur.kind, outer_first[2])
             cur = cur.parent
 
-        shadowed_in_scope = set()
-
-        # ---- Shadowing first ----
+        # ---- Shadowing ----
         for name, locs in scope.bindings.items():
             if name in scope.declared_elsewhere:
                 # `global x` has its own finding; one for the same name here
@@ -1078,7 +1075,6 @@ def _pll_teaching_findings(tree, code, level, session_key):
                     break
             report_loc = defining_loc if defining_loc is not None else first_loc
             if name in enclosing:
-                shadowed_in_scope.add(name)
                 outer = enclosing[name]
                 findings.append(_pll_finding(
                     "shadowing", "Shadowing", report_loc[0], report_loc[1], name,
@@ -1090,14 +1086,12 @@ def _pll_teaching_findings(tree, code, level, session_key):
                     outer_binding=outer[3],
                 ))
             elif name in builtins_set and defining_loc is not None:
-                shadowed_in_scope.add(name)
                 findings.append(_pll_finding(
                     "shadowing-builtin", "Shadowing", defining_loc[0], defining_loc[1], name,
                     scope_kind=scope.kind,
                     binding=defining_loc[2],
                 ))
             elif name in library_names and defining_loc is not None:
-                shadowed_in_scope.add(name)
                 findings.append(_pll_finding(
                     "shadowing-library", "Shadowing", defining_loc[0], defining_loc[1], name,
                     scope_kind=scope.kind,
@@ -1107,13 +1101,17 @@ def _pll_teaching_findings(tree, code, level, session_key):
                     library_type=isinstance(_pll_initial_globals.get(name), type),
                 ))
 
-        # ---- Then reassignment (skip names already shadow-flagged) ----
+        # ---- Reassignment ----
+        # Apart from shadowing: a parameter that hides an outer name and is
+        # then given a new value is both, and renaming it mends only one.
         if _pll_refuses_reassignment(level, scope.kind):
             for name, locs in scope.bindings.items():
-                if name in shadowed_in_scope or name in scope.declared_elsewhere:
+                if name in scope.declared_elsewhere:
                     continue
-                # A property's setter is the property, not a second one.
-                locs = [loc for loc in locs if loc[2] != "accessor"]
+                # A property's setter is the property, not a second one; and
+                # a name imported from a `pll` module is the library's, so
+                # assigning it is the library shadowing, said once.
+                locs = [loc for loc in locs if loc[2] != "accessor" and not _pll_is_pll_import_loc(loc)]
                 # The same capture in two `case`s (or two `except`s) is bound
                 # by whichever one runs, never twice.
                 if all(loc[2] == "capture" for loc in locs):

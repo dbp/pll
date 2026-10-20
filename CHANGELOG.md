@@ -40,6 +40,10 @@
   the language servers off, hardly any other extension adds one.
 
 ### Fixed
+- **A name that shadows another and is then reassigned gets both
+  findings** at `beginner`: `def f(x):` under a top-level `x`, with `x = 20`
+  in it, is shadowing on the `def` line and reassignment on the `x = 20`
+  line, where the reassignment went unsaid.
 - **`type list = int` is caught at `beginner` and `intermediate`**, as
   `list = int` is. A `type` statement defines its name, so hiding a built-in
   or a PLL name with one, or defining a name twice with one, is refused like

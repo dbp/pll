@@ -1251,6 +1251,26 @@ stderr:
   
   Static analysis found 1 problem. The file was not run.
 
+=== st-shadowing-and-reassignment (exit 2)
+stderr:
+  student.py [beginner]
+  Shadowing: `x` is already defined (first defined on line 2, in the file).
+    at student.py:4:7
+  
+  How to fix:
+    - Rename this parameter to something distinct (e.g. `x_inner`, `local_x`, or whatever describes its role).
+    - Or, if you want to use the outer `x`, just read it directly without making a new parameter.
+  
+  Reassignment: `x` is already assigned (first assigned on line 4).
+    at student.py:5:5
+  
+  How to fix:
+    - If you want a different value, give it a different name (e.g. `x_doubled`, `new_x`, `x2`).
+    - If you're trying to update a value (`x = x + 1`, accumulators, running totals), use a built-in like `sum(...)`, `max(...)`, or a small helper function that returns the new value instead.
+    - `#level intermediate` allows changing a variable inside a function, which is what a running total needs.
+  
+  Static analysis found 2 problems. The file was not run.
+
 === st-global (exit 2)
 stderr:
   student.py [intermediate]
