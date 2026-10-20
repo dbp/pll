@@ -149,6 +149,11 @@ _r`);
 
   console.log("\n[4] URLs through urllib, pandas and the libraries, on the desktop's path");
   const { base, close } = await startServer();
+  // Where nothing answers, refused at once and with no network: a name
+  // that does not resolve would wait on the network's DNS, which may be
+  // slow or absent. Port 4 is unassigned, below the ports the system hands
+  // out, and not one `fetch` refuses to try, as it does 1, 7 and 9.
+  const CLOSED = "127.0.0.1:4";
   try {
     const run = (code) => py(code).toJs({ dict_converter: Object.fromEntries });
     // Every byte value as sent: Latin-1 and ISO-8859-15 differ at eight.
@@ -174,7 +179,7 @@ _out`);
     const failed = run(`
 import time
 _out = []
-for _url, _timeout in (("http://nowhere.invalid/x", None), (${JSON.stringify(base + "/hang")}, 0.5)):
+for _url, _timeout in (("http://${CLOSED}/x", None), (${JSON.stringify(base + "/hang")}, 0.5)):
     _start = time.time()
     try:
         urllib.request.urlopen(_url, timeout=_timeout) if _timeout else urllib.request.urlopen(_url)
@@ -182,8 +187,8 @@ for _url, _timeout in (("http://nowhere.invalid/x", None), (${JSON.stringify(bas
         _out.append([type(e.reason).__name__, str(e.reason), time.time() - _start < 5])
 _out`);
     expect(
-      failed[0]?.[1] === "could not connect to nowhere.invalid (ENOTFOUND)",
-      `unreachable, said simply: ${JSON.stringify(failed[0])}`,
+      failed[0]?.[1] === `could not connect to ${CLOSED} (ECONNREFUSED)` && failed[0]?.[2] === true,
+      `unreachable, said simply, at once: ${JSON.stringify(failed[0])}`,
     );
     expect(
       failed[1]?.[0] === "TimeoutError" && /did not answer within 0\.5 seconds/.test(failed[1]?.[1]) && failed[1]?.[2] === true,
@@ -194,14 +199,14 @@ _out`);
     const libraries = run(`
 _t = load_table(${JSON.stringify(base + "/cities.csv")})
 try:
-    load_table("http://nowhere.invalid/x.csv")
+    load_table("http://${CLOSED}/x.csv")
     _e = None
 except OSError as e:
     _e = str(e)
 [_t.column("city"), _e]`);
     expect(libraries[0][0] === "Zürich", `load_table: ${JSON.stringify(libraries[0])}`);
     expect(
-      libraries[1] === "load_table could not read http://nowhere.invalid/x.csv: could not connect to nowhere.invalid (ENOTFOUND).",
+      libraries[1] === `load_table could not read http://${CLOSED}/x.csv: could not connect to ${CLOSED} (ECONNREFUSED).`,
       `no CORS advice off the web: ${libraries[1]}`,
     );
     // A request with a method, a body and a header, by urllib and by
@@ -225,7 +230,7 @@ _r = requests.post(${echo}, json={"b": 2}, headers={"X-Pll": "too"}, timeout=5)
     expect(sent[7] === String(CARS_CSV.length), `and its length is the text's: ${sent[7]}`);
     const refused = run(`
 _out = []
-for _call in (lambda: requests.get("http://nowhere.invalid/x"), lambda: requests.get(${JSON.stringify(base + "/hang")}, timeout=0.5)):
+for _call in (lambda: requests.get("http://${CLOSED}/x"), lambda: requests.get(${JSON.stringify(base + "/hang")}, timeout=0.5)):
     try:
         _call()
     except requests.RequestException as e:
@@ -234,7 +239,7 @@ _out`);
     expect(
       JSON.stringify(refused) ===
         JSON.stringify([
-          ["ConnectionError", "could not connect to nowhere.invalid (ENOTFOUND)"],
+          ["ConnectionError", `could not connect to ${CLOSED} (ECONNREFUSED)`],
           ["ConnectTimeout", `${base.slice("http://".length)} did not answer within 0.5 seconds`],
         ]),
       `requests' own exceptions, in a sentence: ${JSON.stringify(refused)}`,
