@@ -1312,6 +1312,66 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
     console.log(`    ${CASES.length} programs`);
   }
 
+  console.log("\n[31] a function annotated to return something, with no `return` in it");
+  {
+    const CASES = [
+      ["a value worked out and kept", "def area(r: float) -> float:\n    a = 3.14 * r * r\n", ["missing-return@1"]],
+      ["printed instead of returned", "def area(r: float) -> float:\n    print(3.14 * r * r)\n", ["missing-return@1"]],
+      ["a method", "class C:\n    def size(self) -> int:\n        self.n = 1\n", ["missing-return@2"]],
+      ["a loop with no answer after it", "def total(xs: list[int]) -> int:\n    t = 0\n    for x in xs:\n        print(x)\n", ["missing-return@1"]],
+      ["an annotation that is a union", "def first(xs: list[int]) -> int | None:\n    print(xs)\n", ["missing-return@1"]],
+      // Left alone: one that gives back nothing, by its annotation or by
+      // never finishing; one not written yet; and one that returns anywhere.
+      ["`-> None`", "def show(x: int) -> None:\n    print(x)\n", []],
+      ["`-> 'None'`", "def show(x: int) -> 'None':\n    print(x)\n", []],
+      ["`-> NoReturn`", "from typing import NoReturn\ndef stop() -> NoReturn:\n    raise SystemExit(1)\n", []],
+      ["no annotation", "def show(x):\n    print(x)\n", []],
+      ["a `return` in one branch", "def k(x: int) -> int:\n    if x > 0:\n        return x\n", []],
+      ["a generator", "def gen() -> list[int]:\n    yield 1\n", []],
+      ["`pass`, under a docstring", 'def todo() -> int:\n    """Not yet."""\n    pass\n', []],
+      ["`...`", "def todo() -> int:\n    ...\n", []],
+      ["`raise NotImplementedError`", "def todo() -> int:\n    raise NotImplementedError\n", []],
+      ["one that ends by raising", "def fail(m: str) -> int:\n    print(m)\n    raise ValueError(m)\n", []],
+      ["an abstract method", "from abc import abstractmethod\nclass S:\n    @abstractmethod\n    def area(self) -> float:\n        print('x')\n", []],
+      ["a test", "def test_a() -> None:\n    assert 1 == 1\n", []],
+      // A `return` of an inner function's is not the outer one's.
+      ["a `return` only inside an inner function", "def outer() -> int:\n    def inner() -> int:\n        return 1\n    inner()\n", ["missing-return@1"]],
+      // A value thrown away on the last line is told to be returned already.
+      ["a last line that is a value thrown away", "def add_one(x: int) -> int:\n    x + 1\n", ["unused-value@2"]],
+      ["a last line that is a comparison", "def is_five(x: int) -> bool:\n    x == 5\n", ["unused-comparison@2"]],
+      // A course's template, every case still `pass`, is not written yet.
+      ["a template's cases, all `pass`", "def my_count(lst: list) -> int:\n    match lst:\n        case []:\n            pass  # YOUR CODE HERE\n        case [f, *r]:\n            pass\n", []],
+      // Pyret's answers on their own lines: each told to `return`, once.
+      ["each case's answer thrown away", "def my_count(lst: list) -> int:\n    match lst:\n        case []:\n            0\n        case [f, *r]:\n            1 + my_count(r)\n", ["unused-value@4", "unused-value@6"]],
+      ["one case written, the other not", "def my_count(lst: list) -> int:\n    match lst:\n        case []:\n            pass\n        case [f, *r]:\n            n = 1 + my_count(r)\n", ["missing-return@1"]],
+      ["an `if` without an `else`, its answer thrown away", "def sign(x: int) -> int:\n    if x > 0:\n        1\n", ["missing-return@1", "unused-value@3"]],
+    ];
+    for (const [label, code, want] of CASES) {
+      const got = analyze(code, "beginner", "ret.py")
+        .filter((f) => ["missing-return", "unused-value", "unused-comparison"].includes(f.id))
+        .map((f) => `${f.id}@${f.line_number}`);
+      expect(got.join(" ") === want.join(" "), `${label}: ${got.join(" ")}, not ${want.join(" ")}`);
+    }
+    const words = (code) => wordStatic(analyze(code, "beginner", "ret.py").filter((f) => f.id === "missing-return"), "beginner", "ret.py")[0];
+    const printed = words("def area(r: float) -> float:\n    print(3.14 * r * r)\n");
+    expect(
+      printed?.headline === "`area` should return a number (`float`), but it has no `return`, so it always gives back `None`." &&
+        printed.howToFix[0] === "Line 2 ends it with `print`: did you mean `return 3.14 * r * r`?",
+      `printed: ${JSON.stringify(printed)}`,
+    );
+    const plain = words("def shout(word: str) -> str:\n    word.upper()\n");
+    expect(
+      JSON.stringify(plain?.howToFix) ===
+        JSON.stringify(["End it with `return` and the value it works out.", "Or annotate the return type as `None` if `shout` is not meant to return anything."]),
+      `a call, which may give back nothing: ${JSON.stringify(plain?.howToFix)}`,
+    );
+    const union = words("def first(xs: list[int]) -> int | None:\n    print(xs)\n");
+    expect(/should return `int \| None`/.test(union?.headline ?? ""), `an annotation as written: ${union?.headline}`);
+    expect(analyze("def area(r: float) -> float:\n    a = r\n", "intermediate", "ret.py").some((f) => f.id === "missing-return"), "at intermediate too");
+    expect(!analyze("def area(r: float) -> float:\n    a = r\n", "advanced", "ret.py").some((f) => f.id === "missing-return"), "and not at advanced");
+    console.log(`    ${CASES.length} functions`);
+  }
+
   fn.destroy?.();
 
   console.log(passed() ? "\nALL SMOKE TESTS PASSED" : "\nFAILED");

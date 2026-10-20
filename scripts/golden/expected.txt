@@ -697,7 +697,19 @@ stderr:
     - If it should be a number (`float`), convert it with `float(...)`.
     - Or, if `n` really should be a string (`str`), change its annotation in `half` from `float` to `str`.
 
-=== tc-return-none (exit 1)
+=== tc-return-none (exit 2)
+stderr:
+  student.py [beginner]
+  MissingReturn: `shout` should return a string (`str`), but it has no `return`, so it always gives back `None`.
+    at student.py:2:1
+  
+  How to fix:
+    - End it with `return` and the value it works out.
+    - Or annotate the return type as `None` if `shout` is not meant to return anything.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== tc-return-none-branch (exit 1)
 stderr:
   student.py [beginner]
   TypeMismatch: `shout` should return a string (`str`), but it finished without returning a value.
@@ -1545,6 +1557,30 @@ stderr:
   How to fix:
     - Did you mean `return 2`? A function gives back only what it `return`s.
     - Nothing in Python changes as a result of this line.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-missing-return-print (exit 2)
+stderr:
+  student.py [beginner]
+  MissingReturn: `lemonade_stand` should return a whole number (`int`), but it has no `return`, so it always gives back `None`.
+    at student.py:2:1
+  
+  How to fix:
+    - Line 4 ends it with `print`: did you mean `return profit`?
+    - `print` shows a value on screen; `return` hands it back to whatever called the function.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-missing-return (exit 2)
+stderr:
+  student.py [beginner]
+  MissingReturn: `lemonade_stand` should return a whole number (`int`), but it has no `return`, so it always gives back `None`.
+    at student.py:2:1
+  
+  How to fix:
+    - End it with `return` and the value it works out.
+    - Or annotate the return type as `None` if `lemonade_stand` is not meant to return anything.
   
   Static analysis found 1 problem. The file was not run.
 

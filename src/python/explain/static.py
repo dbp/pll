@@ -357,6 +357,26 @@ def _pll_word_unused_value(f, level):
     return headline, fixes + ["Nothing in Python changes as a result of this line."]
 
 
+@_pll_words("missing-return")
+def _pll_word_missing_return(f, level):
+    """`def area(r: float) -> float:` with no `return` in it - worded as the
+    run's type check words the `None` it gives back."""
+    name = f["name_token"] or "this function"
+    written = f.get("returns") or ""
+    wanted = _pll_describe_type(written) if _pll_src_re.fullmatch(r"[A-Za-z_]\w*", written) else "`%s`" % written
+    headline = "`%s` should return %s, but it has no `return`, so it always gives back `None`." % (name, wanted)
+    printed = f.get("printed")
+    if printed is not None:
+        return headline, [
+            "Line %d ends it with `print`: did you mean `return %s`?" % (f["printed_line"], printed),
+            "`print` shows a value on screen; `return` hands it back to whatever called the function.",
+        ]
+    return headline, [
+        "End it with `return` and the value it works out.",
+        "Or annotate the return type as `None` if `%s` is not meant to return anything." % name,
+    ]
+
+
 @_pll_words("assert-tuple")
 def _pll_word_assert_tuple(f, level):
     """`assert(x, 1)`: a tuple, which is always true."""

@@ -29,6 +29,16 @@
   uses it here."). Each is worded as the `NameError` a run would raise. A
   function's body is checked only for names given a value nowhere in the
   file, unless a call runs it early.
+- **A function annotated to return something, with no `return` in it, is
+  caught before the run** at `beginner` and `intermediate`: `def area(r:
+  float) -> float:` that works out its answer and does not return it,
+  "should return a number (`float`), but it has no `return`, so it always
+  gives back `None`" - and when its last line is a `print`, "did you mean
+  `return ...`?". Not for `-> None`, a generator, a function that ends by
+  raising, an abstract method, or one not written yet - every line `pass`,
+  `...` or `raise NotImplementedError`, as a course template's `case []:
+  pass  # YOUR CODE HERE` is. One whose every ending is a value on a line
+  of its own is told to `return` it there instead.
 - **Three ways of starting a function that Python cannot read are said as
   what they are**, for students coming from Pyret: a `-` in the name
   (`def foo-bar(x):` - "Python reads `foo-bar` as `foo` minus `bar`", and

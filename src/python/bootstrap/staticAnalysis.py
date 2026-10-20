@@ -453,6 +453,8 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
 
       - a value computed and thrown away inside a function, which is how a
         test written without `assert` always passes;
+      - a function annotated to return a value with no `return` in it,
+        which gives back `None` - printing its answer, most often;
       - `assert(x, 1)`, where the tuple is always true;
       - a function containing `assert` that is not named `test_...` and is
         never called, so it never runs;
@@ -570,9 +572,75 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
                 _pll_finding("test-not-named", "NeverRun", node.lineno, node.col_offset, node.name)
             )
         self._not_a_type(node.returns)
+        self._missing_return(node)
 
     visit_FunctionDef = _function
     visit_AsyncFunctionDef = _function
+
+    def _ends_thrown_away(self, statements):
+        """Whether every way `statements` can end is a value on a line of
+        its own: the last line, or the last of each branch of an `if` with an
+        `else`, of each `case`, of a `with`."""
+        if not statements:
+            return False
+        last = statements[-1]
+        if isinstance(last, _ast.Expr):
+            return self._discarded(last.value)
+        if isinstance(last, _ast.If):
+            # With no `else`, it can end without either: an empty block ends
+            # in nothing thrown away.
+            return self._ends_thrown_away(last.body) and self._ends_thrown_away(last.orelse)
+        if isinstance(last, _ast.Match):
+            return all(self._ends_thrown_away(case.body) for case in last.cases)
+        if isinstance(last, (_ast.With, _ast.AsyncWith)):
+            return self._ends_thrown_away(last.body)
+        return False
+
+    def _missing_return(self, node):
+        """`def area(r: float) -> float:` with no `return` in it gives back
+        `None`, whatever its annotation says. Not a function annotated to
+        give nothing back (`-> None`, `-> NoReturn`), a generator, one still
+        to be written - every line of it `pass`, `...` or `raise
+        NotImplementedError`, as a course's `case []: pass  # YOUR CODE
+        HERE` is - one that ends by raising, an abstract method or an
+        overload; nor one that ends only in values thrown away, each of
+        which is already told to `return` it."""
+        returns = node.returns
+        if returns is None or _pll_gives_nothing(returns):
+            return
+        if any(_pll_decorator_name(d) in ("abstractmethod", "overload") for d in node.decorator_list):
+            return
+        if all(_pll_is_placeholder(statement) for statement in _pll_simple_statements(node.body)):
+            return
+        body = node.body[1:] if _pll_is_docstring(node.body[0]) else node.body
+        last = body[-1]
+        if isinstance(last, _ast.Raise) or self._ends_thrown_away(body):
+            return
+        if any(isinstance(n, (_ast.Return, _ast.Yield, _ast.YieldFrom)) for n in _pll_own_nodes(node)):
+            return
+        call = last.value if isinstance(last, _ast.Expr) and isinstance(last.value, _ast.Call) else None
+        printed = None
+        if (
+            call is not None
+            and isinstance(call.func, _ast.Name)
+            and call.func.id == "print"
+            and len(call.args) == 1
+            and not call.keywords
+            and not isinstance(call.args[0], _ast.Starred)
+        ):
+            printed = _ast.get_source_segment(self._code, call.args[0])
+        self.found.append(
+            _pll_finding(
+                "missing-return",
+                "MissingReturn",
+                node.lineno,
+                node.col_offset,
+                node.name,
+                returns=_ast.get_source_segment(self._code, returns),
+                printed=printed,
+                printed_line=last.lineno if printed is not None else None,
+            )
+        )
 
     @staticmethod
     def _contains_assert(node):
@@ -891,6 +959,73 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
 
     visit_AnnAssign = _annotation
     visit_arg = _annotation
+
+
+def _pll_gives_nothing(annotation):
+    """Whether a return annotation says the function gives nothing back:
+    `None`, or `NoReturn` / `Never` for one that never returns at all."""
+    if isinstance(annotation, _ast.Constant):
+        return annotation.value is None or annotation.value in ("None", "NoReturn", "Never")
+    if isinstance(annotation, _ast.Name):
+        return annotation.id in ("NoReturn", "Never")
+    return isinstance(annotation, _ast.Attribute) and annotation.attr in ("NoReturn", "Never")
+
+
+def _pll_decorator_name(decorator):
+    """`abstractmethod` for `@abstractmethod` and `@abc.abstractmethod`."""
+    if isinstance(decorator, _ast.Call):
+        decorator = decorator.func
+    if isinstance(decorator, _ast.Attribute):
+        return decorator.attr
+    return decorator.id if isinstance(decorator, _ast.Name) else None
+
+
+def _pll_is_docstring(statement):
+    return isinstance(statement, _ast.Expr) and isinstance(statement.value, _ast.Constant) and isinstance(
+        statement.value.value, str
+    )
+
+
+def _pll_is_placeholder(statement):
+    """A line that holds a place in a function not written yet: `pass`,
+    `...`, a string, or `raise NotImplementedError`."""
+    if isinstance(statement, _ast.Pass):
+        return True
+    if isinstance(statement, _ast.Expr) and isinstance(statement.value, _ast.Constant):
+        return statement.value.value is Ellipsis or isinstance(statement.value.value, str)
+    if isinstance(statement, _ast.Raise):
+        raised = statement.exc.func if isinstance(statement.exc, _ast.Call) else statement.exc
+        return isinstance(raised, _ast.Name) and raised.id == "NotImplementedError"
+    return False
+
+
+def _pll_simple_statements(statements):
+    """The statements that are not blocks of others, through every block:
+    a `match`'s cases' and an `if`'s lines, not the `match` or the `if` -
+    and not into a function or class inside."""
+    for statement in statements:
+        if isinstance(statement, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+            continue
+        blocks = [getattr(statement, field, None) or [] for field in ("body", "orelse", "finalbody")]
+        blocks += [handler.body for handler in getattr(statement, "handlers", None) or []]
+        blocks += [case.body for case in getattr(statement, "cases", None) or []]
+        if any(blocks):
+            for block in blocks:
+                yield from _pll_simple_statements(block)
+        else:
+            yield statement
+
+
+def _pll_own_nodes(function):
+    """Every node of `function`'s body - not of the functions, lambdas and
+    classes inside it, whose `return`s are their own."""
+    pending = list(function.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.Lambda, _ast.ClassDef)):
+            continue
+        yield node
+        pending.extend(_ast.iter_child_nodes(node))
 
 
 def _pll_session_bound_names(session_key):
