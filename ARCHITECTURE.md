@@ -863,8 +863,22 @@ pnpm run smoke         # build, then the whole smoke suite (below)
 
 ### Smoke tests
 
-`pnpm run smoke` builds and then runs `scripts/smoke-*.mjs` in order.
-Three of them cover the host-side TypeScript with no Pyodide involved:
+`pnpm run smoke` builds and then runs `scripts/smoke.mjs`, which runs the
+`scripts/smoke-*.mjs` tests as separate processes, about as many at once
+as the machine's cores carry. Almost every job starts Pyodide, and a start
+is nearly two seconds of work, so a job per core oversubscribes the
+machine: three quarters of the cores is the default, and `--jobs=N` changes
+it. The tests made of `section(...)`s (`scripts/lib/check.mjs`) - smoke-cli
+and smoke-examplar-build - run one job per section, which is why each
+section stands on its own, in files of its own; the golden corpus runs in
+shards (`PLL_GOLDEN_SHARD`). The jobs that measure real time - a Stop's
+latency, a reactor's clock, a Ctrl+C sent at a moment - run last, a few at
+a time, on a quiet machine. Each job's output is kept in `.smoke-logs/`,
+and a failing job's is printed. `node scripts/smoke.mjs golden cli` runs
+only the jobs whose names contain those words; `--serial` runs one at a
+time.
+
+Three of the tests cover the host-side TypeScript with no Pyodide involved:
 
 - `smoke-repl-session.mjs` — `ReplSession` against a fake runtime and a
   recording view, with `vscode` aliased to a stub: per-file sessions,

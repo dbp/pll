@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { expect, passed } from "./lib/check.mjs";
+import { expect, passed, section } from "./lib/check.mjs";
 import { ROOT } from "./lib/bundle.mjs";
 
 const CLI = resolve(ROOT, "dist-cli", "cli.cjs");
@@ -80,8 +80,7 @@ async function main() {
   write("hw/chaffs/shout/1.py", ...NO_BANG);
   write("hw/chaffs/total/1.py", ...SKIPS);
 
-  console.log("\n[1] build writes a bundle of bytecode, compiled by this Pyodide");
-  {
+  if (section("1", "build writes a bundle of bytecode, compiled by this Pyodide")) {
     const r = await run(["examplar", "build", "hw"]);
     expect(r.code === 0, `expected exit 0, got ${r.code}: ${r.stderr}`);
     let bundle;
@@ -116,8 +115,7 @@ async function main() {
     );
   }
 
-  console.log("\n[2] -o writes to a file");
-  {
+  if (section("2", "-o writes to a file")) {
     const r = await run(["examplar", "build", "hw", "-o", "hw.json"]);
     expect(r.code === 0, `expected exit 0, got ${r.code}`);
     expect(existsSync(join(work, "hw.json")), "the bundle should be written");
@@ -126,8 +124,7 @@ async function main() {
     console.log("    wrote hw.json");
   }
 
-  console.log("\n[3] --verify accepts a sound bundle");
-  {
+  if (section("3", "--verify accepts a sound bundle")) {
     write("staff.py", 'def test_shout():', '    assert shout("hi") == "HI!"', "", "def test_total():", "    assert total([1, 2, 3]) == 6");
     const r = await run(["examplar", "build", "hw", "-o", "ok.json", "--verify", "staff.py"]);
     expect(r.code === 0, `expected exit 0, got ${r.code}: ${r.stderr}`);
@@ -138,8 +135,7 @@ async function main() {
     console.log("    verified and written");
   }
 
-  console.log("\n[4] --verify refuses a chaff nothing catches");
-  {
+  if (section("4", "--verify refuses a chaff nothing catches")) {
     write("weak.py", "def test_shout():", '    assert shout("hi") == "HI!"');
     const r = await run(["examplar", "build", "hw", "-o", "weak.json", "--verify", "weak.py"]);
     expect(r.code === 3, `an unsound bundle should exit 3, got ${r.code}`);
@@ -163,8 +159,7 @@ async function main() {
     console.log("    an unstarted function and a real gap are reported differently");
   }
 
-  console.log("\n[5] --verify catches a staff test that is itself wrong");
-  {
+  if (section("5", "--verify catches a staff test that is itself wrong")) {
     write("wrong.py", "def test_shout():", '    assert shout("hi") == "hi!"', "", "def test_total():", "    assert total([1, 2, 3]) == 6");
     const r = await run(["examplar", "build", "hw", "--verify", "wrong.py"]);
     expect(r.code === 3, `expected exit 3, got ${r.code}`);
@@ -180,8 +175,7 @@ async function main() {
     console.log("    flagged the wheats, withheld shout's chaffs, scored total's");
   }
 
-  console.log("\n[6] incoherent and missing inputs are reported");
-  {
+  if (section("6", "incoherent and missing inputs are reported")) {
     write("bad/wheats/a.py", "def shout(w):", "    return w");
     write("bad/chaffs/shout/b.py", "def shout(w):", "    return w", "", "def extra(x):", "    return x");
     const mismatch = await run(["examplar", "build", "bad"]);
@@ -209,8 +203,7 @@ async function main() {
     console.log("    seven input errors, and --help");
   }
 
-  console.log("\n[6b] the chaff layout is stated, not guessed");
-  {
+  if (section("6b", "the chaff layout is stated, not guessed")) {
     // The directory is how an author says which function a chaff breaks, so
     // the three ways of getting it wrong all have to say what to do.
     write("loose/wheats/a.py", "def shout(w):", "    return w");
@@ -234,8 +227,7 @@ async function main() {
     console.log("    a loose chaff, an unknown function, and a function with none");
   }
 
-  console.log("\n[7] global flags may precede the subcommand");
-  {
+  if (section("7", "global flags may precede the subcommand")) {
     const r = await run(["examplar", "build", "hw"]);
     const quiet = await new Promise((res, rej) => {
       const child = spawn(process.execPath, [CLI, "--quiet", "--no-color", "examplar", "build", "hw"], { cwd: work });
@@ -252,8 +244,7 @@ async function main() {
     console.log("    `pll --quiet --no-color examplar build` behaves");
   }
 
-  console.log("\n[8] only the suite's definitions are run, not its program");
-  {
+  if (section("8", "only the suite's definitions are run, not its program")) {
     // The phase runs with the workspace unmounted, and it runs the file once
     // per implementation, so its top-level statements are deliberately not
     // executed: `print` would go four times over, `input()` would block the
@@ -308,8 +299,7 @@ async function main() {
     console.log("    the tests that needed it are gated; the others are still scored");
   }
 
-  console.log("\n[9] the sample bundle in samples/ is sound");
-  {
+  if (section("9", "the sample bundle in samples/ is sound")) {
     // `samples/examplar_bundle` is documentation, and documentation rots.
     // It is also the only worked example of the authoring workflow, so if
     // editing a wheat quietly makes a chaff uncatchable, that should fail
@@ -351,8 +341,7 @@ async function main() {
     console.log(`    samples/examplar.py passes the wheats and misses chaffs ${uncaught.join(", ")}`);
   }
 
-  console.log("\n[10] a student's check: the names a run has, nothing given away, nothing stuck");
-  {
+  if (section("10", "a student's check: the names a run has, nothing given away, nothing stuck")) {
     // Bundles served from here, as a course's server would.
     const server = createServer((req, res) => {
       try {

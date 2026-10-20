@@ -13,6 +13,10 @@
  *   node scripts/smoke-golden.mjs --update   accept the current output
  *   node scripts/smoke-golden.mjs NAME...    only these cases (no --update)
  *
+ * `PLL_GOLDEN_SHARD=i/k` runs every k-th case from the i-th, so that k runs
+ * together cover the corpus; `scripts/smoke.mjs` runs it that way. Shard 0
+ * also checks that every expected case still exists.
+ *
  * After `--update`, read the diff of `expected.txt` before keeping it: that
  * diff is the review.
  *
@@ -29,7 +33,8 @@ import { ROOT } from "./lib/bundle.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = resolve(ROOT, "dist-cli", "cli.cjs");
 const EXPECTED = join(HERE, "golden", "expected.txt");
-const PARALLEL = 4;
+/** Cases run at once; `scripts/smoke.mjs` sets it from the machine's cores. */
+const PARALLEL = Number(process.env.PLL_GOLDEN_PARALLEL) || 4;
 const TIMEOUT_MS = 120_000;
 
 /** One case's output, as text a reviewer can read in a diff. */
@@ -74,12 +79,13 @@ function runCase(work, c, vars) {
     child.on("close", (code) => {
       clearTimeout(timer);
       rmSync(dir, { recursive: true, force: true });
-      const steady = (text) =>
-        text
-          // Package loading is chatter about the cache, not the program.
-          .replace(/^Load(ing|ed) .*\n/gm, "")
-          // The bundle server's port changes every run.
-          .replaceAll(vars.BUNDLE, "{{BUNDLE}}");
+      const steady = (text) => {
+        // Package loading is chatter about the cache, not the program.
+        const quiet = text.replace(/^Load(ing|ed) .*\n/gm, "");
+        // The bundle server's port changes every run. Without a server
+        // there is no URL, and an empty one would match everywhere.
+        return vars.BUNDLE ? quiet.replaceAll(vars.BUNDLE, "{{BUNDLE}}") : quiet;
+      };
       done({ code, stdout: steady(stdout), stderr: steady(stderr) });
     });
     child.stdin.end(c.stdin ?? "");
@@ -122,7 +128,14 @@ async function main() {
     console.error("--update records every case; drop the names.");
     process.exit(64);
   }
-  const cases = only.length > 0 ? CASES.filter((c) => only.includes(c.name)) : CASES;
+  const shard = /^(\d+)\/(\d+)$/.exec(process.env.PLL_GOLDEN_SHARD ?? "");
+  if (shard && (update || only.length > 0)) {
+    console.error("A shard runs its own cases; --update and names need the whole corpus.");
+    process.exit(64);
+  }
+  const [index, count] = shard ? [Number(shard[1]), Number(shard[2])] : [0, 1];
+  const cases =
+    only.length > 0 ? CASES.filter((c) => only.includes(c.name)) : CASES.filter((_, n) => n % count === index);
   const unknown = only.filter((n) => !CASES.some((c) => c.name === n));
   if (unknown.length > 0) {
     console.error(`no such case: ${unknown.join(", ")}`);
@@ -130,7 +143,10 @@ async function main() {
   }
 
   const work = mkdtempSync(join(ROOT, ".smoke-golden-"));
-  const { server, url } = await serveBundle(work);
+  // Built and served only when a case here uses it: building is a run of
+  // its own.
+  const bundled = cases.some((c) => JSON.stringify(c).includes("{{BUNDLE}}"));
+  const { server, url } = bundled ? await serveBundle(work) : { server: null, url: "" };
   const results = new Map();
   try {
     let next = 0;
@@ -143,7 +159,7 @@ async function main() {
       }),
     );
   } finally {
-    server.close();
+    server?.close();
     rmSync(work, { recursive: true, force: true });
   }
   const actual = cases.map((c) => render(c.name, results.get(c.name))).join("\n");
@@ -167,9 +183,9 @@ async function main() {
     for (const line of old) if (line && !now.includes(line)) console.log(`  - ${line}`);
     for (const line of now) if (line && !old.includes(line)) console.log(`  + ${line}`);
   }
-  if (only.length === 0) {
+  if (only.length === 0 && index === 0) {
     for (const name of expected.keys()) {
-      if (!got.has(name)) {
+      if (!CASES.some((c) => c.name === name)) {
         differ += 1;
         console.log(`\n--- ${name} (expected, but no such case)`);
       }
@@ -180,7 +196,7 @@ async function main() {
     console.error("If the change is intended, run with --update and review the diff of expected.txt.");
     process.exit(1);
   }
-  console.log(`smoke-golden: ok (${cases.length} cases)`);
+  console.log(`smoke-golden: ok (${cases.length} cases${shard ? `, shard ${index} of ${count}` : ""})`);
 }
 
 main().catch((err) => {

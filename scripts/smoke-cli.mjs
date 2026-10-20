@@ -13,7 +13,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { expect, passed } from "./lib/check.mjs";
+import { expect, passed, section } from "./lib/check.mjs";
 import { ROOT } from "./lib/bundle.mjs";
 
 const CLI = resolve(ROOT, "dist-cli", "cli.cjs");
@@ -101,17 +101,6 @@ function run(
   });
 }
 
-/**
- * Whether to run section `number`, saying its title if so. All of them,
- * unless `PLL_SMOKE_ONLY=26,27` names some - for checking one change
- * quickly. Each section stands on its own, in files of its own.
- */
-const ONLY = (process.env.PLL_SMOKE_ONLY ?? "").split(",").filter(Boolean);
-function section(number, title) {
-  if (ONLY.length > 0 && !ONLY.includes(String(number))) return false;
-  console.log(`\n[${number}] ${title}`);
-  return true;
-}
 
 async function main() {
   if (!existsSync(CLI)) {
@@ -635,13 +624,15 @@ async function main() {
       [["def test_a():", "    assert 1 == 2"], 3],
       [['print("finished")'], 0],
     ];
+    // Independent programs, so they run at once.
+    const results = await Promise.all(cases.map(([lines], i) => run([fixture(`exit_${i}.py`, ...lines), "--quiet"])));
     const seen = [];
-    for (const [lines, want, stderr] of cases) {
-      const r = await run([fixture(`exit_${seen.length}.py`, ...lines), "--quiet"]);
+    cases.forEach(([lines, want, stderr], i) => {
+      const r = results[i];
       expect(r.code === want, `${lines.at(-1)} should exit ${want}, got ${r.code}`);
       if (stderr) expect(stderr.test(r.stderr), `${lines.at(-1)} says why: ${JSON.stringify(r.stderr)}`);
       seen.push(`${lines.at(-1)}->${r.code}`);
-    }
+    });
     console.log(`    ${seen.join("  ")}`);
   }
 

@@ -31,3 +31,17 @@ export function passed() {
   }
   return failures === 0 && checks > 0;
 }
+
+const ONLY = (process.env.PLL_SMOKE_ONLY ?? "").split(",").filter(Boolean);
+
+/**
+ * Whether to run section `id` of a test, saying its title if so: all of
+ * them, unless `PLL_SMOKE_ONLY=26,27` names some. `scripts/smoke.mjs` runs
+ * each section of a test made of them as a job of its own, so each has to
+ * stand on its own, in files of its own.
+ */
+export function section(id, title) {
+  if (ONLY.length > 0 && !ONLY.includes(String(id))) return false;
+  console.log(`\n[${id}] ${title}`);
+  return true;
+}
