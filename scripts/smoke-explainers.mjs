@@ -1509,6 +1509,76 @@ console.log("[not iterable: the built-in that was given it, a `for` only where t
   console.log(`    ${CASES.length} programs`);
 }
 
+console.log("[not callable: the name that was called; pictures as images]");
+{
+  const raised = (source) => ran(source, "lab.py", "raw");
+  const IMAGE = "from pll.image import *\n";
+  const BARE = "Brackets after a value mean a call; check whether a `*` or a comma is missing.";
+  const LEAVE = (name) => `Leave off the brackets to use the value itself: \`${name}\`.`;
+  // [what, the program, the headline, and the first fix (or none)].
+  const CASES = [
+    ["a value from the image library", `${IMAGE}empty_image()\n`, "`empty_image` is an image, not a function.", LEAVE("empty_image")],
+    ["inside another call", `${IMAGE}print(beside(empty_image(), circle(5, "solid", "red")))\n`,
+      "`empty_image` is an image, not a function.", LEAVE("empty_image")],
+    ["a chart", 'from pll.table import *\nt = table(["x"], [[1], [2]])\nh = t.histogram("x")\nh()\n', "`h` is an image, not a function.", LEAVE("h")],
+    ["given arguments", "x = 5\nprint(x(3))\n", "`x` is a whole number, not a function.", BARE],
+    ["a name ending in a digit", "x2 = 4\nprint(x2(3))\n", "`x2` is a whole number, not a function.", BARE],
+    ["a field", "from dataclasses import dataclass\n\n\n@dataclass\nclass P:\n    x: int\n\n\np = P(1)\np.x()\n",
+      "`p.x` is a whole number, not a function.", LEAVE("p.x")],
+    ["a local", "def f(n):\n    total = n\n    return total()\n\n\nf(3)\n", "`total` is a whole number, not a function.", LEAVE("total")],
+    ["`None`", "x = None\nx()\n", "`x` is `None`, not a function.", LEAVE("x")],
+    ["one of the student's classes", "class Elephant:\n    pass\n\n\ne = Elephant()\ne()\n", "`e` is an `Elephant`, not a function.", LEAVE("e")],
+    ["a built-in's name", "sum = 0\nprint(sum([1, 2]))\n", "`sum` is a whole number, not a function.",
+      "A variable named `sum` hides Python's own `sum`: give the variable a different name."],
+    // What cannot be told is not guessed at: the call that failed is not
+    // a name's, or the name's value is not what failed.
+    ["a built-in calls it", "print(list(map(5, [1])))\n", "A whole number cannot be called like a function.", BARE],
+    ["an image with no name", `${IMAGE}text("hi", 10, "red")()\n`, "An image cannot be called like a function.", BARE],
+    ["what a method gave back", 's = "abc"\ns.upper()()\n', "A string cannot be called like a function.", BARE],
+    ["a property, which is not run again", "class C:\n    @property\n    def n(self):\n        return 5\n\n\nc = C()\nc.n()\n",
+      "A whole number cannot be called like a function.", BARE],
+    ["what a call gave back", "class C:\n    n = 5\n\n\nC().n()\n", "A whole number cannot be called like a function.", BARE],
+    ["given a keyword", "x = 5\nprint(x(n=3))\n", "`x` is a whole number, not a function.", BARE],
+    ["a type a module names", "import datetime\nd = datetime.date(2026, 1, 1)\nd()\n", "`d` is a `date`, not a function.", LEAVE("d")],
+    ["a number before brackets", "print(3(4))\n", "Brackets after `3` look like a function call, not multiplication.", null],
+    // The picture classes, wherever a rule names a type.
+    ["a `for` over an image", `${IMAGE}for x in empty_image:\n    pass\n`, "An image is not something to loop over.", null],
+    ["square brackets", `${IMAGE}empty_image[0]\n`, "Square brackets do not work on an image.", null],
+    ["no such attribute", `${IMAGE}c = circle(10, "solid", "red")\nc.append(1)\n`, "An image has no `append`.", null],
+    ["two images compared", `${IMAGE}print(circle(10, "solid", "red") < square(10, "solid", "red"))\n`,
+      "`<` cannot compare one image with another.", "These values have no order, so `<` has no answer for them."],
+    ["two dictionaries", 'print({"a": 1} < {"b": 2})\n', "`<` cannot compare one dictionary with another.", null],
+    ["an image and a number", `${IMAGE}print(circle(10, "solid", "red") * 2)\n`, "`*` does not work between an image and a whole number.", null],
+    ["Python's own words", `${IMAGE}print(len(empty_image))\n`, "object of type 'Image' has no len().", null],
+    ["an article for a vowel", "class Elephant:\n    pass\n\n\nfor x in Elephant():\n    pass\n", "An `Elephant` is not something to loop over.", null],
+    ["and in a fix", "class Elephant:\n    pass\n\n\nElephant().trunk\n", "`Elephant` has no fields at all, so it has no `trunk`.",
+      "A value that might be an `Elephant` needs a `case Elephant():` before `.trunk` is used."],
+  ];
+  for (const [what, source, headline, fix] of CASES) {
+    const got = raised(source);
+    expect(got.headline === headline, `${what}: ${got.headline}`);
+    if (fix !== null) expect(got.howToFix[0] === fix, `${what}, the fix: ${JSON.stringify(got.howToFix)}`);
+    const text = `${got.headline} ${got.howToFix.join(" ")}`;
+    expect(!/\b_[A-Z]\w*|_Pll/.test(text), `${what} names no class of PLL's own: ${text}`);
+  }
+  // A class of the student's own keeps its name, underscore and all.
+  const own = raised("class _Box:\n    pass\n\n\nprint(len(_Box()))\n");
+  expect(own.headline === "object of type '_Box' has no len().", `a class of theirs: ${own.headline}`);
+  const capture = raised("class Elephant:\n    pass\n\n\ndef f(a):\n    match a:\n        case Elephant:\n            return 1\n        case int():\n            return 2\n");
+  expect(
+    capture.howToFix[1] === "With them, `case Elephant():` matches only an `Elephant`; put one name inside for each field.",
+    `a capture pattern's article: ${JSON.stringify(capture.howToFix)}`,
+  );
+  // At a prompt line, whose source is the line itself.
+  pllCall("_pll_repl_eval", JSON.stringify([IMAGE, "callable-prompt", "raw"]));
+  const prompt = JSON.parse(pllCall("_pll_repl_eval", JSON.stringify(["empty_image()", "callable-prompt", "raw"])));
+  expect(
+    prompt.error?.finding?.headline === "`empty_image` is an image, not a function.",
+    `a prompt line: ${prompt.error?.finding?.headline}`,
+  );
+  console.log(`    ${CASES.length} programs and a prompt line`);
+}
+
 console.log("[annotations: the function wording only where there is a function]");
 {
   const annotation = (written) =>

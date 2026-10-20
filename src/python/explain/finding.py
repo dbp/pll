@@ -149,7 +149,7 @@ def _pll_headline_for(e):
         return "%s while running your program." % e.type
     innermost = e.frames[-1] if e.frames else None
     theirs = bool(innermost and innermost["user"] and _pll_src_re.match(r"\s*raise\b", innermost["text"] or ""))
-    finish = (lambda sentence: sentence) if theirs else _pll_punctuated
+    finish = (lambda sentence: sentence) if theirs else (lambda sentence: _pll_punctuated(_pll_picture_named(sentence)))
     if e.type == "KeyError":
         # `str(KeyError(x))` is the *repr* of x, so a message written as a
         # sentence arrives wrapped in quotes: unwrap that one. A plain
@@ -160,6 +160,16 @@ def _pll_headline_for(e):
             return text
         return finish(unquoted.group(1))
     return finish(text)
+
+
+def _pll_picture_named(message):
+    """Python's message with PLL's own picture classes - `_Polygon`, a
+    chart - named `Image`, the type a student knows them by."""
+    return _pll_src_re.sub(
+        r"\b_[A-Za-z]\w*",
+        lambda found: "Image" if _pll_course_type_name(found.group(0)) == "Image" else found.group(0),
+        message,
+    )
 
 
 def _pll_row_line(source, call_line, message):

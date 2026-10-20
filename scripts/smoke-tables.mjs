@@ -557,7 +557,7 @@ table(["i"], [[i] for i in range(500)])
         "numbers still text",
         `${CSV}c.mean("mpg")`,
         "TypeError",
-        'transform_column("mpg", float) first',
+        'Convert the column first: transform_column("mpg", float).',
       ],
       // The convert advice is wrong for a column of words, so it is not given.
       [
@@ -787,6 +787,13 @@ table(["i"], [[i] for i in range(500)])
     const ONES = 'with open("o.csv", "w") as f:\n    f.write("n\\n1\\n9\\n100\\n")\nc = load_table("o.csv")\n';
     const ones = py(callRunFile, ONES + 'c.max("n")', "text.py", SK);
     expect(/as text "100" comes before "9"/.test(ones.error?.message ?? ""), `two that really are out of order: ${ones.error?.message}`);
+    // Made by hand, in quotes: what the message says is true of that too.
+    const typed = py(callRunFile, 't = table(["n"], [["9"], ["100"], ["41"]])\nt.max("n")', "typed.py", SK);
+    expect(/the column holds numbers written as text, like those in quotes or read from a CSV/.test(typed.error?.message ?? ""),
+      `typed in, max: ${typed.error?.message}`);
+    const mean = py(callRunFile, 't = table(["n"], [["9"], ["100"]])\nt.mean("n")', "typed.py", SK);
+    expect(/in the 1st row\. The column holds numbers written as text, like those in quotes or read from a CSV\. Convert the column first: transform_column\("n", float\)\.$/.test(mean.error?.message ?? ""),
+      `typed in, mean: ${mean.error?.message}`);
     // Text that sorts the same either way, like zip codes, is left alone.
     const zips = py(callRunFile, 't = table(["zip"], [["02115"], ["10001"], ["02134"]])\nprint(t.order_by("zip").column("zip"), t.max("zip"))', "zip.py", SK);
     expect(zips.stdout === "['02115', '02134', '10001'] 10001\n", `zip codes sort as text: ${JSON.stringify(zips.stdout)} ${zips.error?.message ?? ""}`);

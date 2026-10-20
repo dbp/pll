@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **A picture is an image in messages, never a class inside PLL**:
+  `empty_image()` - a value, not a function - said "A `_Polygon` cannot be
+  called like a function". It now says "`empty_image` is an image, not a
+  function", and to leave off the brackets. Any value called by its name is
+  named so - "`p.x` is a whole number, not a function" - and a variable
+  that hides a built-in is told that: "A variable named `sum` hides
+  Python's own `sum`". Looping over a picture and square brackets on one
+  say "an image", and Python's own words say `Image` ("object of type
+  'Image' has no len()"). Two images, or two dictionaries, compared with
+  `<` are "one image with another", which has no order, where the advice
+  was that `<` orders only values of the same kind. "an" comes before a
+  class name that needs it: "An `Elephant` is not something to loop over".
+- **A table's numbers in quotes are not said to come from a CSV**: `max`,
+  `min`, `order_by`, `sum`, `mean`, `linear_regression` and the charts,
+  given a column like `["9"], ["100"]` made by hand, said the values were
+  read from a CSV. They say the column holds numbers written as text, "like
+  those in quotes or read from a CSV".
+- **The README says what Stop does at `input()`** - it raises
+  `KeyboardInterrupt`, as it has since 0.4.0 - and that **PLL: Run Python
+  File** runs the file before its tests.
+
 ## 0.6.0 (2026-10-20)
 
 ### Added

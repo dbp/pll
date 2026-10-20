@@ -778,7 +778,7 @@ class Table:
         return "%s needs at least one row, but the table has none, so there is %s." % (op, what)
 
     def _refuse_numbers_as_text(self, name, op, does):
-        """Stop `op` giving a wrong answer for numbers a CSV left as text.
+        """Stop `op` giving a wrong answer for numbers left as text.
 
         Text compares letter by letter, so "9" comes after "100". When every
         value in the column is a number written as text, and two of them are
@@ -796,8 +796,8 @@ class Table:
             if a > b:
                 raise TypeError(
                     "%s %s column %s as text, and as text %s comes before %s: the "
-                    "values were read from a CSV and never converted to numbers. "
-                    "Convert the column first: transform_column(%s, %s)."
+                    "column holds numbers written as text, like those in quotes or "
+                    "read from a CSV. Convert the column first: transform_column(%s, %s)."
                     % (
                         op,
                         does,
@@ -894,8 +894,9 @@ class Table:
         if self._looks_numeric(name):
             # Numbers written as text, which is every column of a CSV.
             return (
-                "%s. Values read from a CSV are text until they are "
-                "converted: transform_column(%s, float) first."
+                "%s. The column holds numbers written as text, like those in "
+                "quotes or read from a CSV. Convert the column first: "
+                "transform_column(%s, float)."
                 % (base, _pll_literal(name))
             )
         return "%s. That column holds text, so there is nothing to measure." % base

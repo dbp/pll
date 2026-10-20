@@ -586,8 +586,9 @@ way.
 
 `input()` asks for a line in the interactions panel, in desktop VS Code
 and in the browser. The prompt string prints first, then you type a
-reply and press Enter. **Ctrl+C** (with nothing selected) cancels and
-the program gets an `EOFError`.
+reply and press Enter. **Stop** - or **Ctrl+C** with nothing selected -
+stops the program there with a `KeyboardInterrupt`, as Ctrl+C does in a
+terminal.
 
 ```python
 name = input("What is your name? ")
@@ -642,7 +643,7 @@ also appears in the editor title bar when a `.py` file is open.
 
 | Command | What it does |
 | --- | --- |
-| **PLL: Run Python File** | Run tests (if any), then run the file. |
+| **PLL: Run Python File** | Run the file, then its tests (if any). |
 | **PLL: Show Interactions** | Open the interactions panel. |
 | **PLL: Start REPL** | Show the session with no file, at `#level beginner`, whatever file is open. |
 | **PLL: Stop Program** | Stop the program that is running. |

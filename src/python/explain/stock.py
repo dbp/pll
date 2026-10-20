@@ -62,10 +62,19 @@ def _pll_last_segment(type_name):
 
 
 def _pll_friendly(type_name):
-    """`str` -> "string". A class the student wrote keeps its own name."""
-    name = _pll_last_segment(type_name)
+    """`str` -> "string", and any of the picture classes -> "image"
+    (`_pll_course_type_name`). A class the student wrote keeps its own name."""
+    name = _pll_course_type_name(_pll_last_segment(type_name))
+    if name == "Image":
+        return "image"
     words = _pll_type_words(name)
     return words if words is not None else "`%s`" % name
+
+
+def _pll_a_friendly(type_name):
+    """`_pll_friendly`'s words for one value of the type: "a string", "an
+    image", "an `Elephant`" - but "`None`", which takes no article."""
+    return _pll_type_words(_pll_last_segment(type_name), article=True) or _pll_a(_pll_friendly(type_name))
 
 
 def _pll_list_names(names):
@@ -766,9 +775,9 @@ def _pll_no_such_attribute(m, e):
         # checking for before its fields are used.
         if _pll_students_class(e, name):
             return "`%s` has no fields at all, so it has no `%s`." % (name, asked), [
-                "A value that might be a `%s` needs a `case %s():` before `.%s` is used." % (name, name, asked)
+                "A value that might be %s needs a `case %s():` before `.%s` is used." % (_pll_a("`%s`" % name), name, asked)
             ]
-        return "A %s has no `%s`." % (_pll_friendly(type_name), asked), []
+        return "%s has no `%s`." % (_pll_capitalized(_pll_a_friendly(type_name)), asked), []
     suggestion = _pll_closest_name(asked, fields)
     return "`%s` has no field `%s` (its fields are %s)." % (name, asked, _pll_list_names(fields)), (
         ["Did you mean `%s`?" % suggestion] if suggestion is not None else []
@@ -805,7 +814,7 @@ def _pll_not_subscriptable(m, e):
                 % _PLL_FUNCTION_TAKERS["transform_column"]["calls"]
             )
         how_to_fix.append("Square brackets are for lists, dictionaries and table rows.")
-        return "Square brackets do not work on a %s." % _pll_friendly(type_name), how_to_fix
+        return "Square brackets do not work on %s." % _pll_a_friendly(type_name), how_to_fix
     # Their own subscript, turned round: `s["year"]` becomes `s.year`.
     subscript = _pll_src_re.search(r"""([A-Za-z_][\w.]*)\s*\[\s*["'](\w+)["']\s*\]""", e.text or "")
     holder, field = subscript.groups() if subscript else ("value", fields[0])
@@ -853,7 +862,7 @@ def _pll_not_iterable(m, e):
         return _pll_given_no_items(call, e, m.group(1), name)
     if name == "NoneType":
         return "This value is `None`, so it has no items to go through.", _PLL_WHY_NONE
-    return "%s has no items to go through." % _pll_capitalized(_pll_a(_pll_friendly(m.group(1)))), [
+    return "%s has no items to go through." % _pll_capitalized(_pll_a_friendly(m.group(1))), [
         "Use a list, a string, a range or something else with items in it."
     ]
 
@@ -873,7 +882,7 @@ def _pll_given_no_items(call, e, type_name, name):
     if name == "NoneType":
         subject, why = _pll_why_none(e, given)
         return "%s, but %s." % (does, subject), why
-    headline = "%s, but `%s` is %s." % (does, given, _pll_a(_pll_friendly(type_name)))
+    headline = "%s, but `%s` is %s." % (does, given, _pll_a_friendly(type_name))
     if function == "sum":
         if plain and len(arguments) == 2:
             return headline, [
@@ -974,7 +983,7 @@ def _pll_loop_over_nothing(m, e, name):
         return "`%s` is the method itself, not what it gives back - it has not been called." % looped, [
             "Call it, with brackets: `for ... in %s():`." % looped
         ]
-    return "A %s is not something to loop over." % _pll_friendly(m.group(1)), [
+    return "%s is not something to loop over." % _pll_capitalized(_pll_a_friendly(m.group(1))), [
         "`for` needs a list, a string, a range or something else with items in it."
     ]
 
@@ -985,7 +994,9 @@ def _pll_concat_mismatch(m, e):
     and tuples. For a string the question is which side to convert; for a
     list it is almost always one item that belongs in brackets."""
     container, other = m.groups()
-    headline = "A %s and a %s cannot be added together." % (_pll_friendly(container), _pll_friendly(other))
+    headline = "%s and %s cannot be added together." % (
+        _pll_capitalized(_pll_a_friendly(container)), _pll_a_friendly(other)
+    )
     line = e.text or ""
     if container == "str":
         # Built from the line when its two operands can be read: a string
@@ -1041,7 +1052,7 @@ def _pll_operand_mismatch(m, e):
     """`unsupported operand type(s) for +: 'NoneType' and 'int'`"""
     operator, left, right = m.groups()
     if left != "NoneType" and right != "NoneType":
-        return "`%s` does not work between a %s and a %s." % (operator, _pll_friendly(left), _pll_friendly(right)), (
+        return "`%s` does not work between %s and %s." % (operator, _pll_a_friendly(left), _pll_a_friendly(right)), (
             ["Convert one of them first - `int(...)` for a number, `str(...)` for text."]
             if (left == "str") != (right == "str")
             else []
@@ -1069,9 +1080,14 @@ def _pll_comparison_mismatch(m, e):
             "Convert the text to a number with `%s(...)`, or the number to text with `str(...)` - whichever this"
             " comparison is meant to be about." % number
         ]
+    elif _pll_friendly(left) == _pll_friendly(right):
+        # Two images, two dictionaries: one kind, with no order to it.
+        return "`%s` cannot compare one %s with another." % (operator, _pll_friendly(left)), [
+            "These values have no order, so `%s` has no answer for them." % operator
+        ]
     else:
         how_to_fix = ["`%s` only orders values of the same kind; there is no answer to this comparison." % operator]
-    return "`%s` cannot compare a %s with a %s." % (operator, _pll_friendly(left), _pll_friendly(right)), how_to_fix
+    return "`%s` cannot compare %s with %s." % (operator, _pll_a_friendly(left), _pll_a_friendly(right)), how_to_fix
 
 
 @_pll_stock("ValueError", r"^invalid literal for int\(\) with base 10: (.+)$")
@@ -1118,7 +1134,9 @@ def _pll_index_range(m, e):
 
 @_pll_stock("TypeError", r"^'([\w.]+)' object is not callable")
 def _pll_not_callable(m, e):
-    """`'int' object is not callable`, usually a missing `*`."""
+    """`'int' object is not callable`: a value called as if it were a
+    function - by its name, as `empty_image()` is, or a number before
+    brackets, which is a missing `*`."""
     if m.group(1) == "types.UnionType":
         # `types.UnionType` is an implementation name for `Boa | Armadillo`.
         called = _pll_call_on(e.text)
@@ -1132,6 +1150,19 @@ def _pll_not_callable(m, e):
             if members is not None
             else ["Make one of the types the union is built from."]
         )
+    generic = "Brackets after a value mean a call; check whether a `*` or a comma is missing."
+    # A name whose value was called: `empty_image()`, or `sum` made a number.
+    called = e.facts.get("called")
+    if called is not None:
+        name = called["name"]
+        headline = "`%s` is %s, not a function." % (name, _pll_a_friendly(m.group(1)))
+        if called["hides"]:
+            return headline, ["A variable named `%s` hides Python's own `%s`: give the variable a different name." % (
+                name, name
+            )]
+        if not called["arguments"]:
+            return headline, ["Leave off the brackets to use the value itself: `%s`." % name]
+        return headline, [generic]
     # `3(width)` - a number followed by brackets is nearly always a missing
     # `*`. Python's own "perhaps you missed a comma?" points elsewhere.
     juxtaposed = _pll_src_re.search(r"(\d+(?:\.\d+)?)\s*\(([^()]*)\)", e.text or "")
@@ -1140,9 +1171,7 @@ def _pll_not_callable(m, e):
         return "Brackets after `%s` look like a function call, not multiplication." % number, [
             "To multiply, write the `*`: `%s * %s`, not `%s`." % (number, inside.strip() or "...", written)
         ]
-    return "A %s cannot be called like a function." % _pll_friendly(m.group(1)), [
-        "Brackets after a value mean a call; check whether a `*` or a comma is missing."
-    ]
+    return "%s cannot be called like a function." % _pll_capitalized(_pll_a_friendly(m.group(1))), [generic]
 
 
 @_pll_stock("TypeError", r"^(\w+)\(\) accepts (\d+) positional sub-patterns \((\d+) given\)")

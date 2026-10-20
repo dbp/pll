@@ -484,7 +484,7 @@ stderr:
 === compare-none (exit 1)
 stderr:
   student.py [raw]
-  TypeError: `>` cannot compare a `None` with a whole number.
+  TypeError: `>` cannot compare `None` with a whole number.
     at student.py:4:7
   
   How to fix:
@@ -570,7 +570,7 @@ stderr:
 === not-callable-name (exit 1)
 stderr:
   student.py [raw]
-  TypeError: A whole number cannot be called like a function.
+  TypeError: `total` is a whole number, not a function.
     at student.py:2:7
   
   How to fix:
@@ -1992,7 +1992,7 @@ stderr:
 === tbl-mean-text (exit 1)
 stderr:
   student.py [raw]
-  TypeError: mean needs a column of numbers, but column "mpg" holds the string "29" in the 1st row. Values read from a CSV are text until they are converted: transform_column("mpg", float) first.
+  TypeError: mean needs a column of numbers, but column "mpg" holds the string "29" in the 1st row. The column holds numbers written as text, like those in quotes or read from a CSV. Convert the column first: transform_column("mpg", float).
     at student.py:2
 
 === tbl-load-missing (exit 1)

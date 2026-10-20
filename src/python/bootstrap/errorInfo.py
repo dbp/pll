@@ -87,7 +87,7 @@ def _pll_type_check_parts(message):
 
 
 def _pll_course_type_name(name):
-    """`Image` for any of the image library's own classes - `_Circle`, a
+    """`Image` for any of the image library's own classes - `_Ellipse`, a
     chart - which a student has never seen; any other name as it is."""
     found = globals().get(name.rsplit(".", 1)[-1])
     image = globals().get("Image")
@@ -178,6 +178,74 @@ def _pll_enrich_index_error(exc, run):
         if isinstance(value, (list, tuple, str)):
             _pll_add_facts(exc, sequence=name, length=len(value))
             return
+
+
+#: How Python words a call of a value that is not a function.
+_PLL_NOT_CALLABLE_RE = _pll_src_re.compile(r"^'([\w.]+)' object is not callable")
+
+
+def _pll_enrich_not_callable(exc, run):
+    """Record what was called, for `'int' object is not callable`: the name
+    as written, how many arguments it was given, and whether it hides one
+    of Python's own functions (`called`).
+
+    The message names only the type. The name counts only when its call is
+    the one that failed, in the student's own frame, and its value there is
+    of that type: a built-in raises the same error at its own call when it
+    is given the value, as `list(map(5, xs))` is.
+    """
+    found = _PLL_NOT_CALLABLE_RE.match(str(exc)) if type(exc) is TypeError else None
+    if found is None or not str(_pll_failed_instruction(exc.__traceback__) or "").startswith("CALL"):
+        return
+    tb = exc.__traceback__
+    while tb.tb_next is not None:
+        tb = tb.tb_next
+    frame = tb.tb_frame
+    # The failing instruction spans the call, and no two calls end at the
+    # same `)`.
+    where = _tb_mod.extract_tb(tb)[-1]
+    try:
+        with _pll_without_syntax_warnings():
+            tree = _ast.parse(_pll_source_of(frame.f_code, run))
+    except (SyntaxError, ValueError):
+        return
+    call = next(
+        (
+            node
+            for node in _ast.walk(tree)
+            if isinstance(node, _ast.Call)
+            and (node.end_lineno, node.end_col_offset) == (where.end_lineno, where.end_colno)
+        ),
+        None,
+    )
+    if call is None:
+        return
+    attributes, called = [], call.func
+    while isinstance(called, _ast.Attribute):
+        attributes.insert(0, called.attr)
+        called = called.value
+    if not isinstance(called, _ast.Name):
+        return
+    missing = object()
+    value = missing
+    for scope in (frame.f_locals, frame.f_globals, frame.f_builtins):
+        value = scope.get(called.id, missing)
+        if value is not missing:
+            break
+    for attribute in attributes:
+        # As stored: reading it would run a property's code a second time.
+        value = _pll_inspect.getattr_static(value, attribute, missing)
+    if value is missing or type(value).__name__ != found.group(1).rsplit(".", 1)[-1]:
+        return
+    name = ".".join([called.id] + attributes)
+    _pll_add_facts(
+        exc,
+        called={
+            "name": name,
+            "arguments": len(call.args) + len(call.keywords),
+            "hides": callable(frame.f_builtins.get(name)),
+        },
+    )
 
 
 def _pll_return_annotation(frame, run):
@@ -440,10 +508,12 @@ def _pll_error_info(exc, run=None, level=None):
       the parameters of their function.
     - `facts`: what was learned from the live frames - the name a
       `NameError` is about, a sequence's real length, the value that failed
-      its annotation, a swapped field - and from the code (`_pll_code_facts`).
+      its annotation, a swapped field, the name a value that is not a
+      function was called by - and from the code (`_pll_code_facts`).
     """
     _pll_enrich_type_check(exc, run)
     _pll_enrich_index_error(exc, run)
+    _pll_enrich_not_callable(exc, run)
     _pll_enrich_module_not_found(exc)
     # The same frames twice over: summaries for their lines, and the live
     # ones for the code they run.

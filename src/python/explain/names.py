@@ -99,7 +99,7 @@ def _pll_syntax_wording(error_type, message, line, source=None, line_number=None
         name = capture.group(1)
         return "`case %s:` needs brackets: `case %s():`." % (name, name), [
             "Without them, `%s` is a new name that matches anything, so no `case` after it can ever run." % name,
-            "With them, `case %s():` matches only a `%s`; put one name inside for each field." % (name, name),
+            "With them, `case %s():` matches only %s; put one name inside for each field." % (name, _pll_a("`%s`" % name)),
         ]
     assigned = _pll_src_re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=[^=]", line)
     if assigned and assigned.group(1) in _PLL_KEYWORDS:
