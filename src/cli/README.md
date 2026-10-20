@@ -46,7 +46,8 @@ same way everywhere, which is the point of putting it in the file.
 `test_*` functions in the same file run once the program finishes, against
 what it defined, as they do in the editor. A test that prints shows what it
 printed under its result; `@pytest.mark.skip`, `skipif` and `xfail` work as
-in pytest:
+in pytest. A test written with parameters is not run: what is wrong with it
+is said above `Tests:`, apart from the tests that ran.
 
 ```bash
 pll hw.py            # the program, then its tests
@@ -203,7 +204,7 @@ be fast and honest rather than secret.
 | 0 | Ran, and any tests passed |
 | 1 | The program raised, or Ctrl+C stopped it (even if it caught the `KeyboardInterrupt`; its tests are then not run) |
 | 2 | Level checks found problems, so it was not run |
-| 3 | A test failed |
+| 3 | A test failed, or could not be run (it takes parameters) |
 | 64 | Bad usage, or Python could not start (it is given two minutes) |
 | 130 | A second Ctrl+C gave up waiting for the program to stop |
 | 141 | Its output could no longer be read - `pll hw.py \| head` |

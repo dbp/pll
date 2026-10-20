@@ -1973,10 +1973,42 @@ stderr:
 === test-params (exit 3)
 stderr:
   student.py [raw]
+  MalformedTest: `test_pen_cost` takes a parameter, `n`, so it cannot be run as a test.
+    at student.py:4
+  
+  How to fix:
+    - Write `def test_pen_cost():` with nothing in the brackets, and make the values it needs inside it.
+    - If it is not a test but a helper your tests use, give it a name that does not start with `test_`.
+  
+  Tests: no tests collected
+
+=== test-params-and-error (exit 3)
+stderr:
+  student.py [raw]
+  MalformedTest: `test_improperly_written` takes a parameter, `some_parameter`, so it cannot be run as a test.
+    at student.py:1
+  
+  How to fix:
+    - Write `def test_improperly_written():` with nothing in the brackets, and make the values it needs inside it.
+    - If it is not a test but a helper your tests use, give it a name that does not start with `test_`.
+  
   Tests: 1 error
-    ERROR test_pen_cost (line 4)
-          TypeError: `test_pen_cost` is a test, so it cannot take any parameters.
-          - Write `def test_pen_cost():` with nothing in the brackets, and make the values it needs inside it.
+    ERROR test_error (line 4)
+          ZeroDivisionError: division by zero.
+          at student.py:5:12
+
+=== test-params-method (exit 3)
+stderr:
+  student.py [beginner]
+  MalformedTest: `test_area` takes a parameter, `side`, so it cannot be run as a test.
+    at student.py:3
+  
+  How to fix:
+    - Write `def test_area(self):` with only `self` in the brackets, and make the values it needs inside it.
+    - If it is not a test but a helper your tests use, give it a name that does not start with `test_`.
+  
+  Tests: 1 passed
+    ok   TestShapes::test_ok
 
 === test-async (exit 3)
 stderr:
@@ -2150,6 +2182,36 @@ stderr:
     No tests yet.
   examplar: longest
     No tests yet.
+
+=== ex-test-params (exit 3)
+stderr:
+  student.py [beginner]
+  examplar: initials
+    Against correct implementations: your test passes.
+    Against buggy implementations: caught 1 of 3 - missed 2, 3.
+  examplar: longest
+    Against correct implementations: your test passes.
+    Against buggy implementations: caught 1 of 3 - missed 1, 2.
+  MalformedTest: `test_initials` takes a parameter, `name`, so it cannot be run as a test.
+    at student.py:4
+  
+  How to fix:
+    - Write `def test_initials():` with nothing in the brackets, and make the values it needs inside it.
+    - If it is not a test but a helper your tests use, give it a name that does not start with `test_`.
+  
+  Tests: 2 errors
+    ERROR test_initials_two_names (line 7)
+          NameError: Python doesn't know what `initials` means.
+          at student.py:8:12
+          - Check the spelling of `initials` (Python is case-sensitive).
+          - Make sure `initials` is defined before this line runs.
+          - If `initials` should be text, put it in quotes: `"initials"`.
+    ERROR test_longest (line 10)
+          NameError: Python doesn't know what `longest` means.
+          at student.py:11:12
+          - Check the spelling of `longest` (Python is case-sensitive).
+          - Make sure `longest` is defined before this line runs.
+          - If `longest` should be text, put it in quotes: `"longest"`.
 
 === ex-plain-http (exit 0)
 stderr:

@@ -113,6 +113,11 @@ export interface ExecutionTestReportChunk {
   errors: number;
   tests: TestCaseResult[];
   /**
+   * The `test_*` functions that take parameters, which are not run: a test
+   * is called with nothing. Said above the tests, and in none of the counts.
+   */
+  malformed?: MalformedTest[];
+  /**
    * A Stop ended the tests. The tests listed ran (the last, if any, with
    * outcome "stopped"); the rest did not.
    */
@@ -131,6 +136,17 @@ export interface TestCaseResult {
   /** For a test that raised: the exception, until the host explains it. */
   error?: PythonError | null;
   /** That explanation, put there by `explainTestReport`. */
+  finding?: SerializedFinding;
+}
+
+export interface MalformedTest {
+  name: string;
+  lineNumber: number | null;
+  /** The parameters it cannot be called without. */
+  parameters: string[];
+  /** Python's finding for it, until the host explains it. */
+  problem?: PythonFinding | null;
+  /** That finding, put there by `explainTestReport`. */
   finding?: SerializedFinding;
 }
 

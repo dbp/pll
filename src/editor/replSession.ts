@@ -971,6 +971,13 @@ export class ReplSession implements vscode.Disposable {
       case "done":
         break;
       case "testReport":
+        // A test that could not be run is a mistake in the file, shown
+        // above the tests' card as a finding is, and not counted on it.
+        for (const test of event.malformed ?? []) {
+          if (test.finding) {
+            this.appendToSession(session, { kind: "finding", finding: test.finding });
+          }
+        }
         this.appendToSession(session, event);
         break;
     }

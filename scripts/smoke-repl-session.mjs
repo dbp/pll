@@ -3223,6 +3223,61 @@ console.log("\n[79] the header names the level the prompt is at, before the firs
   repl.dispose();
 }
 
+console.log("\n[80] a test that takes a parameter is a finding above the tests' card, not a row on it");
+{
+  const code = "def test_x(n):\n    assert n\n\ndef test_y():\n    assert True\n";
+  const doc = makeDoc("m.py", code);
+  const { repl, view } = await harness(
+    {
+      events: () => [{ kind: "done" }],
+      runTests: async (request, onEvent) => {
+        onEvent({
+          kind: "testReport",
+          fileName: request.fileName,
+          passed: 1,
+          failed: 0,
+          skipped: 0,
+          errors: 0,
+          tests: [{ name: "test_y", outcome: "passed", lineNumber: 4, message: null, stdout: null, error: null }],
+          malformed: [
+            {
+              name: "test_x",
+              lineNumber: 1,
+              parameters: ["n"],
+              problem: {
+                id: "malformed-test",
+                errorType: "MalformedTest",
+                headline: "`test_x` takes a parameter, `n`, so it cannot be run as a test.",
+                howToFix: ["Write `def test_x():` with nothing in the brackets, and make the values it needs inside it."],
+                fileName: "m.py",
+                lineNumber: 1,
+                column: null,
+                nameToken: "test_x",
+                severity: "error",
+                origin: "runtime",
+              },
+            },
+          ],
+        });
+        onEvent({ kind: "done" });
+      },
+    },
+    doc,
+  );
+  await repl.runFile(code, "m.py", doc);
+  await settle();
+  const finding = view.entries.findIndex((e) => e.kind === "finding" && e.finding.errorType === "MalformedTest");
+  const card = view.entries.findIndex((e) => e.kind === "testReport");
+  expect(finding >= 0 && card > finding, `the finding, then the card: ${finding}, ${card}`);
+  const shown = view.entries[finding]?.finding;
+  expect(shown?.location?.label === "m.py:1", `at its line: ${shown?.location?.label}`);
+  const report = view.entries[card];
+  expect(report?.tests?.length === 1 && report.tests[0].name === "test_y", "the card lists only the test that ran");
+  expect(report?.malformed?.every((t) => t.problem === undefined), "and the webview is sent the finding, not Python's");
+  console.log(`    ${shown?.errorType}: ${shown?.headline}`);
+  repl.dispose();
+}
+
 console.log(`\nsmoke-repl-session: ${passed() ? "ok" : "FAILED"}`);
 if (!passed()) {
   process.exit(1);

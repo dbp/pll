@@ -31,6 +31,11 @@
   file, unless a call runs it early.
 
 ### Changed
+- **A test written with parameters is said apart from the tests**, above
+  them, as what it is: `def test_area(side):` is not a test PLL can run,
+  since a test is called with nothing. It is no longer run, listed as an
+  error or counted among the tests, and Examplar leaves it out too. The
+  command line still exits 3 for it.
 - **CodeLens is on for Python files again**, for the `#level` line's. With
   the language servers off, hardly any other extension adds one.
 

@@ -130,6 +130,16 @@ looks like it contains tests, rewrites asserts, collects `test_*` /
 `import pytest` (for example `pytest.approx`) because the package is
 loaded into that interpreter.
 
+A test is called with nothing, so one that takes parameters - which
+pytest would fill from fixtures, and PLL has none of - is not called at
+all. It is a mistake in how the test is written rather than a test that
+failed, so it is not one of the report's tests or counts: the report's
+`malformed` lists it, and each host says it above the tests, as a
+`MalformedTest` finding (`_pll_malformed_test_finding`). It still makes the
+run's tests fail, for the command line's exit code. A test whose `skip`
+mark applies is skipped first, as in pytest, and Examplar leaves these
+tests out of its checks and off its cards.
+
 ## The worker protocol
 
 `pyodide/protocol.ts` defines the messages; `pyodide/runtime.ts` (host) and

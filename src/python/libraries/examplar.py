@@ -435,6 +435,8 @@ def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), onl
     # The student's definitions that could not be loaded here, and why.
     unloaded = []
     results = {}
+    # The `test_*` functions that take parameters, which are not run.
+    malformed = []
 
     def ended(timed_out, **extra):
         return {
@@ -442,6 +444,7 @@ def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), onl
             "tests": results,
             "studentDefines": student_defines,
             "unloaded": unloaded,
+            "malformed": malformed,
             "timedOut": timed_out,
             **extra,
         }
@@ -490,6 +493,9 @@ def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), onl
                 continue
             fn = namespace[name]
             if not callable(fn):
+                continue
+            if _pll_test_parameters(fn):
+                malformed.append(name)
                 continue
             try:
                 with _pll_examplar_budget():
@@ -605,6 +611,12 @@ def _pll_examplar_judge(test_source, bundle_json, filename):
         result["wheats"].append(ran)
         if stopped_by(ran, "wheat"):
             return result
+
+    # A test that takes parameters runs nowhere - the file's own tests say
+    # what is wrong with it - so it is on no function's card.
+    for wheat in result["wheats"]:
+        for name in wheat.get("malformed", ()):
+            attribution.pop(name, None)
 
     # A wheat that will not load is a broken bundle, not a student's problem,
     # and there is nothing to measure against - so no phase two anywhere.

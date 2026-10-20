@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { formatFriendlyError, type AnalysisFinding, type SerializedFinding } from "../run/finding";
+import { formatFriendlyError, serializedFindingLines, type AnalysisFinding, type SerializedFinding } from "../run/finding";
 import type { ExamplarEntry } from "../run/examplar";
 import type { ExecutionEvent } from "../run/types";
 import { errorText } from "../core/errorText";
@@ -191,6 +191,18 @@ export class CliView {
   }
 
   private testReport(event: Extract<ExecutionEvent, { kind: "testReport" }>): void {
+    // A test that could not be run is a mistake in the file, said above
+    // the tests, as a finding is, and not counted among them.
+    for (const test of event.malformed ?? []) {
+      if (test.finding) {
+        const lines = serializedFindingLines(test.finding);
+        this.problem(this.red(lines[0]));
+        for (const line of lines.slice(1)) {
+          this.problem(line);
+        }
+        this.problem("");
+      }
+    }
     const bad = event.failed + event.errors;
     // Worded as the editor's card is.
     const parts = [

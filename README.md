@@ -219,6 +219,10 @@ fails, you can click it to jump to that test. If the program stops with an
 error, or ends itself with `sys.exit()`, the tests are not run, and PLL
 says so.
 
+A test takes no parameters: PLL calls it with nothing. One written with
+parameters - `def test_add(x):` - is not run, and PLL says what is wrong
+with it above the card, apart from the tests that ran.
+
 You do not need a separate test file, and you do not need to run
 `pytest` in a terminal.
 

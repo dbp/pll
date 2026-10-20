@@ -123,12 +123,16 @@ export function findingLocation(finding: AnalysisFinding): FindingLocation | nul
  *     - bullet 2
  */
 export function formatFriendlyError(finding: AnalysisFinding): string[] {
+  return serializedFindingLines(serializeFinding(finding));
+}
+
+/** `formatFriendlyError`'s lines, for a finding as the views have it. */
+export function serializedFindingLines(finding: SerializedFinding): string[] {
   const lines: string[] = [];
   lines.push(`${finding.errorType}: ${finding.headline}`);
 
-  const location = findingLocation(finding);
-  if (location) {
-    lines.push(`  at ${location.label}`);
+  if (finding.location) {
+    lines.push(`  at ${finding.location.label}`);
   }
 
   if (finding.howToFix.length > 0) {
@@ -190,8 +194,9 @@ export function findRuntimeFinding(fileName: string, level: Level, error: Python
 
 /**
  * The test report with each error that a test raised explained, exactly as
- * the same error is explained when the program raises it. The report keeps
- * the finding and drops the exception it came from.
+ * the same error is explained when the program raises it, and each test
+ * that could not be run with Python's finding for it. The report keeps the
+ * finding and drops the exception it came from.
  */
 export function explainTestReport(
   event: ExecutionTestReportChunk,
@@ -203,5 +208,14 @@ export function explainTestReport(
     tests: event.tests.map(({ error, ...test }) =>
       error ? { ...test, finding: serializeFinding(findRuntimeFinding(fileName, level, error)) } : test,
     ),
+    ...(event.malformed
+      ? {
+          malformed: event.malformed.map(({ problem, ...test }) =>
+            problem
+              ? { ...test, finding: serializeFinding({ ...problem, fileName: problem.fileName ?? fileName, level }) }
+              : test,
+          ),
+        }
+      : {}),
   };
 }

@@ -193,6 +193,34 @@ def _pll_mark_condition(args, kwargs, fn):
     return False
 
 
+def _pll_skip(fn):
+    """A test's `skip` mark, or `skipif` whose condition holds, as the
+    outcome `_pll_call_test` gives it; None when it is to run."""
+    for name, args, kwargs in _pll_marks(fn):
+        if name == "skip" or (name == "skipif" and _pll_mark_condition(args, kwargs, fn)):
+            reason = kwargs.get("reason") or (args[0] if name == "skip" and args else None)
+            return ("skipped", reason if isinstance(reason, str) and reason else None, None, None)
+    return None
+
+
+def _pll_test_parameters(fn):
+    """The parameters a test cannot be called without. pytest fills them
+    from fixtures, which PLL has none of: a test is called with nothing, so
+    one that needs a value is not a test that can run. A method's are read
+    off it bound, without `self`; a decorator's wrapper is what is called,
+    so its parameters are the ones that count."""
+    import inspect
+
+    if hasattr(fn, "pll_parameters"):
+        return fn.pll_parameters
+    try:
+        signature = inspect.signature(fn, follow_wrapped=False)
+    except (TypeError, ValueError):
+        return []
+    needed = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    return [p.name for p in signature.parameters.values() if p.kind in needed and p.default is inspect.Parameter.empty]
+
+
 def _pll_call_test(fn, run=None):
     """Run one test function, as pytest would - its `skip`, `skipif` and
     `xfail` marks included.
@@ -203,12 +231,13 @@ def _pll_call_test(fn, run=None):
     fail that does is "skipped", saying so; one that passes anyway passes,
     unless its mark is `strict`.
     """
+    skipped = _pll_skip(fn)
+    if skipped is not None:
+        return skipped
     expected_failure = None
     for name, args, kwargs in _pll_marks(fn):
-        reason = kwargs.get("reason") or (args[0] if name == "skip" and args else None)
-        if name == "skip" or (name == "skipif" and _pll_mark_condition(args, kwargs, fn)):
-            return ("skipped", reason if isinstance(reason, str) and reason else None, None, None)
         if name == "xfail" and _pll_mark_condition(args, kwargs, fn):
+            reason = kwargs.get("reason")
             expected_failure = (reason if isinstance(reason, str) else "", bool(kwargs.get("strict")))
     outcome = _pll_call_test_body(fn, run)
     if expected_failure is not None:
@@ -295,7 +324,7 @@ def _pll_iter_tests(ns):
             continue
         # pytest skips classes with a custom constructor.
         try:
-            obj()
+            instance = obj()
         except TypeError:
             continue
         for meth_name in dir(obj):
@@ -313,6 +342,7 @@ def _pll_iter_tests(ns):
                 getattr(obj, "pytestmark", None) or []
             )
             _bound.pll_module = getattr(attr, "__globals__", None)
+            _bound.pll_parameters = _pll_test_parameters(getattr(instance, meth_name, None))
             yield name + "::" + meth_name, _bound
 
 
@@ -360,8 +390,10 @@ def _pll_reprcompare(op, left, right):
 
 
 def _pll_tests_result():
-    """The tests' part of a run's result, before any has run."""
-    return {"passed": 0, "failed": 0, "skipped": 0, "errors": 0, "tests": []}
+    """The tests' part of a run's result, before any has run. `malformed`
+    are the `test_*` functions that take parameters, which are not run, and
+    are counted apart from the tests that are."""
+    return {"passed": 0, "failed": 0, "skipped": 0, "errors": 0, "tests": [], "malformed": []}
 
 
 def _pll_run_collected_tests(ns, locs, run):
@@ -377,6 +409,16 @@ def _pll_run_collected_tests(ns, locs, run):
     current = None
     try:
         for name, fn in _pll_iter_tests(ns):
+            # One skipped is not run either way, as in pytest.
+            parameters = _pll_test_parameters(fn) if _pll_skip(fn) is None else []
+            if parameters:
+                result["malformed"].append({
+                    "name": name,
+                    "lineNumber": locs.get(name),
+                    "parameters": parameters,
+                    "problem": _pll_malformed_test_finding(name, parameters, run[0] if run else None, locs.get(name)),
+                })
+                continue
             current = name
             outcome, message, cap, error = _pll_call_test(fn, run)
             result[{"passed": "passed", "failed": "failed", "skipped": "skipped"}.get(outcome, "errors")] += 1

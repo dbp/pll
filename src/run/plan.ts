@@ -211,7 +211,7 @@ class Tally {
       } else if (event.kind === "testReport") {
         this.testsRan = true;
         this.testsStopped = event.stopped === true;
-        this.testFailures += event.failed + event.errors;
+        this.testFailures += event.failed + event.errors + (event.malformed?.length ?? 0);
       } else if (event.kind === "done") {
         if (event.exitCode !== undefined) this.exitCode = event.exitCode;
         if (event.stopped) this.stopReached = true;

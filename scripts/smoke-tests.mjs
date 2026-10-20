@@ -185,6 +185,87 @@ def test_add():
     );
   }
 
+  console.log("\n[7] a test that takes a parameter is not run, and is said apart from the tests");
+  {
+    const src = [
+      "import functools",
+      "import pytest",
+      "",
+      "def given(fn):",
+      "    @functools.wraps(fn)",
+      "    def wrapper():",
+      "        return fn(3)",
+      "    return wrapper",
+      "",
+      "def test_one(n):",
+      "    assert n",
+      "",
+      "def test_two(a, b):",
+      "    assert a == b",
+      "",
+      "def test_keyword(*, k):",
+      "    assert k",
+      "",
+      "def test_default(n=1):",
+      "    assert n == 1",
+      "",
+      "def test_rest(*args, **kwargs):",
+      "    assert args == ()",
+      "",
+      "@given",
+      "def test_given(n):",
+      "    assert n == 3",
+      "",
+      '@pytest.mark.skip(reason="later")',
+      "def test_skipped(x):",
+      "    assert x",
+      "",
+      "def test_error():",
+      "    assert 1 / 0 == 1",
+      "",
+      "class TestThings:",
+      "    def test_method(self, value):",
+      "        assert value",
+      "",
+      "    def test_fine(self):",
+      "        assert True",
+      "",
+    ].join("\n");
+    const result = runTests(src, "params.py");
+    const malformed = (result.malformed || []).map((t) => `${t.name}@${t.lineNumber}:${t.parameters.join(",")}`);
+    expect(
+      malformed.join(" ") === "test_one@10:n test_two@13:a,b test_keyword@16:k TestThings::test_method@37:value",
+      `the ones not run: ${malformed.join(" ")}`,
+    );
+    const ran = (result.tests || []).map((t) => `${t.name}:${t.outcome}`);
+    expect(
+      ran.join(" ") === "test_default:passed test_rest:passed test_given:passed test_skipped:skipped test_error:error TestThings::test_fine:passed",
+      `the ones run: ${ran.join(" ")}`,
+    );
+    expect(
+      result.passed === 4 && result.errors === 1 && result.skipped === 1 && result.failed === 0,
+      `counted without them: ${JSON.stringify({ passed: result.passed, errors: result.errors, skipped: result.skipped })}`,
+    );
+    const [one, two, , method] = result.malformed || [];
+    expect(
+      one?.problem?.errorType === "MalformedTest" &&
+        one.problem.headline === "`test_one` takes a parameter, `n`, so it cannot be run as a test." &&
+        one.problem.fileName === "params.py" &&
+        one.problem.lineNumber === 10,
+      `worded: ${JSON.stringify(one?.problem)}`,
+    );
+    expect(
+      two?.problem?.headline === "`test_two` takes parameters - `a` and `b` - so it cannot be run as a test.",
+      `two of them: ${two?.problem?.headline}`,
+    );
+    expect(
+      method?.problem?.headline === "`test_method` takes a parameter, `value`, so it cannot be run as a test." &&
+        method.problem.howToFix[0].startsWith("Write `def test_method(self):` with only `self` in the brackets"),
+      `a method keeps \`self\`: ${JSON.stringify(method?.problem?.howToFix)}`,
+    );
+    console.log(`    not run: ${malformed.length}; run: ${ran.length}`);
+  }
+
   hasTests.destroy?.();
   runFile.destroy?.();
   replEval.destroy?.();

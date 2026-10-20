@@ -795,13 +795,22 @@ async function main() {
       );
       expect(!/can only concatenate/.test(listPlus), `with Python's wording gone: ${listPlus}`);
 
-      const param = await reportFor(
-        'def pen_cost(n, m):\n    return n * 2\n\n\ndef test_pen_cost(n):\n    assert pen_cost(n, "x") == 2\n',
-        "te-2",
+      // A test with a parameter is not run, so it is no row's error: it is
+      // said apart, at its own line.
+      const paramCode = 'def pen_cost(n, m):\n    return n * 2\n\n\ndef test_pen_cost(n):\n    assert pen_cost(n, "x") == 2\n';
+      const paramReport = reportOf(
+        await send({ type: "runFile", withTests: true, code: paramCode, fileName: "te.py", sessionKey: "te-2", level: "raw" }).then(
+          (r) => r.result,
+        ),
+        "te.py",
+        "raw",
+        paramCode,
       );
+      const param = paramReport?.malformed?.[0]?.finding;
       expect(
-        /`test_pen_cost` is a test, so it cannot take any parameters/.test(param),
-        `a test with a parameter: ${param}`,
+        param?.headline === "`test_pen_cost` takes a parameter, `n`, so it cannot be run as a test." &&
+          paramReport?.tests?.length === 0,
+        `a test with a parameter: ${JSON.stringify(param)}`,
       );
 
       // A plain failed assert is still shown as the assert, not reworded.
@@ -835,12 +844,12 @@ async function main() {
           sessionKey: "te-6",
           level: "raw",
         }).then((r) => reportOf(r.result, "te.py", "raw", "def test_pen_cost(n):\n    assert n\n"))
-      )?.tests?.[0]?.finding;
+      )?.malformed?.[0]?.finding;
       expect(
-        paramWhere !== undefined && paramWhere.location === null,
-        `PLL called that test, so there is no line of theirs to point at: ${JSON.stringify(paramWhere?.location)}`,
+        paramWhere?.location?.label === "te.py:1",
+        `at the test's own line: ${JSON.stringify(paramWhere?.location)}`,
       );
-      console.log("    a TypeError and a parameter reworded; a failed assert left alone");
+      console.log("    a TypeError reworded, a test with a parameter said apart; a failed assert left alone");
     }
 
     console.log("\n[22] a row is a dict, and a reactor's state comes from init");

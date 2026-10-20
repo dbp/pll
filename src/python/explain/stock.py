@@ -647,6 +647,38 @@ def _pll_too_few_arguments(m, e):
     ] + _pll_library_hint(name)
 
 
+def _pll_malformed_test_finding(name, parameters, filename, line):
+    """A `test_*` function with parameters, which the tests do not run: a
+    test is called with nothing, so there would be no values for them. Said
+    apart from the tests that ran - it is a mistake in how the test is
+    written, not a test that failed. `name` is as the report lists it, a
+    method's as `TestThings::test_one`."""
+    function = name.split("::")[-1]
+    method = function != name
+    takes = (
+        "a parameter, %s," % _pll_list_names(parameters)
+        if len(parameters) == 1
+        else "parameters - %s -" % _pll_list_names(parameters)
+    )
+    written = "def %s(self):" % function if method else "def %s():" % function
+    return {
+        "id": "malformed-test",
+        "errorType": "MalformedTest",
+        "headline": "`%s` takes %s so it cannot be run as a test." % (function, takes),
+        "howToFix": [
+            "Write `%s` with %s in the brackets, and make the values it needs inside it."
+            % (written, "only `self`" if method else "nothing"),
+            "If it is not a test but a helper your tests use, give it a name that does not start with `test_`.",
+        ],
+        "fileName": filename,
+        "lineNumber": line,
+        "column": None,
+        "nameToken": function,
+        "severity": "error",
+        "origin": "runtime",
+    }
+
+
 def _pll_arity_check(e, name, otherwise):
     """What to look at for a wrong number of values: the call on this line,
     or - when a table method made the call - the function's parameters."""
