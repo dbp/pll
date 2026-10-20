@@ -973,7 +973,15 @@ _g = _pll_get_session("smoke-lib")
       const ids = found(code).map((f) => f.id);
       expect(ids.length === 0, `${label}: nothing, got ${ids.join(" ")}`);
     }
-    expect(found(matching(": Animal", "Aardvark()"), "advanced").length === 0, "advanced has no static checks");
+    // At `advanced` a class nothing defines is still a NameError, and said
+    // the same way; that a `case` never matches is a teaching check only.
+    const advanced = found(matching(": Animal", "Aardvark()"), "advanced");
+    expect(
+      advanced.map((f) => f.id).join() === "unknown-pattern-class" &&
+        advanced[0].said.headline === "There is no class `Aardvark`: an `Animal` is a `Boa` or an `Armadillo`.",
+      `advanced finds the NameError, as the others word it: ${JSON.stringify(advanced.map((f) => [f.id, f.said?.headline]))}`,
+    );
+    expect(found(matching(": Animal", "Rock()"), "advanced").length === 0, "but not a case that never matches");
     // At the prompt, a class an earlier line defined is one.
     pyodide.runPython("_pll_sessions.setdefault('pets:repl', __import__('types').ModuleType('__main__')).__dict__['Lizard'] = type('Lizard', (), {})");
     const prompt = analyze("match 3:\n    case Lizard():\n        pass\n", "beginner", "<repl>", "pets:repl");
@@ -1031,6 +1039,205 @@ _g = _pll_get_session("smoke-lib")
     const prompt = analyze("del total\n", "beginner", "<repl>", null).map((f) => f.id);
     expect(prompt.join() === "unbinding", `at the prompt: ${prompt.join()}`);
     console.log("    names refused at both levels, one finding a statement; items, slices and attributes allowed");
+  }
+
+  console.log("\n[28] names read where they have no value: found before the run, as the run would raise them");
+  {
+    // [what, level, code, the findings ("Error name@line"), and what a run
+    // does: "raises" the first of them there, "clean" with no NameError, or
+    // "later" - a function never called, reported though the run is fine].
+    // `parity`: the run's explanation reads exactly as the static one.
+    const CASES = [
+      ["a typo in a function never called", "beginner", "def f(x: int) -> int:\n    return totl + x\n", ["NameError totl@2"], "later"],
+      ["a call above its def", "beginner", "print(double(2))\ndef double(x: int) -> int:\n    return 2 * x\n", ["NameError double@1"], "raises", "parity"],
+      ["a call below its def", "beginner", "def double(x: int) -> int:\n    return 2 * x\nprint(double(2))\n", [], "clean"],
+      ["recursion", "beginner", "def fact(n: int) -> int:\n    return 1 if n == 0 else n * fact(n - 1)\nprint(fact(3))\n", [], "clean"],
+      ["mutual recursion", "beginner", "def even(n: int) -> bool:\n    return n == 0 or odd(n - 1)\ndef odd(n: int) -> bool:\n    return n != 0 and even(n - 1)\nprint(even(4))\n", [], "clean"],
+      ["a missing import", "beginner", "print(math.pi)\n", ["NameError math@1"], "raises", "parity"],
+      ["a misspelling, with Python's suggestion", "beginner", "total = 3\nprint(totl)\n", ["NameError totl@2"], "raises", "parity"],
+      ["a decorator never imported", "beginner", "@dataclass\nclass P:\n    x: int\n", ["NameError dataclass@1"], "raises", "parity"],
+      ["an unbound local", "advanced", "total = 0\ndef add(n):\n    total = total + n\n    return total\nadd(1)\n", ["UnboundLocalError total@3"], "raises", "parity"],
+      ["`+=` on an outer name", "advanced", "count = 0\ndef bump():\n    count += 1\nbump()\n", ["UnboundLocalError count@3"], "raises", "parity"],
+      ["`global`", "advanced", "count = 0\ndef bump():\n    global count\n    count += 1\nbump()\nprint(count)\n", [], "clean"],
+      ["a name a call gives with `global`", "advanced", "def setup():\n    global config\n    config = 1\nsetup()\nprint(config)\n", [], "clean"],
+      ["`nonlocal`", "advanced", "def outer():\n    n = 0\n    def inner():\n        nonlocal n\n        n += 1\n    inner()\n    return n\nprint(outer())\n", [], "clean"],
+      ["a name `nonlocal` gives before it is set", "advanced", "def outer():\n    def inner():\n        nonlocal x\n        x = 1\n    inner()\n    print(x)\n    x = 0\nouter()\n", [], "clean"],
+      ["a read after `del`", "advanced", "x = 1\ndel x\nprint(x)\n", ["NameError x@3"], "raises"],
+      ["`del` and then a new value", "advanced", "x = 1\ndel x\nx = 2\nprint(x)\n", [], "clean"],
+      ["`del` of a name never set", "advanced", "del y\n", ["NameError y@1"], "raises"],
+      ["a local read after `del`", "advanced", "def f():\n    x = 1\n    del x\n    return x\nf()\n", ["UnboundLocalError x@4"], "raises"],
+      ["an `except` name after its block", "advanced", "try:\n    1 / 0\nexcept ZeroDivisionError as e:\n    pass\nprint(e)\n", ["NameError e@5"], "raises"],
+      ["an `except` name in its block", "beginner", "try:\n    1 / 0\nexcept ZeroDivisionError as e:\n    print(e)\n", [], "clean"],
+      ["a read a handler catches", "beginner", "try:\n    print(undefined_thing)\nexcept NameError:\n    print('none')\n", [], "clean"],
+      ["a loop's name after the loop", "beginner", "for i in range(3):\n    pass\nprint(i)\n", [], "clean"],
+      ["a name set on an earlier pass", "advanced", "for i in range(3):\n    if i > 0:\n        print(prev)\n    prev = i\n", [], "clean"],
+      ["`while` and its `else`", "advanced", "n = 0\nwhile n < 3:\n    n += 1\nelse:\n    done = True\nprint(done)\n", [], "clean"],
+      ["`while True` left by `break`", "advanced", "while True:\n    found = 1\n    break\nprint(found)\n", [], "clean"],
+      ["a comprehension's own name, after it", "beginner", "squares = [x * x for x in range(3)]\nprint(x)\n", ["NameError x@2"], "raises", "parity"],
+      ["a comprehension", "beginner", "xs = [1, 2]\nprint([x + 1 for x in xs])\n", [], "clean"],
+      ["a generator's name nothing defines", "beginner", "def f(xs: list) -> int:\n    return sum(x * k for x in xs)\n", ["NameError k@2"], "later"],
+      ["a class's name inside a method", "advanced", "class C:\n    size = 3\n    def area(self):\n        return size * size\nC().area()\n", ["NameError size@4"], "raises", "parity"],
+      ["an attribute without `self.`", "advanced", "class C:\n    def __init__(self):\n        self.width = 2\n    def area(self):\n        return width * 2\nC().area()\n", ["NameError width@5"], "raises", "parity"],
+      ["a class's own name in a method's annotation", "advanced", "class Node:\n    def child(self) -> Node:\n        return self\n", ["NameError Node@2"], "raises"],
+      ["a dataclass naming itself", "beginner", "from dataclasses import dataclass\n@dataclass\nclass Link:\n    rest: Link | None\n", ["NameError Link@4"], "raises"],
+      ["a dataclass naming itself, as a string", "beginner", "from dataclasses import dataclass\n@dataclass\nclass Link:\n    rest: 'Link | None'\n", [], "clean"],
+      ["type parameters", "beginner", "from dataclasses import dataclass\n@dataclass\nclass Leaf[T]:\n    value: T\n    def get(self) -> T:\n        return self.value\nprint(Leaf(1).get())\n", [], "clean"],
+      ["`match` captures", "beginner", "def f(lst: list) -> int:\n    match lst:\n        case []:\n            return 0\n        case [first, *rest]:\n            return first + f(rest)\n    return -1\nprint(f([1, 2]))\n", [], "clean"],
+      ["`from m import *`", "advanced", "from math import *\nprint(pi)\n", [], "clean"],
+      ["`exec`", "advanced", "exec('z = 1')\nprint(z)\n", [], "clean"],
+      ["`enum.global_enum`", "advanced", "import enum\n@enum.global_enum\nclass Color(enum.Enum):\n    RED = 1\nprint(RED)\n", [], "clean"],
+      ["`:=`", "beginner", "xs = [1, 2, 3]\nif (n := len(xs)) > 2:\n    print(n)\n", [], "clean"],
+      ["`:=` in a comprehension", "advanced", "ys = [y := 5, y + 1]\nprint(y)\n", [], "clean"],
+      ["annotations read later", "advanced", "from __future__ import annotations\ndef f(n: Node) -> int:\n    return 1\nclass Node:\n    pass\nprint(f(Node()))\n", [], "clean"],
+      ["an annotation above its class", "beginner", "def f(n: Node) -> int:\n    return 1\nclass Node:\n    pass\n", ["NameError Node@1"], "raises", "parity"],
+      ["a `__main__` guard", "beginner", "def main():\n    print('hi')\nif __name__ == '__main__':\n    main()\n", [], "clean"],
+      ["an import that may fail", "advanced", "try:\n    import numpy as np\nexcept ImportError:\n    np = None\nprint(np is None or np.pi > 3)\n", [], "clean"],
+      ["`with ... as`", "beginner", "with open(__file__) as fh:\n    text = fh.read()\nprint(len(text) > 0)\n", [], "clean"],
+      ["a lambda reading a name set after it", "beginner", "double = lambda n: n * factor\nfactor = 2\nprint(double(3))\n", [], "clean"],
+      ["PLL's own names", "beginner", "print(circle(10, 'solid', 'red'))\n", [], "clean"],
+      ["an exception class misspelt", "beginner", "try:\n    int('x')\nexcept ValueEror:\n    pass\n", ["NameError ValueEror@3"], "raises", "parity"],
+      ["at raw, nothing", "raw", "print(nothing_here)\n", [], null],
+      ["at intermediate", "intermediate", "print(nothing_here)\n", ["NameError nothing_here@1"], "raises", "parity"],
+      ["at advanced", "advanced", "print(nothing_here)\n", ["NameError nothing_here@1"], "raises", "parity"],
+      ["a built-in, replaced later", "advanced", "print(list((1, 2)))\nlist = 3\n", [], "clean"],
+      ["a class body calling what is defined below it", "advanced", "class A:\n    x = helper()\ndef helper():\n    return 1\n", ["NameError helper@2"], "raises", "parity"],
+      ["a class in a function, reading its local", "advanced", "def f():\n    k = 1\n    class A:\n        y = k\n    return A.y\nprint(f())\n", [], "clean"],
+      ["a comprehension in a class body", "advanced", "class A:\n    xs = [1, 2]\n    k = 2\n    ys = [x * k for x in xs]\n", ["NameError k@4"], "raises", "parity"],
+      ["code after `return`", "advanced", "def f():\n    return 1\n    print(nothing)\nf()\n", [], "clean"],
+      ["`if False:`", "advanced", "if False:\n    print(nothing)\n", [], "clean"],
+      ["`super()` and `__class__`", "advanced", "class A:\n    def f(self):\n        return 1\nclass B(A):\n    def f(self):\n        return super().f() + len(__class__.__name__)\nprint(B().f())\n", [], "clean"],
+      ["a handler reading what its body set", "advanced", "try:\n    n = 1\n    int('x')\nexcept ValueError:\n    print(n)\n", [], "clean"],
+      ["`try` / `finally`", "advanced", "try:\n    x = 1\nfinally:\n    print('done')\nprint(x)\n", [], "clean"],
+      ["a default reading a later name", "advanced", "def f(n=limit):\n    return n\nlimit = 3\n", ["NameError limit@1"], "raises", "parity"],
+      ["a call before a name its function reads", "beginner", "def show() -> None:\n    print(title)\nshow()\ntitle = 'x'\n", ["NameError title@2"], "raises"],
+      ["a call after it", "beginner", "def show() -> None:\n    print(title)\ntitle = 'x'\nshow()\n", [], "clean"],
+      ["a nested function called before its outer name", "advanced", "def outer():\n    def inner():\n        return title\n    r = inner()\n    title = 'x'\n    return r\nouter()\n", ["NameError title@3"], "raises"],
+      ["a nested function called after it", "advanced", "def outer():\n    title = 'x'\n    def inner():\n        return title\n    return inner()\nprint(outer())\n", [], "clean"],
+      ["a call reaching a name through another function", "intermediate", "def area(r: float) -> float:\n    return PI * r * r\ndef report() -> None:\n    print(area(2))\nreport()\nPI = 3.14\n", ["NameError PI@2"], "raises"],
+      ["a call of a function calling one defined below", "beginner", "def main() -> None:\n    helper()\nmain()\ndef helper() -> None:\n    pass\n", ["NameError helper@2"], "raises"],
+      ["a call in a default", "advanced", "def f():\n    return limit\ndef g(n=f()):\n    return n\nlimit = 3\n", ["NameError limit@2"], "raises"],
+      ["a call in a loop", "advanced", "def f():\n    return k\nfor i in range(2):\n    f()\nk = 1\n", ["NameError k@2"], "raises"],
+      ["a call whose read is in a branch", "advanced", "def f(flag):\n    if flag:\n        return later\n    return 0\nprint(f(False))\nlater = 1\n", [], "clean"],
+      ["a call whose read is after `or`", "advanced", "def f(flag):\n    return flag or later\nprint(f(True))\nlater = 1\n", [], "clean"],
+      ["a generator function called early", "advanced", "def gen():\n    yield later\ng = gen()\nlater = 1\nprint(list(g))\n", [], "clean"],
+      ["an `async def` called early", "advanced", "async def f():\n    return later\nc = f()\nlater = 1\nc.close()\n", [], "clean"],
+      ["a decorated function called early", "advanced", "def replace(fn):\n    return lambda: 'ok'\n@replace\ndef f():\n    return later\nprint(f())\nlater = 1\n", [], "clean"],
+      ["a local helper named like a file's function", "advanced", "def helper():\n    return later\ndef a():\n    def helper():\n        return 1\n    return helper()\nprint(a())\nlater = 1\n", [], "clean"],
+      ["a function a `global` replaces", "advanced", "def f():\n    return later\ndef swap():\n    global f\n    f = lambda: 1\nswap()\nprint(f())\nlater = 1\n", [], "clean"],
+      ["a function giving the name with `global`", "advanced", "def f():\n    global later\n    later = 1\n    return later\nf()\nprint(later)\n", [], "clean"],
+      ["a comprehension's name, called", "advanced", "def f():\n    return later\nprint([f() for f in [lambda: 1]])\nlater = 1\n", [], "clean"],
+      ["a call in a lambda", "advanced", "def f():\n    return later\ng = lambda: f()\nlater = 1\nprint(g())\n", [], "clean"],
+      ["a call a handler guards", "advanced", "def f():\n    return later\ntry:\n    f()\nexcept NameError:\n    print('not yet')\nlater = 1\n", [], "clean"],
+      ["a built-in a call reads, replaced later", "advanced", "def f():\n    return len('ab')\nprint(f())\nlen = 3\n", [], "clean"],
+      ["a call above its def, reading a later name", "advanced", "print(f())\ndef f():\n    return later\nlater = 1\n", ["NameError f@1"], "raises"],
+      ["a name another function gives with `global`", "advanced", "def f():\n    return later\ndef setup():\n    global later\n    later = 1\nsetup()\nprint(f())\nlater = 2\n", [], "clean"],
+      ["a name another function gives with `nonlocal`", "advanced", "def outer():\n    def setup():\n        nonlocal x\n        x = 1\n    def show():\n        return x\n    setup()\n    r = show()\n    x = 2\n    return r\nprint(outer())\n", [], "clean"],
+      ["a call's argument giving the name", "advanced", "def show(_):\n    return title\nprint(show(title := 'x'))\n", [], "clean"],
+      ["a `type` alias", "advanced", "type Pair = tuple[int, Later]\nclass Later:\n    pass\nprint(Pair)\n", [], "clean"],
+      ["one finding a name", "beginner", "print(missing)\nprint(missing)\n", ["NameError missing@1"], "raises", "parity"],
+    ];
+    const worded = (code, level) =>
+      JSON.parse(pllCall("_pll_static_findings", JSON.stringify([code, level, "names.py", null]))).filter(
+        (f) => f.id === "undefined-name",
+      );
+    let runs = 0;
+    const ran = (code, level) => {
+      runs += 1;
+      return JSON.parse(pllCall("_pll_run_file", JSON.stringify([code, "names.py", `names-${runs}`, level, false])));
+    };
+    const NAMES = /^(NameError|UnboundLocalError)$/;
+    let parities = 0;
+    for (const [label, level, code, want, runs_, parity] of CASES) {
+      const found = worded(code, level);
+      const got = found.map((f) => `${f.errorType} ${f.nameToken}@${f.lineNumber}`);
+      expect(got.join("|") === want.join("|"), `${label}: ${JSON.stringify(got)}, not ${JSON.stringify(want)}`);
+      if (runs_ === null) continue;
+      const error = ran(code, level).error;
+      const finding = error?.finding ?? null;
+      if (runs_ === "raises") {
+        const [kind, rest] = want[0].split(" ");
+        const line = Number(rest.split("@")[1]);
+        expect(
+          finding?.errorType === kind && finding?.lineNumber === line,
+          `${label}: the run raises ${want[0]}, but got ${finding?.errorType} at ${finding?.lineNumber}`,
+        );
+        if (parity && found[0]) {
+          parities += 1;
+          expect(
+            finding?.headline === found[0].headline && JSON.stringify(finding?.howToFix) === JSON.stringify(found[0].howToFix),
+            `${label}: worded as the run words it:\n  ${found[0].headline} ${JSON.stringify(found[0].howToFix)}\n  ${finding?.headline} ${JSON.stringify(finding?.howToFix)}`,
+          );
+        }
+      } else {
+        expect(!NAMES.test(finding?.errorType ?? ""), `${label}: the run has no NameError: ${finding?.errorType} ${finding?.headline}`);
+      }
+    }
+
+    // What each scope's own names are, against Python's compiler.
+    const agree = pyodide.runPython(`
+import ast, json, symtable
+def compare(code):
+    scopes = _PllNameScopes(ast.parse(code))
+    tables = {}
+    def walk(table):
+        if table.get_type() == symtable.SymbolTableType.FUNCTION:
+            tables[(table.get_name(), table.get_lineno())] = {s.get_name() for s in table.get_symbols() if s.is_local()}
+        for child in table.get_children():
+            walk(child)
+    walk(symtable.symtable(code, "names.py", "exec"))
+    differ = []
+    compared = 0
+    for node, scope in scopes.of.items():
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            theirs = tables[(node.name, node.lineno)]
+            compared += 1
+            if theirs != scope.local:
+                differ.append("%s line %d: ours %s, Python's %s" % (node.name, node.lineno, sorted(scope.local), sorted(theirs)))
+    return compared, differ
+results = [compare(code) for code in json.loads(${JSON.stringify(JSON.stringify(CASES.map((c) => c[2])))})]
+json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
+`);
+    const [compared, differ] = JSON.parse(agree);
+    expect(compared >= 30 && differ.length === 0, `each function's own names, as Python's compiler sees them (${compared}): ${differ.join("; ")}`);
+
+    // A call made too early is about the call: its line, the way from it to
+    // the read, and the line that sets the name, when one does.
+    const CALLS = [
+      [
+        "intermediate",
+        "def area(r: float) -> float:\n    return PI * r * r\ndef report() -> None:\n    print(area(2))\nreport()\nPI = 3.14\n",
+        "Line 5 calls `report` before `PI` has a value, and `report` calls `area`, which uses it here.",
+        ["`PI` gets its value on line 6, after the call.", "Move the call below line 6, or move the line that sets `PI` above line 5."],
+      ],
+      [
+        "advanced",
+        "def show():\n    return title\ntitle = 1\ndel title\nshow()\n",
+        "Line 5 calls `show` before `title` has a value, and `show` uses it here.",
+        ["Give `title` a value before line 5, where `show` is called."],
+      ],
+    ];
+    for (const [level, code, headline, howToFix] of CALLS) {
+      const [f] = worded(code, level);
+      expect(
+        f?.headline === headline && JSON.stringify(f?.howToFix) === JSON.stringify(howToFix),
+        `a call made too early: ${f?.headline} ${JSON.stringify(f?.howToFix)}`,
+      );
+    }
+
+    // A prompt line: what earlier lines gave the session counts.
+    pyodide.runPython("_pll_sessions.setdefault('names:repl', __import__('types').ModuleType('__main__')).__dict__['earlier'] = 1");
+    const prompt = (code) =>
+      JSON.parse(pllCall("_pll_static_findings", JSON.stringify([code, "beginner", "<repl>", "names:repl"]))).map((f) => f.nameToken);
+    expect(prompt("print(earlier)\n").length === 0, "a name an earlier line set");
+    expect(prompt("print(never)\n").join() === "never", "and one no line did");
+    pyodide.runPython("_pll_sessions.pop('names:repl', None)");
+
+    // A file with an `#examplar` line calls functions its bundle provides.
+    const examplar = "#examplar https://example.test/hw.json\ndef test_shout():\n    assert shout('a') == 'A!'\n";
+    expect(worded(examplar, "beginner").length === 0, "the functions an Examplar bundle provides");
+    expect(worded("#examplar https://example.test/hw.json\nprint(shout('a'))\n", "beginner").length === 1, "but not at the top level");
+
+    console.log(`    ${CASES.length} programs, each run as well; ${parities} worded exactly as the run words them; ${compared} functions' scopes as Python's compiler has them`);
   }
 
   fn.destroy?.();

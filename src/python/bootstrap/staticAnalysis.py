@@ -18,6 +18,8 @@
 #                          allowed.
 #     5. Silent mistakes:  code that runs without a word but cannot be what
 #                          was meant (`_PllSilenceVisitor`).
+#     6. Undefined names:  a name read where it has no value
+#                          (undefinedNames.py).
 #
 #   intermediate:
 #     The same, except that reassignment is only flagged at module scope.
@@ -25,7 +27,10 @@
 #     which is what enables for-loop accumulator patterns (e.g. `total = 0;
 #     for x in xs: total += x` inside `def`).
 #
-#   raw, advanced:
+#   advanced:
+#     Only the undefined names: a NameError is never what was meant.
+#
+#   raw:
 #     No checks. Full Python.
 #
 # A "scope" is one of: module, function (incl. async), lambda, class,
@@ -959,8 +964,11 @@ def _pll_static_analyze(code, level, filename, session_key=None):
     If `session_key` is set, names already bound in that session are treated
     as existing module-level bindings. That way a `#level beginner` prompt cannot
     reassign a name the file (or an earlier prompt line) already defined.
+
+    `beginner` and `intermediate` make every check; `advanced` only the one
+    for names read where they have no value (undefinedNames.py); `raw` none.
     """
-    if level not in _PLL_TEACHING_LEVELS:
+    if level not in _PLL_TEACHING_LEVELS and not _pll_checks_names(level):
         return []
     try:
         with _pll_without_syntax_warnings():
@@ -968,8 +976,22 @@ def _pll_static_analyze(code, level, filename, session_key=None):
     except SyntaxError:
         # Let the runtime path surface SyntaxErrors with their normal flow.
         return []
+    teaching = level in _PLL_TEACHING_LEVELS
+    findings = _pll_teaching_findings(tree, code, level, session_key) if teaching else []
+    if _pll_checks_names(level):
+        if not teaching:
+            # A `case` naming no class is a NameError too; the teaching
+            # checks find it with the others, worded with what the subject
+            # can be.
+            findings += _pll_unknown_pattern_classes(tree, code, session_key)
+        findings += _pll_undefined_names(tree, code, level, session_key, findings)
+    findings.sort(key=lambda f: (f["line_number"] or 0, f["column"] or 0))
+    return findings
 
-    findings = []
+
+def _pll_built_scopes(tree, session_key):
+    """`tree`'s scopes, with the names a prompt's session already has as
+    bindings its module starts with."""
     builder = _PllScopeBuilder()
     builder.build(tree)
     if session_key:
@@ -977,6 +999,29 @@ def _pll_static_analyze(code, level, filename, session_key=None):
         for name in _pll_session_bound_names(session_key):
             locs = module.bindings.setdefault(name, [])
             locs.insert(0, (0, 0, "preexisting", None))
+    return builder
+
+
+def _pll_known_names(builder):
+    """Every name the program binds, Python has, or PLL gives it."""
+    builtins_set = set(dir(_builtins_mod)) - _PLL_BUILTINS_MODULE_META
+    return set().union(*(scope.bindings for scope in builder.scopes)) | builtins_set | set(_pll_predefined_library_names())
+
+
+def _pll_unknown_pattern_classes(tree, code, session_key):
+    """The `case` patterns whose class nothing defines, as the teaching
+    checks find them, for the level that makes no other of those checks."""
+    builder = _pll_built_scopes(tree, session_key)
+    found = _PllSilenceVisitor(code, set(builder.scopes[0].bindings), _pll_known_names(builder)).scan(tree)
+    return [f for f in found if f["id"] == "unknown-pattern-class"]
+
+
+def _pll_teaching_findings(tree, code, level, session_key):
+    """The checks only `beginner` and `intermediate` make: shadowing,
+    reassignment, `global` / `nonlocal` and `del`, and code that would run
+    without a word but cannot be what was meant."""
+    findings = []
+    builder = _pll_built_scopes(tree, session_key)
     builtins_set = set(dir(_builtins_mod)) - _PLL_BUILTINS_MODULE_META
     library_names = _pll_predefined_library_names()
 
@@ -1118,8 +1163,5 @@ def _pll_static_analyze(code, level, filename, session_key=None):
         ))
 
     # ---- mistakes that would otherwise run without a word ----
-    known = set().union(*(scope.bindings for scope in builder.scopes)) | builtins_set | set(library_names)
-    findings.extend(_PllSilenceVisitor(code, set(builder.scopes[0].bindings), known).scan(tree))
-
-    findings.sort(key=lambda f: (f["line_number"] or 0, f["column"] or 0))
+    findings.extend(_PllSilenceVisitor(code, set(builder.scopes[0].bindings), _pll_known_names(builder)).scan(tree))
     return findings

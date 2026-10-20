@@ -2,9 +2,9 @@
  * What every smoke test reports with: `expect` notes a failure and carries
  * on, so one run shows every problem; `passed()` says whether any were noted.
  *
- * A test that checked nothing has not passed. One lost its whole body to an
- * edit once and went on reporting success, so `passed()` also needs at
- * least one check to have run.
+ * A test that checked nothing has not passed: an edit that empties a test's
+ * body would otherwise leave it reporting success, so `passed()` also needs
+ * at least one check to have run.
  */
 let failures = 0;
 let checks = 0;

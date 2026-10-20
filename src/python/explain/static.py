@@ -259,6 +259,30 @@ def _pll_word_unbinding(f, level):
     return headline, fixes
 
 
+class _PllNameReading:
+    """An `undefined-name` finding, read as the error it foresees: what the
+    rules that word a NameError as it happens (`_pll_name_wording`) read."""
+
+    def __init__(self, f):
+        self.name = f["name_token"]
+        self.text = f.get("text")
+        self.message = f.get("says") or ""
+        self.facts = {
+            key: f[key]
+            for key in ("defined_on", "deleted_on", "except_on", "being_defined", "called_on", "called")
+            if key in f
+        }
+        self.source = ""
+        self.info = {"lineNumber": f["line_number"]}
+
+
+@_pll_words("undefined-name")
+def _pll_word_undefined_name(f, level):
+    """A name read where it has no value: worded as the error a run would
+    raise there, so that the same mistake reads the same before and during."""
+    return _pll_name_wording(_PllNameReading(f))
+
+
 # Code that would otherwise run without a word being said. Each is valid
 # Python that does nothing, or something other than what was meant: a test
 # written without `assert` always passes; an `assert` on a tuple is always

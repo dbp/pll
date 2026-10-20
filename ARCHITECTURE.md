@@ -35,6 +35,8 @@ src/
 │   │   ├── running.py             `_pll_call`; run a file / a prompt line
 │   │   ├── tests.py               the file's own tests
 │   │   ├── staticAnalysis.py      the checks made before a program runs
+│   │   ├── undefinedNames.py      the one every student level makes: names read
+│   │   │                          where they have no value
 │   │   └── imports.py             the student's files, imported at their own levels
 │   ├── explain/                   what the student is told about an error or a finding
 │   │   ├── finding.py             where a finding is; the rules' registry; the
@@ -106,7 +108,7 @@ worded (`explain/static.py`).
 
 Prompt submissions use the language level of the last Run File
 (`session.lastLevel`, shown in the interactions header), or `raw`
-if the file has not been run. At beginner/intermediate, the snippet is
+if the file has not been run. At every level but raw, the snippet is
 analyzed with `sessionKey` so names already bound in the session count
 as preexisting module bindings. Those findings stay in the interactions
 view; they are not mapped onto the `.py` file.
@@ -199,7 +201,7 @@ a header and falls back to the default.
 | `raw` (default) | no | no | n/a |
 | `beginner` | all | yes | rejected |
 | `intermediate` | all, but reassignment only at module scope | yes | rejected |
-| `advanced` | no | yes | allowed, as in Python |
+| `advanced` | only names read where they have no value | yes | allowed, as in Python |
 
 `raw` is the default so that a `.py` file written without PLL in mind
 behaves exactly as CPython would; every difference has to be opted into by
@@ -214,10 +216,33 @@ homes, and they are kept to exactly two. On the host, the predicates in
 and to offer only fixes the level accepts. In Python,
 `_pll_checks_annotations` decides whether code is compiled with its
 annotation checks, `_pll_rejects_bool` how strictly a number is checked,
-and `_pll_static_analyze` which reassignments it refuses - and which
+`_pll_checks_names` whether it is checked for names read where they have
+no value, and `_pll_static_analyze` which reassignments it refuses - and which
 findings are errors that stop the code running and which are only
 warnings. Adding a level means adding it to `Level`, `LEVEL_NAMES`, those
 predicates, and their Python counterparts.
+
+### Names read where they have no value
+
+`undefinedNames.py` finds the `NameError`s and `UnboundLocalError`s a run
+would raise, before it runs, at every level but `raw`. Each name is resolved
+as Python's compiler resolves it (a test checks its scopes against
+`symtable`), and each scope's code is followed in the order it runs,
+keeping the names that may have a value at each point: branches join, loops
+are followed until nothing grows, a `try`'s handlers start from anywhere in
+its body, and `del` and the end of an `except ... as e` take a value away.
+A read is reported only when its name certainly has none. Code that runs
+when it is called - a function's body, a lambda, a generator after its
+first `in` - is checked only for names given a value nowhere, except where
+a call runs it: `f()` checks the names `f` reads on the way through its
+body up to its first branch, and those of the functions it calls there.
+What a file can give itself without a statement - `from m import *`,
+`exec`, `globals()`, `enum.global_enum` - turns the check off for the names
+it could give, and a read inside a `try` that catches `NameError` is left
+alone. The finding carries Python's own message, so it is worded by the
+same rule (`explain/names.py`) as the error a run would raise; what only
+the check knows - the `del` or `except` that removed the name, the call
+that ran too early - becomes facts that wording reads.
 
 ### A file another imports
 

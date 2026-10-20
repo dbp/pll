@@ -37,6 +37,7 @@ import packagesSource from "../python/bootstrap/packages.py";
 import runningSource from "../python/bootstrap/running.py";
 import testsSource from "../python/bootstrap/tests.py";
 import staticAnalysisSource from "../python/bootstrap/staticAnalysis.py";
+import undefinedNamesSource from "../python/bootstrap/undefinedNames.py";
 import importsSource from "../python/bootstrap/imports.py";
 import findingSource from "../python/explain/finding.py";
 import namesSource from "../python/explain/names.py";
@@ -80,6 +81,7 @@ const PLL_BOOTSTRAP_PY: ReadonlyArray<PythonSource> = [
   { file: bootstrapFile("running"), source: runningSource },
   { file: bootstrapFile("tests"), source: testsSource },
   { file: bootstrapFile("staticAnalysis"), source: staticAnalysisSource },
+  { file: bootstrapFile("undefinedNames"), source: undefinedNamesSource },
   { file: bootstrapFile("imports"), source: importsSource },
 ];
 

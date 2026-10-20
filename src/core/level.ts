@@ -11,7 +11,8 @@ import { editDistance } from "./editDistance";
  *   #level intermediate   -> same as beginner, except reassignment is
  *                            allowed inside functions so for-loop
  *                            accumulator patterns work
- *   #level advanced       -> no static checks; annotations still checked,
+ *   #level advanced       -> only the static check for names read where
+ *                            they have no value; annotations still checked,
  *                            but by Python's own rules
  *
  * Files with no header are `raw`, so code written without PLL in mind runs
@@ -252,7 +253,11 @@ function closestLevel(named: string): Level | null {
     : null;
 }
 
-/** Whether this level runs any static analyzer checks at all. */
+/**
+ * Whether this level runs any static checks at all: every level a student
+ * writes at. `advanced` makes one, for names read where they have no value;
+ * `raw` is plain Python, and makes none.
+ */
 export function levelHasStaticChecks(level: Level): boolean {
-  return level === LEVEL_BEGINNER || level === LEVEL_INTERMEDIATE;
+  return level !== LEVEL_RAW;
 }

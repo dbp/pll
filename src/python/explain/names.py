@@ -121,6 +121,43 @@ def _pll_name_wording(e):
     named = e.name is not None
     name = e.name if named else "this name"
     line = e.text
+    # What a check made before the run knows, as facts: where the name lost
+    # its value, or that it is the class still being made.
+    deleted = e.facts.get("deleted_on")
+    if named and deleted is not None:
+        return "`%s` was removed by the `del` on line %d, so it has no value here." % (name, deleted), [
+            "Use `%s` before the `del`, or leave the `del` out." % name
+        ]
+    handler = e.facts.get("except_on")
+    if named and handler is not None:
+        return "`%s` has a value only inside the `except` on line %d: Python removes it when that block ends." % (
+            name, handler
+        ), ["Use it inside the `except` block, or keep what you need in another name there: `error = %s`." % name]
+    if named and e.facts.get("being_defined"):
+        headline = "`%s` is the class being defined here, and has no value until the class is finished." % name
+        annotated = _pll_annotation_target(line, name)
+        if annotated is not None:
+            example = _pll_as_string_annotation(line, annotated, name)
+            return headline, [
+                "Write the type as a string - `%s` - and Python looks it up later, once the class exists." % example
+            ]
+        return headline, ["Use it inside a method: a method runs later, once the class exists."]
+    # Read in a function that a call runs too early: the mistake is the
+    # order of that call and the line setting the name, not this line.
+    called_on = e.facts.get("called_on")
+    if named and called_on is not None:
+        path = e.facts.get("called") or ["this function"]
+        # "`a` uses it", or "`a` calls `b`, which uses it".
+        who = "`%s`" % path[0] + "".join(" calls `%s`, which" % function for function in path[1:])
+        headline = "Line %d calls `%s` before `%s` has a value, and %s uses it here." % (called_on, path[0], name, who)
+        set_on = e.facts.get("defined_on")
+        if set_on is not None:
+            return headline, [
+                "`%s` gets its value on line %d, after the call." % (name, set_on),
+                "Move the call below line %d, or move the line that sets `%s` above line %d."
+                % (set_on, name, called_on),
+            ]
+        return headline, ["Give `%s` a value before line %d, where `%s` is called." % (name, called_on, path[0])]
     # "Never heard of it" and "not assigned yet" need opposite advice: the
     # second is a name spelled correctly, so telling the student to check
     # the spelling sends them looking for a mistake that is not there. What
@@ -173,13 +210,15 @@ def _pll_name_wording(e):
             "Add `%s` at the top of the file." % _PLL_IMPORT_FOR[name]
         ]
     # Defined, but further down: Python runs the file from the top.
-    later = _pll_defined_later_at(e.source, name, e.info["lineNumber"]) if named else None
+    later = e.facts.get("defined_on")
+    if later is None and named:
+        later = _pll_defined_later_at(e.source, name, e.info["lineNumber"])
     if later is not None:
         # In an annotation, moving the definition up is not the fix and is
         # often impossible: a recursive type names itself.
         annotated = _pll_annotation_target(line, name)
         if annotated is not None:
-            example = '%s: "%s"' % (annotated, name) if annotated else '-> "%s"' % name
+            example = _pll_as_string_annotation(line, annotated, name)
             return "`%s` is defined on line %d, after this line, and an annotation is read as the file runs." % (
                 name, later
             ), [
@@ -252,6 +291,34 @@ def _pll_annotation_target(line, name):
     if named:
         return named.group(1)
     return "" if _pll_src_re.search(r"->\s*%s\b" % escaped, line) else None
+
+
+def _pll_as_string_annotation(line, target, name):
+    """`rest: "Link | None"`: the annotation on `line` for `target` ("" for
+    a return type), all of it as a string - or, when it cannot be read off
+    the line whole, just `name`."""
+    if target:
+        found = _pll_src_re.search(r"(?:^|[(,])\s*%s\s*:\s*([^=#]+)" % _pll_src_re.escape(target), line)
+    else:
+        found = _pll_src_re.search(r"->\s*([^#]+?)\s*:\s*(?:#.*)?$", line)
+    written = found.group(1).strip() if found else ""
+    # A parameter's annotation ends at the next `,` or `)` outside brackets.
+    depth = 0
+    for i, c in enumerate(written):
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                written = written[:i]
+                break
+            depth -= 1
+        elif c == "," and depth == 0:
+            written = written[:i]
+            break
+    written = written.strip()
+    if not written or depth != 0 or name not in written:
+        written = name
+    return '%s: "%s"' % (target, written) if target else '-> "%s"' % written
 
 
 def _pll_did_you_mean(message):

@@ -10,6 +10,16 @@
   `del n` inside `for n in numbers:`, the message says that it removes
   only the name, and leaves the item in `numbers`. `#level advanced` allows
   it.
+- **A name used where it has no value is caught before the run, at every
+  level but `raw`** - `advanced` included, which had no checks before:
+  a misspelling, a function called above its `def`, a variable read before
+  it is set, a local read before the function sets it, a name after the
+  `del` or the `except` that removed it, a class naming itself while it is
+  being defined, and a call that runs a function before a name the function
+  uses is set ("Line 5 calls `greet` before `who` has a value, and `greet`
+  uses it here."). Each is worded as the `NameError` a run would raise. A
+  function's body is checked only for names given a value nowhere in the
+  file, unless a call runs it early.
 
 ## 0.5.1 (2026-10-15)
 

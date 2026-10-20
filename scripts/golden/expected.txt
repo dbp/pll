@@ -896,7 +896,7 @@ stderr:
     - Python runs a file from the top, so nothing further down exists yet.
     - Move the definition of `double` above this line.
 
-=== name-forward-annotation (exit 1)
+=== name-forward-annotation (exit 2)
 stderr:
   student.py [beginner]
   NameError: `NumList` is defined on line 9, after this line, and an annotation is read as the file runs.
@@ -905,6 +905,8 @@ stderr:
   How to fix:
     - Write the type as a string - `rest: "NumList"` - and Python looks it up later, once it exists.
     - A type that names itself can only be written that way: the union needs the class, and the class needs the union.
+  
+  Static analysis found 1 problem. The file was not run.
 
 === name-free-variable (exit 1)
 stderr:
@@ -1277,6 +1279,109 @@ stderr:
   
   Static analysis found 1 problem. The file was not run.
 
+=== nm-call-above-def (exit 2)
+stderr:
+  student.py [beginner]
+  NameError: `double` is defined on line 4, after this line.
+    at student.py:2:7
+  
+  How to fix:
+    - Python runs a file from the top, so nothing further down exists yet.
+    - Move the definition of `double` above this line.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== nm-typo-uncalled (exit 2)
+stderr:
+  student.py [beginner]
+  NameError: Python doesn't know what `widht` means.
+    at student.py:3:12
+  
+  How to fix:
+    - Did you mean `width`?
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== nm-unbound-local (exit 2)
+stderr:
+  student.py [advanced]
+  UnboundLocalError: `total` has not been given a value yet on this line.
+    at student.py:4:13
+  
+  How to fix:
+    - Move the line that sets `total` above this one.
+    - If you meant a `total` from outside this function: assigning to it anywhere inside makes it local to the whole function, so the outer one is not visible here. Pass it in as a parameter instead.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== nm-after-del (exit 2)
+stderr:
+  student.py [advanced]
+  NameError: `scores` was removed by the `del` on line 3, so it has no value here.
+    at student.py:4:7
+  
+  How to fix:
+    - Use `scores` before the `del`, or leave the `del` out.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== nm-except-name (exit 2)
+stderr:
+  student.py [advanced]
+  NameError: `e` has a value only inside the `except` on line 4: Python removes it when that block ends.
+    at student.py:6:7
+  
+  How to fix:
+    - Use it inside the `except` block, or keep what you need in another name there: `error = e`.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== nm-class-own-name (exit 2)
+stderr:
+  student.py [beginner]
+  NameError: `Link` is the class being defined here, and has no value until the class is finished.
+    at student.py:7:11
+  
+  How to fix:
+    - Write the type as a string - `rest: "Link | None"` - and Python looks it up later, once the class exists.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== nm-method-attribute (exit 2)
+stderr:
+  student.py [advanced]
+  NameError: Python doesn't know what `width` means.
+    at student.py:7:16
+  
+  How to fix:
+    - Did you mean `self.width`?
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== nm-call-before-set (exit 2)
+stderr:
+  student.py [beginner]
+  NameError: Line 5 calls `greet` before `who` has a value, and `greet` uses it here.
+    at student.py:3:23
+  
+  How to fix:
+    - `who` gets its value on line 6, after the call.
+    - Move the call below line 6, or move the line that sets `who` above line 5.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== nm-free-variable (exit 2)
+stderr:
+  student.py [advanced]
+  NameError: Line 5 calls `inner` before `title` has a value, and `inner` uses it here.
+    at student.py:4:16
+  
+  How to fix:
+    - `title` gets its value on line 6, after the call.
+    - Move the call below line 6, or move the line that sets `title` above line 5.
+  
+  Static analysis found 1 problem. The file was not run.
+
 === st-del-names-in-function (exit 2)
 stderr:
   student.py [beginner]
@@ -1382,7 +1487,7 @@ stderr:
     - If a `Rock` is a new kind of `Animal`, define `class Rock` and add it: `Animal = Boa | Armadillo | Rock`.
   
 
-=== pattern-unknown-class (exit 1)
+=== pattern-unknown-class (exit 2)
 stderr:
   student.py [advanced]
   NameError: There is no class `Aardvark`: an `Animal` is a `Boa` or an `Armadillo`.
@@ -1391,6 +1496,8 @@ stderr:
   How to fix:
     - Match one of them: `case Boa(...)` or `case Armadillo(...)`.
     - If an `Aardvark` is a new kind of `Animal`, define `class Aardvark` and add it: `Animal = Boa | Armadillo | Aardvark`.
+  
+  Static analysis found 1 problem. The file was not run.
 
 === st-method-not-called (exit 1)
 stderr:

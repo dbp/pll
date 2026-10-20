@@ -36,7 +36,7 @@ print(greeting)
 | `#level raw` | Nothing checked. Plain Python plus PLL's libraries. This is what you get with no line at all. |
 | `#level beginner` | Warns about reassigning a variable, hiding another name (a built-in like `list`, or one of PLL's own like `circle`), `global` / `nonlocal`, and removing a name with `del` (not an item: `del d[key]` is fine). Type annotations are checked as the program runs. If it finds a problem, the file does **not** run. |
 | `#level intermediate` | Same, but reassignment is allowed inside a function. |
-| `#level advanced` | No pre-run checks; annotations still checked, by Python's own rules. |
+| `#level advanced` | One check before the run: names used where they have no value, which every level but `raw` makes. Annotations still checked, by Python's own rules. |
 
 There is deliberately **no flag to override the level**. A file behaves the
 same way everywhere, which is the point of putting it in the file.
