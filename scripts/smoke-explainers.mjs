@@ -1377,7 +1377,43 @@ console.log("[name errors: the hint that fits, not the one that always fits]");
     unknown.howToFix.some((l) => /spelling/.test(l)),
     `still mentions spelling: ${JSON.stringify(unknown.howToFix)}`,
   );
-  console.log("    an import, a later definition, a parameter, and a plain typo");
+
+  // Read as a type, a name from another language is the type it means -
+  // Python suggests nothing for `string`, or a module to import - wherever
+  // in the annotation it is.
+  const TYPES = [
+    ["a parameter's", "def stand(cups: string) -> int:\n    return 1\n", "string", ["Write `str` instead."]],
+    ["a return type", "def ok() -> boolean:\n    return True\n", "boolean", ["Write `bool` instead."]],
+    ["inside brackets", "def count(xs: dict[str, integer]) -> int:\n    return 1\n", "integer", ["Write `int` instead."]],
+    ["typing's, not imported", "def total(xs: List[int]) -> int:\n    return 1\n", "List", ["Write `list` instead."]],
+    ["a variable's", "cups: integer = 3\n", "integer", ["Write `int` instead."]],
+    ["a number", "def half(n: Number) -> int:\n    return 1\n", "Number", ["Write `float` instead.", "Or `int`, if it is always a whole number."]],
+    ["a `type` alias's", "type Pair = tuple[int, string]\nprint(Pair.__value__)\n", "string", ["Write `str` instead."]],
+  ];
+  for (const [what, source, name, fix] of TYPES) {
+    const got = raised(source);
+    expect(
+      got.headline === `\`${name}\` is not a type Python knows.` && JSON.stringify(got.howToFix) === JSON.stringify(fix),
+      `${what}: ${got.headline} ${JSON.stringify(got.howToFix)}`,
+    );
+  }
+  // One that is no type of any language keeps the spelling, and is not
+  // told to put the type in quotes, which names the same missing thing.
+  const unknownType = raised("def f(n: Foo) -> int:\n    return 1\n");
+  expect(
+    unknownType.headline === "Python doesn't know what `Foo` means." &&
+      unknownType.howToFix.some((l) => /spelling/.test(l)) &&
+      unknownType.howToFix.some((l) => /An annotation names a type/.test(l)) &&
+      !unknownType.howToFix.some((l) => /quotes/.test(l)),
+    `an unknown type: ${JSON.stringify(unknownType.howToFix)}`,
+  );
+  // And `string` that is not a type is still a name.
+  const notAType = raised("print(string)\n");
+  expect(
+    notAType.headline === "Python doesn't know what `string` means." && notAType.howToFix.some((l) => /quotes/.test(l)),
+    `outside an annotation: ${notAType.headline} ${JSON.stringify(notAType.howToFix)}`,
+  );
+  console.log("    an import, a later definition, a parameter, a plain typo, and types by other names");
 }
 
 console.log("[annotations: the function wording only where there is a function]");
@@ -1426,6 +1462,12 @@ console.log("[annotations: the function wording only where there is a function]"
       `but still names the type: ${JSON.stringify(found.howToFix)}`,
     );
   }
+  // A number is either kind.
+  const number = annotation("Number");
+  expect(
+    JSON.stringify(number.howToFix.slice(0, 2)) === JSON.stringify(["Write `float` instead.", "Or `int`, if it is always a whole number."]),
+    `a number, either: ${JSON.stringify(number.howToFix)}`,
+  );
   console.log("    `table` and `reactor` named as functions; `image` and `row` not");
 }
 

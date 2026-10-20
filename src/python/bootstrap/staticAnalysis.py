@@ -321,10 +321,12 @@ def _pll_finding(kind, error_type, line, column, name_token=None, **extras):
 
 
 #: Annotations students write that are not types, and the type each should
-#: be: `table` is the function that makes a table, `Table` the type. Written
-#: out rather than derived, so a name is only reported when its replacement
-#: is certainly right, and is a name a student's code has. A row is a
-#: `dict`, the type the course gives for one; PLL's `Row` subclasses it.
+#: be: `table` is the function that makes a table, `Table` the type; most
+#: are a type's name in another language (Pyret's `String`, Java's `double`)
+#: or `typing`'s, unimported (`List`). Written out rather than derived, so a
+#: name is only reported when its replacement is certainly right, and is a
+#: name a student's code has. A row is a `dict`, the type the course gives
+#: for one; PLL's `Row` subclasses it.
 _PLL_NOT_A_TYPE = {
     "table": "Table",
     "reactor": "Reactor",
@@ -342,6 +344,15 @@ _PLL_NOT_A_TYPE = {
     "String": "str",
     "Boolean": "bool",
     "Integer": "int",
+    "double": "float",
+    "char": "str",
+    "List": "list",
+    "Dict": "dict",
+    "Tuple": "tuple",
+    "Set": "set",
+    "array": "list",
+    "dictionary": "dict",
+    "void": "None",
 }
 
 #: Methods that are nearly always meant to be called. `movies["rating"].mean`

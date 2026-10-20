@@ -287,7 +287,7 @@ class _PllNameReading:
         self.message = f.get("says") or ""
         self.facts = {
             key: f[key]
-            for key in ("defined_on", "deleted_on", "except_on", "being_defined", "called_on", "called")
+            for key in ("defined_on", "deleted_on", "except_on", "being_defined", "called_on", "called", "in_annotation")
             if key in f
         }
         self.source = ""
@@ -391,8 +391,7 @@ def _pll_word_annotation_not_a_type(f, level):
     )
     if type_name is None:
         return headline, ["Nothing about this value is being checked as a result."]
-    return headline, [
-        "Write `%s` instead." % type_name,
+    return headline, _pll_type_fix(written) + [
         "As it stands the annotation is accepted and nothing about this value is checked."
         if exists
         else "There is nothing called `%s`, so this line fails as soon as it runs." % written,

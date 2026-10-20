@@ -40,6 +40,14 @@
   the language servers off, hardly any other extension adds one.
 
 ### Fixed
+- **A type by another language's name, used in an annotation, is the type
+  it means**, at every level: `def f(n: string)` says "`string` is not a
+  type Python knows" and "Write `str` instead", where a run's NameError
+  said to check the spelling or put it in quotes. The same goes for
+  `integer`, `boolean`, `Number` (`float`, or `int`), `List` and `Dict`
+  unimported, `double`, `char`, `void` and others, anywhere in the
+  annotation - `dict[str, integer]` too. An unknown name in an annotation
+  is no longer told to go in quotes.
 - **A name that shadows another and is then reassigned gets both
   findings** at `beginner`: `def f(x):` under a top-level `x`, with `x = 20`
   in it, is shadowing on the `def` line and reassignment on the `x = 20`

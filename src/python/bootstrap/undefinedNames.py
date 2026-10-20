@@ -368,18 +368,22 @@ class _PllReading:
     are names bound around the point by a comprehension or a type
     parameter list. `outer` resolves a name a class body does not have, in
     the code the `class` statement runs in; `skip_own` is a comprehension in
-    a class body, which never sees the class's names.
+    a class body, which never sees the class's names. `annotation` is a
+    type: an annotation, or a `type` alias's value.
     """
 
-    __slots__ = ("scope", "later", "guarded", "comp", "outer", "skip_own")
+    __slots__ = ("scope", "later", "guarded", "comp", "outer", "skip_own", "annotation")
 
-    def __init__(self, scope, later=False, guarded=False, comp=frozenset(), outer=None, skip_own=False):
+    def __init__(
+        self, scope, later=False, guarded=False, comp=frozenset(), outer=None, skip_own=False, annotation=False
+    ):
         self.scope = scope
         self.later = later
         self.guarded = guarded
         self.comp = comp
         self.outer = outer
         self.skip_own = skip_own
+        self.annotation = annotation
 
     def but(self, **changes):
         fields = {name: getattr(self, name) for name in self.__slots__}
@@ -532,6 +536,8 @@ class _PllUndefinedNames:
             later = [n for n in self.module.lines.get(name, ()) if n > line]
             if later:
                 facts["defined_on"] = min(later)
+        if ctx.annotation:
+            facts["in_annotation"] = True
         self.findings.append(_pll_finding(
             "undefined-name",
             "UnboundLocalError" if local else "NameError",
@@ -783,7 +789,7 @@ class _PllUndefinedNames:
             return state
         if isinstance(node, getattr(_ast, "TypeAlias", ())):
             scope = self.scopes.of[node]
-            self.expr(node.value, scope.type_params, _PllReading(scope, later=True))
+            self.expr(node.value, scope.type_params, _PllReading(scope, later=True, annotation=True))
             return state | {node.name.id}
         for child in _ast.iter_child_nodes(node):
             state = self.expr(child, state, ctx)
@@ -801,10 +807,10 @@ class _PllUndefinedNames:
         if self.future_annotations:
             # Read as strings, when the function is checked as it is called.
             for annotation in annotations:
-                self.read_anywhere(annotation, ctx)
+                self.read_anywhere(annotation, ctx.but(annotation=True))
         else:
             for annotation in annotations:
-                state = self.expr(annotation, state, ctx.but(comp=own_types))
+                state = self.expr(annotation, state, ctx.but(comp=own_types, annotation=True))
         state = self.bind(_ast.Name(id=node.name, ctx=_ast.Store()), state, ctx)
         self.function_body(node)
         return state
@@ -859,7 +865,7 @@ class _PllUndefinedNames:
             state = self.expr(node.value, state, ctx)
         local = ctx.scope.kind in ("function", "generator")
         if not self.future_annotations and (node.value is not None or not local):
-            state = self.expr(node.annotation, state, ctx)
+            state = self.expr(node.annotation, state, ctx.but(annotation=True))
         if isinstance(node.target, _ast.Name):
             return self.bind(node.target, state, ctx) if node.value is not None else state
         return self.expr(node.target, state, ctx)

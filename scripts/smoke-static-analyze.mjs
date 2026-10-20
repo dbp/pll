@@ -1109,6 +1109,7 @@ _g = _pll_get_session("smoke-lib")
       ["a handler reading what its body set", "advanced", "try:\n    n = 1\n    int('x')\nexcept ValueError:\n    print(n)\n", [], "clean"],
       ["`try` / `finally`", "advanced", "try:\n    x = 1\nfinally:\n    print('done')\nprint(x)\n", [], "clean"],
       ["a default reading a later name", "advanced", "def f(n=limit):\n    return n\nlimit = 3\n", ["NameError limit@1"], "raises", "parity"],
+      ["a type by another language's name", "advanced", "def stand(cups: string) -> int:\n    return 1\n", ["NameError string@1"], "raises", "parity"],
       ["a call before a name its function reads", "beginner", "def show() -> None:\n    print(title)\nshow()\ntitle = 'x'\n", ["NameError title@2"], "raises"],
       ["a call after it", "beginner", "def show() -> None:\n    print(title)\ntitle = 'x'\nshow()\n", [], "clean"],
       ["a nested function called before its outer name", "advanced", "def outer():\n    def inner():\n        return title\n    r = inner()\n    title = 'x'\n    return r\nouter()\n", ["NameError title@3"], "raises"],

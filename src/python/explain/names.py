@@ -230,6 +230,11 @@ def _pll_name_wording(e):
             "Python runs a file from the top, so nothing further down exists yet.",
             "Move the definition of `%s` above this line." % name,
         ]
+    # A type by another language's name - `string`, `Number`, `List` - for
+    # which Python suggests nothing, or a module to import.
+    as_type = named and _pll_read_as_type(e)
+    if as_type and name in _PLL_NOT_A_TYPE:
+        return "`%s` is not a type Python knows." % name, _pll_type_fix(name)
     headline = "Python doesn't know what `%s` means." % name
     meant = _pll_did_you_mean(e.message)
     # One suggestion is a question, not "one of those". Differing only in
@@ -246,13 +251,70 @@ def _pll_name_wording(e):
         "Check the spelling of `%s` (Python is case-sensitive)." % name,
         "Make sure `%s` is defined before this line runs." % name,
     ]
-    # Only worth saying with a real name to quote: `put "this name" in
-    # quotes` is advice about the placeholder rather than about the code.
-    if named:
+    if as_type:
+        # Quoting a type is a forward reference, not text: it names the
+        # same missing thing.
+        how_to_fix.append("An annotation names a type: `int`, `float`, `str`, `bool`, `list`, `dict`, or a class of your own.")
+    elif named:
+        # Only worth saying with a real name to quote: `put "this name" in
+        # quotes` is advice about the placeholder rather than about the code.
         how_to_fix.append('If `%s` should be text, put it in quotes: `"%s"`.' % (name, name))
     if len(meant) > 1:
         how_to_fix.insert(0, "Did you mean one of %s?" % ", ".join("`%s`" % m for m in meant))
     return headline, how_to_fix
+
+
+def _pll_type_fix(written):
+    """What to write for `written`, a type by a name Python does not use
+    (`_PLL_NOT_A_TYPE`): one line naming the type - a number, either."""
+    meant = _PLL_NOT_A_TYPE[written]
+    fix = ["Write `%s` instead." % meant]
+    if written.lower() == "number":
+        fix.append("Or `int`, if it is always a whole number.")
+    return fix
+
+
+def _pll_read_as_type(e):
+    """Whether the name `e` is about is read as a type: in an annotation,
+    or as a `type` alias's value. A check before the run says so; for a
+    run's error it is read off the program, at the error's line and column."""
+    if e.facts.get("in_annotation"):
+        return True
+    run = getattr(e, "run", None)
+    line = getattr(e, "line", None)
+    if not run or line is None or getattr(e, "file", None) != run[0]:
+        return False
+    return _pll_annotates(run[1], line, getattr(e, "column", None), e.name)
+
+
+def _pll_annotates(source, line, column, name):
+    """Whether `name`, read on `line` (at `column`, when known) of `source`,
+    is in an annotation or a `type` alias's value."""
+    try:
+        tree = _ast.parse(source)
+    except SyntaxError:
+        return False
+    for node in _ast.walk(tree):
+        types = []
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            args = node.args
+            every = args.posonlyargs + args.args + args.kwonlyargs + [a for a in (args.vararg, args.kwarg) if a]
+            types = [a.annotation for a in every if a.annotation is not None]
+            types += [node.returns] if node.returns is not None else []
+        elif isinstance(node, _ast.AnnAssign):
+            types = [node.annotation]
+        elif isinstance(node, getattr(_ast, "TypeAlias", ())):
+            types = [node.value]
+        for written in types:
+            for read in _ast.walk(written):
+                if (
+                    isinstance(read, _ast.Name)
+                    and read.id == name
+                    and read.lineno == line
+                    and (column is None or read.col_offset == column)
+                ):
+                    return True
+    return False
 
 
 def _pll_defined_later_at(source, name, used_on):

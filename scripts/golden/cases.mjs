@@ -127,6 +127,7 @@ export const CASES = [
   { name: "name-import-math", code: ["print(math.sqrt(4))"] },
   { name: "name-defined-later", code: ["print(double(2))", "", "def double(n):", "    return n * 2"] },
   { name: "name-forward-annotation", code: [B, ...dataclass("@dataclass", "class Node:", "    value: int", "    rest: NumList", "", "NumList = Node | None")] },
+  { name: "name-type-string", code: ["def lemonade_stand_1(num_cups_sold: string) -> int:", "    return num_cups_sold", "", "def test_lemonade_stand_1():", "    assert lemonade_stand_1(4) == 4"] },
   { name: "name-free-variable", code: ["def outer():", "    def inner():", "        return title", "    r = inner()", '    title = "x"', "    return r", "", "outer()"] },
   { name: "name-unbound-local", code: ["count = 0", "def bump():", "    count = count + 1", "", "bump()"] },
   { name: "name-passed-result", code: [`t = table(["riders"], [[1]])`, "def below_1k(r):", '    return r["riders"] < 1000', "print(t.filter(below_1k(r)))"] },

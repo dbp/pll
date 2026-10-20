@@ -908,6 +908,16 @@ stderr:
   
   Static analysis found 1 problem. The file was not run.
 
+=== name-type-string (exit 1)
+stderr:
+  student.py [raw]
+  NameError: `string` is not a type Python knows.
+    at student.py:1:37
+  
+  How to fix:
+    - Write `str` instead.
+  The tests were not run, because of the error above.
+
 === name-free-variable (exit 1)
 stderr:
   student.py [raw]
