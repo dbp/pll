@@ -831,7 +831,8 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
 
   // -- loops, conversions and comparisons --------------------------------
   const loop = "def total(nums: list[int]) -> int:\n    out = 0\n    for item in len(nums):\n        out = out + item\n    return out\n";
-  const rangeLen = raised(loop, 3, "total", "TypeError: 'int' object is not iterable");
+  // A `for` failing on its value, as a run's traceback says it did.
+  const rangeLen = raised(loop, 3, "total", "TypeError: 'int' object is not iterable", { instruction: "GET_ITER" });
   expect(
     rangeLen.headline === "`len(nums)` is a number, and a number is not something to loop over.",
     `for over len: ${rangeLen.headline}`,
@@ -1414,6 +1415,47 @@ console.log("[name errors: the hint that fits, not the one that always fits]");
     `outside an annotation: ${notAType.headline} ${JSON.stringify(notAType.howToFix)}`,
   );
   console.log("    an import, a later definition, a parameter, a plain typo, and types by other names");
+}
+
+console.log("[not iterable: the built-in that was given it, a `for` only where there is one]");
+{
+  const raised = (source) => ran(source, "lab.py", "raw");
+  // [what, the program, the headline, and the first fix (or none)].
+  const CASES = [
+    ["`sum` given the numbers one by one", "print(sum(1, 3))\n",
+      "`sum` adds up the items in a list, but `1` is a whole number.", "Put the numbers in a list: `sum([1, 3])`."],
+    ["the same, the whole line", "sum(1, 3)\n", "`sum` adds up the items in a list, but `1` is a whole number.", "Put the numbers in a list: `sum([1, 3])`."],
+    ["three of them", "print(sum(1, 2, 3))\n",
+      "`sum` adds up the items in one list, not values given one by one.", "Put the numbers in a list: `sum([1, 2, 3])`."],
+    ["`sum` given one number", "total = sum(4)\n", "`sum` adds up the items in a list, but `4` is a whole number.", "Give `sum` a list of the numbers to add."],
+    ["`max` given one", "print(max(5))\n", "`max` needs a list, or two or more values, but `5` is a whole number.", null],
+    ["`list` given a length", "xs = [3, 1]\nprint(list(len(xs)))\n",
+      "`list` makes a list of the items of another collection, but `len(xs)` is a whole number.", null],
+    ["`map`'s collection, second", "print(list(map(str, 5)))\n",
+      "`map` applies a function to the items of a collection, but `5` is a whole number.", null],
+    ["`zip`'s could be any", "print(list(zip([1], 5)))\n",
+      "`zip` pairs up the items of lists or other collections, and one of the values it was given has no items.", null],
+    ["`None` given to `sum`", "def f():\n    pass\nprint(sum(f()))\n", "`sum` adds up the items in a list, but `f(...)` gave back `None`.", null],
+    // The loop failed on what `max` gave back: the `for` is the story.
+    ["a `for` over what a built-in gave back", "for x in max([1, 2]):\n    print(x)\n", "A whole number is not something to loop over.",
+      "`for` needs a list, a string, a range or something else with items in it."],
+    ["a comprehension", "print([x for x in 5])\n", "A whole number is not something to loop over.", null],
+    ["their own `sum`, with a `for` in it", "def sum(xs):\n    t = 0\n    for x in xs:\n        t += x\n    return t\nprint(sum(5))\n",
+      "A whole number is not something to loop over.", null],
+    // What cannot be told is not guessed at: no `for`, and no function.
+    ["a built-in by another name", "add = sum\nprint(add(5))\n", "A whole number has no items to go through.",
+      "Use a list, a string, a range or something else with items in it."],
+    ["the program's own `sum`, which is not the built-in", "sum = sorted\nprint(sum(5))\n", "A whole number has no items to go through.", null],
+    ["one that is not in the list", "print(iter(5))\n", "A whole number has no items to go through.", null],
+    ["`None`, given to one of those", "print(iter(None))\n", "This value is `None`, so it has no items to go through.", null],
+  ];
+  for (const [what, source, headline, fix] of CASES) {
+    const got = raised(source);
+    expect(got.headline === headline, `${what}: ${got.headline}`);
+    if (fix !== null) expect(got.howToFix[0] === fix, `${what}, the fix: ${JSON.stringify(got.howToFix)}`);
+    if (!/for`|loop/.test(headline)) expect(!/`for`|loop/.test(got.howToFix.join(" ")), `${what}, no loop: ${JSON.stringify(got.howToFix)}`);
+  }
+  console.log(`    ${CASES.length} programs`);
 }
 
 console.log("[annotations: the function wording only where there is a function]");

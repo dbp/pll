@@ -815,16 +815,156 @@ def _pll_not_subscriptable(m, e):
     ]
 
 
+#: Built-ins that go through what they are given, item by item, and what
+#: each does with it - said when one is given something with no items.
+#: `map` and `filter` are given it second, after the function.
+_PLL_GOES_THROUGH = {
+    "sum": "adds up the items in a list",
+    "max": "needs a list, or two or more values",
+    "min": "needs a list, or two or more values",
+    "sorted": "sorts the items of a list or another collection",
+    "list": "makes a list of the items of another collection",
+    "tuple": "makes a tuple of the items of another collection",
+    "set": "makes a set of the items of another collection",
+    "frozenset": "makes a set of the items of another collection",
+    "enumerate": "numbers the items of a list or another collection",
+    "any": "checks the items of a list or another collection",
+    "all": "checks the items of a list or another collection",
+    "dict": "makes a dictionary from a collection of pairs",
+    "map": "applies a function to the items of a collection",
+    "filter": "keeps the items of a collection that pass a test",
+    "zip": "pairs up the items of lists or other collections",
+}
+
+
 @_pll_stock("TypeError", r"^'([\w.]+)' object is not iterable")
 def _pll_not_iterable(m, e):
-    """`'int' object is not iterable`, almost always `for x in len(xs)`."""
+    """`'int' object is not iterable`: a `for` over something with no items,
+    as `for x in len(xs)` is, or a built-in given one, as `sum(1, 3)` is.
+    The two fail at the same place, so which it was is read from what the
+    line was doing (the `instruction` fact); when that cannot say, only
+    what is certain is said - never a `for` that is not there."""
+    name = _pll_last_segment(m.group(1))
+    instruction = str(e.facts.get("instruction") or "")
+    if instruction == "GET_ITER":
+        return _pll_loop_over_nothing(m, e, name)
+    call = _pll_failed_call(e) if instruction.startswith("CALL") else None
+    if call is not None and call[0] in _PLL_GOES_THROUGH:
+        return _pll_given_no_items(call, e, m.group(1), name)
+    if name == "NoneType":
+        return "This value is `None`, so it has no items to go through.", _PLL_WHY_NONE
+    return "%s has no items to go through." % _pll_capitalized(_pll_a(_pll_friendly(m.group(1)))), [
+        "Use a list, a string, a range or something else with items in it."
+    ]
+
+
+def _pll_given_no_items(call, e, type_name, name):
+    """`sum(1, 3)`: a built-in that goes through what it is given, given a
+    value with no items - its first argument, or `map`'s and `filter`'s
+    second. `zip`'s could be any of them, so none is named."""
+    function, arguments, plain = call
+    does = "`%s` %s" % (function, _PLL_GOES_THROUGH[function])
+    at = 1 if function in ("map", "filter") else 0
+    given = arguments[at] if function != "zip" and at < len(arguments) else None
+    if given is None:
+        return "%s, and one of the values it was given has no items." % does, [
+            "Give it lists, strings, ranges or other things with items in them."
+        ]
+    if name == "NoneType":
+        subject, why = _pll_why_none(e, given)
+        return "%s, but %s." % (does, subject), why
+    headline = "%s, but `%s` is %s." % (does, given, _pll_a(_pll_friendly(type_name)))
+    if function == "sum":
+        if plain and len(arguments) == 2:
+            return headline, [
+                "Put the numbers in a list: `sum([%s])`." % ", ".join(arguments),
+                "Or add them with `+`: `%s`." % " + ".join(arguments),
+            ]
+        return headline, ["Give `sum` a list of the numbers to add."]
+    if function in ("max", "min"):
+        return headline, ["Give it the list itself, or two or more values separated by commas."]
+    return headline, ["Give it a list, a string, a range or something else with items in it."]
+
+
+@_pll_stock("TypeError", r"^sum\(\) takes at most 2 arguments")
+def _pll_sum_values(m, e):
+    """`sum(1, 2, 3)`: the numbers given one by one, where `sum` takes one
+    list of them."""
+    call = _pll_failed_call(e)
+    numbers = call[1] if call is not None and call[0] == "sum" and call[2] else None
+    headline = "`sum` adds up the items in one list, not values given one by one."
+    if numbers is None:
+        return headline, ["Put the numbers in a list, in square brackets, and give `sum` the list."]
+    return headline, [
+        "Put the numbers in a list: `sum([%s])`." % ", ".join(numbers),
+        "Or add them with `+`: `%s`." % " + ".join(numbers),
+    ]
+
+
+def _pll_failed_call(e):
+    """The call of a built-in that raised `e` itself, as `(name, arguments,
+    plain)` - its positional arguments as written, `plain` when they are
+    all there is, with no `*` or keyword - or None when that cannot be read
+    off the program for certain: the student's code was not failing at a
+    call (the `instruction` fact), the line holds no one such call at the
+    error's column, or the program gives the name a value of its own."""
+    if not str(e.facts.get("instruction") or "").startswith("CALL") or e.line is None:
+        return None
+    run = getattr(e, "run", None)
+    if run and e.file == run[0]:
+        source, line, column = run[1], e.line, e.column
+    elif e.text:
+        source = e.text.lstrip()
+        line = 1
+        column = None if e.column is None else e.column - (len(e.text) - len(source))
+    else:
+        return None
+    try:
+        tree = _ast.parse(source)
+    except SyntaxError:
+        return None
+    own = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Name) and isinstance(node.ctx, (_ast.Store, _ast.Del)):
+            own.add(node.id)
+        elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+            own.add(node.name)
+        elif isinstance(node, (_ast.Import, _ast.ImportFrom)):
+            own.update((alias.asname or alias.name).split(".")[0] for alias in node.names)
+    calls = [
+        node
+        for node in _ast.walk(tree)
+        if isinstance(node, _ast.Call)
+        and isinstance(node.func, _ast.Name)
+        and node.func.id not in own
+        and node.lineno == line
+        and (column is None or node.col_offset == column)
+    ]
+    if len(calls) != 1:
+        return None
+    call = calls[0]
+    plain = not call.keywords and not any(isinstance(a, _ast.Starred) for a in call.args)
+    return call.func.id, [_ast.get_source_segment(source, a) for a in call.args], plain
+
+
+def _pll_a(words):
+    """`words` after "a" or "an"."""
+    first = words.lstrip("`")[:1].lower()
+    return ("an " if first and first in "aeiou" else "a ") + words
+
+
+def _pll_capitalized(text):
+    return text[:1].upper() + text[1:]
+
+
+def _pll_loop_over_nothing(m, e, name):
+    """A `for` - or a comprehension's - over a value with no items."""
     over = _pll_src_re.search(r"\bfor\s+\w+\s+in\s+len\s*\(\s*([A-Za-z_][\w.]*)\s*\)", e.text or "")
     if over:
         return "`len(%s)` is a number, and a number is not something to loop over." % over.group(1), [
             "To visit each item, write `for item in %s:`." % over.group(1),
             "To count, write `for i in range(len(%s)):` - but the first form is usually what you want." % over.group(1),
         ]
-    name = _pll_last_segment(m.group(1))
     if name == "NoneType":
         subject, why = _pll_why_none(e, _pll_looped_over(e.text))
         return "%s, so there is nothing to loop over." % subject, why

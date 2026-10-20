@@ -16,6 +16,25 @@ stderr:
   KeyError: 'b'
     at student.py:2:7
 
+=== sum-numbers (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: `sum` adds up the items in a list, but `1` is a whole number.
+    at student.py:1:7
+  
+  How to fix:
+    - Put the numbers in a list: `sum([1, 3])`.
+    - Or add them with `+`: `1 + 3`.
+
+=== loop-over-max (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: A whole number is not something to loop over.
+    at student.py:1:10
+  
+  How to fix:
+    - `for` needs a list, a string, a range or something else with items in it.
+
 === key-error-sentence (exit 1)
 stderr:
   student.py [raw]

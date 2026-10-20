@@ -40,6 +40,14 @@
   the language servers off, hardly any other extension adds one.
 
 ### Fixed
+- **`sum(1, 3)` is about `sum`, not a `for` loop**: "`sum` adds up the
+  items in a list, but `1` is a whole number", with `sum([1, 3])` and
+  `1 + 3` as the fixes, where it said that `for` needs a list. The same for
+  the other built-ins that go through what they are given - `max(5)`,
+  `sorted(5)`, `list(len(xs))`, `map(str, 5)` - and `sum(1, 2, 3)` says to
+  put the numbers in a list. A `for` is only mentioned when the error is a
+  `for`'s, as in `for x in max(xs)`; when PLL cannot tell, it says only
+  that the value has no items to go through.
 - **A type by another language's name, used in an annotation, is the type
   it means**, at every level: `def f(n: string)` says "`string` is not a
   type Python knows" and "Write `str` instead", where a run's NameError

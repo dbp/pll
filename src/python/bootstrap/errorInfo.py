@@ -278,6 +278,30 @@ def _pll_innermost_tb(tb, count):
 _PLL_NOT_STUDENT = (_PLL_VENDOR_DIR, "site-packages", "/lib/python", "_pytest", "pluggy")
 
 
+def _pll_failed_instruction(tb):
+    """What the student's code was doing when it failed, as the name of the
+    instruction - `CALL` when a function it called raised with no frame of
+    its own (a built-in), `GET_ITER` when a `for` started on a value - or
+    None when the innermost frame is not theirs. The two can fail at the
+    same place: `for n in max(xs)` and `max(5)` both point at the call."""
+    if tb is None:
+        return None
+    while tb.tb_next is not None:
+        tb = tb.tb_next
+    code = tb.tb_frame.f_code
+    if not _pll_is_students(code.co_filename):
+        return None
+    try:
+        import dis as _pll_dis
+
+        for instruction in _pll_dis.get_instructions(code):
+            if instruction.offset == tb.tb_lasti:
+                return instruction.opname
+    except Exception:
+        pass
+    return None
+
+
 def _pll_is_students(filename):
     """Whether a frame in `filename` runs the student's code: one of their
     files, or a prompt line (`<repl>`). Any other `<...>` is code no file
@@ -452,6 +476,9 @@ def _pll_error_info(exc, run=None, level=None):
         # Facts only add to an explanation; the error itself still has to
         # be reported if reading them fails.
         pass
+    instruction = _pll_failed_instruction(exc.__traceback__)
+    if instruction is not None:
+        facts["instruction"] = instruction
     if isinstance(exc, NameError):
         # Python sets `name` for most of these, but not for a local read
         # before it is assigned; its message names it either way.

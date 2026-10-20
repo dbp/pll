@@ -29,6 +29,8 @@ export const CASES = [
   { name: "plain-ok", code: ['print("hello")'] },
   { name: "zero-division", code: ["def f(n: int) -> float:", "    return 10 / n", "", "print(f(0))"] },
   { name: "key-error-dict", code: ['d = {"a": 1}', 'print(d["b"])'] },
+  { name: "sum-numbers", code: ["print(sum(1, 3))"] },
+  { name: "loop-over-max", code: ["for x in max([1, 2]):", "    print(x)"] },
   { name: "key-error-sentence", code: ['raise KeyError("no such thing here")'] },
   { name: "value-error-own", code: ['raise ValueError("bad value")'] },
   { name: "runtime-no-message", code: ["raise RuntimeError()"] },
