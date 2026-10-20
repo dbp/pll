@@ -2,7 +2,7 @@
 
 # Intermediate mode allows rebinding *inside functions* so for-loop
 # accumulator patterns work, while still keeping shadowing rules and
-# disallowing the `global` / `nonlocal` keywords.
+# disallowing the `global` / `nonlocal` keywords and `del` of a name.
 
 
 def total_of(numbers):

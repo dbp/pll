@@ -413,6 +413,37 @@ expect(
   "nonlocal suggests returning a value",
 );
 
+console.log("[unbinding explainer - del of a name]");
+{
+  const unbinding = (extra, level = "beginner") =>
+    wordStatic(
+      [{ id: "unbinding", error_type: "Unbinding", line_number: 3, column: 4, name_token: "total", ...extra }],
+      level,
+      "del.py",
+    )[0];
+  const plain = unbinding({ names: ["total"], scope_kind: "module", loop_variable: false });
+  expect(plain.errorType === "Unbinding", `errorType: ${plain.errorType}`);
+  expect(
+    plain.headline === "`del` removes the name `total`, which is not allowed at the beginner level.",
+    `the name, and the level: ${plain.headline}`,
+  );
+  expect(plain.howToFix.some((fix) => fix.includes("`del d[key]`")), `an item can still go: ${JSON.stringify(plain.howToFix)}`);
+  expect(/`#level advanced`/.test(plain.howToFix.at(-1)), `and where it is allowed: ${plain.howToFix.at(-1)}`);
+  expect(!/go away by themselves/.test(plain.howToFix[0]), `nothing about functions at the top level: ${plain.howToFix[0]}`);
+  const inFunction = unbinding({ names: ["total", "count"], scope_kind: "function", loop_variable: false }, "intermediate");
+  expect(
+    inFunction.headline === "`del` removes the names `total` and `count`, which is not allowed at the intermediate level.",
+    `every name, and the level: ${inFunction.headline}`,
+  );
+  expect(/go away by themselves when it returns/.test(inFunction.howToFix[0]), `inside a function: ${inFunction.howToFix[0]}`);
+  const loop = unbinding({ name_token: "n", names: ["n"], scope_kind: "function", loop_variable: true });
+  expect(
+    /removes only the name `n`, not the item/.test(loop.howToFix[0]) && /new list/.test(loop.howToFix[0]),
+    `a loop's own name says the item stays: ${loop.howToFix[0]}`,
+  );
+  expect(!loop.howToFix.some((fix) => fix.includes("`del items[0]`")), `and does not suggest removing by index: ${JSON.stringify(loop.howToFix)}`);
+}
+
 console.log("[formatFriendlyError - shadowing-builtin]");
 const lines = mod.formatFriendlyError(findings[1]);
 expect(lines[0].startsWith("Shadowing:"), "first line is errorType + headline");

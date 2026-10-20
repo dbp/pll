@@ -13,7 +13,10 @@
 #                          names already flagged as shadowing in that scope
 #                          (fix the shadow first).
 #     3. Disallowed kw:    `global` and `nonlocal` statements.
-#     4. Silent mistakes:  code that runs without a word but cannot be what
+#     4. Unbinding:        `del` of a name. `del` of an item - `del d[key]`,
+#                          `del xs[0]` - changes a value, not a name, and is
+#                          allowed.
+#     5. Silent mistakes:  code that runs without a word but cannot be what
 #                          was meant (`_PllSilenceVisitor`).
 #
 #   intermediate:
@@ -105,6 +108,8 @@ class _PllScopeBuilder:
 
     def __init__(self):
         self.scopes = []
+        # Each `del` statement, with the scope it is in.
+        self.deletions = []
         self._classes = set()
 
     def build(self, tree):
@@ -192,6 +197,10 @@ class _PllScopeBuilder:
             # and reassignment checks do not report it twice over.
             scope.declared_elsewhere.update(node.names)
             return
+        if isinstance(node, _ast.Delete):
+            # No return: the walk below still visits the targets, where
+            # `del d[key(x)]` reads names.
+            self.deletions.append((node, scope))
         # A `case` pattern's captures, and `except ... as e`, bind a name -
         # one of the alternatives, of which only one runs. Not `case Boa:`
         # for a class `Boa`: that is the class with its brackets left off,
@@ -916,6 +925,19 @@ def _pll_is_pll_import_loc(loc):
     )
 
 
+def _pll_deleted_names(targets):
+    """The `Name` nodes a `del` removes, in order. `del a, (b, c)` removes
+    three names; `del xs[0]` and `del p.x` remove none, only an item of a
+    value."""
+    names = []
+    for target in targets:
+        if isinstance(target, _ast.Name):
+            names.append(target)
+        elif isinstance(target, (_ast.Tuple, _ast.List)):
+            names.extend(_pll_deleted_names(target.elts))
+    return names
+
+
 def _pll_refuses_reassignment(level, scope_kind):
     """Whether `level` refuses a name assigned twice in a scope of `scope_kind`.
 
@@ -1076,6 +1098,24 @@ def _pll_static_analyze(code, level, filename, session_key=None):
                 keyword="global" if isinstance(node, _ast.Global) else "nonlocal",
                 names=list(node.names),
             ))
+
+    # ---- `del` of a name ----
+    # Refused at both levels, for the reason reassignment is: a name that
+    # stops existing partway through the program is as hard to follow as one
+    # that changes. One finding per statement, at its first name.
+    for node, scope in builder.deletions:
+        names = _pll_deleted_names(node.targets)
+        if not names:
+            continue
+        first = names[0]
+        findings.append(_pll_finding(
+            "unbinding", "Unbinding", first.lineno, first.col_offset, first.id,
+            names=[name.id for name in names],
+            scope_kind=scope.kind,
+            # A `for` loop's own name: `del n` in `for n in xs:` leaves the
+            # item in `xs`, which is usually what it was meant to change.
+            loop_variable=any(loc[2] == "for" for loc in scope.bindings.get(first.id, ())),
+        ))
 
     # ---- mistakes that would otherwise run without a word ----
     known = set().union(*(scope.bindings for scope in builder.scopes)) | builtins_set | set(library_names)

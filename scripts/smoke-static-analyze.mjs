@@ -160,7 +160,7 @@ async function main() {
   }
 
   console.log(
-    "\n[9] intermediate_keyword.py - expect 'disallowed-keyword' findings (global + nonlocal)",
+    "\n[9] intermediate_keyword.py - expect 'disallowed-keyword' findings (global + nonlocal), and `del`",
   );
   {
     const findings = analyze(
@@ -179,6 +179,7 @@ async function main() {
     expect(kw.length >= 2, "expected at least one finding per keyword");
     expect(keywords.has("global"), "missing 'global' finding");
     expect(keywords.has("nonlocal"), "missing 'nonlocal' finding");
+    expect(findings.some((f) => f.id === "unbinding"), "missing the `del` of a name");
   }
 
   console.log(
@@ -981,6 +982,55 @@ _g = _pll_get_session("smoke-lib")
     expect(top.map((f) => f.id).join() === "unknown-pattern-class", `and one it does not have: ${JSON.stringify(top.map((f) => f.id))}`);
     pyodide.runPython("_pll_sessions.pop('pets:repl', None)");
     console.log("    the class nothing defines, with the variants; the case that never matches; nothing else");
+  }
+
+  console.log("\n[27] `del` of a name is refused at the teaching levels; `del` of an item is not");
+  {
+    const found = (code, level = "beginner") => analyze(code, level, "del.py").filter((f) => f.id === "unbinding");
+    const one = found("total = 0\ndel total\n");
+    expect(one.length === 1, `one finding: ${JSON.stringify(one)}`);
+    expect(
+      one[0]?.name_token === "total" && one[0]?.line_number === 2 && one[0]?.column === 4,
+      `at the name: ${JSON.stringify(one[0])}`,
+    );
+    expect(one[0]?.error_type === "Unbinding" && one[0]?.severity === "error", `an error: ${one[0]?.severity}`);
+    expect(found("x = 1\ndel x\n", "intermediate").length === 1, "intermediate refuses it too");
+    for (const level of ["advanced", "raw"]) {
+      const all = analyze("x = 1\ndel x\n", level, "del.py");
+      expect(all.length === 0, `${level} has no checks: ${JSON.stringify(all.map((f) => f.id))}`);
+    }
+
+    // One finding a statement, naming every name in it, through brackets,
+    // and only the names when items are removed beside them.
+    const many = found("a = 1\nb = 2\nc = 3\ndel a, (b, c)\n");
+    expect(many.length === 1 && many[0].names?.join() === "a,b,c", `every name: ${JSON.stringify(many)}`);
+    const mixed = found('d = {"k": 1}\nx = 1\ndel d["k"], x\n');
+    expect(
+      mixed.length === 1 && mixed[0].names?.join() === "x" && mixed[0].column === 12,
+      `only the name, at the name: ${JSON.stringify(mixed)}`,
+    );
+
+    // Items, slices and attributes are parts of a value, not names.
+    for (const [label, code] of [
+      ["a key", 'd = {"k": 1}\ndel d["k"]\n'],
+      ["an item", "xs = [1, 2]\ndel xs[0]\n"],
+      ["a slice", "xs = [1, 2, 3]\ndel xs[1:]\n"],
+      ["an attribute", "class P:\n    pass\n\np = P()\np.x = 1\ndel p.x\n"],
+    ]) {
+      const all = analyze(code, "beginner", "del.py");
+      expect(all.length === 0, `${label}: nothing, got ${JSON.stringify(all.map((f) => f.id))}`);
+    }
+
+    // A loop's own name, where taking the item out was meant.
+    const loop = found("def f(xs: list) -> list:\n    for n in xs:\n        if n < 0:\n            del n\n    return xs\n");
+    expect(loop[0]?.loop_variable === true && loop[0]?.scope_kind === "function", `a loop's name: ${JSON.stringify(loop)}`);
+    const plain = found("def f(xs: list) -> int:\n    total = sum(xs)\n    del total\n    return 0\n");
+    expect(plain[0]?.loop_variable === false, `any other: ${JSON.stringify(plain)}`);
+
+    // At the prompt, as in a file.
+    const prompt = analyze("del total\n", "beginner", "<repl>", null).map((f) => f.id);
+    expect(prompt.join() === "unbinding", `at the prompt: ${prompt.join()}`);
+    console.log("    names refused at both levels, one finding a statement; items, slices and attributes allowed");
   }
 
   fn.destroy?.();

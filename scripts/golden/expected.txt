@@ -1264,6 +1264,50 @@ stderr:
   
   Static analysis found 1 problem. The file was not run.
 
+=== st-del-name (exit 2)
+stderr:
+  student.py [beginner]
+  Unbinding: `del` removes the name `total`, which is not allowed at the beginner level.
+    at student.py:3:5
+  
+  How to fix:
+    - Leave `total` in place: nothing needs a name removed.
+    - `del` can still take an item out of a dictionary or a list: `del d[key]`, `del items[0]`.
+    - `#level advanced` allows removing a name with `del`, if you have a reason to.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-del-names-in-function (exit 2)
+stderr:
+  student.py [beginner]
+  Unbinding: `del` removes the names `total` and `count`, which is not allowed at the beginner level.
+    at student.py:6:9
+  
+  How to fix:
+    - Leave `total` and `count` in place: nothing needs a name removed, and a function's names go away by themselves when it returns.
+    - `del` can still take an item out of a dictionary or a list: `del d[key]`, `del items[0]`.
+    - `#level advanced` allows removing a name with `del`, if you have a reason to.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-del-loop-variable (exit 2)
+stderr:
+  student.py [intermediate]
+  Unbinding: `del` removes the name `n`, which is not allowed at the intermediate level.
+    at student.py:5:17
+  
+  How to fix:
+    - If this is meant to leave the item out: `del n` removes only the name `n`, not the item from what the loop goes through. Build a new list of the items to keep instead.
+    - `#level advanced` allows removing a name with `del`, if you have a reason to.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-del-item (exit 0)
+stdout:
+  {'b': 2} [2, 3]
+stderr:
+  student.py [beginner]
+
 === st-unused-comparison (exit 2)
 stderr:
   student.py [beginner]

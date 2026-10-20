@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+- **Removing a name with `del` is refused at `beginner` and
+  `intermediate`**, as reassigning one is: a name that stops existing
+  partway through a program is as hard to follow as one that changes.
+  Removing an item - `del d[key]`, `del items[0]` - is still allowed. For
+  `del n` inside `for n in numbers:`, the message says that it removes
+  only the name, and leaves the item in `numbers`. `#level advanced` allows
+  it.
+
 ## 0.5.1 (2026-10-15)
 
 ### Added

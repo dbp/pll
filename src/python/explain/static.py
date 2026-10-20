@@ -233,6 +233,32 @@ def _pll_word_disallowed_keyword(f, level):
     return "`%s` is not allowed at the %s level." % (keyword, level), fixes
 
 
+@_pll_words("unbinding")
+def _pll_word_unbinding(f, level):
+    """`del x` at a level that refuses it. Taking an item out of a value,
+    `del d[key]`, is allowed, so the wording says that too."""
+    names = f.get("names") or [f["name_token"]]
+    headline = "`del` removes the name%s %s, which is not allowed at the %s level." % (
+        "s" if len(names) > 1 else "", _pll_list_names(names), level
+    )
+    if f.get("loop_variable"):
+        fixes = [
+            "If this is meant to leave the item out: `del %s` removes only the name `%s`, not the item from what the"
+            " loop goes through. Build a new list of the items to keep instead." % (names[0], names[0])
+        ]
+    else:
+        fixes = [
+            "Leave %s in place: nothing needs a name removed%s." % (
+                _pll_list_names(names),
+                ", and a function's names go away by themselves when it returns"
+                if f.get("scope_kind") == "function" else "",
+            ),
+            "`del` can still take an item out of a dictionary or a list: `del d[key]`, `del items[0]`.",
+        ]
+    fixes.append("`#level advanced` allows removing a name with `del`, if you have a reason to.")
+    return headline, fixes
+
+
 # Code that would otherwise run without a word being said. Each is valid
 # Python that does nothing, or something other than what was meant: a test
 # written without `assert` always passes; an `assert` on a tuple is always
