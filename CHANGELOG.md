@@ -29,6 +29,14 @@
   uses it here."). Each is worded as the `NameError` a run would raise. A
   function's body is checked only for names given a value nowhere in the
   file, unless a call runs it early.
+- **Three ways of starting a function that Python cannot read are said as
+  what they are**, for students coming from Pyret: a `-` in the name
+  (`def foo-bar(x):` - "Python reads `foo-bar` as `foo` minus `bar`", and
+  `def foo_bar(...)` as the fix), no name (`def (x):`), and Pyret's `fun`
+  for `def` (with Pyret's closing `end`, if there is one, pointed out too).
+  Each is said only when it is the whole mistake: the line, mended as
+  suggested, has to parse in the program; otherwise Python's own message
+  stands.
 
 ### Changed
 - **A test written with parameters is said apart from the tests**, above

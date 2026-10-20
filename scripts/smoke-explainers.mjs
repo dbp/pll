@@ -661,6 +661,57 @@ console.log("[syntax errors: Python's wording where it is clear, better where it
   console.log("    seven rewordings, and the clear ones left as Python wrote them");
 }
 
+console.log("[syntax errors: a function written as Pyret writes one, or with no name - only when that is all]");
+{
+  // As a run says them, with the program around the line.
+  const raised = (source) => ran(source, "lab.py", "raw");
+  const CASES = [
+    ["a `-` in the name", "def foo-bar(x: int) -> int:\n    return x\n",
+      "A function's name cannot have a `-` in it: Python reads `foo-bar` as `foo` minus `bar`.",
+      ["Write `def foo_bar(...)`, with an underscore, and call it `foo_bar(...)` too."]],
+    ["two of them, the parameters on lines of their own", "def lemonade-stand-1(\n    cups: int,\n) -> int:\n    return cups\n",
+      "A function's name cannot have a `-` in it: Python reads `lemonade-stand-1` as `lemonade` minus `stand` minus `1`.",
+      ["Write `def lemonade_stand_1(...)`, with underscores, and call it `lemonade_stand_1(...)` too."]],
+    ["no name", "def (x: int) -> int:\n    return x\n", "This `def` has no name.",
+      ["Put one between `def` and the brackets - `def function_name(...)` - with a name that says what it does."]],
+    ["no name, no space", "def(x):\n    return x\n", "This `def` has no name.", null],
+    ["Pyret's `fun`", "fun foo(x: int) -> int:\n    return x\n", "Python defines a function with `def`, not `fun`.", ["Write `def foo(...)`."]],
+    ["`fun`, a `-`, and Pyret's `end`", "fun total-cost(x: int) -> int:\n    return x\nend\n",
+      "Python defines a function with `def`, not `fun` - and a name cannot have a `-` in it.",
+      ["Write `def total_cost(...)`, and call it `total_cost(...)` too.",
+        "Take out the `end` on line 3 too: a Python function ends where its indented lines do."]],
+    ["`fun`, with another mistake further down", "fun foo(x):\n    return (x\n", "Python defines a function with `def`, not `fun`.", null],
+  ];
+  for (const [what, source, headline, fix] of CASES) {
+    const got = raised(source);
+    expect(got.headline === headline, `${what}: ${got.headline}`);
+    if (fix !== null) expect(JSON.stringify(got.howToFix) === JSON.stringify(fix), `${what}, the fix: ${JSON.stringify(got.howToFix)}`);
+  }
+  // Each needs that mistake and only that one: with another on the same
+  // line, or a different one, Python's own words stand.
+  const LEFT = [
+    ["a `-` and no colon", "def foo-bar(x: int) -> int\n    return x\n"],
+    ["Pyret's annotations too", "fun foo(x :: Number) -> Number:\n    x\nend\n"],
+    ["a `-` in a parameter", "def foo(a-b):\n    return 1\n"],
+    ["a `-` with spaces round it", "def foo - bar(x):\n    return x\n"],
+    ["a call of `funny`", "funny(x) = 3\n"],
+    ["a call of `funny`, with a colon", "funny(x):\n    pass\n"],
+    ["a mistake under a good `def`", "def total(x):\n    return x +\n"],
+  ];
+  for (const [what, source] of LEFT) {
+    const got = raised(source);
+    expect(!/`fun`|has no name|cannot have a `-`/.test(got.headline), `${what}: ${got.headline}`);
+  }
+  // With no program to mend - a prompt line - the line has to parse alone.
+  const explain = (line) => JSON.parse(pllCall("_pll_syntax_wording", JSON.stringify(["SyntaxError", "invalid syntax", line])));
+  expect(explain("fun foo(x):")[0] === "Python defines a function with `def`, not `fun`.", `a line alone: ${explain("fun foo(x):")[0]}`);
+  expect(explain("fun foo(x) = 1")[0] === "invalid syntax.", `that does not parse mended: ${explain("fun foo(x) = 1")[0]}`);
+  // A good `def`, failing for where it is: there is nothing to mend in it.
+  const placed = JSON.parse(pllCall("_pll_syntax_wording", JSON.stringify(["IndentationError", "unexpected indent", "    def foo(x):"])));
+  expect(placed[0] === "unexpected indent.", `a good def, out of place: ${placed[0]}`);
+  console.log(`    ${CASES.length} said, ${LEFT.length} left to Python, and a line on its own`);
+}
+
 console.log("[stock messages: Python's own wording replaced with the course's]");
 {
   /** Build a finding the way the hosts do, from a traceback and the file. */

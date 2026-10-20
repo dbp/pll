@@ -42,13 +42,16 @@ def _pll_explain_syntax(e):
     syntax" pointing at the `=`. The student's line is what makes them
     recognisable: Python has already forgotten what the construct was.
     """
-    headline, how_to_fix = _pll_syntax_wording(e.type, e.message, e.text)
+    run = getattr(e, "run", None)
+    source = run[1] if run and e.file == run[0] else None
+    headline, how_to_fix = _pll_syntax_wording(e.type, e.message, e.text, source, e.line)
     return {"id": "syntax-error", "headline": headline, "howToFix": how_to_fix, "nameToken": None}
 
 
-def _pll_syntax_wording(error_type, message, line):
+def _pll_syntax_wording(error_type, message, line, source=None, line_number=None):
     """`(headline, how_to_fix)` for a syntax error on `line`: the first
-    rewording that fits."""
+    rewording that fits. `source` is the program, when there is one, and
+    `line_number` where in it the line is."""
     line = (line or "").strip()
     if error_type == "TabError":
         return "This line mixes tabs and spaces for its indentation.", [
@@ -65,6 +68,9 @@ def _pll_syntax_wording(error_type, message, line):
         return "`%s` is not a character Python can read here." % bad.group(1), [
             "Retype the line; the character may have come from copying out of a document."
         ]
+    definition = _pll_definition_mistake(line, source, line_number)
+    if definition is not None:
+        return definition
     # `else if` parses as `else` followed by an expression, so Python asks
     # for the colon it wanted after `else`.
     if _pll_src_re.match(r"else\s+if\b", line):
@@ -102,6 +108,91 @@ def _pll_syntax_wording(error_type, message, line):
             "Pick another name, such as `%s_value` or something describing what it holds." % keyword
         ]
     return (_pll_punctuated(message) if message.strip() else "Python could not read this line."), []
+
+
+#: A line that starts a function the way another language does, or with
+#: no name: `def`, or Pyret's `fun`; a name, which may have Pyret's `-` in
+#: it; and the brackets, and the rest of the line as written.
+_PLL_DEFINITION_LINE = _pll_src_re.compile(
+    r"(?P<keyword>async\s+def|def|fun)\b\s*(?P<name>[A-Za-z_]\w*(?:-\w+)*)?(?P<rest>\s*\(.*)$"
+)
+
+
+def _pll_definition_mistake(line, source=None, line_number=None):
+    """`def foo-bar(x):`, `def (x):` and Pyret's `fun foo(x):`, said as
+    what they are - but only a line that is exactly one of those: mended as
+    said, it has to parse, with the rest of the program around it when there
+    is one. Anything else wrong with it, and nothing here is said."""
+    found = _PLL_DEFINITION_LINE.match(line)
+    if found is None:
+        return None
+    keyword, name, rest = found.group("keyword"), found.group("name"), found.group("rest")
+    pyret = keyword == "fun"
+    hyphens = name is not None and "-" in name
+    if (pyret and name is None) or (not pyret and name is not None and not hyphens):
+        return None
+    mended = (name or "function_name").replace("-", "_")
+    written = ("async def" if keyword.startswith("async") else "def") + " " + mended + rest
+    if not _pll_parses_mended(line, written, source, line_number):
+        return None
+    call = "`%s(...)`" % mended
+    if pyret:
+        headline = "Python defines a function with `def`, not `fun`%s." % (
+            " - and a name cannot have a `-` in it" if hyphens else ""
+        )
+        how_to_fix = ["Write `def %s(...)`%s." % (mended, ", and call it %s too" % call if hyphens else "")]
+        end = _pll_pyret_end(source, line_number)
+        if end is not None:
+            how_to_fix.append(
+                "Take out the `end` on line %d too: a Python function ends where its indented lines do." % end
+            )
+        return headline, how_to_fix
+    if name is None:
+        return "This `def` has no name.", [
+            "Put one between `def` and the brackets - `def %s(...)` - with a name that says what it does." % mended
+        ]
+    return "A function's name cannot have a `-` in it: Python reads `%s` as `%s`." % (
+        name, "` minus `".join(name.split("-"))
+    ), [
+        "Write `def %s(...)`, with %s, and call it %s too."
+        % (mended, "an underscore" if name.count("-") == 1 else "underscores", call)
+    ]
+
+
+def _pll_parses_mended(line, written, source, line_number):
+    """Whether `line`, written as `written`, parses: in `source`, at
+    `line_number`, when there is a program - a later line failing is
+    another mistake, not this one - or else on its own, as a whole
+    definition."""
+    if source is not None and line_number:
+        lines = source.split("\n")
+        if not 0 < line_number <= len(lines) or lines[line_number - 1].strip() != line:
+            return False
+        old = lines[line_number - 1]
+        lines[line_number - 1] = old[: len(old) - len(old.lstrip())] + written + ("\r" if old.endswith("\r") else "")
+        try:
+            _ast.parse("\n".join(lines))
+        except SyntaxError as err:
+            return err.lineno is not None and err.lineno > line_number
+        return True
+    for attempt in (written, written + "\n    pass"):
+        try:
+            _ast.parse(attempt)
+            return True
+        except SyntaxError:
+            continue
+    return False
+
+
+def _pll_pyret_end(source, line_number):
+    """The first line after `line_number` that is only `end`, as a Pyret
+    function is closed with, or None."""
+    if source is None or not line_number:
+        return None
+    for number, text in enumerate(source.split("\n")[line_number:], start=line_number + 1):
+        if text.strip() == "end":
+            return number
+    return None
 
 
 @_pll_explains("NameError", "UnboundLocalError")

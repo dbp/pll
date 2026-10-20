@@ -16,6 +16,34 @@ stderr:
   KeyError: 'b'
     at student.py:2:7
 
+=== syntax-def-hyphen (exit 1)
+stderr:
+  student.py [raw]
+  SyntaxError: A function's name cannot have a `-` in it: Python reads `lemonade-stand` as `lemonade` minus `stand`.
+    at student.py:1:13
+  
+  How to fix:
+    - Write `def lemonade_stand(...)`, with an underscore, and call it `lemonade_stand(...)` too.
+
+=== syntax-def-no-name (exit 1)
+stderr:
+  student.py [raw]
+  SyntaxError: This `def` has no name.
+    at student.py:1:5
+  
+  How to fix:
+    - Put one between `def` and the brackets - `def function_name(...)` - with a name that says what it does.
+
+=== syntax-pyret-fun (exit 1)
+stderr:
+  student.py [raw]
+  SyntaxError: Python defines a function with `def`, not `fun` - and a name cannot have a `-` in it.
+    at student.py:1:5
+  
+  How to fix:
+    - Write `def lemonade_stand(...)`, and call it `lemonade_stand(...)` too.
+    - Take out the `end` on line 3 too: a Python function ends where its indented lines do.
+
 === sum-numbers (exit 1)
 stderr:
   student.py [raw]
