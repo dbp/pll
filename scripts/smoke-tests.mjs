@@ -206,6 +206,9 @@ def test_add():
       "def test_keyword(*, k):",
       "    assert k",
       "",
+      "def test_unused(x):",
+      "    assert 1 + 1 == 2",
+      "",
       "def test_default(n=1):",
       "    assert n == 1",
       "",
@@ -234,7 +237,7 @@ def test_add():
     const result = runTests(src, "params.py");
     const malformed = (result.malformed || []).map((t) => `${t.name}@${t.lineNumber}:${t.parameters.join(",")}`);
     expect(
-      malformed.join(" ") === "test_one@10:n test_two@13:a,b test_keyword@16:k TestThings::test_method@37:value",
+      malformed.join(" ") === "test_one@10:n test_two@13:a,b test_keyword@16:k test_unused@19:x TestThings::test_method@40:value",
       `the ones not run: ${malformed.join(" ")}`,
     );
     const ran = (result.tests || []).map((t) => `${t.name}:${t.outcome}`);
@@ -246,7 +249,7 @@ def test_add():
       result.passed === 4 && result.errors === 1 && result.skipped === 1 && result.failed === 0,
       `counted without them: ${JSON.stringify({ passed: result.passed, errors: result.errors, skipped: result.skipped })}`,
     );
-    const [one, two, , method] = result.malformed || [];
+    const [one, two, , unused, method] = result.malformed || [];
     expect(
       one?.problem?.errorType === "MalformedTest" &&
         one.problem.headline === "`test_one` takes a parameter, `n`, so it cannot be run as a test." &&
@@ -259,8 +262,17 @@ def test_add():
       `two of them: ${two?.problem?.headline}`,
     );
     expect(
+      one?.problem?.howToFix?.[0] ===
+        "Write `def test_one():`, with nothing in the brackets, and use example values in its `assert`s instead of `n`.",
+      `examples where it used the parameter: ${JSON.stringify(one?.problem?.howToFix)}`,
+    );
+    expect(
+      unused?.problem?.howToFix?.[0] === "Take `x` out of the brackets - `def test_unused():` - since the test does not use it.",
+      `one it never used, only taken out: ${JSON.stringify(unused?.problem?.howToFix)}`,
+    );
+    expect(
       method?.problem?.headline === "`test_method` takes a parameter, `value`, so it cannot be run as a test." &&
-        method.problem.howToFix[0].startsWith("Write `def test_method(self):` with only `self` in the brackets"),
+        method.problem.howToFix[0].startsWith("Write `def test_method(self):`, with only `self` in the brackets"),
       `a method keeps \`self\`: ${JSON.stringify(method?.problem?.howToFix)}`,
     );
     console.log(`    not run: ${malformed.length}; run: ${ran.length}`);

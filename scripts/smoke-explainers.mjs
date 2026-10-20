@@ -745,6 +745,11 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     /is a test, so it cannot take any parameters/.test(testArg.headline),
     `test parameter: ${testArg.headline}`,
   );
+  expect(
+    testArg.howToFix?.[0] ===
+      "Write `def test_pen_cost():`, with nothing in the brackets, and use example values in its `assert`s instead of `n`.",
+    `and what to write instead: ${JSON.stringify(testArg.howToFix)}`,
+  );
 
   // A method of PLL's own libraries: Python names the class the student
   // never typed (`Table.scatter_plot()` for `movies.scatter_plot(...)`).

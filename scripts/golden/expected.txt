@@ -1977,7 +1977,7 @@ stderr:
     at student.py:4
   
   How to fix:
-    - Write `def test_pen_cost():` with nothing in the brackets, and make the values it needs inside it.
+    - Write `def test_pen_cost():`, with nothing in the brackets, and use example values in its `assert`s instead of `n`.
     - If it is not a test but a helper your tests use, give it a name that does not start with `test_`.
   
   Tests: no tests collected
@@ -1989,7 +1989,7 @@ stderr:
     at student.py:1
   
   How to fix:
-    - Write `def test_improperly_written():` with nothing in the brackets, and make the values it needs inside it.
+    - Take `some_parameter` out of the brackets - `def test_improperly_written():` - since the test does not use it.
     - If it is not a test but a helper your tests use, give it a name that does not start with `test_`.
   
   Tests: 1 error
@@ -2004,7 +2004,7 @@ stderr:
     at student.py:3
   
   How to fix:
-    - Write `def test_area(self):` with only `self` in the brackets, and make the values it needs inside it.
+    - Write `def test_area(self):`, with only `self` in the brackets, and use example values in its `assert`s instead of `side`.
     - If it is not a test but a helper your tests use, give it a name that does not start with `test_`.
   
   Tests: 1 passed
@@ -2196,7 +2196,7 @@ stderr:
     at student.py:4
   
   How to fix:
-    - Write `def test_initials():` with nothing in the brackets, and make the values it needs inside it.
+    - Write `def test_initials():`, with nothing in the brackets, and use example values in its `assert`s instead of `name`.
     - If it is not a test but a helper your tests use, give it a name that does not start with `test_`.
   
   Tests: 2 errors

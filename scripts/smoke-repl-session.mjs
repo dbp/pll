@@ -3248,7 +3248,7 @@ console.log("\n[80] a test that takes a parameter is a finding above the tests' 
                 id: "malformed-test",
                 errorType: "MalformedTest",
                 headline: "`test_x` takes a parameter, `n`, so it cannot be run as a test.",
-                howToFix: ["Write `def test_x():` with nothing in the brackets, and make the values it needs inside it."],
+                howToFix: ["Write `def test_x():`, with nothing in the brackets, and use example values in its `assert`s instead of `n`."],
                 fileName: "m.py",
                 lineNumber: 1,
                 column: null,

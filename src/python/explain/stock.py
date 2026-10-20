@@ -631,8 +631,10 @@ def _pll_too_few_arguments(m, e):
     # A test function takes no parameters, so pytest has nothing to pass and
     # the test never runs.
     if name.startswith("test_"):
+        # Python names the ones missing - all of them, called with nothing.
+        named = _pll_src_re.findall(r"'([^']+)'", e.message.split(":", 1)[1]) if ":" in e.message else []
         return "`%s` is a test, so it cannot take any parameters." % name, [
-            "Write `def %s():` with nothing in the brackets, and make the values it needs inside it." % name
+            _pll_test_fix(name, named or _pll_parameters_of(e, name, "required") or [], False, ())
         ]
     check = _pll_arity_check(e, name, "Check the call on this line - one value is needed for each parameter.")
     # Wherever it was defined: the student's file, another of theirs, or
@@ -647,27 +649,25 @@ def _pll_too_few_arguments(m, e):
     ] + _pll_library_hint(name)
 
 
-def _pll_malformed_test_finding(name, parameters, filename, line):
+def _pll_malformed_test_finding(name, parameters, filename, line, unused=()):
     """A `test_*` function with parameters, which the tests do not run: a
     test is called with nothing, so there would be no values for them. Said
     apart from the tests that ran - it is a mistake in how the test is
     written, not a test that failed. `name` is as the report lists it, a
-    method's as `TestThings::test_one`."""
+    method's as `TestThings::test_one`; `unused` are the parameters its body
+    never reads."""
     function = name.split("::")[-1]
-    method = function != name
     takes = (
         "a parameter, %s," % _pll_list_names(parameters)
         if len(parameters) == 1
         else "parameters - %s -" % _pll_list_names(parameters)
     )
-    written = "def %s(self):" % function if method else "def %s():" % function
     return {
         "id": "malformed-test",
         "errorType": "MalformedTest",
         "headline": "`%s` takes %s so it cannot be run as a test." % (function, takes),
         "howToFix": [
-            "Write `%s` with %s in the brackets, and make the values it needs inside it."
-            % (written, "only `self`" if method else "nothing"),
+            _pll_test_fix(function, parameters, function != name, unused),
             "If it is not a test but a helper your tests use, give it a name that does not start with `test_`.",
         ],
         "fileName": filename,
@@ -677,6 +677,22 @@ def _pll_malformed_test_finding(name, parameters, filename, line):
         "severity": "error",
         "origin": "runtime",
     }
+
+
+def _pll_test_fix(function, parameters, method, unused):
+    """How a test written with `parameters` is written instead: with empty
+    brackets - `self` only, for a method - and examples in its asserts where
+    it used the parameters; or, when it used none of them, only the
+    brackets. Unknown `parameters` are said as "its parameters"."""
+    written = "def %s(self):" % function if method else "def %s():" % function
+    if parameters and all(p in unused for p in parameters):
+        return "Take %s out of the brackets - `%s` - since the test does not use %s." % (
+            _pll_list_names(parameters), written, "it" if len(parameters) == 1 else "them"
+        )
+    used = [p for p in parameters if p not in unused]
+    return "Write `%s`, with %s in the brackets, and use example values in its `assert`s instead of %s." % (
+        written, "only `self`" if method else "nothing", _pll_list_names(used) if used else "its parameters"
+    )
 
 
 def _pll_arity_check(e, name, otherwise):

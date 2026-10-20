@@ -221,6 +221,25 @@ def _pll_test_parameters(fn):
     return [p.name for p in signature.parameters.values() if p.kind in needed and p.default is inspect.Parameter.empty]
 
 
+def _pll_unused_parameters(code, line, function, parameters):
+    """Those of `parameters` that the `def function` on `line` of `code`
+    never reads; none when it cannot be found."""
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError:
+        return []
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == function and node.lineno == line:
+            read = {
+                n.id
+                for statement in node.body
+                for n in _ast.walk(statement)
+                if isinstance(n, _ast.Name) and isinstance(n.ctx, _ast.Load)
+            }
+            return [p for p in parameters if p not in read]
+    return []
+
+
 def _pll_call_test(fn, run=None):
     """Run one test function, as pytest would - its `skip`, `skipif` and
     `xfail` marks included.
@@ -412,11 +431,13 @@ def _pll_run_collected_tests(ns, locs, run):
             # One skipped is not run either way, as in pytest.
             parameters = _pll_test_parameters(fn) if _pll_skip(fn) is None else []
             if parameters:
+                line = locs.get(name)
+                unused = _pll_unused_parameters(run[1], line, name.split("::")[-1], parameters) if run else []
                 result["malformed"].append({
                     "name": name,
-                    "lineNumber": locs.get(name),
+                    "lineNumber": line,
                     "parameters": parameters,
-                    "problem": _pll_malformed_test_finding(name, parameters, run[0] if run else None, locs.get(name)),
+                    "problem": _pll_malformed_test_finding(name, parameters, run[0] if run else None, line, unused),
                 })
                 continue
             current = name
