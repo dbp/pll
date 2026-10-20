@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Added
+- **The editor keeps a file's `#level` line in place.** It is tinted, and
+  **🔒 Level: beginner · change** above it opens a list of the levels, with
+  **Remove the #level line** - as does **PLL: beginner** in the status bar
+  (**PLL: raw** in a file with no line, where it adds one), and **PLL:
+  Change Level**. Editing the line does nothing to it: Select All selects
+  from the line below, so Select All and Delete empties the file but keeps
+  the line; typing into the line puts the text on the line below; deleting
+  it puts it back. A whole program pasted in with its own `#level` line
+  brings that line. Undo is as usual.
 - **Removing a name with `del` is refused at `beginner` and
   `intermediate`**, as reassigning one is: a name that stops existing
   partway through a program is as hard to follow as one that changes.
@@ -20,6 +29,10 @@
   uses it here."). Each is worded as the `NameError` a run would raise. A
   function's body is checked only for names given a value nowhere in the
   file, unless a call runs it early.
+
+### Changed
+- **CodeLens is on for Python files again**, for the `#level` line's. With
+  the language servers off, hardly any other extension adds one.
 
 ### Fixed
 - **`type list = int` is caught at `beginner` and `intermediate`**, as

@@ -120,6 +120,21 @@ running the file.
 The level is the only thing that decides what gets checked — there is no
 separate setting to keep in sync with it.
 
+### The `#level` line in the editor
+
+PLL keeps a file's `#level` line where it is, so it is not lost by accident.
+The line is tinted, and above it **🔒 Level: beginner · change** opens a list
+of the levels, where you can also remove the line. The status bar shows the
+level too — **PLL: beginner**, or **PLL: raw** for a file with no line — and
+clicking it opens the same list; so does **PLL: Change Level** in the Command
+Palette, which also gives a file with no line one.
+
+Editing the line itself does nothing to it. **Select All** selects everything
+below it, so Select All and Delete empties the file but keeps the line.
+Typing into the line puts what you typed on the line below, and deleting the
+line puts it back. Pasting in a whole program with its own `#level` line
+gives the file that program's level. Undo works as usual.
+
 Each file keeps its own level when another file imports it. If `main.py`
 does `from helper import half` and `helper.py` starts with `#level
 beginner`, then `helper.py` is checked as a beginner file, whatever level

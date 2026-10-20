@@ -83,6 +83,14 @@
       {
         "command": "pll.editor.paste",
         "title": "PLL: Editor Paste"
+      },
+      {
+        "command": "pll.changeLevel",
+        "title": "PLL: Change Level"
+      },
+      {
+        "command": "pll.removeLevelLine",
+        "title": "PLL: Remove Level Line"
       }
     ],
     "menus": {
@@ -92,8 +100,30 @@
           "when": "editorLangId == python && resourceScheme in pll.programSchemes",
           "group": "navigation"
         }
+      ],
+      "commandPalette": [
+        {
+          "command": "pll.changeLevel",
+          "when": "editorLangId == python"
+        },
+        {
+          "command": "pll.removeLevelLine",
+          "when": "editorLangId == python"
+        }
       ]
     },
+    "colors": [
+      {
+        "id": "pll.levelLineBackground",
+        "description": "Background of a Python file's #level line, which PLL keeps in place.",
+        "defaults": {
+          "dark": "#3794ff1f",
+          "light": "#0066b814",
+          "highContrast": "#3794ff38",
+          "highContrastLight": "#0066b824"
+        }
+      }
+    ],
     "viewsContainers": {
       "panel": [
         {
@@ -135,7 +165,7 @@
             "Add `#level raw` - plain Python, nothing checked.",
             "Add `#level beginner` - all checks.",
             "Add `#level intermediate` - all checks, but rebinding inside a function is allowed.",
-            "Add `#level advanced` - no checks before the run; annotations still checked."
+            "Add `#level advanced` - Python's own rules; names used where they have no value are still caught before the run, and annotations checked."
           ],
           "default": "none",
           "markdownDescription": "Level line to put at the top of a newly created `.py` file, for example `#level beginner`. Only applies to files created empty; PLL never edits a file that already has content. This is a template for new files and does **not** change what an existing file without a level line does - that is always `raw`."
@@ -158,7 +188,6 @@
         "editor.suggest.showWords": false,
         "editor.suggest.showSnippets": false,
         "editor.inlineSuggest.enabled": false,
-        "editor.codeLens": false,
         "editor.lightbulb.enabled": "off",
         "editor.minimap.enabled": false,
         "editor.formatOnSave": false,
@@ -253,6 +282,7 @@
     "test-web:load": "pnpm run build && node scripts/smoke-web-load.mjs",
     "test-web:nofile": "pnpm run build && node scripts/smoke-web-nofile.mjs",
     "test-web:view": "node scripts/smoke-webview.mjs",
+    "test-web:level": "pnpm run build && node scripts/smoke-web-level.mjs",
     "cli:pack": "pnpm run build && cd dist-cli && npm pack",
     "cli:publish": "pnpm run build && node scripts/publish-cli.mjs"
   },

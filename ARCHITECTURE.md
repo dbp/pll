@@ -72,7 +72,8 @@ src/
 │   ├── examplar.ts                an Examplar check's cards
 │   └── examplarSource.ts          the #examplar directive, fetch and cache
 ├── core/                          what every layer uses: level.ts (the levels, and the
-│                                  `#level` line), files.ts (which files beside a program
+│                                  `#level` line), levelLine.ts (that line, kept in place
+│                                  through an edit), files.ts (which files beside a program
 │                                  are loaded and saved), editDistance.ts, errorText.ts
 ├── editor/                        everything that imports `vscode`
 │   ├── activate.ts                shared activation for both editor hosts
@@ -81,6 +82,8 @@ src/
 │   ├── diagnostics.ts             findings as squiggles
 │   ├── workspaceFiles.ts          the files beside a program, over vscode.workspace.fs
 │   ├── programDocuments.ts        which documents are programs
+│   ├── levelLine.ts               the `#level` line kept in place: its highlight,
+│   │                              CodeLens, status-bar item and picker
 │   ├── bundleStore.ts, notify.ts
 │   ├── panel/view.ts              the interactions panel: entries, its state, messages
 │   ├── reactors/controller.ts     reactors: playing, their cards' ticks and controls,
@@ -279,6 +282,56 @@ that reason.
 Only files that arrive empty (or whitespace-only) are seeded. A `.py` with
 content was copied, generated, or restored, and prepending to it would be an
 edit nobody asked for.
+
+### The `#level` line in the editor
+
+Once a file has a `#level` line, the editor keeps it: as its first line,
+exactly as written, until it is changed on purpose with the picker - the
+CodeLens above the line (`🔒 Level: beginner · change`), the status-bar item
+(`PLL: beginner`), or **PLL: Change Level**, which also adds a line to a file
+without one and has **Remove the #level line**. The line is tinted
+(`pll.levelLineBackground`, a color PLL contributes).
+
+VS Code gives an extension no read-only ranges, and Monaco has none either -
+only a whole editor's `readOnly`. Pages that freeze lines in Monaco do it by
+catching each edit in their own code before it shows, which an extension,
+in another process and told of an edit only once it is made, cannot. So the
+line is kept by putting it back (`editor/levelLine.ts`), worked out by a
+pure function of the text before the edit and the edit (`core/levelLine.ts`,
+`repairLevelLine`, tested by `smoke-level-line`): what the edit took out of
+the line comes back, what it put into the line or above it goes on the line
+below, everything else it did stands, and a program pasted in with its own
+`#level` line brings that line. What shaped it, measured in VS Code for the
+web (`test-web:level` checks the behaviour that follows):
+
+- The put-back is made with no undo stop before it, and joins the edit it
+  puts right when that edit leaves its undo step open, as Delete and typing
+  do: one Ctrl+Z undoes both. Cut and Paste close their step, so a put-back
+  after them would be a step of its own, and the first Ctrl+Z would take
+  the line away again. Hence the second half: a selection that takes in the
+  line and more is moved to start on the line below as it is made, so
+  Select All and then Delete, Cut, Paste, typing or Ctrl+/ never reach the
+  line and need nothing put back. Select All then copies the file without
+  its `#level` line. A key pressed with no pause after Select All can beat
+  the move; the put-back still keeps the line then.
+- Undo and redo are left alone (`TextDocumentChangeEvent.reason`), so the
+  put-back never fights them, and an undo can take the line away as it can
+  any edit.
+- A file read again from disk, or reverted, is left alone too. VS Code tells
+  that apart from typing only by the dirty state, and says it a moment after
+  the edit, in an event of its own - the first edit of a saved file arrives
+  still clean. So an edit near the line waits for that word, or 50 ms
+  without it, before anything is put back.
+- PLL's own edits replace whole lines: an edit from the middle of one line
+  to the middle of another, made just after a paste, is tokenized wrongly
+  by the editor ("Token length and text length do not match").
+- A CodeLens runs on a plain click; an inlay hint's command needs Ctrl/Cmd
+  and a click, so it would be a poor thing to click. That is why the
+  `[python]` defaults leave CodeLens on (Editor defaults, below).
+
+Other ways in - binding Ctrl/Cmd+X and V (see Clipboard), or taking over
+typing - would break the browser's own clipboard or other extensions. What
+it does not reach: edits outside an editor, and files not open in one.
 
 ## Images
 
@@ -1564,7 +1617,10 @@ Turned off for `[python]` files:
   `github.copilot.enable.python`,
   `github.copilot.editor.enableAutoCompletions`,
   `cursor.cpp.disabledLanguages` (Cursor Tab) — best-effort across forks
-- CodeLens, lightbulb (quick-fix), minimap, sticky scroll, linked editing
+- Lightbulb (quick-fix), minimap, sticky scroll, linked editing. CodeLens
+  stays on: PLL's own, above the `#level` line, is how the level is changed
+  (The `#level` line in the editor), and with the language servers off
+  hardly any other extension adds one
 - Format on save / paste / type
 
 Turned off globally (no-ops if the other extension is not installed):

@@ -3,6 +3,7 @@ import { registerCommands } from "./commands";
 import { Diagnostics } from "./diagnostics";
 import { checkConflictingExtensions } from "./setup/extensionGuard";
 import { InteractionsView } from "./panel/view";
+import { LevelLineKeeper } from "./levelLine";
 import { registerNewFileLevel } from "./setup/newFileLevel";
 import { trackProgramSchemes } from "./programDocuments";
 import { ReplSession } from "./replSession";
@@ -20,6 +21,7 @@ export function activateWithRuntime(
 ): void {
   const diagnostics = new Diagnostics(context.extensionUri);
   const view = new InteractionsView(context.extensionUri);
+  const levelLine = new LevelLineKeeper();
   const repl = new ReplSession({
     runtime,
     diagnostics,
@@ -33,11 +35,12 @@ export function activateWithRuntime(
     diagnostics,
     view,
     repl,
+    levelLine,
     registerNewFileLevel(),
     trackProgramSchemes(),
     { dispose: () => runtime.dispose() },
   );
 
-  registerCommands(context, { repl, view });
+  registerCommands(context, { repl, view, levelLine });
   void checkConflictingExtensions(context);
 }

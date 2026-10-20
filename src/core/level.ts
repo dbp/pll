@@ -52,18 +52,18 @@ const HEADER_RE = /^#\s*level\s+([a-z]+)\s*$/;
 export function parseLevel(source: string): Level {
   const lines = source.split(/\r?\n/);
   for (const raw of lines) {
-    const line = raw.trim();
-    if (line.length === 0) {
+    if (raw.trim().length === 0) {
       continue;
     }
-    const match = HEADER_RE.exec(line);
-    if (!match) {
-      return DEFAULT_LEVEL;
-    }
-    const name = match[1];
-    return isLevel(name) ? name : DEFAULT_LEVEL;
+    return headerLevel(raw) ?? DEFAULT_LEVEL;
   }
   return DEFAULT_LEVEL;
+}
+
+/** The level `line` names, when it is a `#level` line; otherwise null. */
+export function headerLevel(line: string): Level | null {
+  const match = HEADER_RE.exec(line.trim());
+  return match !== null && isLevel(match[1]) ? match[1] : null;
 }
 
 /** What is wrong with a file's `#level` line, and what to say about it. */

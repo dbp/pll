@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { editorCopy, editorCut, editorPaste } from "./setup/clipboard";
+import type { LevelLineKeeper } from "./levelLine";
 import type { InteractionsView } from "./panel/view";
 import type { ReplSession } from "./replSession";
 import { errorText } from "../core/errorText";
@@ -9,6 +10,7 @@ import { isProgramDocument } from "./programDocuments";
 export interface ExtensionServices {
   repl: ReplSession;
   view: InteractionsView;
+  levelLine: LevelLineKeeper;
 }
 
 export function registerCommands(
@@ -37,6 +39,12 @@ export function registerCommands(
     ),
     vscode.commands.registerCommand("pll.editor.paste", () =>
       editorPaste().catch(reportError),
+    ),
+    vscode.commands.registerCommand("pll.changeLevel", (uri?: vscode.Uri) =>
+      services.levelLine.pick(uri).catch(reportError),
+    ),
+    vscode.commands.registerCommand("pll.removeLevelLine", (uri?: vscode.Uri) =>
+      services.levelLine.remove(uri).catch(reportError),
     ),
   );
 }
