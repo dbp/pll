@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 (2026-10-20)
 
 ### Added
 - **The editor keeps a file's `#level` line in place.** It is tinted, and

@@ -1333,7 +1333,7 @@ from VS Code 1.101. One floor for the project instead of two.
 
 `pyodide` is a real dependency rather than bundled, since the package needs
 its `.wasm` and stdlib assets anyway; `require.resolve("pyodide")` finds
-them at run time. That keeps the tarball at about 134 kB. Pyodide's Node
+them at run time. That keeps the tarball at about 285 kB. Pyodide's Node
 loader caches any wheels it downloads into that directory - or the user's
 cache, when it cannot be written - so the first `import pandas` needs the
 network (which `pll` says, once) and later ones do not.
