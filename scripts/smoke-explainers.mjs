@@ -2044,25 +2044,57 @@ console.log("[fourth pass: every replayed case read for the same patterns]");
     /`ac\.balance = ac\.balance \+ amt`/.test(thrown("ac.balance + amt").howToFix[0]),
     `field form: ${JSON.stringify(thrown("ac.balance + amt").howToFix)}`,
   );
-  const compared = wordStatic(
-    [
-      {
-        id: "unused-comparison",
-        error_type: "UnusedValue",
-        message: "x",
-        line_number: 3,
-        column: 4,
-        name_token: null,
-        scope_kind: "function",
-        expression: 'pen_cost(0, "huskies") == 1',
-      },
-    ],
+  const comparison = (expression, inTest) =>
+    wordStatic(
+      [
+        {
+          id: "unused-comparison",
+          error_type: "UnusedValue",
+          message: "x",
+          line_number: 3,
+          column: 4,
+          name_token: null,
+          scope_kind: "function",
+          expression,
+          in_test: inTest,
+        },
+      ],
+      "beginner",
+      "student.py",
+    )[0];
+  // In a test, the `assert` left out - and only that.
+  const compared = comparison('pen_cost(0, "huskies") == 1', true);
+  expect(
+    /Did you mean `assert pen_cost\(0, "huskies"\) == 1`\?/.test(compared.howToFix[0]) && compared.howToFix.length === 1,
+    `their comparison, not "assert ...": ${JSON.stringify(compared.howToFix)}`,
+  );
+  // In another function, the answer a Pyret function would have given back.
+  const answered = comparison("x == 5", false);
+  expect(
+    answered.headline === "This comparison's answer is not used." &&
+      JSON.stringify(answered.howToFix) ===
+        JSON.stringify(["Did you mean `return x == 5`? A function gives back only what it `return`s.", "Or, to check it, `assert x == 5`."]),
+    `not a test: ${answered.headline} ${JSON.stringify(answered.howToFix)}`,
+  );
+  // A value written out, alone: `10` as Pyret's last line would be.
+  const alone = wordStatic(
+    [{ id: "unused-value", error_type: "UnusedValue", line_number: 2, column: 4, name_token: null, expression: "10", constant: true }],
     "beginner",
     "student.py",
   )[0];
   expect(
-    /Did you mean `assert pen_cost\(0, "huskies"\) == 1`\?/.test(compared.howToFix[0]),
-    `their comparison, not "assert ...": ${compared.howToFix[0]}`,
+    alone.headline === "This line is only the value `10`, which goes nowhere." &&
+      alone.howToFix[0] === "Did you mean `return 10`? A function gives back only what it `return`s.",
+    `a value alone: ${alone.headline} ${JSON.stringify(alone.howToFix)}`,
+  );
+  const inTest = wordStatic(
+    [{ id: "unused-value", error_type: "UnusedValue", line_number: 2, column: 4, name_token: null, expression: "x + 1", in_test: true }],
+    "beginner",
+    "student.py",
+  )[0];
+  expect(
+    JSON.stringify(inTest.howToFix) === JSON.stringify(["A test checks with `assert`: compare the value with what it should be."]),
+    `a value thrown away in a test: ${JSON.stringify(inTest.howToFix)}`,
   );
   console.log("    suggestions, lengths, counts, empty classes, swaps and expressions from the program");
 }

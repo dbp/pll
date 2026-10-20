@@ -192,6 +192,8 @@ export const CASES = [
   { name: "st-del-item", code: [B, 'ages = {"a": 1, "b": 2}', "nums = [1, 2, 3]", 'del ages["a"]', "del nums[0]", "print(ages, nums)"] },
   { name: "st-unused-comparison", code: [B, "def double(n: int) -> int:", "    return n * 2", "", "def test_double():", "    double(2) == 4"] },
   { name: "st-unused-value", code: [B, "def order(order_amt: float) -> float:", "    order_amt + 8", "    return order_amt"] },
+  { name: "st-unused-comparison-function", code: [B, "def is_five(x: int) -> bool:", "    x == 5"] },
+  { name: "st-unused-constant", code: [B, "def lemonade_price() -> int:", "    2"] },
   { name: "st-unused-value-field", code: [B, ...dataclass("@dataclass", "class Account:", "    balance: float", "", "def deposit(ac: Account, amt: float) -> Account:", "    ac.balance + amt", "    return ac")] },
   { name: "st-assert-tuple", code: [B, "def test_total():", "    assert(1, 2)"] },
   { name: "st-pattern-unknown-class", code: [B, ...PETS("        case Aardvark(b):", "            return b", "        case Boa(n, l):", "            return n", "        case Armadillo(n, l):", "            return n")] },

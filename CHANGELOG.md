@@ -48,6 +48,14 @@
   the language servers off, hardly any other extension adds one.
 
 ### Fixed
+- **A value on a line of its own in a function is caught when it is
+  written out, too**: `10` or `True` alone - the last line of a Pyret
+  function is its answer - says "Did you mean `return 10`?", as `x + 1`
+  already did. A docstring, a string, `...` and `None` are still left
+  alone. A comparison alone is worded for where it is: in a test, only the
+  `assert` it lacks (no longer the note about the top level displaying
+  values); in another function, `return x == 5` first, and `assert` as the
+  other way.
 - **`sum(1, 3)` is about `sum`, not a `for` loop**: "`sum` adds up the
   items in a list, but `1` is a whole number", with `sum([1, 3])` and
   `1 + 3` as the fixes, where it said that `for` needs a list. The same for

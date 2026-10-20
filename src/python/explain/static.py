@@ -311,13 +311,20 @@ def _pll_word_undefined_name(f, level):
 
 @_pll_words("unused-comparison")
 def _pll_word_unused_comparison(f, level):
-    """`pen_cost(0, "huskies") == 1`: a test written without `assert`."""
+    """`pen_cost(0, "huskies") == 1` on a line of its own: in a test, an
+    `assert` left out; in another function, most often a `return` - the
+    last line of a Pyret function is its answer, and a Python one's is not."""
+    expression = f.get("expression")
     # Their own comparison, not `assert ...`.
-    shown = "`assert %s`" % f["expression"] if f.get("expression") else "`assert ...`"
-    return "This comparison's answer is not used, so nothing checks it.", [
-        "Did you mean %s? Without `assert` the comparison is worked out and thrown away, so the test always passes."
-        % shown,
-        "At the top level a line like this is displayed; inside a function nothing shows it.",
+    shown = "`assert %s`" % expression if expression else "`assert ...`"
+    if f.get("in_test") or not expression:
+        return "This comparison's answer is not used, so nothing checks it.", [
+            "Did you mean %s? Without `assert` the comparison is worked out and thrown away, so the test always passes."
+            % shown
+        ]
+    return "This comparison's answer is not used.", [
+        "Did you mean `return %s`? A function gives back only what it `return`s." % expression,
+        "Or, to check it, %s." % shown,
     ]
 
 
@@ -325,6 +332,14 @@ def _pll_word_unused_comparison(f, level):
 def _pll_word_unused_value(f, level):
     """`ac.balance + amt` on a line of its own."""
     expression = f.get("expression")
+    constant = f.get("constant") and expression is not None
+    headline = (
+        "This line is only the value `%s`, which goes nowhere." % expression
+        if constant
+        else "This line works out a value and then throws it away."
+    )
+    if f.get("in_test"):
+        return headline, ["A test checks with `assert`: compare the value with what it should be."]
     # `ac.balance + amt` reads a field and adds to it: assigning the result
     # back to that field is nearly always what was meant.
     field = _pll_src_re.match(r"([A-Za-z_]\w*\.[A-Za-z_]\w*)\s*[-+*/]", expression) if expression is not None else None
@@ -335,11 +350,11 @@ def _pll_word_unused_value(f, level):
             "To change `%s`, assign the result to it: `%s = %s`." % (field.group(1), field.group(1), expression),
             "Or, if this is the function's answer, return it: `return %s`." % expression,
         ]
+    elif constant:
+        fixes = ["Did you mean `return %s`? A function gives back only what it `return`s." % expression]
     else:
         fixes = ["Did you mean `return %s`? On its own, the value is worked out and thrown away." % expression]
-    return "This line works out a value and then throws it away.", fixes + [
-        "Nothing in Python changes as a result of this line."
-    ]
+    return headline, fixes + ["Nothing in Python changes as a result of this line."]
 
 
 @_pll_words("assert-tuple")

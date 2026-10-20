@@ -516,6 +516,8 @@ _g = _pll_get_session("smoke-lib")
         "unused-value",
         2,
       ],
+      ["a number on a line of its own, as Pyret's answer", "def ten():\n    10\n", "unused-value", 2],
+      ["a comparison as the answer", "def is_five(x):\n    x == 5\n", "unused-comparison", 2],
       ["assert on a tuple", "def test_add():\n    assert(1 + 1, 2)\n", "assert-tuple", 2],
       [
         "a method named but not called",
@@ -751,6 +753,17 @@ _g = _pll_get_session("smoke-lib")
     expect(keyword?.keyword === "global" && keyword?.names?.join() === "g", `the keyword and its names: ${JSON.stringify(keyword)}`);
     const unused = findings.find((f) => f.id === "unused-comparison");
     expect(unused?.expression === "n == 1", `the expression as written: ${unused?.expression}`);
+    // Whether it is in a test decides the advice; a placeholder is none.
+    const where = (code) => analyze(code, "beginner", "where.py").filter((f) => f.id.startsWith("unused-"));
+    const [inTest] = where("def test_a():\n    1 == 1\n");
+    const [inFunction] = where("def a():\n    1 == 1\n");
+    expect(inTest?.in_test === true && inFunction?.in_test === false, `in a test, or not: ${inTest?.in_test} ${inFunction?.in_test}`);
+    const [number] = where("def a():\n    10\n");
+    expect(number?.constant === true, `a value written out: ${JSON.stringify(number)}`);
+    expect(
+      where('def a():\n    """What it does."""\n    ...\n    None\n    "a note"\n').length === 0,
+      "a docstring, `...`, `None` and a string are not values thrown away",
+    );
     // The type written after `=`, so the fix quotes it back: not always int.
     const typed = analyze("@dataclass\nclass Song:\n    title = str\n", "beginner", "typed.py")
       .find((f) => f.id === "field-assigned-type");

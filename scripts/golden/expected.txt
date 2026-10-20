@@ -1509,7 +1509,6 @@ stderr:
   
   How to fix:
     - Did you mean `assert double(2) == 4`? Without `assert` the comparison is worked out and thrown away, so the test always passes.
-    - At the top level a line like this is displayed; inside a function nothing shows it.
   
   Static analysis found 1 problem. The file was not run.
 
@@ -1521,6 +1520,30 @@ stderr:
   
   How to fix:
     - Did you mean `return order_amt + 8`? On its own, the value is worked out and thrown away.
+    - Nothing in Python changes as a result of this line.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-unused-comparison-function (exit 2)
+stderr:
+  student.py [beginner]
+  UnusedValue: This comparison's answer is not used.
+    at student.py:3:5
+  
+  How to fix:
+    - Did you mean `return x == 5`? A function gives back only what it `return`s.
+    - Or, to check it, `assert x == 5`.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-unused-constant (exit 2)
+stderr:
+  student.py [beginner]
+  UnusedValue: This line is only the value `2`, which goes nowhere.
+    at student.py:3:5
+  
+  How to fix:
+    - Did you mean `return 2`? A function gives back only what it `return`s.
     - Nothing in Python changes as a result of this line.
   
   Static analysis found 1 problem. The file was not run.

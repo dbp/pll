@@ -792,6 +792,10 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
                     node.lineno,
                     node.col_offset,
                     expression=_ast.get_source_segment(self._code, value),
+                    # In a test the fix is an `assert`; anywhere else, most
+                    # often a `return`.
+                    in_test=self._functions[-1].name.startswith("test_"),
+                    constant=isinstance(value, _ast.Constant),
                 )
             )
         self.generic_visit(node)
@@ -801,8 +805,9 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         """Whether this expression statement can only be a mistake.
 
         A call, an await or a yield is there for its effect. A string is a
-        docstring. `...` is a placeholder. Everything else computes
-        something and drops it.
+        docstring, or a note. `...` and `None` hold a place. Everything else
+        - a number or `True` on its own included, as the last line of a
+        Pyret function is its answer - computes something and drops it.
         """
         if isinstance(
             value,
@@ -816,7 +821,7 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         ):
             return False
         if isinstance(value, _ast.Constant):
-            return False
+            return not (isinstance(value.value, (str, bytes)) or value.value is Ellipsis or value.value is None)
         return True
 
     def _method_not_called(self, value):
