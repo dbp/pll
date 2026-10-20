@@ -631,7 +631,9 @@ If you use a name that is not defined, PLL rewrites Python's `NameError`
 into a short explanation of what went wrong and **how to fix it**. At every
 level but `raw`, most of these are found before the file runs. The
 message appears in the interactions panel and as a mark in the editor.
-Click the location in the message to jump to that line.
+Click the location in the message to jump to that line. The marks go as
+soon as you edit the file, since its lines may have moved; the panel keeps
+the message, and the next run marks whatever is still wrong.
 
 ## Commands
 

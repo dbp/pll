@@ -79,7 +79,8 @@ src/
 │   ├── activate.ts                shared activation for both editor hosts
 │   ├── replSession.ts             a session per file: the panel, prompt lines, runs
 │   ├── commands.ts                Run File / Show Interactions / Start REPL / Clear / Stop
-│   ├── diagnostics.ts             findings as squiggles
+│   ├── diagnostics.ts             findings as squiggles and gutter icons, gone once
+│   │                              the file is edited
 │   ├── workspaceFiles.ts          the files beside a program, over vscode.workspace.fs
 │   ├── programDocuments.ts        which documents are programs
 │   ├── levelLine.ts               the `#level` line kept in place: its highlight,

@@ -821,6 +821,11 @@ export class ReplSession implements vscode.Disposable {
     document: vscode.TextDocument | undefined,
   ): RunHost {
     const runSeq = session.runSeq;
+    // The file as the run read it: findings about it are marked in the
+    // editor only while it is still that text, or they would mark lines
+    // that have moved.
+    const version = document?.version;
+    const unchanged = () => document !== undefined && document.version === version;
     let shown = program;
     const entry = (item: Entry) => {
       // Anything that is its own entry lands after the output before it.
@@ -836,7 +841,7 @@ export class ReplSession implements vscode.Disposable {
         this.refreshState(session);
       },
       staticFindings: (findings) => {
-        if (document) {
+        if (document && unchanged()) {
           // Also clears stale diagnostics when there are no findings.
           this.deps.diagnostics.setFindings(document.uri, document, findings);
         }
@@ -848,7 +853,7 @@ export class ReplSession implements vscode.Disposable {
         entry({ kind: "finding", finding: serializeFinding(finding) });
         if (!document) return;
         if (finding.fileName === session.fileName) {
-          this.deps.diagnostics.setFinding(document.uri, document, finding);
+          if (unchanged()) this.deps.diagnostics.setFinding(document.uri, document, finding);
           return;
         }
         // In another of the student's files, next to this one.

@@ -39,6 +39,12 @@
   stands.
 
 ### Changed
+- **A run's marks in the editor go when the file is edited** - the
+  squiggles, the gutter icons and the Problems entries, which describe the
+  text as it was and point at the wrong lines once lines move. The
+  interactions panel keeps the message, and the next run marks whatever is
+  still wrong. A finding that arrives after the file was edited during the
+  run - while it waited for `input()`, say - is shown in the panel only.
 - **A test written with parameters is said apart from the tests**, above
   them, as what it is: `def test_area(side):` is not a test PLL can run,
   since a test is called with nothing. It is no longer run, listed as an

@@ -10,12 +10,17 @@ import { formatFriendlyErrorPlain, type AnalysisFinding } from "../run/finding";
  * The decoration has to be re-applied whenever the set of visible editors
  * changes (e.g. user opens the file fresh), since `setDecorations` is
  * editor-scoped.
+ *
+ * All of a file's marks go as soon as the file is edited: they describe the
+ * run of the text as it was, and once lines move they point at the wrong
+ * ones. The next run puts back whatever still applies.
  */
 export class Diagnostics implements vscode.Disposable {
   private readonly collection: vscode.DiagnosticCollection;
   private readonly gutterDecoration: vscode.TextEditorDecorationType;
   private readonly perUriRanges = new Map<string, vscode.Range[]>();
   private readonly editorWatcher: vscode.Disposable;
+  private readonly editWatcher: vscode.Disposable;
 
   constructor(extensionUri: vscode.Uri) {
     this.collection = vscode.languages.createDiagnosticCollection("python-language-levels");
@@ -28,6 +33,12 @@ export class Diagnostics implements vscode.Disposable {
     });
     this.editorWatcher = vscode.window.onDidChangeVisibleTextEditors((editors) => {
       this.applyToEditors(editors);
+    });
+    // An event with no changes is only the dirty state changing.
+    this.editWatcher = vscode.workspace.onDidChangeTextDocument(({ document, contentChanges }) => {
+      if (contentChanges.length > 0 && this.perUriRanges.has(document.uri.toString())) {
+        this.clear(document.uri);
+      }
     });
   }
 
@@ -82,6 +93,7 @@ export class Diagnostics implements vscode.Disposable {
 
   dispose(): void {
     this.editorWatcher.dispose();
+    this.editWatcher.dispose();
     this.collection.dispose();
     this.gutterDecoration.dispose();
   }

@@ -49,6 +49,7 @@ const FILES = [
   "smoke-worker-protocol",
   "smoke-static-analyze",
   "smoke-level-line",
+  "smoke-diagnostics",
   "smoke-python-sources",
   "smoke-explainers",
   "smoke-images",

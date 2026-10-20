@@ -3278,6 +3278,37 @@ console.log("\n[80] a test that takes a parameter is a finding above the tests' 
   repl.dispose();
 }
 
+console.log("\n[81] a finding that comes after the file was edited is not marked in it");
+{
+  // Edited while the run waited - for `input()`, say: the finding's line
+  // is the old text's, and may now be another line.
+  const doc = { ...makeDoc("waits.py", "name = input()\nprint(totl)\n"), version: 1 };
+  const { repl, view, diagnostics } = await harness(
+    {
+      events: () => {
+        doc.version = 2;
+        return [
+          errorEvent({
+            type: "NameError",
+            message: "name 'totl' is not defined",
+            file: "waits.py",
+            line: 2,
+            frames: [["waits.py", 2]],
+            facts: { name: "totl" },
+          }),
+          { kind: "done" },
+        ];
+      },
+    },
+    doc,
+  );
+  await repl.runFile("name = input()\nprint(totl)\n", "waits.py", doc);
+  await settle();
+  expect(view.entries.some((e) => e.kind === "finding"), "the panel still says what happened");
+  expect(!diagnostics.calls.some((c) => c[0] === "setFinding"), `but the editor is not marked: ${JSON.stringify(diagnostics.calls)}`);
+  repl.dispose();
+}
+
 console.log(`\nsmoke-repl-session: ${passed() ? "ok" : "FAILED"}`);
 if (!passed()) {
   process.exit(1);
