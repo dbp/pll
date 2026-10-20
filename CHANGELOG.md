@@ -21,6 +21,12 @@
   function's body is checked only for names given a value nowhere in the
   file, unless a call runs it early.
 
+### Fixed
+- **`type list = int` is caught at `beginner` and `intermediate`**, as
+  `list = int` is. A `type` statement defines its name, so hiding a built-in
+  or a PLL name with one, or defining a name twice with one, is refused like
+  any other definition.
+
 ## 0.5.1 (2026-10-15)
 
 ### Added

@@ -77,6 +77,7 @@ _PLL_BINDING_NOUN = {
     "augassign": "variable",
     "walrus": "variable",
     "with": "variable",
+    "typealias": "type",
 }
 
 #: The library a name every session starts with comes from.
@@ -109,13 +110,18 @@ def _pll_word_shadowing(f, level):
         "Rename this %s to something distinct (e.g. `%s_inner`, `local_%s`, or whatever describes its role)."
         % (inner, name, name),
         "Or, if you want to use the outer `%s`, just read it directly without making a new %s."
-        % (name, "parameter" if inner == "parameter" else "variable"),
+        % (name, inner if inner in ("parameter", "type") else "variable"),
     ]
 
 
 @_pll_words("shadowing-builtin")
 def _pll_word_shadowing_builtin(f, level):
     name = f["name_token"] or "this name"
+    if f.get("binding") == "typealias":
+        return "`%s` is the name of a Python built-in." % name, [
+            "Give the type a name of its own that says what it stands for. Type names are capitalized, like"
+            " `Shape` or `NumList`."
+        ]
     return "`%s` is the name of a Python built-in." % name, [
         "Pick a different name. Common patterns: `my_%s`, `%s_value`, `%ss` (plural), or a more specific noun"
         " describing what this value represents." % (name, name, name)
@@ -145,6 +151,11 @@ def _pll_word_shadowing_library(f, level):
         return "`%s` is already a name in PLL - one of %s's - and this %s hides it." % (name, noun, what), [
             "Give the %s another name - for example `%s_value`, or a word for what it holds." % (what, name)
         ]
+    if binding == "typealias":
+        fixes = ["Give your type a name of its own that says what it stands for."]
+        if f.get("library_type"):
+            fixes.append("If you meant the library's `%s`, use it as it is: it is already a type." % name)
+        return "`%s` is already defined by %s." % (name, noun), fixes
     return "`%s` is already defined by %s." % (name, noun), [
         "Pick a different name for your definition - for example `my_%s`, `%s_value`, or a word that describes"
         " what yours represents." % (name, name),
@@ -160,6 +171,12 @@ def _pll_word_reassignment(f, level):
     # Line 0 is a binding the session already had: a prompt line after Run File.
     where = " (first assigned on line %d)" % first if first is not None and first > 0 else ""
     headline = "`%s` is already assigned%s." % (name, where)
+    if f.get("type_alias"):
+        # A `type` is not a running total: the fix is one meaning for the name.
+        return headline, [
+            "A type keeps one meaning: give the type a name of its own, or leave out the other line that sets `%s`."
+            % name
+        ]
     rename = "If you want a different value, give it a different name (e.g. `%s_doubled`, `new_%s`, `%s2`)." % (
         name, name, name
     )
@@ -187,7 +204,7 @@ def _pll_word_reassignment(f, level):
 
 @_pll_words("duplicate-definition")
 def _pll_word_duplicate_definition(f, level):
-    """Two `def`s (or two `class`es) with the same name.
+    """Two `def`s, two `class`es or two `type`s with the same name.
 
     Python keeps the second and throws the first away silently, which is how
     a test copied without renaming it disappears. Its own finding, not a
@@ -195,11 +212,12 @@ def _pll_word_duplicate_definition(f, level):
     rename one of them.
     """
     name = f["name_token"] or "this name"
-    kind = "classes" if f.get("definition_kind") == "class" else "functions"
+    kind = {"class": "classes", "type": "types"}.get(f.get("definition_kind"), "functions")
     first = f.get("first_line_number")
     where = " (lines %s and %s)" % (first, f["line_number"]) if isinstance(first, int) and first > 0 else ""
     return "There are two %s named `%s`%s." % (kind, name, where), [
-        "Rename one of them. Python keeps only the second, so the first never runs.",
+        "Rename one of them. Python keeps only the second, so the first %s."
+        % ("is never used" if kind == "types" else "never runs"),
         "A test copied and not renamed vanishes this way: only the last one is run."
         if kind == "functions" and name.startswith("test_")
         else "Both definitions are kept in the file, but only the last name points at anything.",

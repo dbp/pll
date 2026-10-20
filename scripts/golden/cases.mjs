@@ -167,6 +167,7 @@ export const CASES = [
   { name: "st-shadowing-builtin", code: [B, "list = [1, 2]"] },
   { name: "st-shadowing-library", code: [B, "def circle(r):", "    return r"] },
   { name: "st-shadowing-library-table", code: [B, "table = 3"] },
+  { name: "st-shadowing-type", code: [B, "type list = int", "print(list)"] },
   { name: "st-global", code: [I, "count = 0", "def bump():", "    global count", "    count = count + 1"] },
   { name: "st-nonlocal", code: [B, "def outer():", "    n = 0", "    def inner():", "        nonlocal n", "        n = 1", "    inner()"] },
   { name: "st-del-name", code: [B, "total = 0", "del total"] },

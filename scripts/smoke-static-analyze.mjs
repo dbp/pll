@@ -1240,6 +1240,45 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
     console.log(`    ${CASES.length} programs, each run as well; ${parities} worded exactly as the run words them; ${compared} functions' scopes as Python's compiler has them`);
   }
 
+  console.log("\n[29] a `type` statement defines its name, as `class` and `=` do");
+  {
+    // [what, level, code, the finding ("kind@line:column"), and words its
+    // wording has - each a regular expression - or none at all].
+    const CASES = [
+      ["a built-in", "beginner", "type list = int\nprint(list)\n", "shadowing-builtin@1:5",
+        [/`list` is the name of a Python built-in\./, /Give the type a name of its own/, /capitalized, like `Shape`/]],
+      ["a library's type", "beginner", "type Table = list[dict]\n", "shadowing-library@1:5",
+        [/`Table` is already defined by the table library\./, /use it as it is: it is already a type/]],
+      ["a library's function", "beginner", "type circle = int\n", "shadowing-library@1:5", [/Give your type a name of its own/]],
+      ["two `type`s", "beginner", "type Shape = int\ntype Shape = str\n", "duplicate-definition@2:5",
+        [/There are two types named `Shape` \(lines 1 and 2\)/, /the first is never used/]],
+      ["a `class` and a `type`", "beginner", "class Shape:\n    pass\ntype Shape = int\n", "duplicate-definition@3:5",
+        [/two types named `Shape`/]],
+      ["a variable, then a `type`", "beginner", "Shape = int\ntype Shape = str\n", "reassignment@2:5",
+        [/`Shape` is already assigned \(first assigned on line 1\)/, /A type keeps one meaning/]],
+      ["a `type`, then a variable", "intermediate", "type Shape = int\nShape = 3\n", "reassignment@2:0", [/A type keeps one meaning/]],
+      ["a function's `type` hiding the file's name", "beginner", "Pair = 1\ndef f() -> None:\n    type Pair = int\n", "shadowing@3:9",
+        [/Rename this type/, /without making a new type/]],
+      ["a parameter hiding a `type`", "beginner", "type Shape = int\ndef f(Shape: int) -> int:\n    return Shape\n", "shadowing@2:6",
+        [/Rename this parameter/]],
+      ["the course's generic tree", "beginner",
+        "from dataclasses import dataclass\n@dataclass\nclass Leaf[T]:\n    value: T\n@dataclass\nclass Node[T]:\n    left: 'BinTree[T]'\n" +
+          "    right: 'BinTree[T]'\ntype BinTree[T] = Leaf[T] | Node[T]\ndef size(t: BinTree[int]) -> int:\n    return 1\nprint(size(Leaf(1)))\n",
+        null, []],
+      ["at intermediate, a built-in", "intermediate", "type list = int\n", "shadowing-builtin@1:5", []],
+      ["at intermediate, two in a function", "intermediate", "def f() -> None:\n    type A = int\n    type A = str\n", null, []],
+      ["at advanced, nothing", "advanced", "type list = int\ntype list = str\n", null, []],
+    ];
+    for (const [label, level, code, want, words] of CASES) {
+      const found = wordStatic(analyze(code, level, "alias.py"), level, "alias.py");
+      const got = found.map((f) => `${f.id}@${f.lineNumber}:${f.column}`);
+      expect(got.join("|") === (want ?? ""), `${label}: ${JSON.stringify(got)}, not ${want}`);
+      const text = found.map((f) => [f.headline, ...f.howToFix].join("\n")).join("\n");
+      for (const word of words) expect(word.test(text), `${label}: says ${word}: ${text}`);
+    }
+    console.log(`    ${CASES.length} programs: built-ins, the libraries' names, two definitions, a reassignment, scopes, levels`);
+  }
+
   fn.destroy?.();
 
   console.log(passed() ? "\nALL SMOKE TESTS PASSED" : "\nFAILED");

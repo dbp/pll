@@ -1240,6 +1240,17 @@ stderr:
   
   Static analysis found 1 problem. The file was not run.
 
+=== st-shadowing-type (exit 2)
+stderr:
+  student.py [beginner]
+  Shadowing: `list` is the name of a Python built-in.
+    at student.py:2:6
+  
+  How to fix:
+    - Give the type a name of its own that says what it stands for. Type names are capitalized, like `Shape` or `NumList`.
+  
+  Static analysis found 1 problem. The file was not run.
+
 === st-global (exit 2)
 stderr:
   student.py [intermediate]

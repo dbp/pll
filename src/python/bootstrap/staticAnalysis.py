@@ -8,10 +8,11 @@
 #                          provided by a PLL library (image / table /
 #                          reactor - the names every session starts with).
 #     2. Reassignment:     a name bound more than once within the *same*
-#                          scope - or, for a `def` or `class` written
-#                          twice, a duplicate definition. Suppressed for
-#                          names already flagged as shadowing in that scope
-#                          (fix the shadow first).
+#                          scope - or, for a `def`, `class` or `type`
+#                          written twice (or a `class` and a `type`), a
+#                          duplicate definition. Suppressed for names
+#                          already flagged as shadowing in that scope (fix
+#                          the shadow first).
 #     3. Disallowed kw:    `global` and `nonlocal` statements.
 #     4. Unbinding:        `del` of a name. `del` of an item - `del d[key]`,
 #                          `del xs[0]` - changes a value, not a name, and is
@@ -189,6 +190,13 @@ class _PllScopeBuilder:
             for alias in node.names:
                 name = alias.asname or alias.name
                 self._add(scope, name, node.lineno, node.col_offset, "importfrom", node.module)
+            return
+        if isinstance(node, getattr(_ast, "TypeAlias", ())):
+            # `type Shape = Circle | Square` binds `Shape` where it is written.
+            self._add(scope, node.name.id, node.name.lineno, node.name.col_offset, "typealias")
+            for param in node.type_params:
+                self._walk(param, scope)
+            self._walk(node.value, scope)
             return
         if isinstance(node, _ast.NamedExpr):
             # Walrus :=
@@ -1086,6 +1094,7 @@ def _pll_teaching_findings(tree, code, level, session_key):
                 findings.append(_pll_finding(
                     "shadowing-builtin", "Shadowing", defining_loc[0], defining_loc[1], name,
                     scope_kind=scope.kind,
+                    binding=defining_loc[2],
                 ))
             elif name in library_names and defining_loc is not None:
                 shadowed_in_scope.add(name)
@@ -1095,6 +1104,7 @@ def _pll_teaching_findings(tree, code, level, session_key):
                     library=library_names[name],
                     binding=defining_loc[2],
                     module=defining_loc[3],
+                    library_type=isinstance(_pll_initial_globals.get(name), type),
                 ))
 
         # ---- Then reassignment (skip names already shadow-flagged) ----
@@ -1114,9 +1124,14 @@ def _pll_teaching_findings(tree, code, level, session_key):
                     # A `def` written twice is not an accumulator: the
                     # advice for a reassigned variable (running totals, use
                     # `sum`) is about something else entirely, and the fix
-                    # is to rename one of them.
-                    definitions = {"functiondef": "function", "classdef": "class"}
-                    both = definitions.get(first_loc[2]) if first_loc[2] == second_loc[2] else None
+                    # is to rename one of them. A `class` and a `type` of
+                    # the same name are two types.
+                    definitions = {"functiondef": "function", "classdef": "class", "typealias": "type"}
+                    kinds = {first_loc[2], second_loc[2]}
+                    if len(kinds) == 1:
+                        both = definitions.get(first_loc[2])
+                    else:
+                        both = "type" if kinds == {"classdef", "typealias"} else None
                     if both is not None:
                         findings.append(_pll_finding(
                             "duplicate-definition", "DuplicateDefinition", second_loc[0], second_loc[1], name,
@@ -1131,6 +1146,7 @@ def _pll_teaching_findings(tree, code, level, session_key):
                         scope_kind=scope.kind,
                         first_line_number=first_loc[0],
                         first_column=first_loc[1],
+                        type_alias="typealias" in kinds,
                     ))
 
     # ---- `global` / `nonlocal` ----
