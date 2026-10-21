@@ -335,6 +335,9 @@ beside(
 
 Each picture has a **Save SVG** button if you want to keep it.
 
+In `print("Area:", picture)`, the text is a line of its own, above the
+picture. At `#level raw`, `print` is Python's, and prints `<Image 20x20>`.
+
 **Shapes:** `circle`, `square`, `rectangle`, `ellipse`, `triangle`,
 `right_triangle`, `regular_polygon`, `star`, `star_polygon`, `line`,
 `text`.

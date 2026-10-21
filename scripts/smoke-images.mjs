@@ -1045,6 +1045,33 @@ async function main() {
     console.log("    once at the prompt, and not beside the error it predicted");
   }
 
+  console.log("\n[31] print shows a picture or a table as the top level does, at the student levels");
+  {
+    const kinds = (result) => (result.displays ?? []).map((d) => (d.kind === "stdout" ? `text:${JSON.stringify(d.text)}` : d.kind));
+    const SETUP = 'img = circle(10, "solid", "red")\nt = table(["a"], [[1], [2]])\n';
+    // From inside a function, which a value on a line of its own cannot do.
+    const inside = py(callRunFile, [`${SETUP}def show():\n    print(img)\n    print(t)\n\nshow()\n`, "pr.py", "print:1", "beginner"]);
+    expect(kinds(inside).join(" ") === "image table", `inside a function: ${kinds(inside).join(" ")}`);
+    // A block: the text before it ends its line, and none is left after it.
+    const mixed = py(callRunFile, [`${SETUP}print("Area:", img)\nprint(img, "after")\nprint(1, 2)\n`, "pr.py", "print:2", "advanced"]);
+    expect(
+      kinds(mixed).join(" ") === 'text:"Area:" text:"\\n" image image text:"after" text:"\\n" text:"1" text:" " text:"2" text:"\\n"',
+      `with text: ${kinds(mixed).join(" ")}`,
+    );
+    // Python's `print` wherever it has only text to go to, and at raw.
+    const elsewhere = py(callRunFile, [`import io\n${SETUP}buffer = io.StringIO()\nprint(img, file=buffer)\nprint(buffer.getvalue().strip())\n`, "pr.py", "print:3", "beginner"]);
+    expect(elsewhere.stdout === "<Image 20x20>\n" && imagesOf(elsewhere).length === 0, `to a file: ${JSON.stringify(elsewhere.stdout)}`);
+    const redirected = py(callRunFile, [`import contextlib, io\n${SETUP}with contextlib.redirect_stdout(io.StringIO()) as caught:\n    print(img)\nprint(caught.getvalue().strip())\n`, "pr.py", "print:6", "beginner"]);
+    expect(redirected.stdout === "<Image 20x20>\n" && imagesOf(redirected).length === 0, `output redirected: ${JSON.stringify(redirected.stdout)}`);
+    const raw = py(callRunFile, [`${SETUP}print(img)\n`, "pr.py", "print:4", "raw"]);
+    expect(raw.stdout === "<Image 20x20>\n" && imagesOf(raw).length === 0, `raw is Python: ${JSON.stringify(raw.stdout)}`);
+    // And at a prompt line.
+    py(callRunFile, [SETUP, "pr.py", "print:5", "beginner"]);
+    const prompt = py(callReplEval, ["print(img)", "print:5", "beginner"]);
+    expect(imagesOf(prompt).length === 1 && prompt.stdout === "", `a prompt line: ${JSON.stringify(prompt.stdout)}`);
+    console.log("    a function's print shows them; text around them stays in its lines; raw and a file get text");
+  }
+
   callRunFile.destroy?.();
   callReplEval.destroy?.();
 

@@ -11,6 +11,13 @@
   stops the copy, so VS Code shows it as it does in every other browser.
 
 ### Added
+- **`print` shows a picture, a table or a figure** as a line of its own
+  showing one does, at `beginner`, `intermediate` and `advanced` - so a
+  function can show one as it runs, where `print` gave `<Image 20x20>` and a
+  table's `table([...], [...])`. Each is a block: in `print("Area:", img)`
+  the text is a line of its own, before the picture. Printing to a file, or
+  with output redirected or captured (as a test's is), is text as before,
+  and `#level raw` is Python's `print`.
 - **`Callable` needs no import at `beginner`, `intermediate` and
   `advanced`**, as the image and table functions need none: a function's
   type is written often enough that `from collections.abc import Callable`

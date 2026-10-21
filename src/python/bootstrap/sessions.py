@@ -178,6 +178,24 @@ def _pll_is_matplotlib(value):
     return type(value).__module__.split(".")[0] == "matplotlib"
 
 
+def _pll_display_of(value):
+    """How `value` is shown in the panel rather than as text - a function
+    that shows it - or None: a picture, a table, or a matplotlib figure."""
+    if type(value) in _PLL_TEXT_TYPES:
+        return None
+    figure = _pll_matplotlib_figure(value)
+    if figure is not None:
+        return lambda: globals()["_pll_show_figure"](figure)
+    payload = _pll_extract_display(value)
+    if payload is not None:
+        return lambda: _pll_push(payload)
+    return None
+
+
+#: Types that are never shown as anything but text, and need no looking at.
+_PLL_TEXT_TYPES = frozenset((str, int, float, bool, type(None), list, tuple, dict, set))
+
+
 def _pll_show_top_level(value):
     """Emit a value produced by a top-level expression statement.
 
@@ -194,17 +212,56 @@ def _pll_show_top_level(value):
     # bootstrap still knows nothing about the reactor library.
     if getattr(value, "_pll_already_displayed", False):
         return
-    figure = _pll_matplotlib_figure(value)
-    if figure is not None:
-        globals()["_pll_show_figure"](figure)
+    show = _pll_display_of(value)
+    if show is not None:
+        show()
         return
     if _pll_is_matplotlib(value):
         return
-    payload = _pll_extract_display(value)
-    if payload is not None:
-        _pll_push(payload)
-        return
     print(repr(value))
+
+
+#: Python's own `print`, which `_pll_print` prints text with.
+_pll_python_print = print
+
+
+def _pll_print(*values, sep=" ", end="\n", file=None, flush=False):
+    """`print` at the student levels: Python's, except that a picture, a table
+    or a figure is shown as a top-level expression shows one - so a function
+    can show one too, which a value on a line of its own there cannot.
+
+    Each is shown as a block: text printed before it ends its line, and the
+    line it would have ended is not left empty after it. Anywhere but the
+    panel's own output - `file=` another stream, output redirected, a test's
+    captured output - it is Python's `print`, which has only text.
+    """
+    stream = _sys.stdout
+    shows = [_pll_display_of(value) for value in values]
+    if (
+        not any(shows)
+        or (file is not None and file is not stream)
+        or not isinstance(stream, _PllStream)
+        or not isinstance(sep if sep is not None else " ", str)
+        or not isinstance(end if end is not None else "\n", str)
+    ):
+        return _pll_python_print(*values, sep=sep, end=end, file=file, flush=flush)
+    text = []
+    for value, show in zip(values, shows):
+        if show is None:
+            text.append(value)
+            continue
+        if text:
+            _pll_python_print(*text, sep=sep, file=stream)
+            text = []
+        show()
+    if text:
+        _pll_python_print(*text, sep=sep, end=end, file=stream)
+    if flush:
+        stream.flush()
+
+
+_pll_print.__name__ = _pll_print.__qualname__ = "print"
+_pll_print.__doc__ = _pll_python_print.__doc__
 
 
 # Called by the code `_PllTopLevelExprWrapper` adds.

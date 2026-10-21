@@ -21,11 +21,19 @@ _PLL_STUDENT_LEVELS = (_PLL_LEVEL_BEGINNER, _PLL_LEVEL_INTERMEDIATE, _PLL_LEVEL_
 
 
 def _pll_level_names(level):
-    """The names a file at `level` starts with beyond `_pll_initial_globals`:
-    at the student levels, `Callable`, the type of a function, which an
-    annotation needs often enough that it should need no import. `#level
-    raw` is Python, which has no such name."""
-    return {"Callable": _pll_level_abc.Callable} if level in _PLL_STUDENT_LEVELS else {}
+    """The names a file at `level` starts with beyond `_pll_initial_globals`.
+    At the student levels:
+
+    - `Callable`, the type of a function, which an annotation needs often
+      enough that it should need no import;
+    - `print`, which shows a picture or a table as the top level shows one
+      (`_pll_print`, sessions.py).
+
+    `#level raw` is Python, which has neither.
+    """
+    if level not in _PLL_STUDENT_LEVELS:
+        return {}
+    return {"Callable": _pll_level_abc.Callable, "print": _pll_print}
 
 
 def _pll_hidden(name, value):
