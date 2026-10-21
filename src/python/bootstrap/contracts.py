@@ -597,6 +597,11 @@ def _pll_takes(function, count):
 # -- functions under contract ----------------------------------------------------
 
 
+#: What a wrapper shows of the function it wraps, as `functools.wraps`
+#: copies: so `f.__annotations__` and `help(f)` see the function's own.
+_PLL_WRAPPER_ASSIGNMENTS = ("__module__", "__name__", "__qualname__", "__doc__", "__annotations__", "__type_params__")
+
+
 class _PllCall:
     """A call of a contracted function that is running: its `def`'s code,
     and the line of the `return` that ended it."""
@@ -663,7 +668,7 @@ def _pll_wrapped(function, source, blame):
                 error._pll_returned_from = _PllReturnedFrom(contract.code, function, call.returned_at)
             raise
 
-    for attribute in ("__module__", "__name__", "__qualname__", "__doc__"):
+    for attribute in _PLL_WRAPPER_ASSIGNMENTS:
         try:
             setattr(contracted, attribute, getattr(function, attribute))
         except (AttributeError, TypeError):
@@ -809,7 +814,7 @@ def _pll_boundary(function, definition):
         )
         return _pll_wrapped(function, definition, blame)(*args, **kwargs)
 
-    for attribute in ("__module__", "__name__", "__qualname__", "__doc__"):
+    for attribute in _PLL_WRAPPER_ASSIGNMENTS:
         setattr(contracted, attribute, getattr(function, attribute))
     contracted.__wrapped__ = function
     contracted.__signature__ = definition.signature

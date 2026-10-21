@@ -1252,3 +1252,41 @@ def _pll_pandas_key_error(m, e):
         else "`.columns` lists the columns a DataFrame has.",
         "Column names are case-sensitive, and spaces count.",
     ]
+
+
+@_pll_explains("BitwiseOperator")
+def _pll_explain_bitwise(e):
+    """A bitwise operator between numbers, which `beginner` and
+    `intermediate` refuse as it runs (`pll:bitwise`, typeChecking.py) -
+    said as what it does, and what was probably meant instead."""
+    facts = e.facts.get("bitwise") or {}
+    symbol, written = facts.get("operator"), facts.get("written") or "this"
+    left, right = facts.get("left"), facts.get("right")
+    in_place = written.split(symbol, 1)[-1].startswith("=") if symbol else False
+    gives = " gives %s" % facts["result"] if facts.get("result") is not None else ""
+    advanced = "`#level advanced` allows `%s`, if you do mean the binary digits." % symbol
+    if symbol == "^":
+        power = "%s **= %s" % (left, right) if in_place else "%s ** %s" % (left, right)
+        headline = "`%s`%s: `^` is not a power in Python, but works on the binary digits of the numbers." % (written, gives)
+        how_to_fix = ["For a power, write `%s`." % power, advanced]
+    elif symbol in ("|", "&"):
+        word = "or" if symbol == "|" else "and"
+        headline = '`%s`%s: between numbers, `%s` is not "%s", but works on their binary digits.' % (
+            written, gives, symbol, word
+        )
+        how_to_fix = ["Between two conditions, write `%s`." % word]
+        if symbol == "|":
+            how_to_fix.append("Between types, as in `int | None`, `|` is fine.")
+        how_to_fix.append(advanced)
+    elif symbol in ("<<", ">>"):
+        headline = "`%s` shifts the binary digits of `%s`." % (written, left)
+        how_to_fix = [
+            "To multiply by a power of 2, write `%s * 2 ** %s`." % (left, right)
+            if symbol == "<<"
+            else "To divide by a power of 2, write `%s // 2 ** %s`." % (left, right),
+            advanced,
+        ]
+    else:
+        headline = '`%s`%s: `~` is not "not", but turns over the binary digits of a number.' % (written, gives)
+        how_to_fix = ["For \"not\", write `not %s`." % left, advanced]
+    return {"id": "bitwise-operator", "errorType": "BitwiseOperator", "headline": headline, "howToFix": how_to_fix}

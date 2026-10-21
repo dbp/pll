@@ -4,6 +4,7 @@
 
 import builtins as _pll_builtins
 import collections.abc as _pll_level_abc
+import operator as _pll_operator
 import sys as _sys
 
 # The language levels, as the host sends them: `LEVEL_NAMES` in level.ts
@@ -75,3 +76,75 @@ def _pll_set_recursion_limit(level):
     _sys.setrecursionlimit(
         _PLL_CHECKED_RECURSION_LIMIT if _pll_checks_annotations(level) else _PLL_PYTHON_RECURSION_LIMIT
     )
+
+
+# -- bitwise operators, at the teaching levels ------------------------------------
+
+
+class _PllBitwiseOperator(Exception):
+    """A bitwise operator between numbers, at a level that does not use them;
+    what the explanation needs is in its facts (`bitwise`)."""
+
+
+_PllBitwiseOperator.__name__ = _PllBitwiseOperator.__qualname__ = "BitwiseOperator"
+_PllBitwiseOperator.__module__ = "builtins"
+
+#: Each bitwise operator, as `pll:bitwise` does it and as `op=` does it.
+_PLL_BITWISE = {
+    "|": (_pll_operator.or_, _pll_operator.ior),
+    "&": (_pll_operator.and_, _pll_operator.iand),
+    "^": (_pll_operator.xor, _pll_operator.ixor),
+    "<<": (_pll_operator.lshift, _pll_operator.ilshift),
+    ">>": (_pll_operator.rshift, _pll_operator.irshift),
+}
+
+
+def _pll_bitwise(symbol, left, right, written, left_text, right_text):
+    """`left symbol right` at `beginner` and `intermediate` (compile.py):
+    refused between two numbers - `True` and `False` among them - where it
+    works on binary digits; anything else - types (`int | None`), sets,
+    dictionaries, a table's masks - is what Python does."""
+    if isinstance(left, int) and isinstance(right, int):
+        _pll_refuse_bitwise(symbol, written, left_text, right_text, left, right)
+    return _PLL_BITWISE[symbol][0](left, right)
+
+
+def _pll_bitwise_in_place(symbol, target, value, written, target_text, value_text):
+    """`target symbol= value`, as `_pll_bitwise` - in place, so a set given
+    `|=` is the same set after."""
+    if isinstance(target, int) and isinstance(value, int):
+        _pll_refuse_bitwise(symbol, written, target_text, value_text, target, value)
+    return _PLL_BITWISE[symbol][1](target, value)
+
+
+def _pll_bitwise_not(operand, written, operand_text):
+    """`~operand`, as `_pll_bitwise`: refused for a number."""
+    if isinstance(operand, int):
+        _pll_refuse_bitwise("~", written, operand_text, None, operand, None)
+    return ~operand
+
+
+def _pll_refuse_bitwise(symbol, written, left_text, right_text, left, right):
+    if symbol == "~":
+        result = ~left
+    elif symbol in ("<<", ">>"):
+        # A shift's answer can be enormous, and says nothing more.
+        result = None
+    else:
+        result = _PLL_BITWISE[symbol][0](left, right)
+    error = _PllBitwiseOperator("%s is a bitwise operation on %r%s" % (
+        written, left, "" if right is None else " and %r" % (right,)
+    ))
+    _pll_add_facts(error, bitwise={
+        "operator": symbol,
+        "written": written,
+        "left": left_text,
+        "right": right_text,
+        "result": None if result is None else repr(result),
+    })
+    raise error
+
+
+_pll_hidden("bitwise", _pll_bitwise)
+_pll_hidden("bitwise_in_place", _pll_bitwise_in_place)
+_pll_hidden("bitwise_not", _pll_bitwise_not)

@@ -11,6 +11,14 @@
   stops the copy, so VS Code shows it as it does in every other browser.
 
 ### Added
+- **Bitwise operators between numbers stop the program at `beginner` and
+  `intermediate`**, as it runs: `n ^ 2` is not a power, and says so - "`n ^
+  2` gives 7: `^` is not a power in Python, but works on the binary digits
+  of the numbers", with `n ** 2` as the fix. The same for `|` and `&`
+  ("Between two conditions, write `or`"), the shifts and `~`, and their
+  `^=` forms. Only numbers - `True` and `False` among them - are refused:
+  a type union (`int | None`), sets, dictionaries and a table's masks work
+  as they always have. `#level advanced` allows them.
 - **`print` shows a picture, a table or a figure** as a line of its own
   showing one does, at `beginner`, `intermediate` and `advanced` - so a
   function can show one as it runs, where `print` gave `<Image 20x20>` and a

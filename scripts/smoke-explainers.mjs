@@ -1570,6 +1570,48 @@ console.log("[not callable: the name that was called; pictures as images]");
   console.log(`    ${CASES.length} programs and a prompt line`);
 }
 
+console.log("[bitwise operators: refused between numbers at beginner and intermediate]");
+{
+  const runOf = (source, level) => {
+    runs += 1;
+    return JSON.parse(pllCall("_pll_run_file", JSON.stringify([source, "bw.py", `bitwise-${runs}`, level, false])));
+  };
+  // [what, the program, the headline, and the first fix].
+  const CASES = [
+    ["`^`, which is no power", "n = 5\nprint(n ^ 2)\n",
+      "`n ^ 2` gives 7: `^` is not a power in Python, but works on the binary digits of the numbers.", "For a power, write `n ** 2`."],
+    ["and in place", "total = 5\ntotal ^= 2\n",
+      "`total ^= 2` gives 7: `^` is not a power in Python, but works on the binary digits of the numbers.", "For a power, write `total **= 2`."],
+    ["`|` between conditions", "a = True\nb = False\nprint(a | b)\n",
+      '`a | b` gives True: between numbers, `|` is not "or", but works on their binary digits.', "Between two conditions, write `or`."],
+    ["`&`", "print(6 & 3)\n", '`6 & 3` gives 2: between numbers, `&` is not "and", but works on their binary digits.', "Between two conditions, write `and`."],
+    ["a shift", "x = 3\nprint(x << 2)\n", "`x << 2` shifts the binary digits of `x`.", "To multiply by a power of 2, write `x * 2 ** 2`."],
+    ["`~`, in a function", "def f(k):\n    return ~k\n\nprint(f(5))\n",
+      '`~k` gives -6: `~` is not "not", but turns over the binary digits of a number.', 'For "not", write `not k`.'],
+  ];
+  for (const [what, source, headline, fix] of CASES) {
+    const finding = runOf(source, "beginner").error?.finding;
+    expect(finding?.headline === headline && finding?.howToFix[0] === fix, `${what}: ${finding?.headline} ${JSON.stringify(finding?.howToFix)}`);
+  }
+  // What is not bitwise goes on as Python does it: types, sets in place, dictionaries, a mask's own `&`.
+  const fine = runOf(
+    "class Mask:\n    def __and__(self, other):\n        return 'both'\n\n" +
+      "def grow(s: set[int]) -> set[int]:\n    t = s\n    s |= {3}\n    return t\n\n" +
+      "Pair = int | str\nprint(isinstance(3, Pair), grow({1}), {1, 2} & {2}, {1} ^ {2}, {'a': 1} | {'b': 2}, Mask() & Mask())\n",
+    "intermediate",
+  );
+  expect(fine.stdout === "True {1, 3} {2} {1, 2} {'a': 1, 'b': 2} both\n", `not bitwise: ${fine.stdout} ${fine.error?.message ?? ""}`);
+  // An annotation is left as written: kept as text, it is read again later.
+  const future = runOf("from __future__ import annotations\n\ndef f(x: int | None) -> int:\n    return 0 if x is None else x\n\nprint(f(None), f.__annotations__['x'])\n", "beginner");
+  expect(future.stdout === "0 int | None\n", `annotations kept as text: ${future.stdout} ${future.error?.message ?? ""}`);
+  // And between numbers it is allowed at advanced and raw.
+  for (const level of ["advanced", "raw"]) {
+    const allowed = runOf("n = 5\nprint(n ^ 2, ~n, 3 << 2)\n", level);
+    expect(allowed.stdout === "7 -6 12\n", `${level}: ${allowed.stdout} ${allowed.error?.message ?? ""}`);
+  }
+  console.log(`    ${CASES.length} refused; types, sets, dictionaries and a mask's & untouched; advanced and raw allow it`);
+}
+
 console.log("[annotations: the function wording only where there is a function]");
 {
   const annotation = (written) =>

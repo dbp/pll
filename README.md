@@ -106,9 +106,9 @@ blank.
 | Line in your file | What it does |
 | --- | --- |
 | `#level raw` | Nothing is checked. Your program runs exactly as plain Python would, with PLL's built-in libraries (images, tables) and the interactions panel still available. **This is what you get if you leave the line out.** |
-| `#level beginner` | Strictest. PLL warns about reassigning a variable, reusing a name that hides another name (a built-in like `list`, or one of PLL's own like `circle`), the `global` / `nonlocal` keywords, and removing a name with `del` (removing an item, as in `del d[key]`, is fine). If it finds a problem, it **does not run** the file. Type annotations are checked as the program runs. |
-| `#level intermediate` | Same rules about hiding names, `global` / `nonlocal` and `del`, but you **may** reassign variables inside a function. That is useful for introducing for loops, where you need mutable accumulators. Reassigning at the top of the file is still flagged. Annotations are checked. |
-| `#level advanced` | Reassigning, hiding names, `global` / `nonlocal` and `del` are all allowed. Annotations are still checked as the program runs, but by Python's own rules (so `True` counts as `1`). |
+| `#level beginner` | Strictest. PLL warns about reassigning a variable, reusing a name that hides another name (a built-in like `list`, or one of PLL's own like `circle`), the `global` / `nonlocal` keywords, and removing a name with `del` (removing an item, as in `del d[key]`, is fine). If it finds a problem, it **does not run** the file. Type annotations are checked as the program runs, and so are bitwise operators: `^`, `&`, `\|`, `<<`, `>>` and `~` stop the program when used on numbers (`^` is not a power). |
+| `#level intermediate` | Same rules about hiding names, `global` / `nonlocal` and `del`, but you **may** reassign variables inside a function. That is useful for introducing for loops, where you need mutable accumulators. Reassigning at the top of the file is still flagged. Annotations and bitwise operators are checked. |
+| `#level advanced` | Reassigning, hiding names, `global` / `nonlocal`, `del` and bitwise operators are all allowed. Annotations are still checked as the program runs, but by Python's own rules (so `True` counts as `1`). |
 
 At `beginner`, `intermediate` and `advanced` PLL also looks, before the
 file runs, for a name used where it has no value: a misspelling, a

@@ -165,8 +165,11 @@ console.log("[annotations that are not types]");
 
 console.log("[what a contracted function still is]");
 {
-  const same = ran(`import inspect\n${ADD1}print(inspect.signature(add1))\nfs = [add1 for _ in range(2)]\nprint(fs[0] is fs[1], add1.__name__)\n`);
-  expect(same.stdout === "(x: int) -> int\nTrue add1\n", `its signature and name, and one function per reference: ${JSON.stringify(same.stdout)}`);
+  const same = ran(`import inspect\n${ADD1}print(inspect.signature(add1))\nfs = [add1 for _ in range(2)]\nprint(fs[0] is fs[1], add1.__name__, add1.__annotations__)\n`);
+  expect(
+    same.stdout === "(x: int) -> int\nTrue add1 {'x': <class 'int'>, 'return': <class 'int'>}\n",
+    `its signature, name and annotations, and one function per reference: ${JSON.stringify(same.stdout)}`,
+  );
   // Nothing of PLL's is left in a program PLL could not instrument, but it says so.
   const plain = ran(`${ADD1}print(add1(1))\n`, "raw");
   expect(plain.stdout === "2\n" && !/not checked/.test(plain.stderr), `raw: ${plain.stdout} ${plain.stderr}`);

@@ -508,6 +508,86 @@ class _PllContracts(_ast.NodeTransformer):
         return node
 
 
+#: The bitwise operators, by their node, as they are written.
+_PLL_BITWISE_SYMBOLS = {_ast.BitOr: "|", _ast.BitAnd: "&", _ast.BitXor: "^", _ast.LShift: "<<", _ast.RShift: ">>"}
+
+
+class _PllBitwiseChecks(_ast.NodeTransformer):
+    """At `beginner` and `intermediate`, check each bitwise operator as it
+    runs (`pll:bitwise`, typeChecking.py): between two numbers it is
+    refused - `^` is no power - and between types, sets or a table's masks
+    it is what Python does. Annotations are left as they are: under `from
+    __future__ import annotations` Python keeps them as their text, which a
+    call in place of `|` would garble."""
+
+    def __init__(self, source):
+        self.source = source
+
+    def _text(self, node):
+        return _ast.get_source_segment(self.source, node) or _ast.unparse(node)
+
+    def _call(self, name, operands, texts, at):
+        """`name(*operands, *texts)`: the operands as they are, and what is
+        written of them for a message."""
+        call = _ast.Call(
+            func=_ast.Name(id=name, ctx=_ast.Load()),
+            args=[*operands, *(_ast.Constant(value=text) for text in texts)],
+            keywords=[],
+        )
+        _ast.copy_location(call, at)
+        return call
+
+    def visit_BinOp(self, node):
+        self.generic_visit(node)
+        symbol = _PLL_BITWISE_SYMBOLS.get(type(node.op))
+        if symbol is None:
+            return node
+        return self._call(
+            "pll:bitwise",
+            [_ast.Constant(value=symbol), node.left, node.right],
+            [self._text(node), self._text(node.left), self._text(node.right)],
+            node,
+        )
+
+    def visit_UnaryOp(self, node):
+        self.generic_visit(node)
+        if not isinstance(node.op, _ast.Invert):
+            return node
+        return self._call("pll:bitwise_not", [node.operand], [self._text(node), self._text(node.operand)], node)
+
+    def visit_AugAssign(self, node):
+        self.generic_visit(node)
+        symbol = _PLL_BITWISE_SYMBOLS.get(type(node.op))
+        if symbol is None or not isinstance(node.target, _ast.Name):
+            return node
+        value = self._call(
+            "pll:bitwise_in_place",
+            [_ast.Constant(value=symbol), _ast.Name(id=node.target.id, ctx=_ast.Load()), node.value],
+            [self._text(node), node.target.id, self._text(node.value)],
+            node,
+        )
+        assign = _ast.Assign(targets=[_ast.Name(id=node.target.id, ctx=_ast.Store())], value=value)
+        _ast.copy_location(assign, node)
+        return assign
+
+    # Annotations: not checked.
+    def visit_arg(self, node):
+        return node
+
+    def visit_FunctionDef(self, node):
+        returns, node.returns = node.returns, None
+        self.generic_visit(node)
+        node.returns = returns
+        return node
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_AnnAssign(self, node):
+        if node.value is not None:
+            node.value = self.visit(node.value)
+        return node
+
+
 def _pll_is_dataclass_decorator(node):
     """True for `@dataclass`, `@dataclasses.dataclass` and calls to either."""
     if isinstance(node, _ast.Call):
@@ -781,8 +861,9 @@ def _pll_parse_and_instrument(code, filename, level):
 
 def _pll_with_contracts(tree, code, filename, level):
     """`tree`, with its annotations in force as contracts, at every level but
-    `raw` - done after any other rewriting, so that the assertion rewriting
-    of a test explains a call by the name it was written with.
+    `raw`, and its bitwise operators checked at `beginner` and `intermediate`
+    - done after any other rewriting, so that the assertion rewriting of a
+    test explains a call by the name it was written with.
 
     Done on a copy, and validated by compiling it: a program PLL cannot
     instrument still runs, unchecked.
@@ -795,6 +876,8 @@ def _pll_with_contracts(tree, code, filename, level):
             # Before the contracts, so the decorators it looks for are as
             # they were written.
             _PllDataclassChecks().visit(instrumented)
+            if level in _PLL_TEACHING_LEVELS:
+                _PllBitwiseChecks(code).visit(instrumented)
             scopes = _PllContractScopes(filename).build(instrumented)
             _PllContracts(scopes, code, filename).visit(instrumented)
             _ast.fix_missing_locations(instrumented)
