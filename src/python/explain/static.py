@@ -134,6 +134,14 @@ def _pll_word_shadowing_library(f, level):
     name = f["name_token"] or "this name"
     noun = _PLL_LIBRARY_NOUN.get(f.get("library"), "the PLL libraries")
     binding = f.get("binding")
+    if f.get("library") == "level":
+        # `Callable`, which every file at the student levels starts with.
+        given = "PLL gives every file `%s` at `#level %s`" % (name, level)
+        if binding in ("import", "importfrom"):
+            return "`%s` needs no import: %s." % (name, given), ["Delete this import."]
+        return "`%s` is already defined: %s, the type of a function." % (name, given), [
+            "Pick a different name for your definition - a word that describes what yours represents."
+        ]
     if binding in ("import", "importfrom"):
         # The fix is the import's own `as`, not a rename of anything of theirs.
         module = f.get("module") or "module"

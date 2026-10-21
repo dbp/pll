@@ -1372,6 +1372,29 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
     console.log(`    ${CASES.length} functions`);
   }
 
+  console.log("\n[32] `Callable` is given at the student levels, so it needs no import");
+  {
+    const USE = "def apply(f: Callable[[int], int]) -> int:\n    return f(1)\n";
+    for (const level of ["beginner", "intermediate", "advanced"]) {
+      const found = analyze(USE, level, "cal.py");
+      expect(!found.some((f) => f.id === "undefined-name"), `${level}: used without an import: ${JSON.stringify(found.map((f) => f.id))}`);
+    }
+    // Importing it anyway rebinds a name PLL gives, and is said as such.
+    for (const imported of ["from collections.abc import Callable", "from typing import Callable"]) {
+      const [said] = wordStatic(analyze(`${imported}\n${USE}`, "beginner", "cal.py").filter((f) => f.id === "shadowing-library"), "beginner", "cal.py");
+      expect(
+        said?.headline === "`Callable` needs no import: PLL gives every file `Callable` at `#level beginner`." &&
+          JSON.stringify(said.howToFix) === JSON.stringify(["Delete this import."]),
+        `${imported}: ${JSON.stringify(said)}`,
+      );
+    }
+    const [defined] = wordStatic(analyze("Callable = 5\n", "intermediate", "cal.py").filter((f) => f.id === "shadowing-library"), "intermediate", "cal.py");
+    expect(/^`Callable` is already defined: PLL gives every file `Callable` at `#level intermediate`/.test(defined?.headline ?? ""), `defined: ${defined?.headline}`);
+    // `advanced` makes none of the teaching checks, and `raw` gives no `Callable`.
+    expect(analyze(`from collections.abc import Callable\n${USE}`, "advanced", "cal.py").length === 0, "the import is allowed at advanced");
+    console.log("    no import needed; an import, or a definition, of it is said; advanced allows it");
+  }
+
   fn.destroy?.();
 
   console.log(passed() ? "\nALL SMOKE TESTS PASSED" : "\nFAILED");

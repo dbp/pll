@@ -1,16 +1,8 @@
-# A value that does not match its annotation: typeguard's `TypeCheckError`,
-# from the parts Python read its message into (`_pll_type_check_parts`).
-#
-# typeguard's own wording is accurate but assumes vocabulary a first-term
-# student does not have ("is not an instance of", "did not match any
-# element in the union"). Its messages look like:
-#
-#   argument "y" (str) is not an instance of int
-#   the return value (int) is not an instance of str
-#   value assigned to total (str) is not an instance of int
-#   item 2 of argument "nums" (list) is not an instance of int
-#   value of key 'a' of argument "x" (dict) is not an instance of int
-#   argument "x" (str) did not match any element in the union: ...
+# A broken contract (bootstrap/contracts.py), as the student is told it:
+# from the facts the contract raised with (`check`), which say what the
+# annotation is on, what failed and who is to blame - so nothing here reads
+# a message back. The first-order cases read as type errors always have;
+# the higher-order ones say who broke which promise.
 
 #: The module prefix a student did not write: a file - and its tests - run
 #: as `__main__`, so its classes arrive as `__main__.Dog`.
@@ -29,34 +21,53 @@ _PLL_COURSE_NAME_FOR = {"Row": "dict"}
 _PLL_RETURNS_NONE = ("append", "extend", "insert", "remove", "sort", "reverse", "clear", "add", "discard", "update")
 
 
-@_pll_explains("TypeCheckError")
+@_pll_explains("TypeMismatch")
 def _pll_explain_type_check(e):
     check = e.facts.get("check")
-    frames = e.user_frames
-    innermost = frames[-1] if frames else None
-    # An argument is checked on entry to the callee, so the innermost frame
-    # is the `def` line. The mistake is at the call, one frame out.
-    blamed = frames[-2] if check and check.get("kind") == "argument" and len(frames) >= 2 else innermost
-    headline, how_to_fix = _pll_type_check_wording(e, check, innermost)
+    file, line = _pll_contract_place(e, check or {})
+    headline, how_to_fix = _pll_type_check_wording(e, check, line)
     return {
         "id": "type-check",
-        # Not a real Python exception name: "TypeCheckError" means nothing to
-        # a student, and "TypeError" would name a different Python error.
         "errorType": "TypeMismatch",
         "headline": headline,
         "howToFix": how_to_fix,
-        "fileName": blamed["file"] if blamed else (e.run[0] if e.run else None),
-        "lineNumber": blamed["line"] if blamed else e.info["lineNumber"],
+        "fileName": file,
+        "lineNumber": line,
         "column": None,
         "nameToken": check.get("name") if check else None,
     }
+
+
+def _pll_contract_place(e, check):
+    """Where the finding goes: where the party to blame broke the contract.
+
+    - The function's own result: at the `return` that gave it - or, for one
+      that ran off its end, at its `def`.
+    - Code that gave a bad value where it called: there.
+    - Code that handed a function over to be called badly, elsewhere: where
+      it handed it over, which is the reference that made the obligation.
+    """
+    blamed = check.get("blamed") or {}
+    applied = check.get("applied")
+    site = check.get("site")
+    if check.get("role") == "owner" and check.get("kind") == "return":
+        line = check.get("returned_at") or blamed.get("line")
+        if line is not None:
+            return blamed.get("file"), line
+    if applied and applied.get("by_blamed"):
+        return applied["file"], applied["line"]
+    if site and site.get("line") is not None:
+        return site["file"], site["line"]
+    if applied:
+        return applied["file"], applied["line"]
+    return (e.run[0] if e.run else None), e.info["lineNumber"]
 
 
 class _PllCheck:
     """What every kind of explanation is built from: the check, and the
     phrases worked out from it once."""
 
-    def __init__(self, e, check, innermost):
+    def __init__(self, e, check, line):
         check = dict(check or {"kind": "unknown", "name": None, "element": None, "actual": None, "expected": []})
         if check.get("element") is not None:
             check["element"] = _pll_describe_element(check["element"])
@@ -67,11 +78,11 @@ class _PllCheck:
         self.element = check.get("element")
         self.actual = check.get("actual")
         self.expected = check.get("expected") or []
-        # The line the check fired on, which for a return is the `return`
-        # itself - or, when the function ran off its end, is not one.
-        self.line = e.frame_text(innermost)
+        # The line the finding is on: for a result, the `return` itself - or,
+        # when the function ran off its end, its `def`.
+        self.line = _pll_line_text(e, line)
         self.called_by = _pll_library_caller(e.frames)
-        function = innermost["function"] if innermost else None
+        function = check.get("function")
         self.wanted = _pll_describe_types(self.expected)
         self.owner = "`%s`" % function if function else "this function"
         self.named = "`%s`" % self.name if self.name else "a value"
@@ -80,9 +91,21 @@ class _PllCheck:
         self.annotation = _pll_clean_type_name(self.expected[0]) if len(self.expected) == 1 else None
 
 
-def _pll_type_check_wording(e, check, innermost):
-    c = _PllCheck(e, check, innermost)
+def _pll_line_text(e, line):
+    """The text of `line` in the run's file, if that is where it is."""
+    return e._line_of_run(e.run[0], line) if e.run and line else None
+
+
+def _pll_type_check_wording(e, check, line):
+    c = _PllCheck(e, check, line)
+    if c.check.get("higher_order"):
+        said = _pll_tc_higher_order(c)
+        if said is not None:
+            return said
     said = _pll_class_given(c)
+    if said is not None:
+        return said
+    said = _pll_handed_over(c)
     if said is not None:
         return said
     explain = {
@@ -94,9 +117,150 @@ def _pll_type_check_wording(e, check, innermost):
     return explain(c)
 
 
+def _pll_handed_over(c):
+    """A function's own argument contract, broken by a call that code which
+    is not to blame made: `add1` handed to `foo`, which calls it with a
+    string, is the fault of the line that handed `add1` over - which is
+    where the finding is, and what to change."""
+    applied, site = c.check.get("applied"), c.check.get("site")
+    if c.kind != "argument" or c.element or not applied or applied.get("by_blamed") or not site:
+        return None
+    caller = "`%s`" % applied["function"] if applied.get("function") else "the top level"
+    got = _pll_describe_type(c.actual) if c.actual else "something else"
+    how_to_fix = [
+        "On line %s, hand over a function that takes %s, which is what %s calls it with." % (site["line"], got, caller),
+    ]
+    if c.annotation and c.actual:
+        how_to_fix.append(
+            "Or, if %s should take %s, change its annotation for %s from `%s` to `%s`."
+            % (c.owner, got, c.named, c.annotation, _pll_clean_type_name(c.actual))
+        )
+    return "%s expects %s to be %s, but it was handed over on line %s and then called by %s with %s." % (
+        c.owner, c.named, c.wanted, site["line"], caller, got
+    ), how_to_fix
+
+
+def _pll_tc_higher_order(c):
+    """A function's contract, broken through a function it takes or gives
+    back - which of the four depends on the path, and decides who is blamed.
+
+    - `foo(f: Callable[[str], str])` calls `f(1)`: `foo` broke its promise.
+    - The function given as `f` gives back a number: the caller who gave it.
+    - The function `adder` returns is called with a string: the caller.
+    - The function `adder` returns gives back a string: `adder`.
+    """
+    path = c.check.get("path") or []
+    calls = [step for step in path if step["kind"] in ("argument", "result")]
+    if len(calls) != 2:
+        return None
+    outer, inner = calls
+    function = c.check.get("function")
+    if function is None:
+        return None
+    given = c.check.get("value")
+    if c.element:
+        given = "%s whose %s is %s" % (_pll_describe_type(c.actual), c.element, c.e.facts.get("element_value") or given)
+    else:
+        given = "`%s`, %s" % (given, _pll_describe_type(c.actual))
+    wanted = c.wanted
+    annotation = outer.get("annotation")
+    if outer["kind"] == "argument":
+        parameter = "`%s`" % outer["name"]
+        if inner["kind"] == "argument":
+            return "`%s` calls %s with %s, but its annotation says %s takes %s." % (
+                function, parameter, given, parameter, wanted
+            ), [
+                "Call %s with %s, as `%s: %s` promises." % (parameter, wanted, outer["name"], annotation),
+                "Or, if %s should take something else, change that annotation." % parameter,
+            ]
+        return "The function given to `%s` as %s should give back %s, but it gave back %s." % (
+            function, parameter, wanted, given
+        ), [
+            "`%s: %s` says what the function given as %s must return." % (outer["name"], annotation, parameter),
+            "Give `%s` a function that returns %s." % (function, wanted),
+        ]
+    if inner["kind"] == "argument":
+        return "The function `%s` returns takes %s, but it was given %s." % (function, wanted, given), [
+            "Call it with %s, as `%s`'s return annotation, `%s`, says." % (wanted, function, annotation),
+        ]
+    return "`%s` says the function it returns gives back %s, but it gave back %s." % (function, wanted, given), [
+        "`%s`'s return annotation, `%s`, says what that function gives back." % (function, annotation),
+        "Change the function `%s` returns, or the annotation." % function,
+    ]
+
+
+@_pll_explains("NotAType")
+def _pll_explain_not_a_type(e):
+    """An annotation that is not a type (bootstrap/contracts.py)."""
+    facts = e.facts.get("not_a_type") or {}
+    written = facts.get("annotation") or "?"
+    function, name, kind = facts.get("function"), facts.get("name"), facts.get("kind")
+    if kind == "return" and function:
+        subject = "`%s`'s return annotation" % function
+    elif kind == "argument" and function:
+        subject = "The annotation of `%s` in `%s`" % (name, function)
+    elif kind == "annotation" and function:
+        subject = "An annotation of `%s`" % function
+    elif name:
+        subject = "The annotation of `%s`" % name
+    else:
+        subject = "This annotation"
+    reason = facts.get("reason")
+    value, value_type = facts.get("value"), facts.get("value_type")
+    literal = value is not None and value == written
+    how_to_fix = ["An annotation names a type, such as `int`, `str`, `list[float]` or one of your classes."]
+    if reason == "undefined":
+        missing = facts.get("missing") or written
+        headline = (
+            "%s names `%s`, which is not defined." % (subject, missing)
+            if written == missing
+            else "%s, `%s`, names `%s`, which is not defined." % (subject, written, missing)
+        )
+        how_to_fix = [
+            "A name in quotes in an annotation is the name of a type, looked up when it is needed.",
+            "Check the spelling, or define `%s` in the file." % missing,
+        ]
+    elif reason == "string":
+        headline = "%s, `%s`, holds the string %s, not a type." % (subject, written, value)
+        how_to_fix.append(
+            "To name a class defined further down the file, put its name in quotes in the annotation itself."
+        )
+    elif reason == "ambiguous":
+        headline = "%s, `%s`, allows more than one kind of function, and the one given fits several." % (
+            subject, written
+        )
+        how_to_fix = ["Use one function type in the annotation, so the function given has one contract to meet."]
+    elif reason in ("number", "function", "module", "value") and value is not None:
+        what = {"number": "a number", "function": "a function", "module": "a module"}.get(
+            reason, _pll_with_article(_pll_describe_type(value_type)) if value_type else "a value"
+        )
+        # A function or a module is named by the annotation already; a
+        # value it holds is worth saying.
+        headline = (
+            "%s, `%s`, is %s, not a type." % (subject, written, what)
+            if literal or reason in ("function", "module")
+            else "%s, `%s`, is %s (%s), not a type." % (subject, written, what, value)
+        )
+    else:
+        headline = "%s, `%s`, is not a type." % (subject, written)
+    file, line = facts.get("file"), facts.get("line")
+    if reason != "undefined" or line is None:
+        file, line = e.file, e.line
+    return {
+        "id": "not-a-type",
+        "errorType": "NotAType",
+        "headline": headline,
+        "howToFix": how_to_fix,
+        "fileName": file,
+        "lineNumber": line,
+        "column": None,
+        "nameToken": name,
+    }
+
+
 def _pll_clean_type_name(type_name):
-    # Anywhere, not just at the start: typeguard reports a class object as
-    # `class __main__.ITunesSong`, so the prefix sits in the middle.
+    # Anywhere, not just at the start: a class can arrive as `class
+    # __main__.ITunesSong`, with the prefix in the middle.
     cleaned = type_name.replace(_PLL_MAIN_PREFIX, "")
     return _PLL_COURSE_NAME_FOR.get(cleaned, cleaned)
 
@@ -177,7 +341,8 @@ def _pll_members_phrase(element):
 
 
 def _pll_describe_element(element):
-    """typeguard's words for a part of a collection, as something to point at."""
+    """A contract's words for a part of a collection ("item 2", "value of key
+    'a'"), as something to point at."""
     if element.startswith("value of key "):
         return "the value for key " + _pll_plain_key(element[len("value of key ") :])
     if element.startswith("key "):
@@ -188,7 +353,7 @@ def _pll_describe_element(element):
 
 
 def _pll_plain_key(key):
-    """A key as typeguard quotes it - Python's `repr`, so `'a'` - in the
+    """A key as a contract quotes it - Python's `repr`, so `'a'` - in the
     double quotes PLL writes a string in, so that the key and the value
     beside it read alike. A key that is not a plain string, or whose quotes
     Python chose because of what is in it, is left as Python wrote it."""
@@ -217,8 +382,60 @@ def _pll_class_given(c):
     ]
 
 
+def _pll_data_path(c):
+    """A part of a dataclass value, as code that reaches it: `t.right.value`,
+    `songs[0].year` - None unless the path into the value goes through a
+    field of one."""
+    path = c.check.get("path") or []
+    steps = path[1:]
+    if not steps or not any(step["kind"] == "field" for step in steps) or c.name is None:
+        return None
+    reached = c.name
+    for step in steps:
+        if step["kind"] == "field":
+            reached += "." + step["name"]
+        elif step["kind"] == "item":
+            reached += "[%d]" % step["index"]
+        elif step["kind"] == "value":
+            reached += "[%s]" % step["key"]
+        else:
+            return None
+    return reached
+
+
+def _pll_tc_arity(c):
+    """A function given where the annotation wants one that takes so many
+    arguments, and it takes a different number."""
+    arity = c.check.get("arity")
+    if not arity or c.kind not in ("argument", "variable"):
+        return None
+    wanted = arity["wanted"]
+    parameters = arity["parameters"]
+    given = "it takes %s" % (
+        "no arguments" if not parameters else "%s (%s)" % (_pll_plural(len(parameters), "argument"), _pll_list_names(parameters))
+    )
+    annotation = c.check.get("annotation") or c.annotation
+    return "%s expects %s to be a function that takes %s (`%s`), but %s." % (
+        c.owner if c.kind == "argument" else "The annotation", c.named, _pll_plural(wanted, "argument"), annotation, given
+    ), [
+        "Give a function that takes %s, as `%s` says." % (_pll_plural(wanted, "argument"), annotation),
+        "Or, if %s should take a different number, change the annotation." % c.named,
+    ]
+
+
 def _pll_tc_argument(c):
     """An argument that does not match its parameter's annotation."""
+    arity = _pll_tc_arity(c)
+    if arity is not None:
+        return arity
+    reached = _pll_data_path(c)
+    if reached is not None:
+        value = c.e.facts.get("element_value")
+        return "%s expects %s to be `%s`, but `%s` is %s." % (
+            c.owner, c.named, c.check.get("annotation"), reached, value or "not"
+        ), [
+            "Look at `%s` in the value you passed for %s: all of it has to match the annotation." % (reached, c.named),
+        ]
     if c.element:
         # What the element *is*, when Python could read it - "item 0 is
         # not" left the student to go and find out.
@@ -293,7 +510,10 @@ def _pll_tc_field(c):
         got = _pll_describe_type(c.actual)
     else:
         got = "something else"
-    how_to_fix = ["Check the values given to `%s(...)`, in the order its fields are written." % owner]
+    if c.check.get("assigned"):
+        how_to_fix = ["Check the value assigned to the `%s` field on this line." % c.name]
+    else:
+        how_to_fix = ["Check the values given to `%s(...)`, in the order its fields are written." % owner]
     if c.convert is not None:
         how_to_fix.append("If it should be %s, convert it with `%s(...)`." % (c.wanted, c.convert))
     if c.annotation is not None and c.actual is not None:
@@ -471,8 +691,9 @@ def _pll_tc_variable(c):
 
 
 def _pll_tc_unfamiliar(c):
-    """Unfamiliar wording: still say what kind of problem this is, and pass
-    typeguard's own sentence through rather than inventing detail."""
+    """A contract on something none of the rules above knows: still say what
+    kind of problem this is, and pass the contract's own sentence through
+    rather than inventing detail."""
     return "A value does not match the type annotation written for it.", [
         _pll_src_re.split(r"\r?\n", c.e.message)[0].strip(),
         "Either pass a value of the annotated type, or change the annotation.",

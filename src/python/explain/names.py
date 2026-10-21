@@ -15,7 +15,7 @@ _PLL_IMPORT_FOR = {
     "pytest": "import pytest",
     "statistics": "import statistics",
     "random": "import random",
-    "Callable": "from typing import Callable",
+    "Callable": "from collections.abc import Callable",
     "Optional": "from typing import Optional",
     "Any": "from typing import Any",
     "datetime": "import datetime",

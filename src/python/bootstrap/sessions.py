@@ -263,5 +263,6 @@ def _pll_reset_session(session_key, level):
     g = _pll_get_session(session_key)
     g.clear()
     g.update(_pll_initial_globals)
+    g.update(_pll_level_names(level))
     g["__pll_level__"] = level
     return g

@@ -34,7 +34,6 @@ def _pll_has_tests(code):
 
 
 _PLL_TRACE_SKIP = (
-    _PLL_VENDOR_DIR,
     "_pytest",
     "pluggy",
     "site-packages",

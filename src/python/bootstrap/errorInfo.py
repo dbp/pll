@@ -10,80 +10,19 @@ import re as _pll_src_re
 import inspect as _pll_inspect
 import weakref as _pll_weakref
 
-#: The checkers PLL gives typeguard for numbers, in place of its own.
-_PLL_CHECKERS = ("_pll_check_int", "_pll_check_float")
+#: The functions of PLL's dataclass checks, whose frames are the checks'
+#: own, like a contract's (compile.py).
+_PLL_FIELD_CHECKS = ("__init__", "_pll_checked_setattr", "_pll_check_field")
 
 
-def _pll_is_vendor_frame(filename, name=None):
-    """Whether a frame is the type checker's: vendored typeguard, or one of
-    the checkers PLL gives it, which do typeguard's job."""
+def _pll_is_checks_frame(filename, name=None):
+    """Whether a frame is the checks' own rather than code that was checked:
+    a contract's (bootstrap/contracts.py), or a dataclass field check's."""
     if not isinstance(filename, str):
         return False
-    return filename.startswith(_PLL_VENDOR_DIR) or (
-        filename == "<pll:bootstrap/typeChecking>" and name in _PLL_CHECKERS
+    return filename == "<pll:bootstrap/contracts>" or (
+        filename == "<pll:bootstrap/compile>" and name in _PLL_FIELD_CHECKS
     )
-
-
-#: How typeguard words what failed: `<subject> (<actual type>) <predicate>`.
-_PLL_TC_PREDICATES = (
-    (_pll_src_re.compile(r"^(.*) is not an instance of (.+)$"), lambda m: [m.group(2)]),
-    (_pll_src_re.compile(r"^(.*) is neither float or int$"), lambda m: ["float"]),
-    (_pll_src_re.compile(r"^(.*) is not None$"), lambda m: ["None"]),
-    (_pll_src_re.compile(r"^(.*) is not a ([A-Za-z_][A-Za-z0-9_]*)$"), lambda m: [m.group(2)]),
-)
-_PLL_TC_UNION = " did not match any element in the union:"
-_PLL_TC_UNION_MEMBER_RE = _pll_src_re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_.\[\], ]*):")
-_PLL_TC_ACTUAL_RE = _pll_src_re.compile(r"^(.*) \(([^()]*)\)$")
-#: Something inside a collection: `item 2 of argument "nums"`.
-_PLL_TC_ELEMENT_RE = _pll_src_re.compile(r"^(item \d+|key .+|value of key .+|\[.+\]) of (.+)$")
-_PLL_TC_ARGUMENT_RE = _pll_src_re.compile(r'^argument "(.+)"$')
-_PLL_TC_ASSIGNED_RE = _pll_src_re.compile(r"^value assigned to (.+)$")
-
-
-def _pll_type_check_parts(message):
-    """typeguard's message, read once into its parts, for the host.
-
-    `kind` is what the annotation is on - "argument", "return", "variable",
-    or "unknown" when the wording is unfamiliar - `name` its name, `element`
-    typeguard's words for the part of a collection that failed ("item 2",
-    "value of key 'a'"), `actual` the type the value had, and `expected`
-    the types the annotation accepts.
-    """
-    lines = message.split("\n")
-    first = lines[0].strip()
-    parts = {"kind": "unknown", "name": None, "element": None, "actual": None, "expected": []}
-    subject = None
-    at = first.find(_PLL_TC_UNION)
-    if at >= 0:
-        subject = first[:at]
-        for raw in lines[1:]:
-            member = _PLL_TC_UNION_MEMBER_RE.match(raw)
-            if member:
-                parts["expected"].append(member.group(1).strip())
-    else:
-        for pattern, pick in _PLL_TC_PREDICATES:
-            found = pattern.match(first)
-            if found:
-                subject = found.group(1)
-                parts["expected"] = pick(found)
-                break
-    if subject is None:
-        return parts
-    actual = _PLL_TC_ACTUAL_RE.match(subject)
-    if actual:
-        subject, parts["actual"] = actual.group(1), _pll_course_type_name(actual.group(2))
-    element = _PLL_TC_ELEMENT_RE.match(subject)
-    if element:
-        parts["element"], subject = element.group(1), element.group(2)
-    argument = _PLL_TC_ARGUMENT_RE.match(subject)
-    assigned = _PLL_TC_ASSIGNED_RE.match(subject)
-    if subject == "the return value":
-        parts["kind"] = "return"
-    elif argument:
-        parts["kind"], parts["name"] = "argument", argument.group(1)
-    elif assigned:
-        parts["kind"], parts["name"] = "variable", assigned.group(1)
-    return parts
 
 
 def _pll_course_type_name(name):
@@ -248,84 +187,6 @@ def _pll_enrich_not_callable(exc, run):
     )
 
 
-def _pll_return_annotation(frame, run):
-    """The return annotation of the function `frame` runs, as written."""
-    code = frame.f_code
-    try:
-        source = _pll_source_of(code, run)
-        with _pll_without_syntax_warnings():
-            tree = _ast.parse(source)
-    except (SyntaxError, ValueError):
-        return None
-    for node in _ast.walk(tree):
-        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == code.co_name:
-            starts = [node.lineno] + [d.lineno for d in node.decorator_list]
-            if code.co_firstlineno in starts and node.returns is not None:
-                return _ast.get_source_segment(source, node.returns)
-    return None
-
-
-def _pll_enrich_type_check(exc, run=None):
-    """Record what failed its annotation, as parts (`check`) - and, for an
-    element of an argument, what the element actually is.
-
-    typeguard names the element that failed - "item 0 of argument "lst"
-    (list) is not an instance of float" - but not what it is, which is the
-    one thing a student needs to see: here, the string "1". The value is
-    only reachable from the frame the check fired in.
-
-    Only frames from the student's own files are searched: typeguard's own
-    functions have locals with ordinary names like `value`, and finding one
-    of those first would describe the wrong thing.
-    """
-    if type(exc).__name__ != "TypeCheckError" or not exc.args:
-        return
-    # A check PLL raised itself has its parts already.
-    check = (getattr(exc, "_pll_facts", None) or {}).get("check")
-    if check is None:
-        check = _pll_type_check_parts(str(exc))
-        # The level of the code checked, which may not be the run's: an
-        # argument is checked in the function it is passed to.
-        frames = _pll_student_frames(exc)
-        check["level"] = frames[-1][0].f_globals.get("__pll_level__") if frames else None
-        if check["kind"] == "return" and frames:
-            check["annotation"] = _pll_return_annotation(frames[-1][0], run)
-        _pll_add_facts(exc, check=check)
-    element, name = check.get("element"), check.get("name")
-    if check["kind"] not in ("argument", "return") or element is None:
-        return
-    item = _pll_src_re.match(r"^item (\d+)$", element)
-    keyed = _pll_src_re.match(r"^value of key (.+)$", element)
-    if item is None and keyed is None:
-        return
-    if check["kind"] == "return":
-        # The value returned is a local of typeguard's own checker.
-        tb = exc.__traceback__
-        container = None
-        while tb is not None:
-            if tb.tb_frame.f_code.co_name == "check_return_type_internal":
-                container = tb.tb_frame.f_locals.get("retval")
-            tb = tb.tb_next
-        if container is None:
-            return
-    else:
-        for frame, _line in reversed(_pll_student_frames(exc)):
-            if name in frame.f_locals:
-                container = frame.f_locals[name]
-                break
-        else:
-            return
-    try:
-        value = container[int(item.group(1))] if item else container[_ast.literal_eval(keyed.group(1))]
-    except Exception:
-        return
-    _pll_add_facts(
-        exc,
-        element_value=_pll_describe(value),
-        element_type=_pll_course_type_name(type(value).__name__),
-    )
-
-
 def _pll_innermost_tb(tb, count):
     """`tb` from its innermost `count` frames on, and how many it skips.
 
@@ -341,9 +202,9 @@ def _pll_innermost_tb(tb, count):
     return nodes[-count], len(nodes) - count
 
 
-#: Files that are not the student's: the vendored type checker, the
-#: standard library, installed packages, and pytest.
-_PLL_NOT_STUDENT = (_PLL_VENDOR_DIR, "site-packages", "/lib/python", "_pytest", "pluggy")
+#: Files that are not the student's: the standard library, installed
+#: packages, and pytest.
+_PLL_NOT_STUDENT = ("site-packages", "/lib/python", "_pytest", "pluggy")
 
 
 def _pll_failed_instruction(tb):
@@ -511,19 +372,18 @@ def _pll_error_info(exc, run=None, level=None):
       its annotation, a swapped field, the name a value that is not a
       function was called by - and from the code (`_pll_code_facts`).
     """
-    _pll_enrich_type_check(exc, run)
     _pll_enrich_index_error(exc, run)
     _pll_enrich_not_callable(exc, run)
     _pll_enrich_module_not_found(exc)
     # The same frames twice over: summaries for their lines, and the live
     # ones for the code they run.
-    # Read from far enough in that the vendored frames left out still leave
+    # Read from far enough in that the checks' frames left out still leave
     # `_PLL_MAX_FRAMES` of the rest.
     tb, _skipped = _pll_innermost_tb(exc.__traceback__, _PLL_MAX_FRAMES * 3)
     entries = [
         (s, live.f_code)
         for s, (live, _line) in zip(_tb_mod.extract_tb(tb), _tb_mod.walk_tb(tb))
-        if not _pll_is_vendor_frame(s.filename, s.name)
+        if not _pll_is_checks_frame(s.filename, s.name)
     ][-_PLL_MAX_FRAMES:]
     frames = []
     for s, code in entries:

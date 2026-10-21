@@ -217,6 +217,7 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
     # exploration since then.
     _pll_protect_import_path()
     user_globals = _pll_reset_session(session_key, level)
+    _pll_set_recursion_limit(level)
     # Where the file is beside the files it was given, so
     # `os.path.dirname(__file__)` finds them.
     user_globals["__file__"] = _PLL_WORK_DIR + "/" + filename
@@ -225,7 +226,8 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
     _pll_reset_notes()
     del _pll_compile_warnings[:]
     try:
-        tree = _pll_parse_and_instrument(code, filename, level)
+        with _pll_recording_compile_warnings():
+            tree = _ast.parse(code, filename=filename, mode="exec")
         # Where each test is, read before anything is added to the tree.
         tests_at = _pll_test_locations(tree) if run_tests else None
         # The levels students write show a top-level expression's value;
@@ -235,6 +237,7 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
         _ast.fix_missing_locations(tree)
         if run_tests:
             _pll_rewrite_asserts(tree, code, filename)
+        tree = _pll_with_contracts(tree, code, filename, level)
         with _pll_recording_compile_warnings():
             compiled = compile(tree, filename, "exec")
     except SyntaxError as e:
@@ -286,7 +289,11 @@ def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
     _pll_displays.clear()
     _pll_protect_import_path()
     user_globals = _pll_get_session(session_key)
+    if "__pll_level__" not in user_globals:
+        # No file has run in this session: the names a run at `level` starts with.
+        user_globals.update(_pll_level_names(level))
     user_globals["__pll_level__"] = level
+    _pll_set_recursion_limit(level)
     main = _pll_session_module(session_key)
     filename = "<repl>"
     del _pll_compile_warnings[:]

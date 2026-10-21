@@ -1031,19 +1031,21 @@ def _pll_own_nodes(function):
 def _pll_session_bound_names(session_key):
     """User-defined names already bound in a session (for REPL checks).
 
-    Baseline names from `_pll_initial_globals` (image primitives, etc.) are
-    skipped unless the user rebound them, so prompt analysis matches file
-    analysis for the same snippet.
+    Baseline names from `_pll_initial_globals` (image primitives, etc.) and
+    the session's level (`Callable`) are skipped unless the user rebound
+    them, so prompt analysis matches file analysis for the same snippet.
     """
     module = _pll_sessions.get(session_key)
     if module is None:
         return []
     g = module.__dict__
+    given = dict(_pll_initial_globals)
+    given.update(_pll_level_names(g.get("__pll_level__")))
     names = []
     for n in g:
         if n.startswith("_") or n in ("__builtins__", "__name__", "__doc__"):
             continue
-        if n in _pll_initial_globals and g[n] is _pll_initial_globals[n]:
+        if n in given and g[n] is given[n]:
             continue
         names.append(n)
     return names
@@ -1182,6 +1184,7 @@ def _pll_teaching_findings(tree, code, level, session_key):
     builder = _pll_built_scopes(tree, session_key)
     builtins_set = set(dir(_builtins_mod)) - _PLL_BUILTINS_MODULE_META
     library_names = _pll_predefined_library_names()
+    library_names.update((name, "level") for name in _pll_level_names(level))
 
     for scope in builder.scopes:
         # Names visible from any enclosing scope, paired with the *nearest*

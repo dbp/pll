@@ -395,6 +395,14 @@ async function main() {
     expect(!/test_main/.test(card), `the check is __main__: ${card}`);
     expect(!/checking hi/.test(rejected.stdout + card), `and what it printed is dropped: ${rejected.stdout}${card}`);
 
+    // At a student level, the names a run there has: `Callable` among them.
+    const typed = await run([write(
+      "students/typed.py", "#level beginner", `#examplar ${base}/shouts.json`, "",
+      "def twice(f: Callable[[str], str], s: str) -> str:", "    return f(f(s))", "",
+      "def test_twice():", '    assert twice(shout, "hi") == "HI!!"',
+    )]);
+    expect(/shout\n  Against correct implementations: your test passes\./.test(typed.stderr), `\`Callable\` is there: ${typed.stderr}`);
+
     // A buggy implementation that never finishes stops the check.
     await bundle("loops", SHOUT, { "shout/1": ['def shout(s):', '    while True:', '        pass'] });
     const started = Date.now();

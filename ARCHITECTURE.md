@@ -23,7 +23,8 @@ src/
 ├── python/                        Python that runs inside Pyodide, all of it in one
 │   │                              namespace, loaded in this order (`pyodide/install.ts`)
 │   ├── bootstrap/
-│   │   ├── typeChecking.py        the level's checks; typeguard set up
+│   │   ├── typeChecking.py        the level's checks; the names instrumentation calls
+│   │   ├── contracts.py           annotations as higher-order contracts, and blame
 │   │   ├── errorInfo.py           an exception described, and explained (`error`)
 │   │   ├── codeFacts.py           what the code says about it: definitions,
 │   │   │                          assignments, a function's shape
@@ -56,8 +57,7 @@ src/
 │   │                              time, live output, stdin
 │   ├── runtime.ts                 the host side (`WorkerConnection`): starting it,
 │   │                              replies, live output, stdin, Stop, Python lost
-│   ├── install.ts                 putting PLL into Pyodide: the Python above, the
-│   │                              vendored wheels
+│   ├── install.ts                 putting PLL into Pyodide: the Python above
 │   ├── sharedMemory.ts            the stdin and Stop SharedArrayBuffers
 │   ├── workspace.ts               the files beside the program, in MEMFS
 │   └── fileNames.ts               the `<pll:...>` names, apart so the host bundle does
@@ -96,7 +96,6 @@ src/
 │                                  (`desktopPython`, shared with the CLI), syncHttp.ts
 └── web/                           extension.ts, pyodideWorker.ts, pyodideRuntime.ts
 
-vendor/python/                     typeguard and typing_extensions wheels, inlined by esbuild
 media/interactionsView/            the panel's page: main.js, style.css
 ```
 
@@ -487,9 +486,9 @@ is:
   which library it is. A frame of theirs carries its line, read from its
   own file, and its function's parameters;
 - facts learned from the live frames: the name a `NameError` is about, a
-  sequence's real length, the element that failed its annotation, a
-  swapped dataclass field, typeguard's message read into its parts
-  (`check`). They travel beside the message, never in it;
+  sequence's real length, a swapped dataclass field, and everything a
+  broken contract knows about itself - what it was on, who is blamed and
+  where (`check`). They travel beside the message, never in it;
 - facts about the code, from `_pll_code_facts`: what the names in the
   message and on the failing line are (`definitions` - a function's
   parameters, a class's fields, a union's members, found from the live
@@ -527,83 +526,102 @@ Annotations are checked while the program runs at every level except
 `#level raw`, which exists precisely so a file can opt out. There is
 deliberately **no setting** for this: the level is the only input, so
 nothing can contradict it. Whether code is instrumented is decided as it
-is compiled, from its own file's level (`_pll_checks_annotations`). The
-work is done by
-[typeguard](https://typeguard.readthedocs.io), which is **not** in
-Pyodide's lockfile, so `vendor/python/` holds its wheel plus
-`typing_extensions` (its only dependency). esbuild's `base64` loader
-inlines both into the bundle; the worker writes them into MEMFS under
-`/pll_vendor` and appends them to `sys.path`, where zipimport reads them
-in place — a wheel is a zip with the package at its root, so nothing is
-unpacked and no network or `micropip` step is involved.
-`typing_extensions` is pinned to the version in Pyodide's own lockfile,
-and the paths are *appended*, so a program that later pulls in Pyodide's
-copy (pandas depends on it) gets the same code either way.
+is compiled, from its own file's level (`_pll_checks_annotations`).
 
-Checking happens by AST instrumentation, not a decorator: typeguard's
-`TypeguardTransformer` rewrites the tree before `compile`, alongside PLL's
-existing transformers. So the check runs at the point of the violation — a
-bad argument raises on entry to the callee, a bad return raises at that
-`return`. Unannotated functions are not touched at all.
+The checks are higher-order contracts (`bootstrap/contracts.py`), with the
+semantics of Findler and Felleisen's λCON ("Contracts for Higher-Order
+Functions", ICFP 2002) and Racket's first-order checks on functions;
+`docs/contracts.md` has the design and the decisions in it. In short:
 
-At `#level beginner` and `#level intermediate`, a `bool` is rejected where `int` or
-`float` is annotated. Python makes `bool` a subclass of `int`, and both
-mypy and typeguard follow it, so `count: int = True` is normally accepted;
-at the teaching levels that is a hole worth closing, since a student who
-annotates `int` and passes `True` has almost always made a mistake. It is
-implemented as a `checker_lookup_functions` entry (typeguard's public hook)
-that replaces the `int` and `float` checkers. Each check reads the level
-from the namespace of the code being checked (typeguard's `memo.globals`),
-where a run records it as `__pll_level__` - so code is checked at its own
-file's level whenever it runs, a reactor's handler included, and `#level
-advanced` keeps Python's own rule. The replacements raise typeguard's exact
-wording, and their frames are dropped like typeguard's own, so its
-explanation needs no special case; it only adds a note saying this is
-PLL's rule and not Python's.
+- An annotated `def` has the contract its annotations make. Every
+  reference to it is an **obligation** between two parties: the function
+  (positive) and the definition the reference is in (negative) - another
+  function, a test, or `main`, the file's top level or a prompt line. A
+  reference inside its own body is one too, so a recursive call is checked.
+- A **flat** contract (`int`, `list[str]`, `Dog`) is checked when its value
+  crosses: an argument as it is passed, a result as it is returned. A
+  **function** contract (`Callable[[str], str]`) is checked first-order as
+  the function crosses - callable, taking that many arguments - and in
+  full at each call: the argument with the parties swapped, the result as
+  they are. A failure blames the party that, by those rules, gave the value.
+- So `foo(f: Callable[[str], str])` calling `f(1)` blames `foo`, at that
+  call; given `add1(x: int)` and calling `f("a")`, it blames the line that
+  handed `add1` to `foo`.
 
-Two adjustments to typeguard's defaults:
+How it is put into a program (`compile.py`, last of the AST passes, after
+pytest's assertion rewriting so a test's failure names a call as it was
+written):
 
-- `collection_check_strategy` is `ALL_ITEMS`. The default checks only the
-  first item, so `[1, 2, "three"]` silently satisfies `list[int]`, which
-  is indefensible when the annotation says otherwise.
-- typeguard does not instrument annotated assignments outside functions,
-  so `_PllTopLevelAnnAssign` wraps module-level `x: int = ...` in
-  typeguard's own `check_variable_assignment`, keeping the wording
-  identical to the in-function case.
+- `pll:contract_def`, the innermost decorator of each annotated `def`,
+  records the annotations, refuses one that is not a type (`-> 12345`, a
+  variable holding a string) while the `def` runs, and binds the name to the
+  function's **boundary**: a wrapper that makes the obligation with
+  whatever code called it. That is what a method gets, being reached
+  through its object, and what a file at `#level raw` gets when it calls
+  into one that checks - as Racket's module boundary does with whoever
+  imports what it provides.
+- A reference the scope analysis (`_PllContractScopes`, Python's own rules)
+  finds may reach a contracted function - one the file defines, or imports
+  from another of the student's files - becomes `pll:ref(f, party, line,
+  column)`: the obligation made there, on the function itself, so its
+  boundary does not check the call again. One wrapper per reference site.
+- Each `return` in a contracted function notes its line (`pll:returning`),
+  which a result's check reports; a function that ran off its end is
+  reported at its `def`.
+- An annotated variable - and an annotated parameter, for what the body
+  assigns it - is checked each time it is given a value (`pll:assigned`).
+- A `@dataclass` checks its fields once its `__init__` has run, and each
+  one assigned afterwards (`_pll_check_dataclass_fields`).
 
-Instrumentation is attempted on a second parse and validated by compiling
-it, so anything typeguard cannot handle falls back to the plain tree. If
-the wheels fail to load, `_pll_enable_type_checking` returns False and
-instrumentation becomes a no-op: the program still runs, just unchecked.
-That degradation is deliberate — this must never be the reason a
-student's code will not run.
+What a contract is made of, from the annotation (`_pll_compile`): a class
+is `isinstance`, with PEP 484's numeric tower; `A | B` is Racket's `or/c`;
+`list[T]`, `dict[K, V]`, `tuple[...]` check every item as the container
+crosses; a generic dataclass with its type filled in (`BinTree[float]`) is
+checked field by field, to the leaves; a type parameter (`[A, B]`, `T`) is
+`any`; a name in quotes is looked up when first needed. Lists and
+dataclasses are shared, so a function among their items is checked
+first-order only, and a change made to one later is not checked.
+
+At `#level beginner` and `#level intermediate`, a `bool` is rejected where
+`int` or `float` is annotated. Python makes `bool` a subclass of `int`, so
+`count: int = True` is normally accepted; at the teaching levels that is a
+hole worth closing, since a student who annotates `int` and passes `True`
+has almost always made a mistake. Each contract takes the level of the
+file its annotation is in, so code is checked at its own file's level
+whenever it runs, a reactor's handler included, and `#level advanced` keeps
+Python's own rule.
+
+A call of a contracted function goes through its wrapper, a second frame,
+so a run at a checked level doubles the recursion limit
+(`_pll_set_recursion_limit`) to leave recursion as deep as before.
+
+Instrumentation is done on a copy and validated by compiling it, so a
+program PLL cannot instrument still runs - unchecked, with a warning that
+says so: a student who annotated the file should know nothing is checking
+it.
 
 ### Error messages
 
-typeguard's wording is accurate but not teachable ("is not an instance
-of", "did not match any element in the union"), so `TypeCheckError` is
-explained like any other error (`explain/typeCheck.py`), as a finding
-labelled `TypeMismatch`:
+A broken contract raises `TypeMismatch` with its facts (`check`): what the
+annotation is on, the path from the function's contract to the part that
+failed, the value, the party blamed and its role, where the obligation was
+made and where the call was. Nothing reads its message back.
+`explain/typeCheck.py` words it:
 
-| typeguard | PLL |
+| What broke | PLL |
 | --- | --- |
-| `argument "y" (str) is not an instance of int` | `add` expects `y` to be a whole number (`int`), but got a string (`str`). |
-| `the return value (None) is not an instance of str` | `grade` should return a string (`str`), but it finished without returning a value. |
-| `item 2 of argument "nums" (list) is not an instance of int` | `total` expects every item in `nums` to be a whole number (`int`), but item 2 is not. |
+| an argument | `add` expects `y` to be a whole number (`int`), but got a string (`str`). |
+| a result that ran off the end | `grade` should return a string (`str`), but it finished without returning a value. |
+| an item | `total` expects every item in `nums` to be a whole number (`int`), but item 2 is the string "three". |
+| a function's promise to the one it takes | `foo` calls `f` with `1`, a whole number (`int`), but its annotation says `f` takes a string (`str`). |
+| a function handed over to be misused | `add1` expects `x` to be a whole number (`int`), but it was handed over on line 10 and then called by `foo` with a string (`str`). |
 
-Two details that decide where the squiggle lands:
-
-- An argument is checked on entry to the callee, so the innermost frame is
-  the `def` line. The finding blames the frame *outside* it - the call -
-  which is where the mistake actually is. Returns and assignments are
-  blamed on their own line.
-- Frames inside `/pll_vendor` are left out of the error's frames, so
-  nothing a student sees points into typeguard's internals.
-- typeguard's message is read once (`_pll_type_check_parts`), into what
-  the annotation is on, its name, the element that failed, the actual type
-  and the accepted ones - a union's on the lines after the first. A
-  dataclass field PLL checks itself gives the same parts. The rules read
-  only those.
+Where the finding goes (`_pll_contract_place`): a function's own result at
+the `return` that gave it; a value given by code that is to blame, where it
+gave it; a function handed over by code that is to blame but called
+elsewhere, where it was handed over. The contracts' own frames are left out
+of the error's frames, so nothing a student sees points into PLL. An
+annotation that is not a type raises `NotAType`, at the `def`.
 
 ## Reactors (big-bang / animate) and the universe client
 
@@ -982,9 +1000,10 @@ Three of the tests cover the host-side TypeScript with no Pyodide involved:
   writes parses back to the level that was asked for.
 
 `smoke-typecheck.mjs` spans both halves: it drives the built desktop
-worker for the instrumentation, and reads the findings Python made of the
-real typeguard messages through the host's `findRuntimeFinding`, so the
-rewritten wording and the blamed line are both asserted.
+worker for the instrumentation, and reads the findings Python made of
+real contract violations through the host's `findRuntimeFinding`, so the
+wording and the blamed line are both asserted. `smoke-contracts.mjs` is
+the semantics: who is blamed, where and when, for the higher-order cases.
 
 The rest boot real Pyodide in Node: `smoke-static-analyze`,
 `smoke-explainers` (the explanations, from real programs and from errors
@@ -1333,7 +1352,7 @@ from VS Code 1.101. One floor for the project instead of two.
 
 `pyodide` is a real dependency rather than bundled, since the package needs
 its `.wasm` and stdlib assets anyway; `require.resolve("pyodide")` finds
-them at run time. That keeps the tarball at about 285 kB. Pyodide's Node
+them at run time. That keeps the tarball at about 220 kB. Pyodide's Node
 loader caches any wheels it downloads into that directory - or the user's
 cache, when it cannot be written - so the first `import pandas` needs the
 network (which `pll` says, once) and later ones do not.

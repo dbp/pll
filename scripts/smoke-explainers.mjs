@@ -119,15 +119,6 @@ function pyErrorLine(errorLine, frames, options = {}) {
 }
 
 /**
- * What Python reads a `TypeCheckError`'s message into, as
- * `_pll_type_check_parts` does - tested against typeguard itself in
- * smoke-typecheck.
- */
-function check(kind, name, actual, expected, more = {}) {
-  return { kind, name, element: null, actual, expected, ...more };
-}
-
-/**
  * What `_pll_definition` sends for a function, one of the student's
  * classes, and a union - tested against Python itself in smoke-typecheck.
  */

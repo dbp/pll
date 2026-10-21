@@ -69,9 +69,6 @@ const baseOptions = {
   legalComments: "none",
   loader: {
     ".py": "text",
-    // Vendored pure-Python wheels, inlined so the worker can write them
-    // into Pyodide's MEMFS without a network fetch.
-    ".whl": "base64",
   },
 };
 

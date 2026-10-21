@@ -59,7 +59,7 @@ def _pll_undefined_names(tree, code, level, session_key, earlier):
     if module is not None:
         initial = set(module.__dict__)
     else:
-        initial = set(_pll_initial_globals) | {"__file__", "__pll_level__"}
+        initial = set(_pll_initial_globals) | set(_pll_level_names(level)) | {"__file__", "__pll_level__"}
     return _PllUndefinedNames(tree, code, level, initial, earlier).findings
 
 

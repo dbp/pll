@@ -249,9 +249,9 @@ async function main() {
       const id = session.displays.slice(before).find((d) => d.kind === "reactor")?.id;
       const tick = async () =>
         (await session.send({ type: "reactorStep", reactorId: id, event: '{"kind":"tick"}' })).result.error?.errorType;
-      expect((await tick()) === "TypeCheckError", "a bool is not an int at beginner");
+      expect((await tick()) === "TypeMismatch", "a bool is not an int at beginner");
       await run("x = 1\n", "lvB", "advanced");
-      expect((await tick()) === "TypeCheckError", "nor after another file ran at advanced");
+      expect((await tick()) === "TypeMismatch", "nor after another file ran at advanced");
       const advanced = await run("def f(n: int) -> int:\n    return n\nprint(f(True))\n", "lvC", "advanced");
       expect(advanced.stdout === "True\n", `at advanced it is: ${advanced.error?.errorType}`);
 

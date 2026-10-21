@@ -10,6 +10,58 @@
   Code took for the panel loading, and then never showed it. The panel now
   stops the copy, so VS Code shows it as it does in every other browser.
 
+### Added
+- **`Callable` needs no import at `beginner`, `intermediate` and
+  `advanced`**, as the image and table functions need none: a function's
+  type is written often enough that `from collections.abc import Callable`
+  at the top of every file is only noise. At `beginner` and `intermediate`,
+  importing it anyway is said as such - "`Callable` needs no import: PLL
+  gives every file `Callable` at `#level beginner`" - as other names PLL
+  gives are. `#level raw` is Python, and needs the import.
+
+### Changed
+- **Annotations are checked as higher-order contracts**, PLL's own, in place
+  of typeguard: Findler and Felleisen's semantics, as Racket has them. A
+  function's annotations are its contract, every use of the function is
+  checked against it, and the message says who broke it - which, for a
+  function handed to another, is not always the one that was running:
+  - `foo(f: Callable[[str], str])` calling `f(1)` is `foo`'s fault, at that
+    call: "`foo` calls `f` with `1`, a whole number (`int`), but its
+    annotation says `f` takes a string (`str`)". typeguard checked only that
+    `f` was a function, and the call went through.
+  - Given `add1(x: int)` and calling `f("a")`, as its annotation allows, it
+    is the fault of the line that handed `add1` over: "`add1` expects `x` to
+    be a whole number (`int`), but it was handed over on line 10 and then
+    called by `foo` with a string (`str`)".
+  - A function another returns, or is given, is checked at each call: "The
+    function `adder` returns takes a whole number (`int`), but it was given
+    `"a"`", "The function given to `apply` as `f` should give back a whole
+    number (`int`), but it gave back `"s"`".
+  - A function that takes a different number of arguments is refused as it
+    is handed over: "`apply` expects `f` to be a function that takes 1
+    argument (`Callable[[int], int]`), but it takes 2 arguments".
+  - `BinTree[float]` is checked to its leaves, at the call: "`tree_sum`
+    expects `t` to be `BinTree[float]`, but `t.right.value` is the string
+    "x"". typeguard checked `Leaf[float]` as `Leaf`, and blamed `tree_sum`'s
+    `return` for the caller's tree.
+  - A field assigned after a dataclass is made is checked (`d.age =
+    "three"`), as the values it is made with are.
+  - A file at `#level raw` that calls a function of a checked file is
+    blamed at its own call, where the check used to be in the function.
+- **An annotation that is not a type is an error when its `def` runs**:
+  `-> 12345`, `-> z` with `z = 10`, `x: len`, and a variable that holds a
+  string - `-> s` with `s = "failure"`, which printed typeguard's
+  `TypeHintWarning` and went unchecked (and, in a nested function, went
+  unchecked silently). A name in quotes that names nothing is said as such,
+  at the `def`, where it was a `NameError` suggesting `text`.
+- **Checked calls are faster**: about half the time typeguard's took, and a
+  `list[int]` is checked in a seventh. The extension and the command line no
+  longer carry typeguard and typing_extensions.
+- Recursion at the levels that check goes as deep as before: a checked call
+  takes two frames, and the recursion limit doubles at those levels.
+- If PLL cannot add its checks to a file, a warning says that its
+  annotations are not checked, where it was silent.
+
 ## 0.6.1 (2026-10-20)
 
 ### Fixed

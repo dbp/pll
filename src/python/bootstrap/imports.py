@@ -86,7 +86,10 @@ class _PllStudentLoader(_pll_machinery.SourceFileLoader):
         for key, value in _pll_initial_globals.items():
             if key not in _PLL_MODULE_OWN:
                 own.setdefault(key, value)
-        own["__pll_level__"] = _pll_level_of_file(self.get_filename(module.__name__))[0]
+        level = _pll_level_of_file(self.get_filename(module.__name__))[0]
+        for key, value in _pll_level_names(level).items():
+            own.setdefault(key, value)
+        own["__pll_level__"] = level
         super().exec_module(module)
 
 

@@ -56,6 +56,7 @@ const FILES = [
   "smoke-tables",
   "smoke-tests",
   "smoke-typecheck",
+  "smoke-contracts",
   "smoke-pandas",
   "smoke-input",
   "smoke-workspace-files",

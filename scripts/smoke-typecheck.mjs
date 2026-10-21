@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * Smoke test for runtime type checking (typeguard).
+ * Smoke test for runtime type checking: annotations as contracts
+ * (bootstrap/contracts.py).
  *
  * Drives the built desktop worker over the real protocol, so this covers
- * the whole stack: the vendored wheels being written into MEMFS and put on
- * sys.path, the AST instrumentation, the level that selects it, and the
- * traceback filtering that keeps typeguard's own frames out of what a
- * student sees.
+ * the whole stack: the AST instrumentation, the level that selects it, and
+ * the traceback filtering that keeps the contracts' own frames out of what
+ * a student sees.
  *
  * Requires `pnpm run build` so dist/desktop/pyodideWorker.js exists.
  */
@@ -60,7 +60,7 @@ async function main() {
     }).then((r) => r.result);
 
   try {
-    console.log("\n[1] init (writes the vendored wheels, enables typeguard)");
+    console.log("\n[1] init");
     await send({ type: "init", indexUrl: INDEX_URL });
     // For the runs with tests, whose asserts pytest rewrites.
     await send({ type: "loadPytest" });
@@ -84,17 +84,16 @@ async function main() {
       console.log(`    ${r.error?.errorType}: ${r.error?.message}`);
       console.log(`    line_number=${r.error?.lineNumber}`);
       expect(r.ok === false, "a bad argument should fail the run");
-      expect(r.error?.errorType === "TypeCheckError", "expected TypeCheckError, got " + r.error?.errorType);
+      expect(r.error?.errorType === "TypeMismatch", "expected TypeMismatch, got " + r.error?.errorType);
       expect(
-        /argument "y" \(str\) is not an instance of int/.test(r.error?.message),
+        /argument y of add is "three" \(str\), not int/.test(r.error?.message),
         "message should name the argument and both types, got " + r.error?.message,
       );
-      // The `typeguard.TypeCheckError:` exception name is fine; what must
-      // not appear is a *frame* inside the vendored checker.
+      // What must not appear is a *frame* of the contract's own.
       const frames = (r.error?.frames ?? []).map((f) => `${f.file}:${f.line}`);
       expect(
-        !frames.some((l) => /pll_vendor|_checkers\.py|_functions\.py/.test(l)),
-        "the frames must not expose typeguard's own:\n" + frames.join("\n"),
+        !frames.some((l) => /pll_vendor|<pll:bootstrap\/contracts>/.test(l)),
+        "the frames must not expose the contract's own:\n" + frames.join("\n"),
       );
       expect(frames.includes("hello.py:4"), "the frames should include the call site (line 4):\n" + frames.join("\n"));
     }
@@ -105,21 +104,21 @@ async function main() {
         "def label(n: int) -> str:\n    return n * 2\n\nlabel(5)\n",
       );
       console.log(`    ${r.error?.errorType}: ${r.error?.message} (line ${r.error?.lineNumber})`);
-      expect(r.error?.errorType === "TypeCheckError", "expected TypeCheckError, got " + r.error?.errorType);
+      expect(r.error?.errorType === "TypeMismatch", "expected TypeMismatch, got " + r.error?.errorType);
       expect(
-        /the return value \(int\) is not an instance of str/.test(r.error?.message),
+        /the return value of label is 10 \(int\), not str/.test(r.error?.message),
         "message should describe the return value, got " + r.error?.message,
       );
-      expect(r.error?.lineNumber === 2, "should point at the return statement, got " + r.error?.lineNumber);
+      expect(r.error?.finding?.lineNumber === 2, "should point at the return statement, got " + r.error?.finding?.lineNumber);
     }
 
-    console.log("\n[5] module-level annotated assignment (typeguard alone misses this)");
+    console.log("\n[5] module-level annotated assignment");
     {
       const r = await run('total: int = "not a number"\nprint(total)\n');
       console.log(`    ${r.error?.errorType}: ${r.error?.message} (line ${r.error?.lineNumber})`);
-      expect(r.error?.errorType === "TypeCheckError", "top-level annassign should be checked, got " + r.error?.errorType);
+      expect(r.error?.errorType === "TypeMismatch", "top-level annassign should be checked, got " + r.error?.errorType);
       expect(
-        /value assigned to total \(str\) is not an instance of int/.test(r.error?.message || ""),
+        /the value assigned to total is "not a number" \(str\), not int/.test(r.error?.message || ""),
         "message should name the variable, got " + r.error?.message,
       );
       expect(r.error?.lineNumber === 1, "should point at the assignment, got " + r.error?.lineNumber);
@@ -136,9 +135,9 @@ async function main() {
         "def total(nums: list[int]) -> int:\n    return sum(nums)\n\ntotal([1, 2, \"three\"])\n",
       );
       console.log(`    ${r.error?.errorType}: ${r.error?.message}`);
-      expect(r.error?.errorType === "TypeCheckError", "a bad item late in a list should be caught");
+      expect(r.error?.errorType === "TypeMismatch", "a bad item late in a list should be caught");
       expect(
-        /item 2 of argument "nums"/.test(r.error?.message || ""),
+        /item 2 of argument nums/.test(r.error?.message || ""),
         "message should name the item index, got " + r.error?.message,
       );
     }
@@ -166,8 +165,8 @@ async function main() {
         { level: "raw" },
       );
       console.log(`    ok=${r.ok} error=${r.error?.errorType || "(none)"}`);
-      expect(r.error?.errorType !== "TypeCheckError", "raw must not check annotations");
-      // "2" + "three" is a TypeError from Python itself, not from typeguard.
+      expect(r.error?.errorType !== "TypeMismatch", "raw must not check annotations");
+      // "2" + "three" is a TypeError from Python itself, not a contract's.
       expect(r.error?.errorType === "TypeError", "plain Python should still fail its own way, got " + r.error?.errorType);
 
       // And a request with no level at all must behave the same, because a
@@ -193,7 +192,7 @@ async function main() {
         "def f(x: int) -> None:\n    label: str = x\n    print(label)\n\nf(3)\n",
       );
       console.log(`    ${r.error?.errorType}: ${r.error?.message} (line ${r.error?.lineNumber})`);
-      expect(r.error?.errorType === "TypeCheckError", "in-function annassign should be checked");
+      expect(r.error?.errorType === "TypeMismatch", "in-function annassign should be checked");
       expect(r.error?.lineNumber === 2, "should point at the assignment, got " + r.error?.lineNumber);
     }
 
@@ -232,7 +231,7 @@ async function main() {
       );
       const bad = (r.tests || []).find((t) => t.name === "test_double_bad_type");
       expect(
-        bad && /not an instance of int/.test(bad.message || ""),
+        bad && /argument n of double is "four" \(str\), not int/.test(bad.message || ""),
         "the failure should explain the type problem, got " + (bad && bad.message),
       );
     }
@@ -276,7 +275,7 @@ async function main() {
       });
       const r = reply.result;
       console.log(`    ${r.error?.errorType}: ${r.error?.message}`);
-      expect(r.error?.errorType === "TypeCheckError", "prompt calls should be checked, got " + r.error?.errorType);
+      expect(r.error?.errorType === "TypeMismatch", "prompt calls should be checked, got " + r.error?.errorType);
       const good = (
         await send({ type: "replEval", code: "add(1, 2)", sessionKey: key, level: "advanced" })
       ).result;
@@ -298,7 +297,7 @@ async function main() {
           `    ${label.padEnd(24)} beginner=${strict.error?.errorType || "ok"} advanced=${loose.error?.errorType || "ok"}`,
         );
         expect(
-          strict.error?.errorType === "TypeCheckError",
+          strict.error?.errorType === "TypeMismatch",
           `${label} should be rejected at beginner, got ` + (strict.error?.errorType || "no error"),
         );
         expect(
@@ -320,7 +319,7 @@ async function main() {
       expect(towerOk.ok === true, "int for float must still be fine: " + (towerOk.error?.message || ""));
     }
 
-    console.log("\n[15] typeguard's wording is rewritten for students");
+    console.log("\n[15] a broken contract is worded for students");
     {
       /** Run `code`, then push it through the host-side analyzer. */
       const finding = async (code, level = "advanced") => {
@@ -332,7 +331,7 @@ async function main() {
         'def add(x: int, y: int) -> int:\n    return x + y\n\nresult = add(2, "three")\n',
       );
       console.log(`    arg      line ${arg.lineNumber}: ${arg.headline}`);
-      expect(arg.errorType === "TypeMismatch", "should not surface typeguard's class name");
+      expect(arg.errorType === "TypeMismatch", "said as a type mismatch");
       expect(arg.lineNumber === 4, "an argument should be blamed on the call, got " + arg.lineNumber);
       expect(
         arg.headline === "`add` expects `y` to be a whole number (`int`), but got a string (`str`).",
@@ -343,8 +342,8 @@ async function main() {
         "should suggest the conversion, got " + JSON.stringify(arg.howToFix),
       );
       expect(
-        !/instance of|typeguard/.test(arg.headline),
-        "headline must not keep typeguard's vocabulary: " + arg.headline,
+        !/instance of|contract/.test(arg.headline),
+        "headline must not use a checker's vocabulary: " + arg.headline,
       );
 
       const ret = await finding('def label(n: int) -> str:\n    return n * 2\n\nlabel(5)\n');
@@ -473,8 +472,8 @@ async function main() {
       expect(tested.tests?.passed === 1, `expected 1 passing test, got ${tested.tests?.passed}`);
       console.log("    a recursive dataclass runs and tests cleanly");
 
-      // `@dataclass` writes `__init__` after typeguard has instrumented the
-      // source, so its fields were never checked at all.
+      // `@dataclass` writes `__init__` itself, so there is no `def` in the
+      // source for a contract to go on.
       const fields = [
         "from dataclasses import dataclass",
         "",
@@ -513,8 +512,8 @@ async function main() {
 
     console.log("\n[17] a type error inside a test is worded for students");
     {
-      // The run path went through the analyzers; the test path did not, so
-      // students read typeguard's own "is not an instance of str".
+      // The run path went through the analyzers; the test path must too, or
+      // students read the contract's own words.
       const code = [
         "def shout(word: str) -> str:",
         "    return None",
@@ -531,22 +530,22 @@ async function main() {
         sessionKey: "tc-tw",
         level: "beginner",
       }).then((r) => r.result);
-      // The *worker* result still carries typeguard's own text; the
+      // The *worker* result still carries the contract's own text; the
       // rewriting happens where the result becomes events, so that both the
       // editor's card and the command line get it. Check it there.
       const raw = (result.tests?.tests ?? [])[0];
       expect(raw !== undefined, "a test case should be reported");
       expect(
-        (raw.message ?? "").includes("is not an instance of"),
-        `the worker reports typeguard's text: ${raw.message}`,
+        (raw.message ?? "").includes("the return value of shout is None"),
+        `the worker reports the contract's text: ${raw.message}`,
       );
 
       const report = reportOf(result, "tw.py", "beginner", code);
       expect(report !== null, "a testReport event should be emitted");
       const test = { ...report.tests[0], message: shown(report.tests[0]) };
       expect(
-        !(test.message ?? "").includes("is not an instance of"),
-        `typeguard's wording must not reach the report: ${test.message}`,
+        !(test.message ?? "").includes("the return value of shout is None"),
+        `the contract's wording must not reach the report: ${test.message}`,
       );
       expect(
         (test.message ?? "").includes("should return"),
@@ -683,8 +682,7 @@ async function main() {
 
     console.log("\n[19] advice that fits where the value came from");
     {
-      // A dataclass field, which typeguard words as an assignment because
-      // that is the check being reused - and nobody assigned anything.
+      // A dataclass field, which is no assignment: nobody assigned anything.
       const DC =
         "from dataclasses import dataclass\n\n\n@dataclass\nclass ITunesSong:\n" +
         "    name: str\n    singer: str\n    year: int\n\n\n";
@@ -898,8 +896,7 @@ async function main() {
 
     console.log("\n[23] an element failure says what the element is");
     {
-      // typeguard names the element that failed but not what it is; Python
-      // reads it from the frame the check fired in.
+      // The element that failed, and what it is.
       const code =
         "#level intermediate\n" +
         "def sum_list(lst: list[float]) -> float:\n" +
@@ -1071,10 +1068,11 @@ async function main() {
         `the field check, in parts: ${JSON.stringify(swappedCheck)}`,
       );
 
-      // typeguard's message, read into its parts once, by Python.
+      // A broken contract's facts, in parts.
       const parts = async (code) => (await described(code, "beginner")).error?.facts?.check;
       const same = (got, want) => JSON.stringify(got) === JSON.stringify(want);
-      const typeguardShapes = [
+      const includes = (got, want) => got != null && Object.entries(want).every(([key, value]) => same(got[key], value));
+      const contractShapes = [
         [
           'def f(x: int) -> int:\n    return x\n\nf("a")\n',
           { kind: "argument", name: "x", element: null, actual: "str", expected: ["int"], level: "beginner" },
@@ -1102,9 +1100,9 @@ async function main() {
           { kind: "argument", name: "d", element: "value of key 'a'", actual: "dict", expected: ["int"], level: "beginner" },
         ],
       ];
-      for (const [code, want] of typeguardShapes) {
+      for (const [code, want] of contractShapes) {
         const got = await parts(code);
-        expect(same(got, want), `${JSON.stringify(code)}: ${JSON.stringify(got)}`);
+        expect(includes(got, want), `${JSON.stringify(code)}: ${JSON.stringify(got)}`);
       }
       const union = await parts('def f(x: int | None) -> int:\n    return 0\n\nf("a")\n');
       expect(
@@ -1254,10 +1252,13 @@ async function main() {
         `a broken #level line refuses it too: ${JSON.stringify(header.error?.facts?.checks)}`,
       );
       const student = "#level beginner\ndef count(n: int) -> int:\n    return n\n\ndef dot() -> Image:\n    return circle(5, \"solid\", \"red\")\n";
+      // The grader is not instrumented, so the call reaches `count`'s boundary,
+      // which makes the obligation with the code that called it.
       const strict = await graded("from student import count\nprint(count(True))\n", student);
       expect(
-        strict.error?.errorType === "TypeCheckError" && strict.error?.frames.at(-1)?.file === "student.py",
-        `checked at its level, in its file: ${strict.error?.errorType} ${JSON.stringify(strict.error?.frames.at(-1))}`,
+        strict.error?.errorType === "TypeMismatch" &&
+          strict.error?.facts?.check?.blamed?.file === "grader.py" && strict.error?.finding?.lineNumber === 2,
+        `checked at its level, the grader blamed: ${strict.error?.errorType} ${JSON.stringify(strict.error?.facts?.check?.blamed)}`,
       );
       expect(strict.error?.facts?.check?.level === "beginner", `the check says whose level: ${JSON.stringify(strict.error?.facts?.check)}`);
       const strictFinding = findRuntimeFinding("grader.py", "raw", strict.error);
@@ -1275,6 +1276,10 @@ async function main() {
       const lenient = await graded("#level beginner\nfrom student import count\nprint(count(True))\n",
         "#level advanced\ndef count(n: int) -> int:\n    return n\n");
       expect(lenient.ok && lenient.stdout === "True\n", `an advanced file is advanced: ${lenient.error?.message ?? lenient.stdout}`);
+      // A file imported at a student level has that level's names: `Callable`.
+      const given = await graded("from student import apply\nprint(apply(lambda n: n + 1))\n",
+        "#level beginner\ndef apply(f: Callable[[int], int]) -> int:\n    return f(1)\n");
+      expect(given.ok && given.stdout === "2\n", `Callable needs no import there: ${given.error?.message ?? given.stdout}`);
       // And a file with no header is plain Python.
       const plain = await graded("import student\nprint(student.f(\"x\"))\n", "def f(n: int) -> int:\n    return n\n\nf = f\n");
       expect(plain.ok && plain.stdout === "x\n", `raw is unchecked: ${plain.error?.message ?? plain.stdout}`);
@@ -1333,14 +1338,14 @@ async function main() {
         "def f(x: int) -> int:",
         "    return x",
         "y: int = 3",
-        'print([n for n in dir() if n.startswith("_pll") or n in ("TypeCheckMemo", "check_argument_types_internal", "check_return_type_internal")])',
+        'print([n for n in dir() if n.startswith("_pll") or n.startswith("pll")])',
         "_pll_show_top_level = 0",
         "f(3)",
       ].join("\n");
       const result = await run(code, { level: "beginner", fileName: "ns.py" });
-      expect(result.ok === true && result.stdout === "[]\n3\n", `nothing of PLL's or typeguard's, and values still shown: ${JSON.stringify(result.stdout)} ${result.error?.message ?? ""}`);
+      expect(result.ok === true && result.stdout === "[]\n3\n", `nothing of PLL's, and values still shown: ${JSON.stringify(result.stdout)} ${result.error?.message ?? ""}`);
       const checked = await run('#level beginner\ndef f(x: int) -> int:\n    return x\nf("a")\n', { level: "beginner", fileName: "ns2.py" });
-      expect(checked.error?.errorType === "TypeCheckError", `and the checks still run: ${checked.error?.errorType}`);
+      expect(checked.error?.errorType === "TypeMismatch", `and the checks still run: ${checked.error?.errorType}`);
       console.log("    dir() is the student's, and the checks still happen");
     }
 

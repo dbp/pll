@@ -491,7 +491,9 @@ def _pll_code_facts(exc, run):
     return something that returned `None`, `returned_none`."""
     if isinstance(exc, SyntaxError):
         return {}
-    frames = _pll_student_frames(exc)
+    # A result its contract refused: read the function that returned it.
+    returned = getattr(exc, "_pll_returned_from", None)
+    frames = [(returned, returned.f_lineno)] if returned is not None else _pll_student_frames(exc)
     if not frames:
         return {}
     frame, lineno = frames[-1]

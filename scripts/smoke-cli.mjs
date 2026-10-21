@@ -326,10 +326,10 @@ async function main() {
     expect(r.code === 3, `expected exit 3, got ${r.code}: ${r.stderr}`);
     expect(/output:/.test(r.stderr), `the test's own output should be shown: ${r.stderr}`);
     expect(/about to call shout/.test(r.stderr), `including what it printed: ${r.stderr}`);
-    // And typeguard's own wording must not reach the report.
+    // And the contract's own wording must not reach the report.
     expect(
-      !/is not an instance of/.test(r.stderr),
-      `typeguard's wording should be rewritten: ${r.stderr}`,
+      !/the return value of shout is None/.test(r.stderr),
+      `the contract's wording should be rewritten: ${r.stderr}`,
     );
     expect(/should return a string/.test(r.stderr), `expected PLL's wording: ${r.stderr}`);
     // Shown as a finding is shown anywhere: its type, then where it is -

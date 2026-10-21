@@ -1,63 +1,511 @@
-# Compiling the student's code: the AST passes that check top-level
-# annotations and dataclass fields, show top-level expression values, and
-# turn Python's compile-time warnings into something a beginner can act on.
+# Compiling the student's code: the AST passes that put annotations in force
+# as contracts (bootstrap/contracts.py), check dataclass fields, show
+# top-level expression values, and turn Python's compile-time warnings into
+# something a beginner can act on.
 
 import ast as _ast
 import copy as _pll_copy
 import contextlib
+import dataclasses as _pll_dataclasses
 import sys as _sys
 import warnings as _pll_warnings
+import weakref as _pll_weakref
 import re as _pll_src_re
 
-class _PllTopLevelAnnAssign(_ast.NodeTransformer):
-    """Type-check annotated assignments outside functions.
+def _pll_has_annotations(node):
+    """Whether a `def` annotates anything: then it has a contract."""
+    return node.returns is not None or any(arg.annotation is not None for arg in _pll_all_args(node.args))
 
-    typeguard instruments function arguments, return values, and
-    annotated assignments *inside* functions, but leaves
-    `total: int = "oops"` at module level unchecked. Students write those,
-    so we wrap the value in typeguard's own check to get the same wording.
 
-    Function and class bodies are skipped: typeguard already covers
-    functions, and a bare `name: str` in a class body is a field
-    declaration (dataclasses, etc.) rather than an assignment.
-    """
+def _pll_is_quoted(annotation):
+    """An annotation written as a string: a name, looked up when needed."""
+    return isinstance(annotation, _ast.Constant) and isinstance(annotation.value, str)
+
+
+def _pll_bound_names(target):
+    """The names an assignment's target binds: `a`, or each of `a, (b, c)`."""
+    if isinstance(target, _ast.Name):
+        return [target.id]
+    if isinstance(target, (_ast.Tuple, _ast.List)):
+        return [name for element in target.elts for name in _pll_bound_names(element)]
+    if isinstance(target, _ast.Starred):
+        return _pll_bound_names(target.value)
+    return []
+
+
+#: Packages a program imports that are not the student's: none of their
+#: functions has a contract of PLL's to carry.
+_PLL_NOT_STUDENTS = frozenset(("pll", "pandas", "numpy", "matplotlib", "pytest", "_pytest", "requests", "PIL", "scipy"))
+
+
+def _pll_may_be_students(module, level):
+    """Whether `module` may be one of the student's own files, whose
+    functions have contracts: anything but the standard library and the
+    packages PLL knows. pytest's assertion rewriting imports its helpers
+    under names no program can write (`@py_builtins`)."""
+    if level:
+        return True
+    top = module.split(".")[0]
+    return bool(top) and not top.startswith("@") and top not in _sys.stdlib_module_names and top not in _PLL_NOT_STUDENTS
+
+
+class _PllContractScope:
+    """A scope of the program, as far as contracts need one: the names it
+    binds; which of those may be contracted functions (`contracted`: an
+    annotated `def`, or a name imported from another file) or modules;
+    its annotated variables; and the party a reference made in it belongs
+    to (`party`, as bootstrap/contracts.py reads it). A function's scope
+    says whether its own `def` is contracted."""
+
+    __slots__ = (
+        "kind", "parent", "party", "qualname", "bound", "globals", "nonlocals",
+        "contracted", "modules", "annotations", "contracted_def",
+    )
+
+    def __init__(self, kind, parent, party, qualname):
+        self.kind = kind
+        self.parent = parent
+        self.party = party
+        self.qualname = qualname
+        self.bound = set()
+        self.globals = set()
+        self.nonlocals = set()
+        self.contracted = set()
+        self.modules = set()
+        self.annotations = {}
+        self.contracted_def = False
+
+
+class _PllContractScopes(_ast.NodeVisitor):
+    """The scopes of a program, by node, and which one a name refers to -
+    by Python's own rules - for `_PllContracts`."""
+
+    def __init__(self, filename):
+        self.filename = filename
+        self.by_node = {}
+        self.current = None
+        self.module = None
+        # A prompt line runs among the names the file and earlier lines
+        # defined: any name it does not bind may be a contracted function.
+        self.prompt = filename == "<repl>"
+
+    def build(self, tree):
+        self.module = self.current = _PllContractScope(
+            "module", None, ("main", None, "<module>", self.filename, None), ""
+        )
+        self.by_node[id(tree)] = self.module
+        for statement in tree.body:
+            self.visit(statement)
+        return self
+
+    def scope_of(self, node):
+        return self.by_node[id(node)]
+
+    def binder(self, scope, name):
+        """The scope `name`, used in `scope`, refers to - or None, for a
+        built-in."""
+        if name in scope.globals:
+            return self.module if name in self.module.bound else None
+        if name in scope.bound and name not in scope.nonlocals:
+            return scope
+        candidate = scope.parent
+        while candidate is not None:
+            if candidate.kind == "class":
+                candidate = candidate.parent
+                continue
+            if candidate.kind == "module":
+                return candidate if name in candidate.bound else None
+            if name in candidate.globals:
+                return self.module if name in self.module.bound else None
+            if name in candidate.bound and name not in candidate.nonlocals:
+                return candidate
+            candidate = candidate.parent
+        return None
+
+    def _enter(self, node, kind, party, qualname):
+        scope = _PllContractScope(kind, self.current, party, qualname)
+        self.by_node[id(node)] = scope
+        return scope
+
+    def _inside(self, scope, nodes):
+        outer, self.current = self.current, scope
+        for node in nodes:
+            self.visit(node)
+        self.current = outer
+
+    def _qualname(self, name):
+        scope = self.current
+        if scope.kind == "module":
+            return name
+        if scope.kind == "class":
+            return scope.qualname + "." + name
+        return scope.qualname + ".<locals>." + name
+
+    def _defaults(self, arguments):
+        for default in list(arguments.defaults) + [d for d in arguments.kw_defaults if d is not None]:
+            self.visit(default)
 
     def visit_FunctionDef(self, node):
+        self.current.bound.add(node.name)
+        contracted = isinstance(node, _ast.FunctionDef) and _pll_has_annotations(node)
+        if contracted and self.current.kind != "class":
+            self.current.contracted.add(node.name)
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        self._defaults(node.args)
+        qualname = self._qualname(node.name)
+        party = ("function", qualname.replace(".<locals>.", "."), qualname, self.filename, node.lineno)
+        scope = self._enter(node, "function", party, qualname)
+        scope.contracted_def = contracted
+        scope.bound.update(arg.arg for arg in _pll_all_args(node.args))
+        # A parameter's annotation is its variable's, for what the body
+        # assigns it: `ac = ac.balance + amt` gives an `Account` a number.
+        scope.annotations.update(
+            (arg.arg, arg.annotation) for arg in _pll_all_args(node.args) if arg.annotation is not None
+        )
+        self._inside(scope, node.body)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_Lambda(self, node):
+        self._defaults(node.args)
+        scope = self._enter(node, "lambda", self.current.party, self.current.qualname)
+        scope.bound.update(arg.arg for arg in _pll_all_args(node.args))
+        self._inside(scope, [node.body])
+
+    def visit_ClassDef(self, node):
+        self.current.bound.add(node.name)
+        for part in node.decorator_list + node.bases + [keyword.value for keyword in node.keywords]:
+            self.visit(part)
+        scope = self._enter(node, "class", self.current.party, self._qualname(node.name))
+        self._inside(scope, node.body)
+
+    def _comprehension(self, node, parts):
+        self.visit(node.generators[0].iter)
+        scope = self._enter(node, "comprehension", self.current.party, self.current.qualname)
+        outer, self.current = self.current, scope
+        for index, generator in enumerate(node.generators):
+            if index:
+                self.visit(generator.iter)
+            self.visit(generator.target)
+            for condition in generator.ifs:
+                self.visit(condition)
+        for part in parts:
+            self.visit(part)
+        self.current = outer
+
+    def visit_ListComp(self, node):
+        self._comprehension(node, [node.elt])
+
+    visit_SetComp = visit_GeneratorExp = visit_ListComp
+
+    def visit_DictComp(self, node):
+        self._comprehension(node, [node.key, node.value])
+
+    def visit_Name(self, node):
+        if not isinstance(node.ctx, _ast.Load):
+            self.current.bound.add(node.id)
+
+    def visit_NamedExpr(self, node):
+        self.visit(node.value)
+        scope = self.current
+        while scope.kind == "comprehension":
+            scope = scope.parent
+        scope.bound.add(node.target.id)
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            name = alias.asname or alias.name.split(".")[0]
+            self.current.bound.add(name)
+            if _pll_may_be_students(alias.name, 0):
+                self.current.modules.add(name)
+
+    def visit_ImportFrom(self, node):
+        for alias in node.names:
+            if alias.name != "*":
+                name = alias.asname or alias.name
+                self.current.bound.add(name)
+                if _pll_may_be_students(node.module or "", node.level):
+                    self.current.contracted.add(name)
+
+    def visit_Global(self, node):
+        self.current.globals.update(node.names)
+
+    def visit_Nonlocal(self, node):
+        self.current.nonlocals.update(node.names)
+
+    def visit_AnnAssign(self, node):
+        if isinstance(node.target, _ast.Name) and self.current.kind in ("module", "function"):
+            self.current.annotations[node.target.id] = node.annotation
+            if node.value is not None:
+                self.current.bound.add(node.target.id)
+        else:
+            self.visit(node.target)
+        if node.value is not None:
+            self.visit(node.value)
+
+    def visit_ExceptHandler(self, node):
+        if node.name:
+            self.current.bound.add(node.name)
+        self.generic_visit(node)
+
+    def visit_MatchAs(self, node):
+        if node.name:
+            self.current.bound.add(node.name)
+        self.generic_visit(node)
+
+    def visit_MatchStar(self, node):
+        if node.name:
+            self.current.bound.add(node.name)
+
+    def visit_MatchMapping(self, node):
+        if node.rest:
+            self.current.bound.add(node.rest)
+        self.generic_visit(node)
+
+    def visit_TypeAlias(self, node):
+        self.current.bound.add(node.name.id)
+
+
+class _PllContracts(_ast.NodeTransformer):
+    """Put a program's annotations in force as contracts
+    (bootstrap/contracts.py):
+
+    - an annotated `def` gets its contract, from the decorator
+      `pll:contract_def` innermost of its decorators, and each `return` in
+      it notes its line (`pll:returning`);
+    - each reference to what may be a contracted function becomes the
+      obligation for it (`pll:ref`), made by the definition it is in;
+    - an annotated variable's value is checked each time it is given one
+      (`pll:assigned`).
+
+    Annotations are left as they are: the `def` records them, and a name in
+    one is not a reference.
+    """
+
+    def __init__(self, scopes, source, filename):
+        self.scopes = scopes
+        self.source = source
+        self.filename = filename
+        self.current = None
+        self.all_quoted = False
+
+    def _call(self, name, args, at):
+        call = _ast.Call(func=_ast.Name(id=name, ctx=_ast.Load()), args=args, keywords=[])
+        _ast.copy_location(call, at)
+        return call
+
+    def _text(self, node):
+        return _ast.get_source_segment(self.source, node) or _ast.unparse(node)
+
+    def _statements(self, statements):
+        kept = []
+        for statement in statements:
+            result = self.visit(statement)
+            if isinstance(result, list):
+                kept.extend(result)
+            elif result is not None:
+                kept.append(result)
+        return kept
+
+    def _in(self, node, work):
+        outer, self.current = self.current, self.scopes.scope_of(node)
+        try:
+            return work()
+        finally:
+            self.current = outer
+
+    def _defaults(self, arguments):
+        arguments.defaults = [self.visit(default) for default in arguments.defaults]
+        arguments.kw_defaults = [None if d is None else self.visit(d) for d in arguments.kw_defaults]
+
+    def visit_Module(self, node):
+        self.current = self.scopes.scope_of(node)
+        self.all_quoted = any(
+            isinstance(statement, _ast.ImportFrom)
+            and statement.module == "__future__"
+            and any(alias.name == "annotations" for alias in statement.names)
+            for statement in node.body
+        )
+        node.body = self._statements(node.body)
+        return node
+
+    def visit_FunctionDef(self, node):
+        node.decorator_list = [self.visit(decorator) for decorator in node.decorator_list]
+        self._defaults(node.args)
+        scope = self.scopes.scope_of(node)
+        node.body = self._in(node, lambda: self._statements(node.body))
+        if scope.contracted_def:
+            node.decorator_list.append(self._contract(node, scope))
         return node
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
-    def visit_ClassDef(self, node):
+    def _contract(self, node, scope):
+        """`pll:contract_def(party, written, quoted)` for `node`."""
+        written, quoted = [], []
+        annotated = [(arg.arg, arg.annotation) for arg in _pll_all_args(node.args) if arg.annotation is not None]
+        if node.returns is not None:
+            annotated.append(("return", node.returns))
+        for name, annotation in annotated:
+            written.append((name, self._text(annotation)))
+            if self.all_quoted or _pll_is_quoted(annotation):
+                quoted.append(name)
+        decorator = self._call(
+            _PLL_CONTRACT_DEF,
+            [
+                _ast.Constant(value=scope.party),
+                _ast.Constant(value=tuple(written)),
+                _ast.Constant(value=tuple(quoted)),
+            ],
+            node,
+        )
+        _ast.fix_missing_locations(decorator)
+        return decorator
+
+    def visit_Return(self, node):
+        if node.value is not None:
+            node.value = self.visit(node.value)
+        if self.current.kind == "function" and self.current.contracted_def:
+            value = node.value if node.value is not None else _ast.copy_location(_ast.Constant(value=None), node)
+            node.value = self._call(_PLL_RETURNING, [value, _ast.Constant(value=node.lineno)], value)
         return node
+
+    def visit_ClassDef(self, node):
+        node.decorator_list = [self.visit(decorator) for decorator in node.decorator_list]
+        node.bases = [self.visit(base) for base in node.bases]
+        for keyword in node.keywords:
+            keyword.value = self.visit(keyword.value)
+        node.body = self._in(node, lambda: self._statements(node.body))
+        return node
+
+    def visit_Lambda(self, node):
+        self._defaults(node.args)
+        node.body = self._in(node, lambda: self.visit(node.body))
+        return node
+
+    def _comprehension(self, node, parts):
+        first = node.generators[0]
+        first.iter = self.visit(first.iter)
+
+        def inside():
+            for index, generator in enumerate(node.generators):
+                if index:
+                    generator.iter = self.visit(generator.iter)
+                generator.ifs = [self.visit(condition) for condition in generator.ifs]
+            for part in parts:
+                setattr(node, part, self.visit(getattr(node, part)))
+
+        self._in(node, inside)
+        return node
+
+    def visit_ListComp(self, node):
+        return self._comprehension(node, ["elt"])
+
+    visit_SetComp = visit_GeneratorExp = visit_ListComp
+
+    def visit_DictComp(self, node):
+        return self._comprehension(node, ["key", "value"])
+
+    def _reference(self, node):
+        """`node` as the obligation its value may carry, made here."""
+        return self._call(
+            _PLL_REF,
+            [node, _ast.Constant(value=self.current.party), _ast.Constant(value=node.lineno),
+             _ast.Constant(value=node.col_offset)],
+            node,
+        )
+
+    def visit_Name(self, node):
+        if isinstance(node.ctx, _ast.Load):
+            binder = self.scopes.binder(self.current, node.id)
+            if binder is not None and node.id in binder.contracted:
+                return self._reference(node)
+            if binder is None and self.scopes.prompt and not hasattr(_pll_builtins, node.id):
+                return self._reference(node)
+        return node
+
+    def visit_Attribute(self, node):
+        node.value = self.visit(node.value)
+        if isinstance(node.ctx, _ast.Load) and isinstance(node.value, _ast.Name):
+            binder = self.scopes.binder(self.current, node.value.id)
+            if binder is not None and node.value.id in binder.modules:
+                return self._reference(node)
+        return node
+
+    # -- annotated variables --
+
+    def _annotation(self, name):
+        """The annotation of the variable `name` here, if it has one."""
+        scope = self.current
+        while scope.kind == "comprehension":
+            scope = scope.parent
+        if scope.kind not in ("module", "function") or name in scope.globals:
+            return None
+        return scope.annotations.get(name)
+
+    def _assigned(self, value, name, annotation, at):
+        return self._call(
+            _PLL_ASSIGNED,
+            [
+                value,
+                _pll_copy.deepcopy(annotation),
+                _ast.Constant(value=self._text(annotation)),
+                _ast.Constant(value=name),
+                _ast.Constant(value=self.current.party),
+                _ast.Constant(value=at.lineno),
+                _ast.Constant(value=self.all_quoted or _pll_is_quoted(annotation)),
+            ],
+            at,
+        )
+
+    def _rechecked(self, name, annotation, at):
+        """`name = pll:assigned(name, ...)`, after a statement that gave
+        `name` a value some other way."""
+        check = _ast.Assign(
+            targets=[_ast.Name(id=name, ctx=_ast.Store())],
+            value=self._assigned(_ast.Name(id=name, ctx=_ast.Load()), name, annotation, at),
+        )
+        _ast.copy_location(check, at)
+        _ast.fix_missing_locations(check)
+        return check
 
     def visit_AnnAssign(self, node):
-        if node.value is None or not isinstance(node.target, _ast.Name):
+        if node.value is None:
             return node
-        node.value = self._checked(node.target.id, node.value, node.annotation)
+        node.value = self.visit(node.value)
+        if isinstance(node.target, _ast.Name) and self._annotation(node.target.id) is not None:
+            node.value = self._assigned(node.value, node.target.id, node.annotation, node)
+        else:
+            node.target = self.visit(node.target)
         return node
 
-    def _checked(self, name, value, annotation):
-        """`value` -> `pll:tg_check_assign(value, [(name, ann)], memo)`."""
-        memo = _ast.Call(
-            func=_ast.Name(id=_PLL_TG_MEMO, ctx=_ast.Load()),
-            args=[
-                _ast.Call(func=_ast.Name(id="globals", ctx=_ast.Load()), args=[], keywords=[]),
-                _ast.Call(func=_ast.Name(id="locals", ctx=_ast.Load()), args=[], keywords=[]),
-            ],
-            keywords=[],
-        )
-        target = _ast.Tuple(
-            elts=[_ast.Constant(value=name), _pll_copy.deepcopy(annotation)],
-            ctx=_ast.Load(),
-        )
-        call = _ast.Call(
-            func=_ast.Name(id=_PLL_TG_CHECK_ASSIGN, ctx=_ast.Load()),
-            args=[value, _ast.List(elts=[target], ctx=_ast.Load()), memo],
-            keywords=[],
-        )
-        _ast.copy_location(call, value)
-        _ast.fix_missing_locations(call)
-        return call
+    def visit_Assign(self, node):
+        node.value = self.visit(node.value)
+        node.targets = [self.visit(target) for target in node.targets]
+        names = [
+            name for target in node.targets for name in _pll_bound_names(target) if self._annotation(name) is not None
+        ]
+        if not names:
+            return node
+        if len(node.targets) == 1 and isinstance(node.targets[0], _ast.Name):
+            node.value = self._assigned(node.value, names[0], self._annotation(names[0]), node)
+            return node
+        return [node] + [self._rechecked(name, self._annotation(name), node) for name in names]
+
+    def visit_AugAssign(self, node):
+        node.value = self.visit(node.value)
+        node.target = self.visit(node.target)
+        if isinstance(node.target, _ast.Name) and self._annotation(node.target.id) is not None:
+            return [node, self._rechecked(node.target.id, self._annotation(node.target.id), node)]
+        return node
+
+    def visit_NamedExpr(self, node):
+        node.value = self.visit(node.value)
+        annotation = self._annotation(node.target.id)
+        if annotation is not None:
+            node.value = self._assigned(node.value, node.target.id, annotation, node)
+        return node
 
 
 def _pll_is_dataclass_decorator(node):
@@ -72,16 +520,13 @@ def _pll_is_dataclass_decorator(node):
 
 
 class _PllDataclassChecks(_ast.NodeTransformer):
-    """Have every `@dataclass` check its field types when constructed.
+    """Have every `@dataclass` check its fields (`_pll_check_dataclass_fields`).
 
-    typeguard instruments what it can see in the source, but `@dataclass`
-    writes `__init__` *afterwards* - so `Dog(5, 3)` with `name: str` was
-    accepted without a word, which is the opposite of the point at
-    `#level beginner`.
-
-    The checker goes on the front of the decorator list, which makes it the
-    outermost one and therefore the last to run, so it sees the `__init__`
-    that `@dataclass` generated rather than the class before it existed.
+    `@dataclass` writes `__init__` itself, from the class's annotations, so
+    there is no `def` in the source to put a contract on. The checker goes
+    on the front of the decorator list, which makes it the outermost one and
+    therefore the last to run, so it sees the `__init__` that `@dataclass`
+    generated rather than the class before it existed.
     """
 
     def visit_ClassDef(self, node):
@@ -93,15 +538,16 @@ class _PllDataclassChecks(_ast.NodeTransformer):
         return node
 
 
-def _pll_hint_name(hint):
-    """An annotation as it was written, as near as can be recovered."""
-    name = getattr(hint, "__name__", None)
-    if isinstance(name, str):
-        return name
-    return str(hint).replace("typing.", "")
+#: Instances whose `__init__` is running: their fields are checked once it
+#: has finished, not one by one as it sets them.
+_PLL_CONSTRUCTING = set()
+
+#: The contracts of each checked dataclass's fields, by class: a function
+#: that makes them when first asked.
+_PLL_DATACLASS_FIELDS = _pll_weakref.WeakKeyDictionary()
 
 
-def _pll_swapped_field(instance, hints, field_name):
+def _pll_swapped_field(instance, contracts, field_name):
     """Another field whose value fits here, while this value fits there.
 
     `ITunesSong("Yesterday", 2015, "The Beatles")` gives `singer` a number
@@ -109,115 +555,117 @@ def _pll_swapped_field(instance, hints, field_name):
     error go away and the song wrong; what happened is that two values were
     written in each other's places.
     """
-    import typing as _pll_typing
-
-    def fits(value, hint):
-        origin = _pll_typing.get_origin(hint) or hint
-        if not isinstance(origin, type):
-            return False
-        if origin is float and isinstance(value, int) and not isinstance(value, bool):
-            return True
-        return isinstance(value, origin) and not (
-            origin is int and isinstance(value, bool)
-        )
-
     mine = getattr(instance, field_name)
-    for other, other_hint in hints.items():
-        if other == field_name or not hasattr(instance, other):
+    for other, contract in contracts.items():
+        if other == field_name or not hasattr(instance, other) or isinstance(contract, _PllAnyContract):
             continue
-        theirs = getattr(instance, other)
-        if fits(mine, other_hint) and fits(theirs, hints[field_name]):
-            return other
+        try:
+            if contract.accepts(mine) and contracts[field_name].accepts(getattr(instance, other)):
+                return other
+        except _PllUnresolved:
+            continue
     return None
 
 
-def _pll_check_dataclass_fields(cls):
-    """Wrap a dataclass's `__init__` so its fields are checked.
-
-    Checked after the original `__init__` has run, so defaults,
-    `field(default_factory=...)` and `__post_init__` have all had their
-    say and the values checked are the ones the instance really holds.
-
-    Annotations are resolved at construction rather than at decoration,
-    because a recursive definition names a class that does not exist yet
-    (`rest: "NumList"`). A resolution that fails is not cached: it may well
-    succeed once the rest of the file has run.
-
-    The namespace to resolve them in is taken from the frame that applied
-    the decorator - the student's own globals - and not left to
-    `get_type_hints`, which would look up `sys.modules[cls.__module__]`.
-    That is Pyodide's `__main__`, a different dict from the session's, so
-    every recursive annotation failed to resolve and its field went
-    unchecked.
-    """
-    if not _PLL_TYPEGUARD_READY:
-        return cls
-    memo_type = _pll_builtins.__dict__.get(_PLL_TG_MEMO)
-    check = _pll_builtins.__dict__.get(_PLL_TG_CHECK_ASSIGN)
-    if memo_type is None or check is None:
-        return cls
-
+def _pll_check_field(instance, cls, name, value, contract, frame, contracts, assigned=False):
+    """Check one field's value. The code running in `frame` - that made the
+    instance, or assigned the field - is the party that answers for it."""
     try:
-        defining_globals = _sys._getframe(1).f_globals
-    except Exception:
-        defining_globals = getattr(_sys.modules.get(cls.__module__), "__dict__", {})
+        if contract.accepts(value):
+            return
+    except _PllUnresolved:
+        # A name in quotes the file has not defined yet: checked once it is.
+        return
+    party = _pll_party_of_code(frame.f_code)
+    step = ("field", name, cls.__name__, contract.written)
+    level = (_PLL_CLASS_NAMESPACES.get(cls) or {}).get("__pll_level__")
+    blame = _PllBlame(party, party, None, (step,), (frame.f_code.co_filename, frame.f_lineno, None), level)
+    try:
+        contract.check_now(value, blame)
+    except _PllTypeMismatch as error:
+        error._pll_facts["check"]["assigned"] = assigned
+        swapped = None if assigned else _pll_swapped_field(instance, contracts, name)
+        if swapped is not None:
+            _pll_add_facts(error, swapped_with=swapped)
+        raise error from None
 
+
+def _pll_field_contracts_of(cls):
+    """The field contracts of `cls` or the nearest class it comes from that
+    PLL checks - None if there is none."""
+    for klass in type.mro(cls):
+        made = _PLL_DATACLASS_FIELDS.get(klass)
+        if made is not None:
+            return made()
+    return None
+
+
+def _pll_checked_setattr(self, name, value):
+    """A checked dataclass's `__setattr__`: a field is given a value of its
+    annotation, or the assignment is refused."""
+    if id(self) not in _PLL_CONSTRUCTING:
+        contracts = _pll_field_contracts_of(type(self))
+        contract = contracts.get(name) if contracts else None
+        if contract is not None:
+            _pll_check_field(self, type(self), name, value, contract, _sys._getframe(1), contracts, assigned=True)
+    object.__setattr__(self, name, value)
+
+
+def _pll_check_dataclass_fields(cls):
+    """Check a dataclass's fields against their annotations: all of them once
+    its `__init__` has run - defaults, `field(default_factory=...)` and
+    `__post_init__` have had their say, and the values checked are the ones
+    the instance holds - and each one assigned afterwards.
+
+    A field's annotation is read in the globals the class was defined in, the
+    student's, taken from the frame that applied the decorator - not from
+    `sys.modules[cls.__module__]`, which is Pyodide's `__main__`, a different
+    dict from the session's. It is read when first needed: a recursive
+    definition names a class that does not exist yet (`rest: "NumList"`). A
+    generic class's own type parameters (`value: T`) stand for any type.
+    """
+    try:
+        namespace = _sys._getframe(1).f_globals
+    except Exception:
+        namespace = getattr(_sys.modules.get(cls.__module__), "__dict__", {})
+    _PLL_CLASS_NAMESPACES[cls] = namespace
+    level = namespace.get("__pll_level__")
+    typevars = {param: _PllAnyContract(param.__name__) for param in getattr(cls, "__type_params__", ())}
+    made = {}
+
+    def contracts():
+        if not made:
+            for field in _pll_dataclasses.fields(cls):
+                made[field.name] = _pll_compile(field.type, None, namespace, level, typevars)
+        return made
+
+    _PLL_DATACLASS_FIELDS[cls] = contracts
     original = cls.__init__
-    cache = []
 
     def __init__(self, *args, **kwargs):
-        original(self, *args, **kwargs)
-        if not cache:
-            import typing as _pll_typing
-
-            try:
-                cache.append(
-                    _pll_typing.get_type_hints(cls, globalns=dict(defining_globals))
-                )
-            except Exception:
-                # Not resolvable yet (or at all). Construct without
-                # checking rather than failing on the annotation.
-                return
-        memo = memo_type(defining_globals, {})
-        for field_name, hint in cache[0].items():
-            if not hasattr(self, field_name):
-                continue
-            try:
-                check(getattr(self, field_name), [(field_name, hint)], memo)
-            except _pll_type_check_error:
-                # typeguard words this as an assignment ("value assigned to
-                # singer"), because that is the check being reused. Nobody
-                # assigned anything: a field of a value was the wrong type,
-                # and the value is only known here.
-                bad = getattr(self, field_name)
-                shown = '"%s"' % bad if isinstance(bad, str) and '"' not in bad else repr(bad)
-                swapped = _pll_swapped_field(self, cache[0], field_name)
-                expected = _pll_hint_name(hint)
-                error = _pll_type_check_error(
-                    "field %r of %r got %s (%s), not %s"
-                    % (field_name, cls.__name__, shown, type(bad).__name__, expected)
-                )
-                # The parts, as `_pll_type_check_parts` gives typeguard's.
-                _pll_add_facts(error, check={
-                    "kind": "field",
-                    "name": field_name,
-                    "element": None,
-                    "actual": type(bad).__name__,
-                    "expected": [expected],
-                    "owner": cls.__name__,
-                    "value": shown,
-                    "level": defining_globals.get("__pll_level__"),
-                })
-                if swapped:
-                    _pll_add_facts(error, swapped_with=swapped)
-                raise error from None
+        _PLL_CONSTRUCTING.add(id(self))
+        try:
+            original(self, *args, **kwargs)
+        finally:
+            _PLL_CONSTRUCTING.discard(id(self))
+        frame = _sys._getframe(1)
+        fields = contracts()
+        for name, contract in fields.items():
+            if hasattr(self, name):
+                _pll_check_field(self, cls, name, getattr(self, name), contract, frame, fields)
 
     __init__.__name__ = "__init__"
     __init__.__qualname__ = "%s.__init__" % cls.__qualname__
     # So `inspect.signature` gives the fields, not `*args, **kwargs`.
     __init__.__wrapped__ = original
     cls.__init__ = __init__
+    params = getattr(cls, "__dataclass_params__", None)
+    if cls.__setattr__ is object.__setattr__ and not (params is not None and params.frozen):
+        cls.__setattr__ = _pll_checked_setattr
     return cls
+
+
+_pll_hidden("check_dataclass_fields", _pll_check_dataclass_fields)
 
 
 #: Compile-time warnings for the current file: `(line, message)`, each once.
@@ -325,68 +773,45 @@ def _pll_reword_warning(message, line=""):
 
 
 def _pll_parse_and_instrument(code, filename, level):
-    """Parse `code`, adding the runtime type checks of its `level` when they
-    are available.
-
-    Instrumentation is attempted on a second parse and validated by
-    compiling it, so anything typeguard cannot handle falls back to the
-    plain tree rather than failing the run.
-    """
+    """Parse `code`, with its `level`'s contracts in force."""
     with _pll_recording_compile_warnings():
         tree = _ast.parse(code, filename=filename, mode="exec")
-        if not _pll_checks_annotations(level) or not _PLL_TYPEGUARD_READY:
-            return tree
+    return _pll_with_contracts(tree, code, filename, level)
+
+
+def _pll_with_contracts(tree, code, filename, level):
+    """`tree`, with its annotations in force as contracts, at every level but
+    `raw` - done after any other rewriting, so that the assertion rewriting
+    of a test explains a call by the name it was written with.
+
+    Done on a copy, and validated by compiling it: a program PLL cannot
+    instrument still runs, unchecked.
+    """
+    if not _pll_checks_annotations(level):
+        return tree
+    with _pll_recording_compile_warnings():
         try:
-            instrumented = _ast.parse(code, filename=filename, mode="exec")
-            own = {id(node) for node in _ast.walk(instrumented) if isinstance(node, _ast.ImportFrom)}
-            _pll_typeguard_transformer().visit(instrumented)
-            _pll_hide_typeguard_imports(instrumented, own)
-            _PllTopLevelAnnAssign().visit(instrumented)
+            instrumented = _pll_copy.deepcopy(tree)
+            # Before the contracts, so the decorators it looks for are as
+            # they were written.
             _PllDataclassChecks().visit(instrumented)
+            scopes = _PllContractScopes(filename).build(instrumented)
+            _PllContracts(scopes, code, filename).visit(instrumented)
             _ast.fix_missing_locations(instrumented)
+            # That copies a parent's place onto the nodes pytest's assertion
+            # rewriting adds, which can leave a range ending before it starts.
+            _pll_fix_ast_ranges(instrumented)
             compile(instrumented, filename, "exec")
             return instrumented
-        except BaseException:
+        except Exception as error:
+            # PLL's own failure, and never to be silent: a student who
+            # annotated the file should know nothing is checking it.
+            _pll_compile_warnings.append((
+                filename, 1,
+                "the annotations in this file are not checked: PLL could not add its checks (%s: %s)"
+                % (type(error).__name__, error),
+            ))
             return tree
-
-
-def _pll_hide_typeguard_imports(tree, own):
-    """Take typeguard's own imports out of the student's namespace.
-
-    Its instrumentation imports its checkers into the module it checks
-    (`TypeCheckMemo`, `check_argument_types_internal`), where `dir()` listed
-    them and an assignment could replace one. Each is bound among the
-    builtins instead (`_pll_hidden`), and the code that calls it renamed to
-    match. `own` is the imports the tree had before typeguard added any,
-    the student's, which are left alone.
-    """
-    import importlib as _pll_importlib
-
-    renamed = {}
-    for node in _ast.walk(tree):
-        body = getattr(node, "body", None)
-        if not isinstance(body, list):
-            continue
-        kept = []
-        for stmt in body:
-            if (
-                isinstance(stmt, _ast.ImportFrom)
-                and id(stmt) not in own
-                and stmt.level == 0
-                and (stmt.module or "").split(".")[0] == "typeguard"
-            ):
-                module = _pll_importlib.import_module(stmt.module)
-                for alias in stmt.names:
-                    renamed[alias.asname or alias.name] = _pll_hidden(
-                        "tg:" + alias.name, getattr(module, alias.name)
-                    )
-                continue
-            kept.append(stmt)
-        node.body = kept or [_ast.Pass()]
-    if renamed:
-        for node in _ast.walk(tree):
-            if isinstance(node, _ast.Name) and node.id in renamed:
-                node.id = renamed[node.id]
 
 
 class _PllTopLevelExprWrapper(_ast.NodeTransformer):

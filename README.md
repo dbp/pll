@@ -177,9 +177,43 @@ You do not need to import anything, and it works at every level except
   returning anything when it says it returns something
 - variables you annotate, like `total: int = 0`
 - every item in an annotated `list`, `dict`, `set`, or `tuple`
+- the fields of a dataclass, when one is made and when a field is changed
+- a type with its type filled in, like `BinTree[float]`, all the way down
 
 Functions without annotations are left completely alone. A whole number is
 accepted wherever a `float` is expected, as it is in normal Python.
+
+An annotation has to name a type. `-> 12345`, or a variable that holds a
+number or a string, is an error as soon as the `def` runs.
+
+### Functions passed to functions
+
+A `Callable` annotation is a promise about a function that is handed over,
+and PLL checks it each time that function is called - then says who broke
+the promise. At the student levels `Callable` needs no import (at `#level
+raw`, as in Python, it is `from collections.abc import Callable`):
+
+```python
+#level beginner
+
+def shout(word: str) -> str:
+    return word.upper() + "!"
+
+def apply_to_42(f: Callable[[int], str]) -> str:
+    return f(42)
+
+apply_to_42(shout)
+```
+
+> `shout` expects `word` to be a string (`str`), but it was handed over on
+> line 9 and then called by `apply_to_42` with a whole number (`int`).
+
+`apply_to_42` kept its promise - it calls `f` with a whole number - so the
+line that handed `shout` over is the mistake. Had `apply_to_42` called `f`
+with a string instead, it would be the one blamed: its annotation says `f`
+is given whole numbers. A function handed over only has to take the right
+number of arguments; the rest is checked when it is called. The same goes
+for a function another one returns.
 
 At `#level beginner` and `#level intermediate`, `True` and `False` are
 **not** accepted where `int` or `float` is annotated:

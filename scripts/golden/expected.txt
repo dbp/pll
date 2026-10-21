@@ -839,6 +839,115 @@ stderr:
     - `Song` on its own is the blueprint; `Song(...)` makes one.
     - Add the brackets and the values for its fields: `Song(...)`.
 
+=== ho-caller-breaks-promise (exit 1)
+stderr:
+  student.py [advanced]
+  TypeMismatch: `foo` calls `f` with `1`, a whole number (`int`), but its annotation says `f` takes a string (`str`).
+    at student.py:6
+  
+  How to fix:
+    - Call `f` with a string (`str`), as `f: Callable[[str], str]` promises.
+    - Or, if `f` should take something else, change that annotation.
+
+=== ho-handed-over (exit 1)
+stderr:
+  student.py [advanced]
+  TypeMismatch: `add1` expects `x` to be a whole number (`int`), but it was handed over on line 9 and then called by `foo` with a string (`str`).
+    at student.py:9
+  
+  How to fix:
+    - On line 9, hand over a function that takes a string (`str`), which is what `foo` calls it with.
+    - Or, if `add1` should take a string (`str`), change its annotation for `x` from `int` to `str`.
+
+=== ho-arity (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `apply` expects `f` to be a function that takes 1 argument (`Callable[[int], int]`), but it takes 2 arguments (`a` and `b`).
+    at student.py:8
+  
+  How to fix:
+    - Give a function that takes 1 argument, as `Callable[[int], int]` says.
+    - Or, if `f` should take a different number, change the annotation.
+
+=== ho-returned-misused (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: The function `adder` returns takes a whole number (`int`), but it was given `"a"`, a string (`str`).
+    at student.py:6
+  
+  How to fix:
+    - Call it with a whole number (`int`), as `adder`'s return annotation, `Callable[[int], int]`, says.
+
+=== ho-given-returns-wrong (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: The function given to `apply` as `f` should give back a whole number (`int`), but it gave back `"s"`, a string (`str`).
+    at student.py:5
+  
+  How to fix:
+    - `f: Callable[[int], int]` says what the function given as `f` must return.
+    - Give `apply` a function that returns a whole number (`int`).
+
+=== ho-recursive-call (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `count` expects `n` to be a whole number (`int`), but got a string (`str`).
+    at student.py:5
+  
+  How to fix:
+    - Check the value you passed for `n` on this line.
+    - If it should be a whole number (`int`), convert it with `int(...)`.
+    - Or, if `n` really should be a string (`str`), change its annotation in `count` from `int` to `str`.
+
+=== tc-generic-tree (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `tree_sum` expects `t` to be `BinTree[float]`, but `t.right.value` is the string "x".
+    at student.py:22
+  
+  How to fix:
+    - Look at `t.right.value` in the value you passed for `t`: all of it has to match the annotation.
+
+=== tc-field-assigned (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: The `age` field of `Dog` should be a whole number (`int`), but got `"three"`.
+    at student.py:10
+  
+  How to fix:
+    - Check the value assigned to the `age` field on this line.
+    - If it should be a whole number (`int`), convert it with `int(...)`.
+    - Or change the field's annotation from `int` to `str`.
+
+=== not-a-type-number (exit 1)
+stderr:
+  student.py [beginner]
+  NotAType: `double`'s return annotation, `z`, is a number (10), not a type.
+    at student.py:4
+  
+  How to fix:
+    - An annotation names a type, such as `int`, `str`, `list[float]` or one of your classes.
+
+=== not-a-type-string-variable (exit 1)
+stderr:
+  student.py [beginner]
+  NotAType: `double`'s return annotation, `s`, holds the string "failure", not a type.
+    at student.py:4
+  
+  How to fix:
+    - An annotation names a type, such as `int`, `str`, `list[float]` or one of your classes.
+    - To name a class defined further down the file, put its name in quotes in the annotation itself.
+
+=== not-a-type-quoted (exit 1)
+stderr:
+  student.py [advanced]
+  NotAType: `double`'s return annotation, `"test"`, names `test`, which is not defined.
+    at student.py:2
+  
+  How to fix:
+    - A name in quotes in an annotation is the name of a type, looked up when it is needed.
+    - Check the spelling, or define `test` in the file.
+
 === tc-row-is-dict (exit 1)
 stderr:
   student.py [beginner]

@@ -101,7 +101,7 @@ export const CASES = [
   { name: "error-in-library-callback", code: [`t = table(["a"], [[1], [2]])`, 'print(t.add_column("b", lambda r: r["a"] / 0))'] },
   { name: "error-deep-stack", code: ["def a(n):", "    return b(n)", "def b(n):", "    return c(n)", "def c(n):", "    return n / 0", "", "print(a(1))"] },
 
-  // ---- type checking (typeguard) ----------------------------------------
+  // ---- type checking (contracts) ----------------------------------------
   { name: "tc-argument", code: [B, "def double(n: int) -> int:", "    return n * 2", "", 'print(double("4"))'] },
   { name: "tc-argument-float", code: [B, "def half(n: float) -> float:", "    return n / 2", "", 'print(half("4"))'] },
   { name: "tc-return-none", code: [B, "def shout(word: str) -> str:", "    word.upper()", "", 'print(shout("hi"))'] },
@@ -118,6 +118,18 @@ export const CASES = [
   { name: "tc-field", code: [B, ...dataclass("@dataclass", "class Song:", "    title: str", "    year: int", "", 's = Song("x", "1999")')] },
   { name: "tc-field-swapped", code: [B, ...dataclass("@dataclass", "class Song:", "    title: str", "    year: int", "", 's = Song(1999, "x")')] },
   { name: "tc-class-itself", code: [B, ...dataclass("@dataclass", "class Song:", "    title: str", "", "def t(s: Song) -> str:", "    return s.title", "", "print(t(Song))")] },
+  // Higher-order: who broke a function's contract, and where.
+  { name: "ho-caller-breaks-promise", code: [A, "def add1(x: int) -> int:", "    return x + 1", "", "def foo(f: Callable[[str], str]) -> int:", "    return f(1)", "", "foo(add1)"] },
+  { name: "ho-handed-over", code: [A, "def add1(x: int) -> int:", "    return x + 1", "", "def foo(f: Callable[[str], str]) -> int:", '    f("a")', "    return 0", "", "foo(add1)"] },
+  { name: "ho-arity", code: [B, "def two(a: int, b: int) -> int:", "    return a + b", "", "def apply(f: Callable[[int], int]) -> int:", "    return f(1)", "", "print(apply(two))"] },
+  { name: "ho-returned-misused", code: [B, "def adder(n: int) -> Callable[[int], int]:", "    return lambda x: x + n", "", "plus = adder(1)", 'print(plus("a"))'] },
+  { name: "ho-given-returns-wrong", code: [B, "def apply(f: Callable[[int], int]) -> int:", "    return f(1)", "", 'print(apply(lambda x: "s"))'] },
+  { name: "ho-recursive-call", code: [B, "def count(n: int) -> int:", "    if n == 0:", "        return 0", "    return count(str(n - 1))", "", "print(count(3))"] },
+  { name: "tc-generic-tree", code: [B, ...dataclass("@dataclass", "class Leaf[T]:", "    value: T", "", "@dataclass", "class Node[T]:", '    left: "BinTree[T]"', '    right: "BinTree[T]"', "", "type BinTree[T] = Leaf[T] | Node[T]", "", "def tree_sum(t: BinTree[float]) -> float:", "    match t:", "        case Leaf(v):", "            return v", "        case Node(l, r):", "            return tree_sum(l) + tree_sum(r)", "", 'print(tree_sum(Node(Leaf(1.0), Leaf("x"))))')] },
+  { name: "tc-field-assigned", code: [B, ...dataclass("@dataclass", "class Dog:", "    name: str", "    age: int", "", 'd = Dog("Rex", 3)', 'd.age = "three"')] },
+  { name: "not-a-type-number", code: [B, "z = 10", "", "def double(x: int) -> z:", "    return x * 2"] },
+  { name: "not-a-type-string-variable", code: [B, 's = "failure"', "", "def double(x: int) -> s:", "    return x * 2"] },
+  { name: "not-a-type-quoted", code: [A, 'def double(x: int) -> "test":', "    return x * 2", "", "double(1)"] },
   { name: "tc-row-is-dict", code: [B, "def big(r: int) -> bool:", '    return r["a"] > 1', "", `t = table(["a"], [[1]])`, "print(t.filter(big))"] },
   { name: "tc-filter-returns", code: [B, "def keep(r: dict) -> bool:", '    return r["a"]', "", `t = table(["a"], [[1]])`, "print(t.filter(keep))"] },
   { name: "tc-reactor-init", code: [B, "def draw(n: int) -> Image:", '    return circle(10, "solid", "red")', "", 'r = reactor(init="zero", to_draw=draw)', "r.interact()"] },

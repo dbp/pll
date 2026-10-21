@@ -28,6 +28,7 @@ import contextlib as _ex_contextlib
 import importlib.util as _ex_util
 import io as _ex_io
 import marshal as _ex_marshal
+import re as _ex_re
 import sys as _ex_sys
 import time as _ex_time
 import types as _ex_types
@@ -404,7 +405,21 @@ def _pll_examplar_compiled_definitions(test_source, filename):
     return pieces
 
 
-def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), only=None):
+#: A `#level` line, as the host reads one (`HEADER_RE` in core/level.ts).
+_PLL_EXAMPLAR_HEADER_RE = _ex_re.compile(r"^#\s*level\s+([a-z]+)\s*$")
+
+
+def _pll_examplar_level(source):
+    """The level the student's file is at, read as the host reads it: from
+    its first line that is not blank, and `raw` when that names none."""
+    for line in source.splitlines():
+        if line.strip():
+            found = _PLL_EXAMPLAR_HEADER_RE.match(line.strip())
+            return found.group(1) if found is not None else _PLL_LEVEL_RAW
+    return _PLL_LEVEL_RAW
+
+
+def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), only=None, given=None):
     """Run every `test_*` the student defined against one implementation.
 
     Their definitions are loaded first and the implementation second, so a
@@ -431,6 +446,8 @@ def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), onl
     """
     module = _ex_types.ModuleType("__main__")
     module.__dict__.update(_pll_initial_globals)
+    # And those of the student's level - `Callable` - as their run has.
+    module.__dict__.update(given or {})
     namespace = module.__dict__
     # The student's definitions that could not be loaded here, and why.
     unloaded = []
@@ -581,6 +598,7 @@ def _pll_examplar_judge(test_source, bundle_json, filename):
         }
 
     attribution = _pll_examplar_attribution(test_source, provides)
+    given = _pll_level_names(_pll_examplar_level(test_source))
     result = {
         "ok": True,
         "provides": provides,
@@ -606,7 +624,7 @@ def _pll_examplar_judge(test_source, bundle_json, filename):
         return True
 
     for entry in bundle.get("wheats") or []:
-        ran = _pll_examplar_run_one(test_pieces, entry.get("pyc", ""), filename, provides)
+        ran = _pll_examplar_run_one(test_pieces, entry.get("pyc", ""), filename, provides, given=given)
         ran["id"] = entry.get("id", "?")
         result["wheats"].append(ran)
         if stopped_by(ran, "wheat"):
@@ -650,7 +668,7 @@ def _pll_examplar_judge(test_source, bundle_json, filename):
         # fails on it as well, and crediting that would score the student
         # for a signal that says nothing about this chaff.
         mine = {name for name, names in attribution.items() if function in names}
-        ran = _pll_examplar_run_one(test_pieces, entry.get("pyc", ""), filename, provides, mine)
+        ran = _pll_examplar_run_one(test_pieces, entry.get("pyc", ""), filename, provides, mine, given=given)
         ran["id"] = entry.get("id", "?")
         ran["targets"] = function
         result["chaffs"].append(ran)
