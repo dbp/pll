@@ -439,6 +439,19 @@ try {
     }
   }
 
+  console.log("\n[11] a `load` fired by a script, not the browser, does not reach the webview host");
+  {
+    // As AdGuard fires one in Safari. The host listens on the window, not
+    // capturing, so the view's capturing listener stops it first.
+    const seen = await page.evaluate(() => {
+      const seen = [];
+      window.addEventListener("load", (event) => seen.push(event.target === window ? "window" : "document"));
+      window.dispatchEvent(new Event("load"));
+      return seen;
+    });
+    expect(seen.length === 0, `stopped before the host's listener: ${JSON.stringify(seen)}`);
+  }
+
   expect(problems.length === 0, `no script errors or CSP violations: ${problems.join("; ")}`);
 } finally {
   view.dispose();

@@ -34,6 +34,17 @@
 (function () {
   const vscode = acquireVsCodeApi();
 
+  // VS Code in the browser keeps this frame hidden, holding back every
+  // message for it, until it sees the frame's `load` event, or for 200ms if
+  // none comes. AdGuard for Safari holds back the real `load` and later fires
+  // its own copy at the window. The host takes the copy for the load, stops
+  // waiting, and - the copy's target is the window, not the document it
+  // checks for - never shows the frame: the panel stays blank. Stopped here,
+  // before the host's listener, the copy leaves the host its 200ms.
+  window.addEventListener("load", (event) => {
+    if (!event.isTrusted && event.target === window) event.stopImmediatePropagation();
+  }, true);
+
   const saved = vscode.getState();
   /** Whether the host has shown a session yet - which it does almost at once. */
   let shown = false;

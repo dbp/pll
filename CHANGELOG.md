@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **The interactions panel is not blank in Safari with AdGuard**: in
+  vscode.dev, with AdGuard Mini's advanced blocking on, the PLL panel
+  showed nothing at all - no header, no prompt, no output. AdGuard holds
+  back a page's `load` event and later fires a copy of its own, which VS
+  Code took for the panel loading, and then never showed it. The panel now
+  stops the copy, so VS Code shows it as it does in every other browser.
+
 ## 0.6.1 (2026-10-20)
 
 ### Fixed
