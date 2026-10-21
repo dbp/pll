@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 (2026-10-20)
 
 ### Fixed
 - **A picture is an image in messages, never a class inside PLL**:
