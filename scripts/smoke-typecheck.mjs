@@ -594,6 +594,8 @@ async function main() {
             'print(shout(["hi"]))\n',
           wanted: /`result` was set to the result of `\.append\(\.\.\.\)` on line 5/,
           also: /changes the list in place and gives back nothing/,
+          // Where `.append` may change a list: the teaching levels refuse it first.
+          level: "advanced",
         },
         {
           label: "a list pattern of a fixed length",
@@ -648,13 +650,13 @@ async function main() {
           also: /Line 4 ends its branch with `print`: did you mean `return order_amt \+ 4`\?/,
         },
       ];
-      for (const { label, code, wanted, also } of cases) {
-        const source = `#level beginner\n${code}`;
-        const result = await run(source, { level: "beginner", fileName: "none.py" });
+      for (const { label, code, wanted, also, level = "beginner" } of cases) {
+        const source = `#level ${level}\n${code}`;
+        const result = await run(source, { level, fileName: "none.py" });
         expect(result.ok === false, `${label}: should fail`);
         const finding = findRuntimeFinding(
           "none.py",
-          "beginner",
+          level,
           result.error,
         );
         const text = `${finding.headline}\n${finding.howToFix.join("\n")}`;

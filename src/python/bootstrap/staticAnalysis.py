@@ -355,6 +355,39 @@ _PLL_NOT_A_TYPE = {
     "void": "None",
 }
 
+#: Functions that give back a new value and change nothing, by module, so
+#: that a call of one on a line of its own throws away all it did: None for
+#: every function the module has.
+_PLL_NEW_VALUE_FUNCTIONS = {
+    "builtins": frozenset((
+        "sorted", "reversed", "len", "abs", "round", "min", "max", "sum", "list", "tuple", "set", "dict",
+        "str", "int", "float", "bool", "map", "filter", "zip", "enumerate", "range", "any", "all", "repr",
+    )),
+    "math": None,
+    "random": frozenset(("sample", "choice")),
+    "copy": frozenset(("copy", "deepcopy")),
+    "dataclasses": frozenset(("replace",)),
+}
+
+#: Of those, the ones that could be taken for changing their first argument:
+#: `sorted(xs)` leaves `xs` as it was.
+_PLL_LEAVES_ITS_ARGUMENT = frozenset((
+    ("builtins", "sorted"), ("builtins", "reversed"), ("random", "sample"), ("dataclasses", "replace"),
+))
+
+#: Methods that give back a new value on every type a student calls them on
+#: - a string's, a set's, a list's `copy`, a table's - and leave the value
+#: they are called on as it was.
+_PLL_NEW_VALUE_METHODS = frozenset((
+    "upper", "lower", "strip", "lstrip", "rstrip", "replace", "title", "capitalize", "casefold", "swapcase",
+    "split", "rsplit", "join", "center", "ljust", "rjust", "zfill", "removeprefix", "removesuffix",
+    "copy", "union", "intersection", "difference", "symmetric_difference",
+    "filter", "transform_column", "add_column", "add_row", "select_columns", "order_by", "head", "tail",
+))
+
+#: What makes a method a property, read without a call.
+_PLL_PROPERTY_DECORATORS = frozenset(("property", "cached_property", "functools.cached_property"))
+
 #: Methods that are nearly always meant to be called. `movies["rating"].mean`
 #: prints `<bound method Series.mean of ...>` and says nothing; `.mean()` is
 #: what was wanted. Only names that are a method everywhere a student meets
@@ -452,7 +485,8 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
     other than what was meant, and so produces no error at all:
 
       - a value computed and thrown away inside a function, which is how a
-        test written without `assert` always passes;
+        test written without `assert` always passes - `sorted(xs)` and
+        `name.upper()` among them, which leave `xs` and `name` as they were;
       - a function annotated to return a value with no `return` in it,
         which gives back `None` - printing its answer, most often;
       - `assert(x, 1)`, where the tuple is always true;
@@ -488,6 +522,10 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         "_aliases",
         "_bases",
         "_functions",
+        "_methods",
+        "_modules",
+        "_imported",
+        "_library",
     )
 
     def __init__(self, code, defined, known=frozenset()):
@@ -504,7 +542,9 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         self._type_valued = []
         # Classes defined in this file, so `== Boa` can be told from `== b`.
         self._classes = set()
-        # Their field names. A field called `count` or `items` happens to
+        # The names that are data on something here: a class's fields and
+        # class attributes, its properties, and every attribute assigned
+        # (`self.items = []`). One called `count` or `items` happens to
         # share its name with a method, and `s.count` is then exactly
         # right - so those are not "a method you forgot to call".
         self._fields = set()
@@ -525,6 +565,15 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         self._bases = {}
         # The functions being visited, innermost last.
         self._functions = []
+        # The methods this file's classes define, whose calls may be there
+        # for what they do, whatever they are called.
+        self._methods = set()
+        # The modules imported, by the name each is bound to (`import random
+        # as r`), and the names imported from one, as (module, name).
+        self._modules = {}
+        self._imported = {}
+        # PLL's own names, by library (`circle`: "image").
+        self._library = _pll_predefined_library_names()
 
     # ---- functions ----
 
@@ -537,13 +586,32 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         reason, by the checks that would otherwise mistake one for a method.
         """
         for node in _ast.walk(tree):
+            if isinstance(node, _ast.Attribute) and isinstance(node.ctx, _ast.Store):
+                self._fields.add(node.attr)
+            elif isinstance(node, _ast.Import):
+                for alias in node.names:
+                    if alias.asname:
+                        self._modules[alias.asname] = alias.name
+                    else:
+                        self._modules[alias.name.split(".")[0]] = alias.name.split(".")[0]
+            elif isinstance(node, _ast.ImportFrom) and node.module and not node.level:
+                for alias in node.names:
+                    self._imported[alias.asname or alias.name] = (node.module, alias.name)
             if not isinstance(node, _ast.ClassDef):
                 continue
             self._classes.add(node.name)
             self._bases[node.name] = [_pll_dotted(base) for base in node.bases]
             for stmt in node.body:
+                if isinstance(stmt, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    self._methods.add(stmt.name)
                 if isinstance(stmt, _ast.AnnAssign) and isinstance(stmt.target, _ast.Name):
                     self._fields.add(stmt.target.id)
+                elif isinstance(stmt, _ast.Assign):
+                    self._fields.update(target.id for target in stmt.targets if isinstance(target, _ast.Name))
+                elif isinstance(stmt, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and any(
+                    _pll_dotted(decorator) in _PLL_PROPERTY_DECORATORS for decorator in stmt.decorator_list
+                ):
+                    self._fields.add(stmt.name)
         for stmt in tree.body:
             if isinstance(stmt, _ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], _ast.Name):
                 self._aliases[stmt.targets[0].id] = stmt.value
@@ -585,7 +653,7 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
             return False
         last = statements[-1]
         if isinstance(last, _ast.Expr):
-            return self._discarded(last.value)
+            return self._discarded(last.value) or self._new_value_call(last.value) is not None
         if isinstance(last, _ast.If):
             # With no `else`, it can end without either: an empty block ends
             # in nothing thrown away.
@@ -852,27 +920,62 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         value = node.value
         # A method named but not called is the more specific thing to say
         # about `t.mean` on a line of its own, so it wins.
-        if not self._method_not_called(value) and self._depth > 0 and self._discarded(value):
-            self.found.append(
-                _pll_finding(
-                    "unused-comparison" if isinstance(value, _ast.Compare) else "unused-value",
-                    "UnusedValue",
-                    node.lineno,
-                    node.col_offset,
-                    expression=_ast.get_source_segment(self._code, value),
-                    # In a test the fix is an `assert`; anywhere else, most
-                    # often a `return`.
-                    in_test=self._functions[-1].name.startswith("test_"),
-                    constant=isinstance(value, _ast.Constant),
+        if not self._method_not_called(value) and self._depth > 0:
+            unchanged = self._new_value_call(value)
+            if unchanged is not None or self._discarded(value):
+                extras = {"unchanged": unchanged} if unchanged else {}
+                self.found.append(
+                    _pll_finding(
+                        "unused-comparison" if isinstance(value, _ast.Compare) else "unused-value",
+                        "UnusedValue",
+                        node.lineno,
+                        node.col_offset,
+                        expression=_ast.get_source_segment(self._code, value),
+                        # In a test the fix is an `assert`; anywhere else, most
+                        # often a `return`.
+                        in_test=self._functions[-1].name.startswith("test_"),
+                        constant=isinstance(value, _ast.Constant),
+                        **extras,
+                    )
                 )
-            )
         self.generic_visit(node)
+
+    def _new_value_call(self, value):
+        """For a call that only gives back a new value - `sorted(xs)`,
+        `name.upper()`, `t.add_column(...)`, `circle(...)` - the text of what
+        it leaves as it was, or "" when that is nothing in particular; None
+        for any other call, which may be there for what it does."""
+        if not isinstance(value, _ast.Call):
+            return None
+        func = value.func
+        if isinstance(func, _ast.Attribute) and isinstance(func.value, _ast.Name) and func.value.id in self._modules:
+            function = (self._modules[func.value.id], func.attr)
+        elif isinstance(func, _ast.Attribute):
+            if func.attr in _PLL_NEW_VALUE_METHODS and func.attr not in self._methods:
+                return _ast.get_source_segment(self._code, func.value) or ""
+            return None
+        elif isinstance(func, _ast.Name) and func.id in self._imported:
+            function = self._imported[func.id]
+        elif isinstance(func, _ast.Name) and func.id not in self._defined:
+            function = ("pll" if func.id in self._library else "builtins", func.id)
+        else:
+            return None
+        module, name = function
+        if module == "pll" or module.startswith("pll."):
+            return "" if self._library.get(name) in ("image", "table") else None
+        names = _PLL_NEW_VALUE_FUNCTIONS.get(module, ())
+        if names is not None and name not in names:
+            return None
+        if function in _PLL_LEAVES_ITS_ARGUMENT and value.args:
+            return _ast.get_source_segment(self._code, value.args[0]) or ""
+        return ""
 
     @staticmethod
     def _discarded(value):
         """Whether this expression statement can only be a mistake.
 
-        A call, an await or a yield is there for its effect. A string is a
+        A call, an await or a yield is there for its effect - unless the call
+        only gives back a new value (`_new_value_call`). A string is a
         docstring, or a note. `...` and `None` hold a place. Everything else
         - a number or `True` on its own included, as the last line of a
         Pyret function is its answer - computes something and drops it.
@@ -1076,6 +1179,23 @@ def _pll_predefined_library_names():
     return {n: labels.get(n, "library") for n in public}
 
 
+def _pll_import_kept(tree, line, column, name):
+    """The `from` import at `line`, `column` as it is without `name` -
+    `from dataclasses import replace`, for `from dataclasses import
+    dataclass, replace` - or None if `name` is all it imports."""
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.ImportFrom) and node.lineno == line and node.col_offset == column:
+            kept = [alias for alias in node.names if (alias.asname or alias.name) != name]
+            if not kept:
+                return None
+            return "from %s%s import %s" % (
+                "." * node.level,
+                node.module or "",
+                ", ".join(alias.name + (" as %s" % alias.asname if alias.asname else "") for alias in kept),
+            )
+    return None
+
+
 def _pll_is_pll_import_loc(loc):
     """True when a binding loc tuple imports from a `pll` module.
 
@@ -1246,6 +1366,9 @@ def _pll_teaching_findings(tree, code, level, session_key):
                     binding=defining_loc[2],
                 ))
             elif name in library_names and defining_loc is not None:
+                kept = None
+                if library_names[name] == "level" and defining_loc[2] == "importfrom":
+                    kept = _pll_import_kept(tree, defining_loc[0], defining_loc[1], name)
                 findings.append(_pll_finding(
                     "shadowing-library", "Shadowing", defining_loc[0], defining_loc[1], name,
                     scope_kind=scope.kind,
@@ -1253,6 +1376,7 @@ def _pll_teaching_findings(tree, code, level, session_key):
                     binding=defining_loc[2],
                     module=defining_loc[3],
                     library_type=isinstance(_pll_initial_globals.get(name), type),
+                    **({"kept_import": kept} if kept else {}),
                 ))
 
         # ---- Reassignment ----

@@ -446,7 +446,7 @@ def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), onl
     """
     module = _ex_types.ModuleType("__main__")
     module.__dict__.update(_pll_initial_globals)
-    # And those of the student's level - `Callable` - as their run has.
+    # And those of the student's level - `Callable`, `dataclass` - as their run has.
     module.__dict__.update(given or {})
     namespace = module.__dict__
     # The student's definitions that could not be loaded here, and why.

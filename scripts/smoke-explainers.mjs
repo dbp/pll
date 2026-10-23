@@ -418,7 +418,8 @@ console.log("[unbinding explainer - del of a name]");
     plain.headline === "`del` removes the name `total`, which is not allowed at the beginner level.",
     `the name, and the level: ${plain.headline}`,
   );
-  expect(plain.howToFix.some((fix) => fix.includes("`del d[key]`")), `an item can still go: ${JSON.stringify(plain.howToFix)}`);
+  // Taking an item out is changing a value in place, refused as it runs.
+  expect(!plain.howToFix.some((fix) => fix.includes("`del d[key]`")), `no item's del offered: ${JSON.stringify(plain.howToFix)}`);
   expect(/`#level advanced`/.test(plain.howToFix.at(-1)), `and where it is allowed: ${plain.howToFix.at(-1)}`);
   expect(!/go away by themselves/.test(plain.howToFix[0]), `nothing about functions at the top level: ${plain.howToFix[0]}`);
   const inFunction = unbinding({ names: ["total", "count"], scope_kind: "function", loop_variable: false }, "intermediate");
@@ -1247,6 +1248,20 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     noDecorator.howToFix.some((l) => /`@dataclass` on the line above `class ITunesSong`/.test(l)),
     `and says where it goes: ${JSON.stringify(noDecorator.howToFix)}`,
   );
+  // Nothing to import at a level that gives every file `dataclass`; at raw, the import.
+  expect(!noDecorator.howToFix.some((l) => /import/.test(l)), `nothing to import at beginner: ${JSON.stringify(noDecorator.howToFix)}`);
+  const noDecoratorRaw = explained(
+    pyErrorLine("TypeError: ITunesSong() takes no arguments", [["<pll:bootstrap/running>", 560, "run"], ["lab.py", 7, "<module>"]], {
+      facts: { definitions: { ITunesSong: defClass(["name", "singer", "year"], false) } },
+    }),
+    "class ITunesSong:\n    name: str\n    singer: str\n    year: int\n\n\ns = ITunesSong(\"a\", \"b\", 1)\n",
+    "lab.py",
+    "raw",
+  );
+  expect(
+    noDecoratorRaw.howToFix.at(-1) === "Add `from dataclasses import dataclass` at the top of the file if it is not there.",
+    `at raw, the import too: ${JSON.stringify(noDecoratorRaw.howToFix)}`,
+  );
 
   // An `add_column` elsewhere in the file is not taken to be the cause.
   const discarded = raised(
@@ -1593,14 +1608,16 @@ console.log("[bitwise operators: refused between numbers at beginner and interme
     const finding = runOf(source, "beginner").error?.finding;
     expect(finding?.headline === headline && finding?.howToFix[0] === fix, `${what}: ${finding?.headline} ${JSON.stringify(finding?.howToFix)}`);
   }
-  // What is not bitwise goes on as Python does it: types, sets in place, dictionaries, a mask's own `&`.
+  // What is not bitwise goes on as Python does it: types, sets, dictionaries, a mask's own `&`.
   const fine = runOf(
     "class Mask:\n    def __and__(self, other):\n        return 'both'\n\n" +
-      "def grow(s: set[int]) -> set[int]:\n    t = s\n    s |= {3}\n    return t\n\n" +
-      "Pair = int | str\nprint(isinstance(3, Pair), grow({1}), {1, 2} & {2}, {1} ^ {2}, {'a': 1} | {'b': 2}, Mask() & Mask())\n",
+      "Pair = int | str\nprint(isinstance(3, Pair), {1, 2} & {2}, {1} ^ {2}, {'a': 1} | {'b': 2}, Mask() & Mask())\n",
     "intermediate",
   );
-  expect(fine.stdout === "True {1, 3} {2} {1, 2} {'a': 1, 'b': 2} both\n", `not bitwise: ${fine.stdout} ${fine.error?.message ?? ""}`);
+  expect(fine.stdout === "True {2} {1, 2} {'a': 1, 'b': 2} both\n", `not bitwise: ${fine.stdout} ${fine.error?.message ?? ""}`);
+  // Where a set may be changed in place, `|=` changes the same set.
+  const grown = runOf("def grow(s: set[int]) -> set[int]:\n    t = s\n    s |= {3}\n    return t\n\nprint(grow({1}))\n", "advanced");
+  expect(grown.stdout === "{1, 3}\n", `in place: ${grown.stdout} ${grown.error?.message ?? ""}`);
   // An annotation is left as written: kept as text, it is read again later.
   const future = runOf("from __future__ import annotations\n\ndef f(x: int | None) -> int:\n    return 0 if x is None else x\n\nprint(f(None), f.__annotations__['x'])\n", "beginner");
   expect(future.stdout === "0 int | None\n", `annotations kept as text: ${future.stdout} ${future.error?.message ?? ""}`);
@@ -1610,6 +1627,225 @@ console.log("[bitwise operators: refused between numbers at beginner and interme
     expect(allowed.stdout === "7 -6 12\n", `${level}: ${allowed.stdout} ${allowed.error?.message ?? ""}`);
   }
   console.log(`    ${CASES.length} refused; types, sets, dictionaries and a mask's & untouched; advanced and raw allow it`);
+}
+
+console.log("[changing a list, a dictionary, a set or a dataclass in place: refused at beginner and intermediate]");
+{
+  const runOf = (source, level) => {
+    runs += 1;
+    return JSON.parse(pllCall("_pll_run_file", JSON.stringify([source, "mut.py", `mutation-${runs}`, level, false])));
+  };
+  const ALLOWED = (noun) => `Python allows changing ${noun} in place, and so does \`#level advanced\`.`;
+  // [what, the program, the headline, what to write instead].
+  const CASES = [
+    ["append", "xs = [1]\nxs.append(2)\n", "`xs.append(2)` changes a list in place, which is not allowed at `#level beginner`.",
+      "Make a new list with it on the end: `xs + [2]`."],
+    ["sort, with its arguments", "xs = [3, 1]\nxs.sort(reverse=True)\n", "`xs.sort(reverse=True)` changes a list in place, which is not allowed at `#level beginner`.",
+      "`sorted(xs, reverse=True)` is a new list, in order."],
+    ["a method fetched and not called", "xs = [1]\nf = xs.pop\n", "`xs.pop` changes a list in place, which is not allowed at `#level beginner`.",
+      "`xs[-1]` is the last item, and `xs[:-1]` a new list without it."],
+    ["a method's argument", "class Box:\n    def append(self, x):\n        return x\n\nxs = [1]\nBox().append(xs.pop())\n",
+      "`xs.pop()` changes a list in place, which is not allowed at `#level beginner`.", "`xs[-1]` is the last item, and `xs[:-1]` a new list without it."],
+    ["pop from the middle", "xs = [5, 6, 7]\nprint(xs.pop(1))\n", "`xs.pop(1)` changes a list in place, which is not allowed at `#level beginner`.",
+      "`xs[1]` is the item, and `xs[:1] + xs[2:]` a new list without it."],
+    ["remove", "xs = [5, 6]\nxs.remove(5)\n", "`xs.remove(5)` changes a list in place, which is not allowed at `#level beginner`.",
+      "With `i = xs.index(5)`, `xs[:i] + xs[i + 1:]` is a new list without it."],
+    ["an item set", "xs = [5, 6, 7]\nxs[2] = 9\n", "`xs[2] = 9` changes a list in place, which is not allowed at `#level beginner`.",
+      "`xs[:2] + [9] + xs[3:]` is a new list with it changed."],
+    ["an item deleted", "xs = [5, 6, 7]\ndel xs[0]\n", "`del xs[0]` changes a list in place, which is not allowed at `#level beginner`.",
+      "`xs[1:]` is a new list without it."],
+    ["an item added to", "xs = [5, 6, 7]\nxs[0] += 10\n", "`xs[0] += 10` changes a list in place, which is not allowed at `#level beginner`.",
+      "`[xs[0] + 10] + xs[1:]` is a new list with it changed."],
+    ["a key set", 'd = {"a": 1}\nd["b"] = 2\n', '`d["b"] = 2` changes a dictionary in place, which is not allowed at `#level beginner`.',
+      '`d | {"b": 2}` is a new dictionary with it changed.'],
+    ["a key added to", 'd = {"a": 1}\nd["a"] *= 2 + 1\n', '`d["a"] *= 2 + 1` changes a dictionary in place, which is not allowed at `#level beginner`.',
+      '`d | {"a": d["a"] * (2 + 1)}` is a new dictionary with it changed.'],
+    ["a key deleted", 'd = {"a": 1}\ndel d["a"]\n', '`del d["a"]` changes a dictionary in place, which is not allowed at `#level beginner`.',
+      "For a dictionary without it, start from `{}` and add each other key with `|`."],
+    ["update", 'd = {"a": 1}\nd.update({"b": 2})\n', '`d.update({"b": 2})` changes a dictionary in place, which is not allowed at `#level beginner`.',
+      '`d | {"b": 2}` is a new dictionary with both.'],
+    ["update with a keyword", 'd = {"a": 1}\nd.update(b=2)\n', '`d.update(b=2)` changes a dictionary in place, which is not allowed at `#level beginner`.',
+      '`d | {"b": 2}` is a new dictionary with both.'],
+    ["update of several, made sets", "s = {1}\ns.update([2], [3])\n", "`s.update([2], [3])` changes a set in place, which is not allowed at `#level beginner`.",
+      "Make a new set of all of them: `s | set([2]) | set([3])`."],
+    ["extend by a range, made a list", "xs = [1]\nxs.extend(range(3))\n", "`xs.extend(range(3))` changes a list in place, which is not allowed at `#level beginner`.",
+      "Make a new list of both: `xs + list(range(3))`."],
+    ["insert at the front", "xs = [1, 2]\nxs.insert(0, 5)\n", "`xs.insert(0, 5)` changes a list in place, which is not allowed at `#level beginner`.",
+      "Make a new list with it at that place: `[5] + xs`."],
+    ["pop with a default", 'd = {"a": 1}\nd.pop("a", None)\n', '`d.pop("a", None)` changes a dictionary in place, which is not allowed at `#level beginner`.',
+      '`d.get("a", None)` is the value. For a dictionary without it, start from `{}` and add each other key with `|`.'],
+    ["a method through its class", "xs = [1]\nlist.append(xs, 2)\n", "`list.append(xs, 2)` changes a list in place, which is not allowed at `#level beginner`.",
+      "Make a new list with it on the end: `xs + [2]`."],
+    ["shuffle", "import random\n\nxs = [1, 2, 3]\nrandom.shuffle(xs)\n", "`random.shuffle(xs)` changes `xs` in place, which is not allowed at `#level beginner`.",
+      "`random.sample(xs, len(xs))` is a new list of the same items, in a random order."],
+    ["shuffle named on its own", "from random import shuffle\n\nxs = [1, 2, 3]\nshuffle(xs)\n", "`shuffle(xs)` changes `xs` in place, which is not allowed at `#level beginner`.",
+      "`sample(xs, len(xs))` is a new list of the same items, in a random order, with `from random import sample`."],
+    ["insort", "import bisect\n\nxs = [1, 3]\nbisect.insort(xs, 2)\n", "`bisect.insort(xs, 2)` changes `xs` in place, which is not allowed at `#level beginner`.",
+      "`sorted(xs + [2])` is a new list with it in order."],
+    ["a set's add", "s = {1}\ns.add(2)\n", "`s.add(2)` changes a set in place, which is not allowed at `#level beginner`.", "Make a new set with it: `s | {2}`."],
+    ["a table's row", 't = table(["a"], [[1]])\nr = t.row(0)\nr["a"] = 2\n', '`r["a"] = 2` changes a dictionary in place, which is not allowed at `#level beginner`.', null],
+    ["a field", 'from dataclasses import dataclass\n\n@dataclass\nclass Dog:\n    name: str\n    age: int\n\nd = Dog("Rex", 3)\nd.age = 4\n',
+      "Setting the `age` field changes a `Dog` in place, which is not allowed at `#level beginner`.",
+      "Make a new `Dog` with the change instead: `replace(d, age=4)`, with `from dataclasses import replace`."],
+  ];
+  for (const [what, source, headline, instead] of CASES) {
+    const finding = runOf(source, "beginner").error?.finding;
+    expect(finding?.errorType === "Mutation" && finding?.headline === headline, `${what}: ${finding?.headline}`);
+    if (instead !== null) expect(finding?.howToFix[0] === instead, `${what}, instead: ${JSON.stringify(finding?.howToFix)}`);
+    expect(/^Python allows changing .*, and so does `#level advanced`\.$/.test(finding?.howToFix.at(-1) ?? ""), `${what}, allowed elsewhere: ${JSON.stringify(finding?.howToFix)}`);
+  }
+  // `+=` on a list changes it; on a number it gives a new one.
+  const inPlace = runOf("def grow(xs: list[int]) -> list[int]:\n    xs += [4]\n    return xs\n\ngrow([1])\n", "intermediate").error?.finding;
+  expect(
+    inPlace?.headline === "`xs += [4]` changes a list in place, which is not allowed at `#level intermediate`." &&
+      inPlace.howToFix[0] === "`xs + [4]` is a new list, and leaves `xs` as it was." && inPlace.howToFix[1] === ALLOWED("a list"),
+    `+= on a list: ${inPlace?.headline} ${JSON.stringify(inPlace?.howToFix)}`,
+  );
+  // Refused with no one new value to suggest: a slice, items among several
+  // targets (a swap), a method not called, and what `*` hands over.
+  const NO_INSTEAD = [
+    ["xs = [5, 6, 7]", "xs[0:2] = [1]", "a list"],
+    ["xs = [5, 6, 7]", "xs[0:2] += [1]", "a list"],
+    ["xs = [5, 6, 7]", "del xs[0:2]", "a list"],
+    ["xs = [5, 6, 7]", "xs[::2] = [0, 0]", "a list"],
+    ["xs = [5, 6, 7]", "xs[0], xs[2] = xs[2], xs[0]", "a list"],
+    ["xs = [5, 6, 7]", "a = xs[0] = 9", "a list"],
+    ['d = {"a": 1}', 'k, d["a"] = "b", 2', "a dictionary"],
+    ["xs = [5, 6, 7]", "f = xs.append", "a list", "xs.append"],
+    ["s = {1}\nls = [[2], [3]]", "s.update(*ls)", "a set"],
+    ["xs = [5, 6, 7]\nwhere = (0, 1)", "xs.insert(*where)", "a list"],
+    ["xs = [5, 6, 7]", "f = list.pop", "a list", "list.pop"],
+    ["xs = [5, 6, 7]", "for xs[0] in range(3):\n    pass", "a list", "for xs[0] in range(3)"],
+    ["xs = [5, 6, 7]", "ys = [0 for xs[1] in range(3)]", "a list", "for xs[1] in range(3)"],
+  ];
+  for (const [setup, written, noun, shown = written] of NO_INSTEAD) {
+    const found = runOf(`${setup}\n${written}\n`, "beginner").error?.finding;
+    expect(
+      found?.headline === `\`${shown}\` changes ${noun} in place, which is not allowed at \`#level beginner\`.` &&
+        found.howToFix.length === 1 && found.howToFix[0] === ALLOWED(noun),
+      `no one new value for ${written}: ${found?.headline} ${JSON.stringify(found?.howToFix)}`,
+    );
+  }
+  // A library function that changes a list: refused however it is reached,
+  // at the level the file is at, with no new list to suggest for a heap.
+  const ALLOWED_LIST = ALLOWED("a list");
+  const heaped = runOf("import heapq\n\nh = [3, 1]\nheapq.heappush(h, 2)\n", "beginner").error?.finding;
+  expect(
+    heaped?.headline === "`heapq.heappush(h, 2)` changes `h` in place, which is not allowed at `#level beginner`." &&
+      heaped.howToFix.length === 1 && heaped.howToFix[0] === ALLOWED_LIST,
+    `heappush: ${heaped?.headline} ${JSON.stringify(heaped?.howToFix)}`,
+  );
+  const named = runOf("from random import shuffle\n\nmix = shuffle\n", "beginner").error?.finding;
+  expect(
+    named?.headline === "`shuffle` changes the list it is given in place, which is not allowed at `#level beginner`.",
+    `shuffle named and not called: ${named?.headline}`,
+  );
+  const mixed = runOf("import random\n\ndef mix(xs: list[int]) -> list[int]:\n    random.shuffle(xs)\n    return xs\n\nmix([1, 2])\n", "intermediate").error?.finding;
+  expect(
+    mixed?.headline === "`random.shuffle(xs)` changes `xs` in place, which is not allowed at `#level intermediate`.",
+    `shuffle at intermediate: ${mixed?.headline}`,
+  );
+  // What only looks like one is left alone: a function of their own called
+  // `shuffle`, `random.sample`, and what reads through a class.
+  const lookalikes = runOf(
+    "import random\n\ndef shuffle(deck: list[int]) -> list[int]:\n    return deck[::-1]\n\nxs = [1, 2, 3]\n" +
+      "print(shuffle(xs), sorted(random.sample(xs, len(xs))), xs, dict.get({'a': 1}, 'a'), list.index(xs, 2))\n",
+    "beginner",
+  );
+  expect(lookalikes.stdout === "[3, 2, 1] [1, 2, 3] [1, 2, 3] 1 1\n", `look-alikes: ${lookalikes.stdout} ${lookalikes.error?.message ?? ""}`);
+  // A set has no items to set, as Python says; a class's own `__setitem__` is its own.
+  const setItem = runOf("s = {1}\ns[0] = 2\n", "beginner").error?.finding;
+  expect(setItem?.errorType === "TypeError", `an item of a set: ${setItem?.errorType} ${setItem?.headline}`);
+  const ownItems = runOf("class Grid:\n    def __setitem__(self, k, v):\n        print(k, v)\n\ng = Grid()\ng[0], g[1] = 5, 6\n", "beginner");
+  expect(ownItems.stdout === "0 5\n1 6\n", `a class's own items: ${ownItems.stdout} ${ownItems.error?.message ?? ""}`);
+  // On an attribute: what it holds is refused before it changes - for a
+  // dataclass's field, as setting the field is - and the rest is Python's.
+  const DATACLASS = "from dataclasses import dataclass\n\n@dataclass\nclass Library:\n    books: list[str]\n\n";
+  const shelved = runOf(DATACLASS + 'lib = Library([])\ntry:\n    lib.books += ["b"]\nfinally:\n    print(lib.books)\n', "beginner");
+  expect(
+    shelved.stdout === "[]\n" &&
+      shelved.error?.finding?.headline === "Setting the `books` field changes a `Library` in place, which is not allowed at `#level beginner`." &&
+      shelved.error.finding.howToFix[0] === 'Make a new `Library` with the change instead: `replace(lib, books=lib.books + ["b"])`, with `from dataclasses import replace`.',
+    `+= on a field holding a list: ${shelved.stdout} ${shelved.error?.finding?.headline} ${JSON.stringify(shelved.error?.finding?.howToFix)}`,
+  );
+  const OWN = "class Shelf:\n    def __init__(self):\n        self.things = []\n        self.count = 0\n\n";
+  const own = runOf(OWN + "    def add(self, x):\n        self.things += [x]\n\nShelf().add(1)\n", "beginner").error?.finding;
+  expect(
+    own?.headline === "`self.things += [x]` changes a list in place, which is not allowed at `#level beginner`." &&
+      own.howToFix[0] === "`self.things + [x]` is a new list, and leaves `self.things` as it was.",
+    `+= on an attribute holding a list: ${own?.headline} ${JSON.stringify(own?.howToFix)}`,
+  );
+  const counted2 = runOf(OWN + "    def add(self, x):\n        self.count += x\n\ns = Shelf()\ns.add(2)\nprint(s.count)\n", "beginner");
+  expect(counted2.stdout === "2\n", `+= on an attribute holding a number: ${counted2.stdout} ${counted2.error?.message ?? ""}`);
+  const shifted = runOf(OWN + "    def add(self, x):\n        self.count ^= x\n\nShelf().add(2)\n", "intermediate").error?.finding;
+  expect(shifted?.errorType === "BitwiseOperator", `^= on an attribute: ${shifted?.errorType} ${shifted?.headline}`);
+  const advancedShelf = runOf(OWN + "    def add(self, x):\n        self.things += [x]\n\ns = Shelf()\ns.add(1)\nprint(s.things)\n", "advanced");
+  expect(advancedShelf.stdout === "[1]\n", `advanced, += on an attribute: ${advancedShelf.stdout} ${advancedShelf.error?.message ?? ""}`);
+  // `xs += range(3)` works where `xs + range(3)` does not.
+  const ranged = runOf("def grow(xs: list[int]) -> list[int]:\n    xs += range(3)\n    return xs\n\ngrow([1])\n", "intermediate").error?.finding;
+  expect(ranged?.howToFix[0] === "`xs + list(range(3))` is a new list, and leaves `xs` as it was.", `+= a range: ${JSON.stringify(ranged?.howToFix)}`);
+  // What it is in place of is an operation of its own: `s - t - u` would not be it.
+  const takenAway = runOf("def less(s: set[int], t: set[int]) -> set[int]:\n    s -= t - {1}\n    return s\n\nless({1, 2}, {2, 3})\n", "intermediate").error?.finding;
+  expect(takenAway?.howToFix[0] === "`s - (t - {1})` is a new set, and leaves `s` as it was.", `-= on a set: ${JSON.stringify(takenAway?.howToFix)}`);
+  const counted = runOf("def total(xs: list[int]) -> int:\n    n = 0\n    for x in xs:\n        n += x\n    return n\n\nprint(total([1, 2, 3]))\n", "intermediate");
+  expect(counted.stdout === "6\n", `+= on a number: ${counted.stdout} ${counted.error?.message ?? ""}`);
+  const tallied = runOf(
+    "class Tally:\n    def __init__(self):\n        self.n = 0\n\n    def __iadd__(self, k):\n        self.n = self.n + k\n        return self\n\n" +
+      "def bump() -> int:\n    t = Tally()\n    t += 2\n    return t.n\n\nprint(bump())\n",
+    "intermediate",
+  );
+  expect(tallied.stdout === "2\n", `+= on a class of one's own is its own __iadd__: ${tallied.stdout} ${tallied.error?.message ?? ""}`);
+  // What gives a new value back is left alone, and so is what is not a list, a dictionary or a set.
+  const reads = runOf(
+    "xs = [3, 1, 2]\nd = {'a': 1}\nprint(xs.index(1), xs.count(3), sorted(xs), xs + [4], xs[::-1], d.get('a'), d | {'b': 2})\n" +
+      "class Box:\n    def append(self, x):\n        return 'ok'\n\nprint(Box().append(1))\n",
+    "beginner",
+  );
+  expect(reads.stdout === "1 1 [1, 2, 3] [3, 1, 2, 4] [2, 1, 3] 1 {'a': 1, 'b': 2}\nok\n", `left alone: ${reads.stdout} ${reads.error?.message ?? ""}`);
+  // Allowed at advanced, and at raw.
+  for (const level of ["advanced", "raw"]) {
+    const allowed = runOf("xs = [1]\nxs.append(2)\nxs[0] = 0\ndel xs[1]\nd = {}\nd['a'] = 1\nxs[0], d['b'] = 5, 2\nprint(xs, d)\n", level);
+    const reached = runOf("import random\n\nxs = [1, 2, 3]\nrandom.shuffle(xs)\nlist.append(xs, 4)\nfor xs[0] in range(3):\n    pass\nprint(len(xs), xs[0])\n", level);
+    expect(reached.stdout === "4 2\n", `${level}, shuffle, a class's method and an item loop: ${reached.stdout} ${reached.error?.message ?? ""}`);
+    expect(allowed.stdout === "[5] {'a': 1, 'b': 2}\n", `${level}: ${allowed.stdout} ${allowed.error?.message ?? ""}`);
+  }
+  console.log(`    ${CASES.length} refused, each with what to write instead; += on a number, reads and other classes left alone`);
+}
+
+console.log("[an iterator shown or printed: Python's text, and a warning that says what it is]");
+{
+  let iterRuns = 0;
+  const runOf = (source, level) => {
+    iterRuns += 1;
+    return JSON.parse(pllCall("_pll_run_file", JSON.stringify([source, "iter.py", `iterator-${iterRuns}`, level, false])));
+  };
+  const WORKED = "its items are worked out as they are read, and can be read only once.";
+  const program =
+    'zip([1, 2], [3, 4])\nprint("doubled:", map(str, [1]))\nfor n in [1, 2]:\n    print(filter(None, [n]))\n' +
+    "(x for x in [1])\nprint(list(zip([1], [2])))\n";
+  const shown = runOf(program, "beginner");
+  const warnings = shown.stderr.split("\n").filter((line) => line.startsWith("warning:"));
+  expect(
+    JSON.stringify(warnings) ===
+      JSON.stringify([
+        `warning: line 1: \`zip(...)\` gives an iterator, not a list: ${WORKED} \`list(zip(...))\` makes a list of them.`,
+        `warning: line 2: \`map(...)\` gives an iterator, not a list: ${WORKED} \`list(map(...))\` makes a list of them.`,
+        `warning: line 4: \`filter(...)\` gives an iterator, not a list: ${WORKED} \`list(filter(...))\` makes a list of them.`,
+        `warning: line 5: This generator is an iterator, not a list: ${WORKED} \`list(...)\` of it makes a list of them.`,
+      ]),
+    `one warning for each line that shows one: ${JSON.stringify(warnings)}`,
+  );
+  expect(
+    /^<zip object at 0x[0-9a-f]+>\ndoubled: <map object at 0x[0-9a-f]+>\n<filter object at 0x[0-9a-f]+>\n<filter object at 0x[0-9a-f]+>\n<generator object <genexpr> at 0x[0-9a-f]+>\n\[\(1, 2\)\]\n$/.test(shown.stdout),
+    `and what is shown is Python's own: ${JSON.stringify(shown.stdout)}`,
+  );
+  const reversedShown = runOf("reversed([1, 2])\n", "advanced");
+  expect(/^warning: line 1: `reversed\(\.\.\.\)` gives an iterator/.test(reversedShown.stderr), `advanced too: ${reversedShown.stderr}`);
+  const raw = runOf('print(map(str, [1]))\n', "raw");
+  expect(raw.stderr === "" && /^<map object at/.test(raw.stdout), `raw is Python: ${raw.stderr} ${raw.stdout}`);
+  const toFile = runOf('import sys\nprint(zip([1], [2]), file=sys.stderr)\n', "beginner");
+  expect(!/warning:/.test(toFile.stderr), `printed somewhere else, no warning: ${toFile.stderr}`);
+  console.log("    once for each line, after Python's text; not at raw, nor for what is printed elsewhere");
 }
 
 console.log("[annotations: the function wording only where there is a function]");
@@ -2198,6 +2434,20 @@ console.log("[fourth pass: every replayed case read for the same patterns]");
   expect(
     JSON.stringify(inTest.howToFix) === JSON.stringify(["A test checks with `assert`: compare the value with what it should be."]),
     `a value thrown away in a test: ${JSON.stringify(inTest.howToFix)}`,
+  );
+  // A call that only gives back a new value: what it was taken to change stays as it was.
+  const dropped = wordStatic(
+    [{ id: "unused-value", error_type: "UnusedValue", line_number: 2, column: 4, name_token: null, expression: "sorted(xs)", unchanged: "xs" }],
+    "beginner",
+    "student.py",
+  )[0];
+  expect(
+    JSON.stringify(dropped.howToFix) ===
+      JSON.stringify([
+        "Did you mean `return sorted(xs)`? On its own, the value is worked out and thrown away.",
+        "`sorted(xs)` gives back a new value, and `xs` stays as it was.",
+      ]),
+    `a new value thrown away: ${JSON.stringify(dropped.howToFix)}`,
   );
   console.log("    suggestions, lengths, counts, empty classes, swaps and expressions from the program");
 }

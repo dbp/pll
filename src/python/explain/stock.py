@@ -602,12 +602,13 @@ def _pll_missing_dataclass(m, e):
     fields = _pll_fields_of(e, class_name)
     if fields is None:
         return None
+    fixes = ["Write `@dataclass` on the line above `class %s`." % class_name]
+    if e.level not in _PLL_STUDENT_LEVELS:
+        # (at the student levels every file has `dataclass`)
+        fixes.append("Add `from dataclasses import dataclass` at the top of the file if it is not there.")
     return "`%s` lists fields (%s) but has no `@dataclass`, so it takes no arguments." % (
         class_name, _pll_list_names(fields)
-    ), [
-        "Write `@dataclass` on the line above `class %s`." % class_name,
-        "Add `from dataclasses import dataclass` at the top of the file if it is not there.",
-    ]
+    ), fixes
 
 
 @_pll_stock(
@@ -1290,3 +1291,254 @@ def _pll_explain_bitwise(e):
         headline = '`%s`%s: `~` is not "not", but turns over the binary digits of a number.' % (written, gives)
         how_to_fix = ["For \"not\", write `not %s`." % left, advanced]
     return {"id": "bitwise-operator", "errorType": "BitwiseOperator", "headline": headline, "howToFix": how_to_fix}
+
+
+#: What to write instead of changing a value in place, by its kind and the
+#: method: `{t}` is the value as written; `{a}`, `{b}` and `{rest}` its
+#: arguments, `{a_list}` the first as a list; `{around}` and `{at}` the list
+#: without the item at `{a}`, and with `{b}` put there.
+_PLL_INSTEAD = {
+    ("list", "append"): "Make a new list with it on the end: `{t} + [{a}]`.",
+    ("list", "extend"): "Make a new list of both: `{t} + {a_list}`.",
+    ("list", "insert"): "Make a new list with it at that place: `{at}`.",
+    ("list", "remove"): "With `i = {t}.index({a})`, `{t}[:i] + {t}[i + 1:]` is a new list without it.",
+    ("list", "pop"): "`{t}[-1]` is the last item, and `{t}[:-1]` a new list without it.",
+    ("list", "pop1"): "`{t}[{a}]` is the item, and `{around}` a new list without it.",
+    ("list", "clear"): "`[]` is a new list with nothing in it.",
+    ("list", "sort"): "`sorted({t}{args})` is a new list, in order.",
+    ("list", "reverse"): "`{t}[::-1]` is a new list, the other way round.",
+    ("dict", "setdefault"): "`{t}.get({rest})` gives the value without changing `{t}`.",
+    ("dict", "pop"): "`{t}[{a}]` is the value. For a dictionary without it, start from `{{}}` and add each other key with `|`.",
+    ("dict", "pop2"): "`{t}.get({rest})` is the value. For a dictionary without it, start from `{{}}` and add each other key with `|`.",
+    ("dict", "popitem"): "For a dictionary without an item, start from `{{}}` and add each key to keep with `|`.",
+    ("dict", "clear"): "`{{}}` is a new dictionary with nothing in it.",
+    ("set", "add"): "Make a new set with it: `{t} | {{{a}}}`.",
+    ("set", "remove"): "Make a new set without it: `{t} - {{{a}}}`.",
+    ("set", "discard"): "Make a new set without it: `{t} - {{{a}}}`.",
+    ("set", "intersection_update"): "`{t} & {a}` is a new set of what both have.",
+    ("set", "difference_update"): "`{t} - {a}` is a new set without those.",
+    ("set", "symmetric_difference_update"): "`{t} ^ {a}` is a new set of what one has and not the other.",
+    ("set", "clear"): "`set()` is a new set with nothing in it.",
+}
+
+
+def _pll_around(target, key, middle=""):
+    """`target` without the item at `key`, with `middle` in its place - as
+    slices: `xs[:2] + [9] + xs[3:]`, or `[9] + xs[1:]` for the first."""
+    if _pll_src_re.fullmatch(r"\d+", key or ""):
+        at = int(key)
+        before = "%s[:%d] + " % (target, at) if at else ""
+        return "%s%s%s[%d:]" % (before, middle + " + " if middle else "", target, at + 1)
+    return "%s[:%s] + %s%s[%s + 1:]" % (target, key, middle + " + " if middle else "", target, _pll_operand(key))
+
+
+#: What makes each kind of value, written out.
+_PLL_KIND_NODES = {
+    "list": (_ast.List, _ast.ListComp),
+    "set": (_ast.Set, _ast.SetComp),
+    "dict": (_ast.Dict, _ast.DictComp),
+}
+
+#: Builtins that make a list, a set or a dictionary, and which.
+_PLL_MADE_BY = {"list": "list", "sorted": "list", "set": "set", "dict": "dict"}
+
+#: Builtins that make something `+` and `|` do not take with one of those.
+_PLL_NOT_MADE = frozenset(("range", "map", "filter", "zip", "reversed", "enumerate", "tuple", "str", "frozenset"))
+
+
+def _pll_as_kind(text, kind):
+    """`text`, what `extend`, `update` or `+=` is given, as a `kind` that
+    `+` or `|` takes: written as another kind of value (`[2]` for a set), or
+    made by a builtin like `range`, it is converted (`set([2])`); a name or
+    a call of one's own is taken to be one already."""
+    try:
+        node = _ast.parse(text, mode="eval").body
+    except SyntaxError:
+        return None
+    if isinstance(node, _PLL_KIND_NODES[kind]):
+        return text
+    if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Name):
+        made = _PLL_MADE_BY.get(node.func.id)
+        if made == kind:
+            return text
+        if made is not None or node.func.id in _PLL_NOT_MADE:
+            return "%s(%s)" % (kind, text)
+        return text
+    if isinstance(node, (_ast.Constant, _ast.JoinedStr, _ast.Tuple, _ast.GeneratorExp, *(
+        nodes for other, nodes in _PLL_KIND_NODES.items() if other != kind
+    ))):
+        return "%s(%s)" % (kind, text)
+    return _pll_operand(text)
+
+
+def _pll_union_instead(target, kind, arguments):
+    """What to write for `update`: `target` and each argument joined by
+    `|` - for a dictionary, its keyword arguments as one dictionary more."""
+    parts, keys = [target], []
+    for argument in arguments:
+        keyword = _pll_src_re.match(r"([A-Za-z_]\w*)=(?!=)(.*)\Z", argument, _pll_src_re.S)
+        if keyword is not None and kind == "dict":
+            keys.append('"%s": %s' % keyword.groups())
+            continue
+        part = None if keyword is not None else _pll_as_kind(argument, kind)
+        if part is None:
+            return None
+        parts.append(part)
+    if keys:
+        parts.append("{%s}" % ", ".join(keys))
+    which = "both" if len(parts) == 2 else "all of them"
+    if kind == "dict":
+        return "`%s` is a new dictionary with %s." % (" | ".join(parts), which)
+    return "Make a new set of %s: `%s`." % (which, " | ".join(parts))
+
+
+def _pll_operand(text):
+    """`text` as it can follow an operator: in parentheses when it is an
+    operation itself, as `s - (t - u)` must be."""
+    try:
+        node = _ast.parse(text, mode="eval").body
+    except SyntaxError:
+        return text
+    if isinstance(node, (_ast.BinOp, _ast.BoolOp, _ast.Compare, _ast.IfExp, _ast.Lambda, _ast.NamedExpr)) or (
+        isinstance(node, _ast.UnaryOp) and isinstance(node.op, _ast.Not)
+    ):
+        return "(%s)" % text
+    return text
+
+
+def _pll_is_slice(key):
+    """Whether `key`, as written, is a slice (`1:3`)."""
+    try:
+        return isinstance(_ast.parse("_[%s]" % key, mode="eval").body.slice, _ast.Slice)
+    except SyntaxError:
+        return False
+
+
+def _pll_mutation_instead(facts, e):
+    """What to write instead: a new value, made from the old one."""
+    what, kind = facts.get("what"), facts.get("kind")
+    target = facts.get("target")
+    if target is None and what != "field":
+        return None
+    if what == "function":
+        name, arguments, prefix = facts.get("name"), facts.get("arguments") or (), facts.get("prefix")
+        if name == "shuffle" and len(arguments) == 1:
+            if prefix:
+                return "`%s.sample(%s, len(%s))` is a new list of the same items, in a random order." % (
+                    prefix, target, target
+                )
+            return (
+                "`sample(%s, len(%s))` is a new list of the same items, in a random order, with `from random import sample`."
+                % (target, target)
+            )
+        if name == "insort" and len(arguments) == 2 and not _pll_src_re.match(r"[A-Za-z_]\w*=(?!=)", arguments[1]):
+            return "`sorted(%s + [%s])` is a new list with it in order." % (target, arguments[1])
+        return None
+    if what == "method":
+        name, arguments = facts.get("name"), facts.get("arguments")
+        if arguments is None:
+            # (fetched, not called: what it would be given is not known)
+            template = _PLL_INSTEAD.get((kind, name))
+            return template.format(t=target) if template and "{" not in template.replace("{t}", "") else None
+        arguments = list(arguments)
+        if any(a.startswith("*") for a in arguments):
+            return None
+        if name == "update":
+            return _pll_union_instead(target, kind, arguments)
+        if name != "sort" and any(_pll_src_re.match(r"[A-Za-z_]\w*=(?!=)", a) for a in arguments):
+            return None
+        key = name
+        if name == "pop" and arguments:
+            key = "pop1" if kind == "list" else "pop2" if len(arguments) > 1 else "pop"
+        template = _PLL_INSTEAD.get((kind, key))
+        if template is None:
+            return None
+        a = arguments[0] if arguments else "..."
+        b = arguments[1] if len(arguments) > 1 else "..."
+        rest = ", ".join(arguments)
+        at = "[%s] + %s" % (b, target) if a == "0" else "%s[:%s] + [%s] + %s[%s:]" % (target, a, b, target, a)
+        a_list = _pll_as_kind(a, "list") if "{a_list}" in template else None
+        if "{a_list}" in template and a_list is None:
+            return None
+        return template.format(
+            t=target, a=a, b=b, rest=rest, args=", " + rest if rest else "", around=_pll_around(target, a), at=at,
+            a_list=a_list,
+        )
+    if what in ("setitem", "delitem") and _pll_is_slice(facts.get("key") or ""):
+        return None
+    if what == "setitem":
+        key, value = facts.get("key") or "...", facts.get("value")
+        if value is None:
+            return None
+        if facts.get("symbol"):
+            value = "%s[%s] %s %s" % (target, key, facts["symbol"], _pll_operand(value))
+        if kind == "dict":
+            return "`%s | {%s: %s}` is a new dictionary with it changed." % (target, key, value)
+        return "`%s` is a new list with it changed." % _pll_around(target, key, "[%s]" % value)
+    if what == "delitem":
+        key = facts.get("key") or "..."
+        if kind == "dict":
+            return "For a dictionary without it, start from `{}` and add each other key with `|`."
+        return "`%s` is a new list without it." % _pll_around(target, key)
+    if what == "in_place":
+        symbol, value = facts.get("symbol"), facts.get("value") or "..."
+        # (`xs += range(3)` works where `xs + range(3)` does not)
+        same = (
+            (kind == "list" and symbol == "+")
+            or (kind == "set" and symbol in ("|", "&", "-", "^"))
+            or (kind == "dict" and symbol == "|")
+        )
+        value = _pll_as_kind(value, kind) if same else _pll_operand(value)
+        if value is None:
+            return None
+        return "`%s %s %s` is a new %s, and leaves `%s` as it was." % (
+            target, symbol, value, {"dict": "dictionary"}.get(kind, kind), target
+        )
+    if what == "field":
+        written = _pll_src_re.match(
+            r"\s*(?P<obj>[A-Za-z_][\w.]*)\.%s\s*(?P<op>\*\*|//|<<|>>|[-+*/%%@&|^])?=\s*(?P<value>.+?)\s*$"
+            % _pll_src_re.escape(facts.get("name") or ""),
+            e.text or "",
+        )
+        if written is None:
+            return "Make a new `%s` with the change instead: `replace(..., %s=...)`, with `from dataclasses import replace`." % (
+                kind, facts.get("name")
+            )
+        value = written.group("value")
+        if written.group("op"):
+            value = "%s.%s %s %s" % (written.group("obj"), facts["name"], written.group("op"), value)
+        return "Make a new `%s` with the change instead: `replace(%s, %s=%s)`, with `from dataclasses import replace`." % (
+            kind, written.group("obj"), facts["name"], value
+        )
+    return None
+
+
+@_pll_explains("Mutation")
+def _pll_explain_mutation(e):
+    """A list, a dictionary, a set or a dataclass changed in place, which
+    `beginner` and `intermediate` refuse as it runs (typeChecking.py): with
+    no changing in place, no change shows up through another name for the
+    same value; `#level advanced` is where a course meets that."""
+    facts = e.facts.get("mutation") or {}
+    kind, level = facts.get("kind") or "value", facts.get("level") or "beginner"
+    noun = {"list": "a list", "dict": "a dictionary", "set": "a set"}.get(kind)
+    shown = facts.get("written") or "this"
+    if facts.get("what") == "field":
+        headline = "Setting the `%s` field changes a `%s` in place, which is not allowed at `#level %s`." % (
+            facts.get("name"), kind, level
+        )
+        allowed = "Python allows changing a field, and so does `#level advanced`."
+    elif facts.get("what") == "function":
+        changed = "`%s`" % facts["target"] if facts.get("target") else "the list it is given"
+        headline = "`%s` changes %s in place, which is not allowed at `#level %s`." % (shown, changed, level)
+        allowed = "Python allows changing a list in place, and so does `#level advanced`."
+    else:
+        headline = "`%s` changes %s in place, which is not allowed at `#level %s`." % (shown, noun or "a value", level)
+        allowed = "Python allows changing %s in place, and so does `#level advanced`." % (noun or "a value")
+    instead = _pll_mutation_instead(facts, e)
+    return {
+        "id": "mutation",
+        "errorType": "Mutation",
+        "headline": headline,
+        "howToFix": ([instead] if instead else []) + [allowed],
+    }

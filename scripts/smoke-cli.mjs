@@ -430,9 +430,6 @@ async function main() {
     const file = fixture(
       "capture.py",
       "#level beginner",
-      "from dataclasses import dataclass",
-      "",
-      "",
       "@dataclass",
       "class Boa:",
       "    name: str",
@@ -472,7 +469,7 @@ async function main() {
       `the missing brackets are named: ${r.stderr}`,
     );
     // 8 spaces + "case " is 13 characters, so `Boa` starts at 14.
-    expect(/capture\.py:20:14\b/.test(r.stderr), `blamed at the case line: ${r.stderr}`);
+    expect(/capture\.py:17:14\b/.test(r.stderr), `blamed at the case line: ${r.stderr}`);
     console.log(`    ${r.stderr.split("\n")[0]}`);
   }
 

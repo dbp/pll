@@ -2,13 +2,63 @@
 
 ## Unreleased
 
+### Added
+- **`dataclass` needs no import at `beginner`, `intermediate` and
+  `advanced`**, as `Callable` needs none: every data definition starts with
+  it. At `beginner` and `intermediate`, importing it anyway is said as such
+  - "`dataclass` needs no import: PLL gives every file `dataclass` at
+  `#level beginner`" - and an import of more than it keeps the rest: "Take
+  `dataclass` out of this import: `from dataclasses import replace`".
+  `replace` and `field` still come from `dataclasses`, and `#level raw` is
+  Python, which needs the import.
+- **Changing a list, a dictionary, a set or a dataclass in place stops the
+  program at `beginner` and `intermediate`**, as it runs: with nothing
+  changed in place, no change shows up through another name for the same
+  value. `xs.append(4)`, `xs.sort()`, `d[key] = 1`, `s.add(x)`, `xs += [4]`
+  and `p.age = 5` each say what they change, and what to write instead,
+  which makes a new value - "Make a new list with it on the end: `xs +
+  [4]`", `sorted(xs)`, `d | {key: 1}`, `replace(p, age=5)`. A swap, `xs[i],
+  xs[j] = xs[j], xs[i]`, is refused too, as are slices, a method called
+  through its class (`list.append(xs, 4)`), a loop whose target is an item
+  (`for xs[i] in ...`), and the library functions that change a list:
+  `random.shuffle(xs)` - `random.sample(xs, len(xs))` is a new list in a
+  random order - and those of `heapq` and `bisect`. Only those four kinds
+  of value are refused: reading one (`xs.index(4)`, `d.get(key)`), `n += 1`
+  on a number, and an `append` method or a `shuffle` function of one's own
+  work as they always have. `#level advanced` allows it.
+
+- **A call that only gives back a new value, on a line of its own in a
+  function, is caught before the run**, as `xs + [4]` there is: `sorted(xs)`,
+  `name.upper()`, `replace(p, age=2)`, `t.add_column(...)`, `circle(...)`,
+  `math.sqrt(x)` - "`sorted(xs)` gives back a new value, and `xs` stays as it
+  was." A call of one's own, a method of one's own of the same name, and a
+  library function that does something (`random.seed`) are left alone.
+- **An iterator shown or printed comes with a warning**, at `beginner`,
+  `intermediate` and `advanced`: after Python's own `<zip object at ...>`,
+  "`zip(...)` gives an iterator, not a list: its items are worked out as they
+  are read, and can be read only once. `list(zip(...))` makes a list of
+  them." The same for `map`, `filter`, `enumerate`, `reversed` and a
+  generator, once for each line. `#level raw`, and printing anywhere but the
+  panel, say nothing.
+
+### Changed
+- **Taking an item out with `del` - `del xs[0]`, `del d[key]` - is refused
+  at `beginner` and `intermediate`**, as changing one in place is. 0.6.0
+  allowed it.
+- **`s |= t` on a set is refused at `beginner` and `intermediate`**, which
+  0.7.0 allowed, as it is not a bitwise operator between numbers: it
+  changes `s` in place, where `s | t` is a new set. The same for `&=`,
+  `^=` and `-=` on a set, and `|=` on a dictionary.
+
 ### Fixed
-- **The interactions panel is not blank in Safari with AdGuard**: in
-  vscode.dev, with AdGuard Mini's advanced blocking on, the PLL panel
-  showed nothing at all - no header, no prompt, no output. AdGuard holds
-  back a page's `load` event and later fires a copy of its own, which VS
-  Code took for the panel loading, and then never showed it. The panel now
-  stops the copy, so VS Code shows it as it does in every other browser.
+- **`self.n ^= 2` is refused at `beginner` and `intermediate`**, as `n ^= 2`
+  is: 0.7.0 checked the bitwise assignments only on a name.
+- **An attribute a class sets for itself is not taken for a method left
+  uncalled**: with `self.items = []` in `__init__`, `print(s.items)` said
+  "`items` is named here but never called". The same for a class attribute
+  and a property; a dataclass's fields already counted.
+
+## 0.7.0 (2026-10-21)
 
 ### Added
 - **Bitwise operators between numbers stop the program at `beginner` and
@@ -76,6 +126,14 @@
   takes two frames, and the recursion limit doubles at those levels.
 - If PLL cannot add its checks to a file, a warning says that its
   annotations are not checked, where it was silent.
+
+### Fixed
+- **The interactions panel is not blank in Safari with AdGuard**: in
+  vscode.dev, with AdGuard Mini's advanced blocking on, the PLL panel
+  showed nothing at all - no header, no prompt, no output. AdGuard holds
+  back a page's `load` event and later fires a copy of its own, which VS
+  Code took for the panel loading, and then never showed it. The panel now
+  stops the copy, so VS Code shows it as it does in every other browser.
 
 ## 0.6.1 (2026-10-20)
 

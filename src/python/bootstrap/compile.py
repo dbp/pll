@@ -511,14 +511,34 @@ class _PllContracts(_ast.NodeTransformer):
 #: The bitwise operators, by their node, as they are written.
 _PLL_BITWISE_SYMBOLS = {_ast.BitOr: "|", _ast.BitAnd: "&", _ast.BitXor: "^", _ast.LShift: "<<", _ast.RShift: ">>"}
 
+#: Every operator `x op= y` can have, as it is written.
+_PLL_OPERATOR_SYMBOLS = {
+    **_PLL_BITWISE_SYMBOLS,
+    _ast.Add: "+", _ast.Sub: "-", _ast.Mult: "*", _ast.Div: "/", _ast.FloorDiv: "//", _ast.Mod: "%",
+    _ast.Pow: "**", _ast.MatMult: "@",
+}
 
-class _PllBitwiseChecks(_ast.NodeTransformer):
-    """At `beginner` and `intermediate`, check each bitwise operator as it
-    runs (`pll:bitwise`, typeChecking.py): between two numbers it is
-    refused - `^` is no power - and between types, sets or a table's masks
-    it is what Python does. Annotations are left as they are: under `from
-    __future__ import annotations` Python keeps them as their text, which a
-    call in place of `|` would garble."""
+
+class _PllTeachingChecks(_ast.NodeTransformer):
+    """What `beginner` and `intermediate` refuse as the code runs
+    (typeChecking.py), each only when the value it meets is one it is about:
+
+    - a bitwise operator between two numbers (`pll:bitwise`): `^` is no
+      power, and between types or sets `|` is not bitwise at all;
+    - changing a list, a dictionary or a set in place - a method that does
+      (`pll:attribute`, as it is fetched, off the value or its class), a
+      library function that does (`random.shuffle`; `pll:named` for one
+      named on its own), `xs[i] = v` and `del xs[i]` (`pll:setitem`,
+      `pll:delitem`, and `pll:setitem_check` for an item among several
+      targets), a loop whose target is an item (`pll:iterating_into`),
+      `xs += ys` (`pll:in_place`), `xs[i] += v` (`pll:setitem_in_place`)
+      and `x.a += v` (`pll:attribute_in_place`) - where aliasing would make
+      one change show up through another name.
+
+    Annotations are left as they are: under `from __future__ import
+    annotations` Python keeps them as their text, which a call in place of
+    `|` would garble.
+    """
 
     def __init__(self, source):
         self.source = source
@@ -536,6 +556,23 @@ class _PllBitwiseChecks(_ast.NodeTransformer):
         )
         _ast.copy_location(call, at)
         return call
+
+    def _statement(self, call, at):
+        statement = _ast.Expr(value=call)
+        _ast.copy_location(statement, at)
+        return statement
+
+    def _key(self, node):
+        """A subscript's key as an expression a call can be given: a slice
+        written `a:b` is `slice(a, b, None)`."""
+        if isinstance(node, _ast.Slice):
+            parts = [part if part is not None else _ast.Constant(value=None) for part in (node.lower, node.upper, node.step)]
+            return _ast.copy_location(
+                _ast.Call(func=_ast.Name(id="pll:slice", ctx=_ast.Load()), args=parts, keywords=[]), node
+            )
+        if isinstance(node, _ast.Tuple):
+            return _ast.copy_location(_ast.Tuple(elts=[self._key(elt) for elt in node.elts], ctx=_ast.Load()), node)
+        return node
 
     def visit_BinOp(self, node):
         self.generic_visit(node)
@@ -556,19 +593,169 @@ class _PllBitwiseChecks(_ast.NodeTransformer):
         return self._call("pll:bitwise_not", [node.operand], [self._text(node), self._text(node.operand)], node)
 
     def visit_AugAssign(self, node):
-        self.generic_visit(node)
-        symbol = _PLL_BITWISE_SYMBOLS.get(type(node.op))
-        if symbol is None or not isinstance(node.target, _ast.Name):
-            return node
-        value = self._call(
-            "pll:bitwise_in_place",
-            [_ast.Constant(value=symbol), _ast.Name(id=node.target.id, ctx=_ast.Load()), node.value],
-            [self._text(node), node.target.id, self._text(node.value)],
+        written = self._text(node)
+        symbol = _PLL_OPERATOR_SYMBOLS.get(type(node.op))
+        node.value = self.visit(node.value)
+        target = node.target
+        if isinstance(target, _ast.Name):
+            value = self._call(
+                "pll:in_place",
+                [_ast.Constant(value=symbol), _ast.Name(id=target.id, ctx=_ast.Load()), node.value],
+                [written, target.id, self._text(node.value)],
+                node,
+            )
+            assign = _ast.Assign(targets=[_ast.Name(id=target.id, ctx=_ast.Store())], value=value)
+            return _ast.copy_location(assign, node)
+        if isinstance(target, _ast.Subscript):
+            key_text = self._text(target.slice)
+            target.value = self.visit(target.value)
+            key = self._key(self.visit(target.slice))
+            return self._statement(self._call(
+                "pll:setitem_in_place",
+                [target.value, key, _ast.Constant(value=symbol), node.value],
+                [written, self._text(target.value), key_text, self._text(node.value)],
+                node,
+            ), node)
+        # An attribute: `x.a = pll:attribute_in_place(x, "a", ...)`, so that
+        # the assignment is the program's own, which a dataclass's own check
+        # sees (`_pll_checked_setattr`).
+        call = self._call(
+            "pll:attribute_in_place",
+            [self.visit(_pll_copy.deepcopy(target.value)), _ast.Constant(value=target.attr), _ast.Constant(value=symbol),
+             node.value],
+            [written, self._text(target.value), self._text(node.value)],
             node,
         )
-        assign = _ast.Assign(targets=[_ast.Name(id=node.target.id, ctx=_ast.Store())], value=value)
-        _ast.copy_location(assign, node)
-        return assign
+        target.value = self.visit(target.value)
+        return _ast.copy_location(_ast.Assign(targets=[target], value=call), node)
+
+    def _fetched(self, node, written, arguments):
+        """`node.attr`, fetched through `pll:attribute`."""
+        value = self.visit(node.value)
+        return self._call(
+            "pll:attribute",
+            [value, _ast.Constant(value=node.attr)],
+            [written, self._text(node.value), arguments],
+            node,
+        )
+
+    def _arguments(self, node):
+        """A call's arguments, as written: `x`, `key=len`, `**options`."""
+        return tuple(self._text(arg) for arg in node.args) + tuple(
+            ("%s=%s" % (k.arg, self._text(k.value))) if k.arg else "**" + self._text(k.value) for k in node.keywords
+        )
+
+    def visit_Call(self, node):
+        func = node.func
+        if isinstance(func, _ast.Attribute) and isinstance(func.ctx, _ast.Load) and func.attr in _PLL_MUTATOR_NAMES:
+            node.func = self._fetched(func, self._text(node), self._arguments(node))
+        elif isinstance(func, _ast.Name) and func.id in _PLL_LIBRARY_MUTATOR_NAMES:
+            node.func = self._call("pll:named", [func], [self._text(node), self._arguments(node)], func)
+        else:
+            self.generic_visit(node)
+            return node
+        node.args = [self.visit(arg) for arg in node.args]
+        for keyword in node.keywords:
+            keyword.value = self.visit(keyword.value)
+        return node
+
+    def visit_Name(self, node):
+        if isinstance(node.ctx, _ast.Load) and node.id in _PLL_LIBRARY_MUTATOR_NAMES:
+            return self._call("pll:named", [node], [node.id, None], node)
+        return node
+
+    def _item_targets(self, node):
+        """For a loop whose target sets items - `for xs[i] in ...` - a copy
+        of each item's container, with what is written of it, taken before
+        the loop's own parts are visited."""
+        written = "for %s in %s" % (self._text(node.target), self._text(node.iter))
+        return [
+            (_pll_copy.deepcopy(item.value), written, self._text(item.value), self._text(item.slice))
+            for item in _ast.walk(node.target)
+            if isinstance(item, _ast.Subscript) and isinstance(item.ctx, _ast.Store)
+        ]
+
+    def _into_items(self, node, items):
+        """`node.iter`, checked first for each item its target sets."""
+        iterable = node.iter
+        for container, written, container_text, key_text in items:
+            iterable = self._call(
+                "pll:iterating_into", [iterable, self.visit(container)], [written, container_text, key_text], node.iter
+            )
+        return iterable
+
+    def visit_For(self, node):
+        items = self._item_targets(node)
+        self.generic_visit(node)
+        node.iter = self._into_items(node, items)
+        return node
+
+    visit_AsyncFor = visit_For
+
+    def visit_comprehension(self, node):
+        items = self._item_targets(node)
+        self.generic_visit(node)
+        node.iter = self._into_items(node, items)
+        return node
+
+    def visit_Attribute(self, node):
+        if isinstance(node.ctx, _ast.Load) and node.attr in _PLL_MUTATOR_NAMES:
+            return self._fetched(node, self._text(node), None)
+        self.generic_visit(node)
+        return node
+
+    def visit_Assign(self, node):
+        if len(node.targets) == 1 and isinstance(node.targets[0], _ast.Subscript):
+            target = node.targets[0]
+            written, key_text = self._text(node), self._text(target.slice)
+            node.value = self.visit(node.value)
+            target.value = self.visit(target.value)
+            key = self._key(self.visit(target.slice))
+            return self._statement(self._call(
+                "pll:setitem",
+                [target.value, key, node.value],
+                [written, self._text(target.value), key_text, self._text(node.value)],
+                node,
+            ), node)
+        # `xs[i], xs[j] = xs[j], xs[i]` and `a = xs[0] = 0`: each item's
+        # container is checked before the assignment, which is Python's.
+        items = [
+            item for target in node.targets for item in _ast.walk(target)
+            if isinstance(item, _ast.Subscript) and isinstance(item.ctx, _ast.Store)
+        ]
+        checks = [
+            self._statement(self._call(
+                "pll:setitem_check",
+                [self.visit(_pll_copy.deepcopy(item.value))],
+                [self._text(node), self._text(item.value), self._text(item.slice)],
+                node,
+            ), node)
+            for item in items
+        ]
+        self.generic_visit(node)
+        return checks + [node] if checks else node
+
+    def visit_Delete(self, node):
+        kept, checked = [], []
+        for target in node.targets:
+            if isinstance(target, _ast.Subscript):
+                key_text = self._text(target.slice)
+                value = self.visit(target.value)
+                checked.append(self._statement(self._call(
+                    "pll:delitem",
+                    [value, self._key(self.visit(target.slice))],
+                    ["del " + self._text(target), self._text(target.value), key_text],
+                    node,
+                ), node))
+            else:
+                kept.append(self.visit(target))
+        if not checked:
+            node.targets = kept
+            return node
+        if kept:
+            node.targets = kept
+            return [node] + checked
+        return checked
 
     # Annotations: not checked.
     def visit_arg(self, node):
@@ -682,13 +869,48 @@ def _pll_field_contracts_of(cls):
 
 def _pll_checked_setattr(self, name, value):
     """A checked dataclass's `__setattr__`: a field is given a value of its
-    annotation, or the assignment is refused."""
+    annotation, or the assignment is refused - and at `beginner` and
+    `intermediate`, whose code makes new values rather than change old ones,
+    it is refused once the instance is made, whatever the value."""
     if id(self) not in _PLL_CONSTRUCTING:
+        frame = _sys._getframe(1)
+        level = frame.f_globals.get("__pll_level__")
         contracts = _pll_field_contracts_of(type(self))
+        if level in _PLL_TEACHING_LEVELS and contracts is not None and name in contracts:
+            _pll_refuse_field(self, name, level)
         contract = contracts.get(name) if contracts else None
         if contract is not None:
-            _pll_check_field(self, type(self), name, value, contract, _sys._getframe(1), contracts, assigned=True)
+            _pll_check_field(self, type(self), name, value, contract, frame, contracts, assigned=True)
     object.__setattr__(self, name, value)
+
+
+def _pll_refuse_field(instance, name, level):
+    """Refuse setting the field `name` of `instance`, at `level`."""
+    kind = type(instance).__name__
+    _pll_refuse_mutation("field", kind, "the %s field of a %s" % (name, kind), level, name=name)
+
+
+def _pll_attribute_in_place(instance, name, symbol, value, written, instance_text, value_text):
+    """The new value of `instance.name symbol= value`, which the program
+    then assigns, at `beginner` and `intermediate`. A list, a dictionary or
+    a set there would be changed in place before that assignment, so it is
+    refused here - as setting the field is, for a dataclass's field - and
+    so is a bitwise operator between numbers."""
+    current = getattr(instance, name)
+    kind = _pll_mutable_kind(current)
+    if kind is not None:
+        level = _pll_level_of_caller()
+        contracts = _pll_field_contracts_of(type(instance))
+        if contracts is not None and name in contracts:
+            _pll_refuse_field(instance, name, level)
+        _pll_refuse_mutation("in_place", kind, written, level, symbol=symbol, target="%s.%s" % (instance_text, name),
+                             value=value_text)
+    if symbol in _PLL_BITWISE and isinstance(current, int) and isinstance(value, int):
+        _pll_refuse_bitwise(symbol, written, "%s.%s" % (instance_text, name), value_text, current, value)
+    return _PLL_IN_PLACE[symbol](current, value)
+
+
+_pll_hidden("attribute_in_place", _pll_attribute_in_place)
 
 
 def _pll_check_dataclass_fields(cls):
@@ -861,7 +1083,7 @@ def _pll_parse_and_instrument(code, filename, level):
 
 def _pll_with_contracts(tree, code, filename, level):
     """`tree`, with its annotations in force as contracts, at every level but
-    `raw`, and its bitwise operators checked at `beginner` and `intermediate`
+    `raw`, and what `beginner` and `intermediate` refuse as it runs checked
     - done after any other rewriting, so that the assertion rewriting of a
     test explains a call by the name it was written with.
 
@@ -877,7 +1099,7 @@ def _pll_with_contracts(tree, code, filename, level):
             # they were written.
             _PllDataclassChecks().visit(instrumented)
             if level in _PLL_TEACHING_LEVELS:
-                _PllBitwiseChecks(code).visit(instrumented)
+                _PllTeachingChecks(code).visit(instrumented)
             scopes = _PllContractScopes(filename).build(instrumented)
             _PllContracts(scopes, code, filename).visit(instrumented)
             _ast.fix_missing_locations(instrumented)

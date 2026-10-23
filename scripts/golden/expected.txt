@@ -621,17 +621,29 @@ stderr:
   KeyError: the table has no column "pay" (it has: name, hours).
     at student.py:4
 
-=== discarded-add-column-in-fn-intermediate (exit 1)
+=== discarded-add-column-in-fn-intermediate (exit 2)
 stderr:
   student.py [intermediate]
-  KeyError: the table has no column "pay" (it has: name, hours).
-    at student.py:4
+  UnusedValue: This line works out a value and then throws it away.
+    at student.py:3:5
+  
+  How to fix:
+    - Did you mean `return employees.add_column("pay", lambda r: r["hours"] * 15)`? On its own, the value is worked out and thrown away.
+    - `employees.add_column("pay", lambda r: r["hours"] * 15)` gives back a new value, and `employees` stays as it was.
+  
+  Static analysis found 1 problem. The file was not run.
 
-=== discarded-add-column-in-fn-beginner (exit 1)
+=== discarded-add-column-in-fn-beginner (exit 2)
 stderr:
   student.py [beginner]
-  KeyError: the table has no column "pay" (it has: name, hours).
-    at student.py:4
+  UnusedValue: This line works out a value and then throws it away.
+    at student.py:3:5
+  
+  How to fix:
+    - Did you mean `return employees.add_column("pay", lambda r: r["hours"] * 15)`? On its own, the value is worked out and thrown away.
+    - `employees.add_column("pay", lambda r: r["hours"] * 15)` gives back a new value, and `employees` stays as it was.
+  
+  Static analysis found 1 problem. The file was not run.
 
 === uneven-columns (exit 1)
 stderr:
@@ -700,12 +712,12 @@ stderr:
 === tc-return-none (exit 2)
 stderr:
   student.py [beginner]
-  MissingReturn: `shout` should return a string (`str`), but it has no `return`, so it always gives back `None`.
-    at student.py:2:1
+  UnusedValue: This line works out a value and then throws it away.
+    at student.py:3:5
   
   How to fix:
-    - End it with `return` and the value it works out.
-    - Or annotate the return type as `None` if `shout` is not meant to return anything.
+    - Did you mean `return word.upper()`? On its own, the value is worked out and thrown away.
+    - `word.upper()` gives back a new value, and `word` stays as it was.
   
   Static analysis found 1 problem. The file was not run.
 
@@ -734,7 +746,7 @@ stderr:
 
 === tc-return-append (exit 1)
 stderr:
-  student.py [beginner]
+  student.py [advanced]
   TypeMismatch: `add` should return a list (`list`), but `xs.append(x)` is `None` here.
     at student.py:3
   
@@ -757,7 +769,7 @@ stderr:
 stderr:
   student.py [beginner]
   TypeMismatch: No `case` in `sound` fitted `p`, so nothing was returned.
-    at student.py:13
+    at student.py:11
   
   How to fix:
     - There is no `case` for `Cat`.
@@ -812,7 +824,7 @@ stderr:
 stderr:
   student.py [beginner]
   TypeMismatch: The `year` field of `Song` should be a whole number (`int`), but got `"1999"`.
-    at student.py:9
+    at student.py:7
   
   How to fix:
     - Check the values given to `Song(...)`, in the order its fields are written.
@@ -823,7 +835,7 @@ stderr:
 stderr:
   student.py [beginner]
   TypeMismatch: The values for `title` and `year` of `Song` look swapped.
-    at student.py:9
+    at student.py:7
   
   How to fix:
     - `title` got `1999`, which fits `year` - and the other way round.
@@ -833,7 +845,7 @@ stderr:
 stderr:
   student.py [beginner]
   TypeMismatch: `t` was given the class `Song` itself, not one made from it.
-    at student.py:11
+    at student.py:9
   
   How to fix:
     - `Song` on its own is the blueprint; `Song(...)` makes one.
@@ -903,14 +915,14 @@ stderr:
 stderr:
   student.py [beginner]
   TypeMismatch: `tree_sum` expects `t` to be `BinTree[float]`, but `t.right.value` is the string "x".
-    at student.py:22
+    at student.py:20
   
   How to fix:
     - Look at `t.right.value` in the value you passed for `t`: all of it has to match the annotation.
 
 === tc-field-assigned (exit 1)
 stderr:
-  student.py [beginner]
+  student.py [advanced]
   TypeMismatch: The `age` field of `Dog` should be a whole number (`int`), but got `"three"`.
     at student.py:10
   
@@ -1067,8 +1079,8 @@ stderr:
 === name-forward-annotation (exit 2)
 stderr:
   student.py [beginner]
-  NameError: `NumList` is defined on line 9, after this line, and an annotation is read as the file runs.
-    at student.py:7:11
+  NameError: `NumList` is defined on line 7, after this line, and an annotation is read as the file runs.
+    at student.py:5:11
   
   How to fix:
     - Write the type as a string - `rest: "NumList"` - and Python looks it up later, once it exists.
@@ -1483,7 +1495,6 @@ stderr:
   
   How to fix:
     - Leave `total` in place: nothing needs a name removed.
-    - `del` can still take an item out of a dictionary or a list: `del d[key]`, `del items[0]`.
     - `#level advanced` allows removing a name with `del`, if you have a reason to.
   
   Static analysis found 1 problem. The file was not run.
@@ -1549,7 +1560,7 @@ stderr:
 stderr:
   student.py [beginner]
   NameError: `Link` is the class being defined here, and has no value until the class is finished.
-    at student.py:7:11
+    at student.py:5:11
   
   How to fix:
     - Write the type as a string - `rest: "Link | None"` - and Python looks it up later, once the class exists.
@@ -1599,7 +1610,6 @@ stderr:
   
   How to fix:
     - Leave `total` and `count` in place: nothing needs a name removed, and a function's names go away by themselves when it returns.
-    - `del` can still take an item out of a dictionary or a list: `del d[key]`, `del items[0]`.
     - `#level advanced` allows removing a name with `del`, if you have a reason to.
   
   Static analysis found 1 problem. The file was not run.
@@ -1616,11 +1626,65 @@ stderr:
   
   Static analysis found 1 problem. The file was not run.
 
-=== st-del-item (exit 0)
-stdout:
-  {'b': 2} [2, 3]
+=== st-del-item (exit 1)
 stderr:
   student.py [beginner]
+  Mutation: `del ages["a"]` changes a dictionary in place, which is not allowed at `#level beginner`.
+    at student.py:4
+  
+  How to fix:
+    - For a dictionary without it, start from `{}` and add each other key with `|`.
+    - Python allows changing a dictionary in place, and so does `#level advanced`.
+
+=== mut-append (exit 1)
+stderr:
+  student.py [beginner]
+  Mutation: `result.append(2 * x)` changes a list in place, which is not allowed at `#level beginner`.
+    at student.py:5
+  
+  How to fix:
+    - Make a new list with it on the end: `result + [2 * x]`.
+    - Python allows changing a list in place, and so does `#level advanced`.
+
+=== mut-sort (exit 1)
+stderr:
+  student.py [intermediate]
+  Mutation: `scores.sort()` changes a list in place, which is not allowed at `#level intermediate`.
+    at student.py:3
+  
+  How to fix:
+    - `sorted(scores)` is a new list, in order.
+    - Python allows changing a list in place, and so does `#level advanced`.
+
+=== mut-dict-set (exit 1)
+stderr:
+  student.py [intermediate]
+  Mutation: `counts[w] = counts.get(w, 0) + 1` changes a dictionary in place, which is not allowed at `#level intermediate`.
+    at student.py:5
+  
+  How to fix:
+    - `counts | {w: counts.get(w, 0) + 1}` is a new dictionary with it changed.
+    - Python allows changing a dictionary in place, and so does `#level advanced`.
+
+=== mut-plus-equals (exit 1)
+stderr:
+  student.py [intermediate]
+  Mutation: `xs += [4]` changes a list in place, which is not allowed at `#level intermediate`.
+    at student.py:3
+  
+  How to fix:
+    - `xs + [4]` is a new list, and leaves `xs` as it was.
+    - Python allows changing a list in place, and so does `#level advanced`.
+
+=== mut-field (exit 1)
+stderr:
+  student.py [beginner]
+  Mutation: Setting the `age` field changes a `Dog` in place, which is not allowed at `#level beginner`.
+    at student.py:8
+  
+  How to fix:
+    - Make a new `Dog` with the change instead: `replace(d, age=4)`, with `from dataclasses import replace`.
+    - Python allows changing a field, and so does `#level advanced`.
 
 === st-unused-comparison (exit 2)
 stderr:
@@ -1642,6 +1706,30 @@ stderr:
   How to fix:
     - Did you mean `return order_amt + 8`? On its own, the value is worked out and thrown away.
     - Nothing in Python changes as a result of this line.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-unused-sorted (exit 2)
+stderr:
+  student.py [beginner]
+  UnusedValue: This line works out a value and then throws it away.
+    at student.py:3:5
+  
+  How to fix:
+    - Did you mean `return sorted(xs)`? On its own, the value is worked out and thrown away.
+    - `sorted(xs)` gives back a new value, and `xs` stays as it was.
+  
+  Static analysis found 1 problem. The file was not run.
+
+=== st-unused-upper (exit 2)
+stderr:
+  student.py [beginner]
+  UnusedValue: This line works out a value and then throws it away.
+    at student.py:3:5
+  
+  How to fix:
+    - Did you mean `return name.upper()`? On its own, the value is worked out and thrown away.
+    - `name.upper()` gives back a new value, and `name` stays as it was.
   
   Static analysis found 1 problem. The file was not run.
 
@@ -1697,7 +1785,7 @@ stderr:
 stderr:
   student.py [beginner]
   UnusedValue: This line works out a value and then throws it away.
-    at student.py:9:5
+    at student.py:7:5
   
   How to fix:
     - To change `ac.balance`, assign the result to it: `ac.balance = ac.balance + amt`.
@@ -1722,7 +1810,7 @@ stderr:
 stderr:
   student.py [beginner]
   NameError: There is no class `Aardvark`: an `Animal` is a `Boa` or an `Armadillo`.
-    at student.py:22:14
+    at student.py:20:14
   
   How to fix:
     - Match one of them: `case Boa(...)` or `case Armadillo(...)`.
@@ -1736,7 +1824,7 @@ stdout:
 stderr:
   student.py [beginner]
   NeverMatches: This `case` never matches: an `Animal` is a `Boa` or an `Armadillo`, never a `Rock`.
-    at student.py:24:14
+    at student.py:22:14
   
   How to fix:
     - Match one of them: `case Boa(...)` or `case Armadillo(...)`.
@@ -1747,7 +1835,7 @@ stderr:
 stderr:
   student.py [advanced]
   NameError: There is no class `Aardvark`: an `Animal` is a `Boa` or an `Armadillo`.
-    at student.py:22:14
+    at student.py:20:14
   
   How to fix:
     - Match one of them: `case Boa(...)` or `case Armadillo(...)`.
@@ -1810,7 +1898,7 @@ stderr:
 stderr:
   student.py [beginner]
   FieldNeedsType: `year = int` sets `year` to the type itself; did you mean `year: int`?
-    at student.py:7:5
+    at student.py:5:5
   
   How to fix:
     - A field is declared with a colon, not an `=`.
@@ -1826,7 +1914,6 @@ stderr:
   
   How to fix:
     - Write `@dataclass` on the line above `class Song`.
-    - Add `from dataclasses import dataclass` at the top of the file if it is not there.
   
   Static analysis found 1 problem. The file was not run.
 
@@ -1834,7 +1921,7 @@ stderr:
 stderr:
   student.py [beginner]
   AlwaysFalse: `Boa` is a class, so comparing a value with it is always False.
-    at student.py:9:17
+    at student.py:7:17
   
   How to fix:
     - Use `match` to tell the kinds apart: `case Boa(...):`.
@@ -1857,8 +1944,8 @@ stderr:
 === st-duplicate-class (exit 2)
 stderr:
   student.py [beginner]
-  DuplicateDefinition: There are two classes named `A` (lines 5 and 8).
-    at student.py:8:1
+  DuplicateDefinition: There are two classes named `A` (lines 3 and 6).
+    at student.py:6:1
   
   How to fix:
     - Rename one of them. Python keeps only the second, so the first never runs.

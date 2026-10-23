@@ -104,11 +104,12 @@ class _PllStream:
     "what did the program print?".
     """
 
-    __slots__ = ("_kind", "_chunks")
+    __slots__ = ("_kind", "_chunks", "_warned")
 
     def __init__(self, kind):
         self._kind = kind  # "stdout" or "stderr"
         self._chunks = []
+        self._warned = set()  # the warnings said on it, so each is said once
 
     def write(self, s):
         if not isinstance(s, str):
@@ -219,6 +220,48 @@ def _pll_show_top_level(value):
     if _pll_is_matplotlib(value):
         return
     print(repr(value))
+    _pll_warn_iterators((value,), _sys._getframe(1).f_lineno)
+
+
+#: The iterators a student meets, by type, and the function that makes each
+#: (None for a generator).
+_PLL_ITERATOR_MAKERS = {
+    map: "map",
+    filter: "filter",
+    zip: "zip",
+    enumerate: "enumerate",
+    reversed: "reversed",
+    type(reversed([])): "reversed",
+    type(reversed({})): "reversed",
+    type(reversed({}.values())): "reversed",
+    type(reversed({}.items())): "reversed",
+    _pll_types.GeneratorType: None,
+}
+
+
+def _pll_warn_iterators(values, line):
+    """Say what an iterator is when one is shown, at `line`: `<zip object at
+    0x...>` looks like a value of its own, and nothing it shows says that
+    reading it once uses it up. Said once for each line and kind, on the
+    run's own `stderr`, after what Python shows."""
+    stream = _sys.stderr
+    if not isinstance(stream, _PllStream):
+        return
+    for value in values:
+        if type(value) not in _PLL_ITERATOR_MAKERS:
+            continue
+        maker = _PLL_ITERATOR_MAKERS[type(value)]
+        if (line, maker) in stream._warned:
+            continue
+        stream._warned.add((line, maker))
+        if maker is None:
+            said = "This generator is an iterator, not a list", "`list(...)` of it"
+        else:
+            said = "`%s(...)` gives an iterator, not a list" % maker, "`list(%s(...))`" % maker
+        stream.write(
+            "warning: line %d: %s: its items are worked out as they are read, and can be read only once. "
+            "%s makes a list of them.\n" % (line, said[0], said[1])
+        )
 
 
 #: Python's own `print`, which `_pll_print` prints text with.
@@ -237,14 +280,17 @@ def _pll_print(*values, sep=" ", end="\n", file=None, flush=False):
     """
     stream = _sys.stdout
     shows = [_pll_display_of(value) for value in values]
+    to_panel = (file is None or file is stream) and isinstance(stream, _PllStream)
     if (
         not any(shows)
-        or (file is not None and file is not stream)
-        or not isinstance(stream, _PllStream)
+        or not to_panel
         or not isinstance(sep if sep is not None else " ", str)
         or not isinstance(end if end is not None else "\n", str)
     ):
-        return _pll_python_print(*values, sep=sep, end=end, file=file, flush=flush)
+        _pll_python_print(*values, sep=sep, end=end, file=file, flush=flush)
+        if to_panel:
+            _pll_warn_iterators(values, _sys._getframe(1).f_lineno)
+        return
     text = []
     for value, show in zip(values, shows):
         if show is None:

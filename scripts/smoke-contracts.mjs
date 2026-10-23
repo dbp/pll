@@ -21,6 +21,21 @@ function ran(source, level = "beginner") {
 
 // `Callable` needs no import at the student levels.
 const CALLABLE = "";
+
+console.log("[`dataclass` needs no import at the student levels; raw is Python]");
+{
+  const DOG = '@dataclass\nclass Dog:\n    name: str\n\nprint(Dog("Rex"))\n';
+  for (const level of ["beginner", "intermediate", "advanced"]) {
+    const given = ran(DOG, level);
+    expect(given.stdout === "Dog(name='Rex')\n" && given.error === null, `${level}: ${given.stdout} ${given.error?.message ?? ""}`);
+  }
+  const raw = ran(DOG, "raw");
+  expect(
+    raw.error?.errorType === "NameError" && raw.finding?.howToFix?.[0] === "Add `from dataclasses import dataclass` at the top of the file.",
+    `raw needs the import: ${JSON.stringify(raw.finding)}`,
+  );
+  console.log("    given at beginner, intermediate and advanced, and checked there as an imported one is");
+}
 const ADD1 = "def add1(x: int) -> int:\n    return x + 1\n\n";
 
 console.log("[the paper's examples: a function's argument contract, broken two ways]");
@@ -128,7 +143,9 @@ console.log("[recursion, methods, data]");
     bad.finding?.headline === '`tree_sum` expects `t` to be `BinTree[float]`, but `t.right.value` is the string "x".' && bad.finding?.lineNumber === 21,
     `a bad leaf: ${bad.finding?.headline} at ${bad.finding?.lineNumber}`,
   );
-  const field = ran('from dataclasses import dataclass\n\n@dataclass\nclass Dog:\n    name: str\n    age: int\n\nd = Dog("Rex", 3)\nd.age = "x"\n');
+  // Setting a field is checked where it is allowed, at advanced; the
+  // teaching levels refuse it whatever the value.
+  const field = ran('from dataclasses import dataclass\n\n@dataclass\nclass Dog:\n    name: str\n    age: int\n\nd = Dog("Rex", 3)\nd.age = "x"\n', "advanced");
   expect(
     field.finding?.headline === 'The `age` field of `Dog` should be a whole number (`int`), but got `"x"`.' && field.finding?.lineNumber === 9 &&
       field.finding?.howToFix[0] === "Check the value assigned to the `age` field on this line.",

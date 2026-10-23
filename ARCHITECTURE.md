@@ -209,12 +209,12 @@ line by `level.ts`. The syntax is exact: lower case, one space, one of the
 four names. Anything else - including the old bare `#beginner` form - is not
 a header and falls back to the default.
 
-| level | static checks | annotations checked | `bool` where a number is annotated |
-| --- | --- | --- | --- |
-| `raw` (default) | no | no | n/a |
-| `beginner` | all | yes | rejected |
-| `intermediate` | all, but reassignment only at module scope | yes | rejected |
-| `advanced` | only names read where they have no value | yes | allowed, as in Python |
+| level | static checks | annotations checked | `bool` where a number is annotated | bitwise operators on numbers | changing a list, dict, set or dataclass in place | `Callable` and `dataclass`, and a `print` that shows pictures |
+| --- | --- | --- | --- | --- | --- | --- |
+| `raw` (default) | no | no | n/a | allowed | allowed | no |
+| `beginner` | all | yes | rejected | refused as they run | refused as it runs | yes |
+| `intermediate` | all, but reassignment only at module scope | yes | rejected | refused as they run | refused as it runs | yes |
+| `advanced` | only names read where they have no value | yes | allowed, as in Python | allowed | allowed | yes |
 
 `raw` is the default so that a `.py` file written without PLL in mind
 behaves exactly as CPython would; every difference has to be opted into by
@@ -228,11 +228,26 @@ homes, and they are kept to exactly two. On the host, the predicates in
 `levelRefusesReassignment` - and the explanations use them to word a finding
 and to offer only fixes the level accepts. In Python,
 `_pll_checks_annotations` decides whether code is compiled with its
-annotation checks, `_pll_rejects_bool` how strictly a number is checked,
-`_pll_checks_names` whether it is checked for names read where they have
-no value, and `_pll_static_analyze` which reassignments it refuses - and which
-findings are errors that stop the code running and which are only
-warnings. Adding a level means adding it to `Level`, `LEVEL_NAMES`, those
+annotation checks, and a contract takes its file's level to decide whether a
+`bool` is a number (`_PllClassContract`); `_pll_with_contracts` adds the
+teaching checks at the teaching levels (`_PllTeachingChecks`, which sends
+each bitwise operator, each method of a list, dictionary or set that
+changes it - called or only read, as in `f = xs.append`, and off its class
+too - each library function that changes a list (`random.shuffle`), each
+item assigned or deleted, a loop's target among them, and each `+=`,
+through a function in `typeChecking.py` that refuses it only on a value of
+that kind as it runs: `int | None`, an `append` on a class of one's own, a
+`shuffle` of one's own and `n += 1` are untouched), and
+`_pll_checked_setattr`, at those levels, refuses setting a dataclass's field
+once it is made;
+`_pll_level_names` gives the names a level starts with beyond the
+libraries' (`Callable`, `dataclass`, and `_pll_print`, which shows a picture, a table or a
+figure as a top-level expression does, and after an iterator - `zip(...)`, a
+generator - warns, as the top level does, that it is one and is read only
+once: `_pll_warn_iterators`); `_pll_checks_names` decides whether
+code is checked for names read where they have no value, and
+`_pll_static_analyze` which reassignments it refuses - and which findings
+are errors that stop the code running and which are only warnings. Adding a level means adding it to `Level`, `LEVEL_NAMES`, those
 predicates, and their Python counterparts.
 
 ### Names read where they have no value

@@ -463,8 +463,6 @@ _g = _pll_get_session("smoke-lib")
     // tell students to rename a perfectly good field.
     const fields = analyze(
       [
-        "from dataclasses import dataclass",
-        "",
         "@dataclass",
         "class Dog:",
         "    id: int",
@@ -525,6 +523,29 @@ _g = _pll_get_session("smoke-lib")
         "method-not-called",
         2,
       ],
+      ["a new list thrown away", "def tidy(xs: list[int]) -> list[int]:\n    sorted(xs)\n    return xs\n", "unused-value", 2],
+      ["a string method's answer thrown away", "def shout(name: str) -> str:\n    name.upper()\n    return name\n", "unused-value", 2],
+      [
+        "replace's answer thrown away",
+        "from dataclasses import replace\n\n\n@dataclass\nclass P:\n    age: int\n\n\ndef older(p: P) -> P:\n    replace(p, age=p.age + 1)\n    return p\n",
+        "unused-value",
+        10,
+      ],
+      ["a table made and thrown away", 'def with_total(t):\n    t.add_column("total", [1])\n    return t\n', "unused-value", 2],
+      ["a picture made and thrown away", 'def dot():\n    circle(5, "solid", "red")\n    return 1\n', "unused-value", 2],
+      ["math's answer thrown away", "import math\n\n\ndef root(x: float) -> float:\n    math.sqrt(x)\n    return x\n", "unused-value", 5],
+      [
+        "an imported function's answer thrown away, under a name of its own",
+        "from random import sample as pick\n\n\ndef few(xs: list[int]) -> list[int]:\n    pick(xs, 2)\n    return xs\n",
+        "unused-value",
+        5,
+      ],
+      [
+        "a method of their own named but not called",
+        "class Shelf:\n    def items(self):\n        return []\n\n\ndef show(s):\n    print(s.items)\n",
+        "method-not-called",
+        7,
+      ],
       [
         "an annotation that is a function",
         'def summarise(t: table) -> str:\n    return "x"\n',
@@ -583,23 +604,53 @@ _g = _pll_get_session("smoke-lib")
       // is exactly right, and `count` is a very ordinary field name.
       [
         "a field named like a method",
-        "from dataclasses import dataclass\n\n\n@dataclass\nclass Song:\n    count: int\n\n\ndef show(s: Song):\n    print(s.count)\n",
+        "@dataclass\nclass Song:\n    count: int\n\n\ndef show(s: Song):\n    print(s.count)\n",
+      ],
+      // A call that may be there for what it does: a function or a method
+      // of their own (whatever it is called), a library function that
+      // changes something, and a function handed in.
+      ["a function of their own, called for what it does", "def show(x: int) -> None:\n    print(x)\n\n\ndef f(x: int) -> int:\n    show(x)\n    return x\n"],
+      ["a method of their own named like a string's", 'class Pen:\n    def split(self):\n        print("split")\n\n\ndef f(p):\n    p.split()\n    return p\n'],
+      ["a library function that does something", "import random\n\n\ndef f(xs):\n    random.seed(1)\n    return xs\n"],
+      ["a function handed in", "def apply(f, x):\n    f(x)\n    return x\n"],
+      // So is an attribute a class sets for itself, a class attribute, and
+      // a property: each is data, read without a call.
+      [
+        "an attribute set in __init__, named like a method",
+        "class Shelf:\n    def __init__(self):\n        self.items = []\n\n\ndef show(s):\n    print(s.items)\n",
+      ],
+      ["a class attribute named like a method", "class Config:\n    count = 3\n\n\ndef show(c):\n    print(c.count)\n"],
+      [
+        "a property named like a method",
+        "class Box:\n    @property\n    def count(self):\n        return 1\n\n\ndef show(b):\n    print(b.count)\n",
       ],
       // A class of their own called `Number` is a type.
       [
         "an annotation naming their own class",
-        "from dataclasses import dataclass\n\n\n@dataclass\nclass Number:\n    value: int\n\n\ndef twice(n: Number) -> Number:\n    return n\n",
+        "@dataclass\nclass Number:\n    value: int\n\n\ndef twice(n: Number) -> Number:\n    return n\n",
       ],
       // `type(a) == Boa` is a real check, however unidiomatic.
       [
         "a type() comparison",
-        "from dataclasses import dataclass\n\n\n@dataclass\nclass Boa:\n    name: str\n\n\ndef f(a):\n    return type(a) == Boa\n",
+        "@dataclass\nclass Boa:\n    name: str\n\n\ndef f(a):\n    return type(a) == Boa\n",
       ],
     ]) {
       const findings = analyze(code, "beginner", "quiet.py");
       expect(findings.length === 0, `${label} should stay silent, got ${JSON.stringify(findings)}`);
     }
     console.log("    and correct code stays silent");
+
+    // What a call that only gives back a new value leaves as it was: its
+    // first argument, or what it is called on - or nothing in particular.
+    for (const [code, unchanged] of [
+      ["def tidy(xs: list[int]) -> list[int]:\n    sorted(xs)\n    return xs\n", "xs"],
+      ["def shout(name: str) -> str:\n    name.upper()\n    return name\n", "name"],
+      ['def dot():\n    circle(5, "solid", "red")\n    return 1\n', undefined],
+    ]) {
+      const found = analyze(code, "beginner", "silence.py").find((f) => f.id === "unused-value");
+      expect(found?.unchanged === unchanged, `what stays as it was: ${JSON.stringify(found)}`);
+    }
+    console.log("    a call that only gives back a new value, thrown away, says what stays as it was");
 
     // Only at the levels that have static checks.
     const raw = analyze("def test_x():\n    assert(1, 2)\n", "raw", "silence.py");
@@ -643,12 +694,12 @@ _g = _pll_get_session("smoke-lib")
     // A dataclass field written the wrong way, which otherwise goes wrong
     // somewhere else entirely - as a NameError, or in an argument count.
     const fields = analyze(
-      "from dataclasses import dataclass\n\n\n@dataclass\nclass Boa:\n    name: str\n    year = int\n    length\n",
+      "@dataclass\nclass Boa:\n    name: str\n    year = int\n    length\n",
       "beginner",
       "dc.py",
     );
     expect(
-      fields.some((f) => f.id === "field-assigned-type" && f.line_number === 7),
+      fields.some((f) => f.id === "field-assigned-type" && f.line_number === 4),
       `\`year = int\` is flagged: ${JSON.stringify(fields)}`,
     );
     expect(
@@ -656,7 +707,7 @@ _g = _pll_get_session("smoke-lib")
       `with the type written carried through: ${JSON.stringify(fields)}`,
     );
     const asStr = analyze(
-      "from dataclasses import dataclass\n\n\n@dataclass\nclass Song:\n    name = str\n",
+      "@dataclass\nclass Song:\n    name = str\n",
       "beginner",
       "dc2.py",
     );
@@ -665,30 +716,30 @@ _g = _pll_get_session("smoke-lib")
       `\`name = str\` carries \`str\`, not \`int\`: ${JSON.stringify(asStr)}`,
     );
     expect(
-      fields.some((f) => f.id === "field-no-type" && f.line_number === 8),
+      fields.some((f) => f.id === "field-no-type" && f.line_number === 5),
       `a field with no type is flagged: ${JSON.stringify(fields)}`,
     );
 
     // A function written above the class it compares against is ordinary,
     // so the class names are collected before anything else is looked at.
     const above = analyze(
-      "from dataclasses import dataclass\n\n\ndef f(a):\n    return a == Boa\n\n\n@dataclass\nclass Boa:\n    name: str\n",
+      "def f(a):\n    return a == Boa\n\n\n@dataclass\nclass Boa:\n    name: str\n",
       "beginner",
       "order.py",
     );
     expect(
-      above.some((f) => f.id === "compared-with-class" && f.line_number === 5),
+      above.some((f) => f.id === "compared-with-class" && f.line_number === 2),
       `a comparison above the class is still seen: ${JSON.stringify(above)}`,
     );
 
     // `if a == Boa:` is always False, and runs without complaint.
     const compared = analyze(
-      "from dataclasses import dataclass\n\n\n@dataclass\nclass Boa:\n    name: str\n\n\ndef f(a):\n    return a == Boa\n",
+      "@dataclass\nclass Boa:\n    name: str\n\n\ndef f(a):\n    return a == Boa\n",
       "beginner",
       "cmp.py",
     );
     expect(
-      compared.some((f) => f.id === "compared-with-class" && f.line_number === 10),
+      compared.some((f) => f.id === "compared-with-class" && f.line_number === 7),
       `comparing with a class is flagged: ${JSON.stringify(compared)}`,
     );
     // Comparing with an ordinary value is not.
@@ -924,7 +975,6 @@ _g = _pll_get_session("smoke-lib")
   console.log("\n[26] a `case` pattern's class: one nothing defines, and one the subject never is");
   {
     const CLASSES = [
-      "from dataclasses import dataclass",
       "@dataclass",
       "class Pet:\n    name: str",
       "@dataclass",
@@ -1068,7 +1118,8 @@ _g = _pll_get_session("smoke-lib")
       ["mutual recursion", "beginner", "def even(n: int) -> bool:\n    return n == 0 or odd(n - 1)\ndef odd(n: int) -> bool:\n    return n != 0 and even(n - 1)\nprint(even(4))\n", [], "clean"],
       ["a missing import", "beginner", "print(math.pi)\n", ["NameError math@1"], "raises", "parity"],
       ["a misspelling, with Python's suggestion", "beginner", "total = 3\nprint(totl)\n", ["NameError totl@2"], "raises", "parity"],
-      ["a decorator never imported", "beginner", "@dataclass\nclass P:\n    x: int\n", ["NameError dataclass@1"], "raises", "parity"],
+      ["a decorator never imported", "beginner", "@total_ordering\nclass P:\n    x: int\n", ["NameError total_ordering@1"], "raises", "parity"],
+      ["the decorator every file has", "beginner", "@dataclass\nclass P:\n    x: int\n", [], "clean"],
       ["an unbound local", "advanced", "total = 0\ndef add(n):\n    total = total + n\n    return total\nadd(1)\n", ["UnboundLocalError total@3"], "raises", "parity"],
       ["`+=` on an outer name", "advanced", "count = 0\ndef bump():\n    count += 1\nbump()\n", ["UnboundLocalError count@3"], "raises", "parity"],
       ["`global`", "advanced", "count = 0\ndef bump():\n    global count\n    count += 1\nbump()\nprint(count)\n", [], "clean"],
@@ -1092,9 +1143,9 @@ _g = _pll_get_session("smoke-lib")
       ["a class's name inside a method", "advanced", "class C:\n    size = 3\n    def area(self):\n        return size * size\nC().area()\n", ["NameError size@4"], "raises", "parity"],
       ["an attribute without `self.`", "advanced", "class C:\n    def __init__(self):\n        self.width = 2\n    def area(self):\n        return width * 2\nC().area()\n", ["NameError width@5"], "raises", "parity"],
       ["a class's own name in a method's annotation", "advanced", "class Node:\n    def child(self) -> Node:\n        return self\n", ["NameError Node@2"], "raises"],
-      ["a dataclass naming itself", "beginner", "from dataclasses import dataclass\n@dataclass\nclass Link:\n    rest: Link | None\n", ["NameError Link@4"], "raises"],
-      ["a dataclass naming itself, as a string", "beginner", "from dataclasses import dataclass\n@dataclass\nclass Link:\n    rest: 'Link | None'\n", [], "clean"],
-      ["type parameters", "beginner", "from dataclasses import dataclass\n@dataclass\nclass Leaf[T]:\n    value: T\n    def get(self) -> T:\n        return self.value\nprint(Leaf(1).get())\n", [], "clean"],
+      ["a dataclass naming itself", "beginner", "@dataclass\nclass Link:\n    rest: Link | None\n", ["NameError Link@3"], "raises"],
+      ["a dataclass naming itself, as a string", "beginner", "@dataclass\nclass Link:\n    rest: 'Link | None'\n", [], "clean"],
+      ["type parameters", "beginner", "@dataclass\nclass Leaf[T]:\n    value: T\n    def get(self) -> T:\n        return self.value\nprint(Leaf(1).get())\n", [], "clean"],
       ["`match` captures", "beginner", "def f(lst: list) -> int:\n    match lst:\n        case []:\n            return 0\n        case [first, *rest]:\n            return first + f(rest)\n    return -1\nprint(f([1, 2]))\n", [], "clean"],
       ["`from m import *`", "advanced", "from math import *\nprint(pi)\n", [], "clean"],
       ["`exec`", "advanced", "exec('z = 1')\nprint(z)\n", [], "clean"],
@@ -1276,7 +1327,7 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
       ["a parameter hiding a `type`", "beginner", "type Shape = int\ndef f(Shape: int) -> int:\n    return Shape\n", "shadowing@2:6",
         [/Rename this parameter/]],
       ["the course's generic tree", "beginner",
-        "from dataclasses import dataclass\n@dataclass\nclass Leaf[T]:\n    value: T\n@dataclass\nclass Node[T]:\n    left: 'BinTree[T]'\n" +
+        "@dataclass\nclass Leaf[T]:\n    value: T\n@dataclass\nclass Node[T]:\n    left: 'BinTree[T]'\n" +
           "    right: 'BinTree[T]'\ntype BinTree[T] = Leaf[T] | Node[T]\ndef size(t: BinTree[int]) -> int:\n    return 1\nprint(size(Leaf(1)))\n",
         null, []],
       ["at intermediate, a built-in", "intermediate", "type list = int\n", "shadowing-builtin@1:5", []],
@@ -1338,6 +1389,7 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
       ["a `return` only inside an inner function", "def outer() -> int:\n    def inner() -> int:\n        return 1\n    inner()\n", ["missing-return@1"]],
       // A value thrown away on the last line is told to be returned already.
       ["a last line that is a value thrown away", "def add_one(x: int) -> int:\n    x + 1\n", ["unused-value@2"]],
+      ["a last line that is a new value thrown away", "def shout(word: str) -> str:\n    word.upper()\n", ["unused-value@2"]],
       ["a last line that is a comparison", "def is_five(x: int) -> bool:\n    x == 5\n", ["unused-comparison@2"]],
       // A course's template, every case still `pass`, is not written yet.
       ["a template's cases, all `pass`", "def my_count(lst: list) -> int:\n    match lst:\n        case []:\n            pass  # YOUR CODE HERE\n        case [f, *r]:\n            pass\n", []],
@@ -1359,7 +1411,7 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
         printed.howToFix[0] === "Line 2 ends it with `print`: did you mean `return 3.14 * r * r`?",
       `printed: ${JSON.stringify(printed)}`,
     );
-    const plain = words("def shout(word: str) -> str:\n    word.upper()\n");
+    const plain = words("def say(word: str) -> None:\n    print(word)\n\n\ndef shout(word: str) -> str:\n    say(word)\n");
     expect(
       JSON.stringify(plain?.howToFix) ===
         JSON.stringify(["End it with `return` and the value it works out.", "Or annotate the return type as `None` if `shout` is not meant to return anything."]),
@@ -1393,6 +1445,42 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
     // `advanced` makes none of the teaching checks, and `raw` gives no `Callable`.
     expect(analyze(`from collections.abc import Callable\n${USE}`, "advanced", "cal.py").length === 0, "the import is allowed at advanced");
     console.log("    no import needed; an import, or a definition, of it is said; advanced allows it");
+  }
+
+  console.log("\n[33] `dataclass` is given at the student levels too, so it needs no import");
+  {
+    const USE = "@dataclass\nclass Dog:\n    name: str\n";
+    for (const level of ["beginner", "intermediate", "advanced"]) {
+      const found = analyze(USE, level, "dc.py");
+      expect(found.length === 0, `${level}: used without an import: ${JSON.stringify(found.map((f) => f.id))}`);
+    }
+    const [said] = wordStatic(analyze(`from dataclasses import dataclass\n${USE}`, "beginner", "dc.py").filter((f) => f.id === "shadowing-library"), "beginner", "dc.py");
+    expect(
+      said?.headline === "`dataclass` needs no import: PLL gives every file `dataclass` at `#level beginner`." &&
+        JSON.stringify(said.howToFix) === JSON.stringify(["Delete this import."]),
+      `the import: ${JSON.stringify(said)}`,
+    );
+    // An import of more than it: only `dataclass` comes out of it.
+    for (const [imported, kept] of [
+      ["from dataclasses import dataclass, replace", "from dataclasses import replace"],
+      ["from dataclasses import field, dataclass, replace as r", "from dataclasses import field, replace as r"],
+    ]) {
+      const [mixed] = wordStatic(analyze(`${imported}\n${USE}`, "intermediate", "dc.py").filter((f) => f.id === "shadowing-library"), "intermediate", "dc.py");
+      expect(
+        JSON.stringify(mixed?.howToFix) === JSON.stringify([`Take \`dataclass\` out of this import: \`${kept}\`.`]),
+        `${imported}: ${JSON.stringify(mixed?.howToFix)}`,
+      );
+    }
+    const [defined] = wordStatic(analyze("def dataclass(x: int) -> int:\n    return x\n", "beginner", "dc.py").filter((f) => f.id === "shadowing-library"), "beginner", "dc.py");
+    expect(
+      defined?.headline === "`dataclass` is already defined: PLL gives every file `dataclass` at `#level beginner`, for `@dataclass` above a class.",
+      `defined: ${defined?.headline}`,
+    );
+    expect(analyze(`from dataclasses import dataclass\n${USE}`, "advanced", "dc.py").length === 0, "the import is allowed at advanced");
+    // A class with fields and no `@dataclass` is told to write it, and nothing about an import.
+    const [bare] = wordStatic(analyze("class Song:\n    title: str\n", "beginner", "dc.py").filter((f) => f.id === "class-needs-dataclass"), "beginner", "dc.py");
+    expect(JSON.stringify(bare?.howToFix) === JSON.stringify(["Write `@dataclass` on the line above `class Song`."]), `no @dataclass: ${JSON.stringify(bare?.howToFix)}`);
+    console.log("    no import needed; an import of it is said, and one of more keeps the rest; advanced allows it");
   }
 
   fn.destroy?.();

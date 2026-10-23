@@ -13,16 +13,17 @@ const A = "#level advanced";
 const CARS = "name,mpg\nvw,29\nhonda,33\nford,18\n";
 const RIDES = "month,riders\nJan,900\nFeb,1200\nMar,\n";
 
+// The import a file at `raw` needs; at the student levels every file has
+// `dataclass` already, and an import of it is refused.
 const dataclass = (...lines) => ["from dataclasses import dataclass", "", ...lines];
-const PETS = (...match) =>
-  dataclass(
-    "@dataclass", "class Boa:", "    name: str", "    length: float", "",
-    "@dataclass", "class Armadillo:", "    name: str", "    liveness: bool", "",
-    "@dataclass", "class Rock:", "    weight: float", "",
-    "Animal = Boa | Armadillo", "",
-    "def animal_name(a: Animal) -> str:", "    match a:", ...match, '    return ""', "",
-    'print(animal_name(Boa("Ayisha", 10)))',
-  );
+const PETS = (...match) => [
+  "@dataclass", "class Boa:", "    name: str", "    length: float", "",
+  "@dataclass", "class Armadillo:", "    name: str", "    liveness: bool", "",
+  "@dataclass", "class Rock:", "    weight: float", "",
+  "Animal = Boa | Armadillo", "",
+  "def animal_name(a: Animal) -> str:", "    match a:", ...match, '    return ""', "",
+  'print(animal_name(Boa("Ayisha", 10)))',
+];
 
 export const CASES = [
   // ---- runtime: the catch-all and the stock rules -----------------------
@@ -107,17 +108,17 @@ export const CASES = [
   { name: "tc-return-none", code: [B, "def shout(word: str) -> str:", "    word.upper()", "", 'print(shout("hi"))'] },
   { name: "tc-return-none-branch", code: [B, "def shout(word: str) -> str:", "    if word != \"\":", "        return word.upper()", "", "print(shout(\"\"))"] },
   { name: "tc-return-print", code: [B, "def order(order_amt: float) -> float:", "    if order_amt > 10:", "        return order_amt", "    else:", "        print(order_amt + 4)", "", "print(order(5))"] },
-  { name: "tc-return-append", code: [B, "def add(xs: list, x: int) -> list:", "    return xs.append(x)", "", "print(add([], 1))"] },
+  { name: "tc-return-append", code: [A, "def add(xs: list, x: int) -> list:", "    return xs.append(x)", "", "print(add([], 1))"] },
   { name: "tc-return-wrong", code: [B, "def name_of(n: int) -> str:", "    return n", "", "print(name_of(3))"] },
-  { name: "tc-match-no-case", code: [B, ...dataclass("@dataclass", "class Dog:", "    name: str", "@dataclass", "class Cat:", "    name: str", "", "Pet = Dog | Cat", "", "def sound(p: Pet) -> str:", "    match p:", "        case Dog(n):", '            return "woof"', "", 'print(sound(Cat("x")))')] },
+  { name: "tc-match-no-case", code: [B, "@dataclass", "class Dog:", "    name: str", "@dataclass", "class Cat:", "    name: str", "", "Pet = Dog | Cat", "", "def sound(p: Pet) -> str:", "    match p:", "        case Dog(n):", '            return "woof"', "", 'print(sound(Cat("x")))'] },
   { name: "tc-union-argument", code: [B, "def f(x: int | None) -> int:", "    return 1", "", 'print(f("a"))'] },
   { name: "tc-list-element", code: [B, "def total(lst: list[float]) -> float:", "    return sum(lst)", "", 'print(total(["1", 2.0]))'] },
   { name: "tc-dict-value", code: [B, "def total(d: dict[str, int]) -> int:", "    return sum(d.values())", "", 'print(total({"a": "1"}))'] },
   { name: "tc-bool-as-int", code: [B, "def double(n: int) -> int:", "    return n * 2", "", "print(double(True))"] },
   { name: "tc-bool-as-int-advanced", code: [A, "def double(n: int) -> int:", "    return n * 2", "", "print(double(True))"] },
-  { name: "tc-field", code: [B, ...dataclass("@dataclass", "class Song:", "    title: str", "    year: int", "", 's = Song("x", "1999")')] },
-  { name: "tc-field-swapped", code: [B, ...dataclass("@dataclass", "class Song:", "    title: str", "    year: int", "", 's = Song(1999, "x")')] },
-  { name: "tc-class-itself", code: [B, ...dataclass("@dataclass", "class Song:", "    title: str", "", "def t(s: Song) -> str:", "    return s.title", "", "print(t(Song))")] },
+  { name: "tc-field", code: [B, "@dataclass", "class Song:", "    title: str", "    year: int", "", 's = Song("x", "1999")'] },
+  { name: "tc-field-swapped", code: [B, "@dataclass", "class Song:", "    title: str", "    year: int", "", 's = Song(1999, "x")'] },
+  { name: "tc-class-itself", code: [B, "@dataclass", "class Song:", "    title: str", "", "def t(s: Song) -> str:", "    return s.title", "", "print(t(Song))"] },
   // Higher-order: who broke a function's contract, and where.
   { name: "ho-caller-breaks-promise", code: [A, "def add1(x: int) -> int:", "    return x + 1", "", "def foo(f: Callable[[str], str]) -> int:", "    return f(1)", "", "foo(add1)"] },
   { name: "ho-handed-over", code: [A, "def add1(x: int) -> int:", "    return x + 1", "", "def foo(f: Callable[[str], str]) -> int:", '    f("a")', "    return 0", "", "foo(add1)"] },
@@ -125,8 +126,8 @@ export const CASES = [
   { name: "ho-returned-misused", code: [B, "def adder(n: int) -> Callable[[int], int]:", "    return lambda x: x + n", "", "plus = adder(1)", 'print(plus("a"))'] },
   { name: "ho-given-returns-wrong", code: [B, "def apply(f: Callable[[int], int]) -> int:", "    return f(1)", "", 'print(apply(lambda x: "s"))'] },
   { name: "ho-recursive-call", code: [B, "def count(n: int) -> int:", "    if n == 0:", "        return 0", "    return count(str(n - 1))", "", "print(count(3))"] },
-  { name: "tc-generic-tree", code: [B, ...dataclass("@dataclass", "class Leaf[T]:", "    value: T", "", "@dataclass", "class Node[T]:", '    left: "BinTree[T]"', '    right: "BinTree[T]"', "", "type BinTree[T] = Leaf[T] | Node[T]", "", "def tree_sum(t: BinTree[float]) -> float:", "    match t:", "        case Leaf(v):", "            return v", "        case Node(l, r):", "            return tree_sum(l) + tree_sum(r)", "", 'print(tree_sum(Node(Leaf(1.0), Leaf("x"))))')] },
-  { name: "tc-field-assigned", code: [B, ...dataclass("@dataclass", "class Dog:", "    name: str", "    age: int", "", 'd = Dog("Rex", 3)', 'd.age = "three"')] },
+  { name: "tc-generic-tree", code: [B, "@dataclass", "class Leaf[T]:", "    value: T", "", "@dataclass", "class Node[T]:", '    left: "BinTree[T]"', '    right: "BinTree[T]"', "", "type BinTree[T] = Leaf[T] | Node[T]", "", "def tree_sum(t: BinTree[float]) -> float:", "    match t:", "        case Leaf(v):", "            return v", "        case Node(l, r):", "            return tree_sum(l) + tree_sum(r)", "", 'print(tree_sum(Node(Leaf(1.0), Leaf("x"))))'] },
+  { name: "tc-field-assigned", code: [A, ...dataclass("@dataclass", "class Dog:", "    name: str", "    age: int", "", 'd = Dog("Rex", 3)', 'd.age = "three"')] },
   { name: "not-a-type-number", code: [B, "z = 10", "", "def double(x: int) -> z:", "    return x * 2"] },
   { name: "not-a-type-string-variable", code: [B, 's = "failure"', "", "def double(x: int) -> s:", "    return x * 2"] },
   { name: "not-a-type-quoted", code: [A, 'def double(x: int) -> "test":', "    return x * 2", "", "double(1)"] },
@@ -144,7 +145,7 @@ export const CASES = [
   { name: "name-import-pd", code: ['df = pd.DataFrame({"a": [1]})'] },
   { name: "name-import-math", code: ["print(math.sqrt(4))"] },
   { name: "name-defined-later", code: ["print(double(2))", "", "def double(n):", "    return n * 2"] },
-  { name: "name-forward-annotation", code: [B, ...dataclass("@dataclass", "class Node:", "    value: int", "    rest: NumList", "", "NumList = Node | None")] },
+  { name: "name-forward-annotation", code: [B, "@dataclass", "class Node:", "    value: int", "    rest: NumList", "", "NumList = Node | None"] },
   { name: "name-type-string", code: ["def lemonade_stand_1(num_cups_sold: string) -> int:", "    return num_cups_sold", "", "def test_lemonade_stand_1():", "    assert lemonade_stand_1(4) == 4"] },
   { name: "name-free-variable", code: ["def outer():", "    def inner():", "        return title", "    r = inner()", '    title = "x"', "    return r", "", "outer()"] },
   { name: "name-unbound-local", code: ["count = 0", "def bump():", "    count = count + 1", "", "bump()"] },
@@ -196,20 +197,28 @@ export const CASES = [
   { name: "nm-unbound-local", code: [A, "total = 0", "def add(n):", "    total = total + n", "    return total"] },
   { name: "nm-after-del", code: [A, "scores = [1, 2]", "del scores", "print(scores)"] },
   { name: "nm-except-name", code: [A, "try:", "    1 / 0", "except ZeroDivisionError as e:", "    pass", "print(e)"] },
-  { name: "nm-class-own-name", code: [B, "from dataclasses import dataclass", "", "@dataclass", "class Link:", "    first: int", "    rest: Link | None"] },
+  { name: "nm-class-own-name", code: [B, "@dataclass", "class Link:", "    first: int", "    rest: Link | None"] },
   { name: "nm-method-attribute", code: [A, "class Box:", "    def __init__(self):", "        self.width = 2", "", "    def area(self):", "        return width * 2"] },
   { name: "nm-call-before-set", code: [B, "def greet() -> None:", '    print("Hello, " + who)', "", "greet()", 'who = "Ada"'] },
   { name: "nm-free-variable", code: [A, "def outer():", "    def inner():", "        return title", "    r = inner()", '    title = "x"', "    return r", "", "outer()"] },
   { name: "st-del-names-in-function", code: [B, "def average(xs: list) -> float:", "    total = sum(xs)", "    count = len(xs)", "    result = total / count", "    del total, count", "    return result"] },
   { name: "st-del-loop-variable", code: [I, "def without_negatives(numbers: list) -> list:", "    for n in numbers:", "        if n < 0:", "            del n", "    return numbers"] },
   { name: "st-del-item", code: [B, 'ages = {"a": 1, "b": 2}', "nums = [1, 2, 3]", 'del ages["a"]', "del nums[0]", "print(ages, nums)"] },
+  // Changing a list, a dictionary, a set or a dataclass in place, refused as it runs.
+  { name: "mut-append", code: [B, "def double_all(xs: list[int]) -> list[int]:", "    result = []", "    for x in xs:", "        result.append(2 * x)", "    return result", "", "print(double_all([1, 2]))"] },
+  { name: "mut-sort", code: [I, "scores = [3, 1, 2]", "scores.sort()"] },
+  { name: "mut-dict-set", code: [I, "def count(words: list[str]) -> dict[str, int]:", "    counts = {}", "    for w in words:", "        counts[w] = counts.get(w, 0) + 1", "    return counts", "", 'print(count(["a", "b"]))'] },
+  { name: "mut-plus-equals", code: [I, "def grow(xs: list[int]) -> list[int]:", "    xs += [4]", "    return xs", "", "print(grow([1]))"] },
+  { name: "mut-field", code: [B, "@dataclass", "class Dog:", "    name: str", "    age: int", "", 'd = Dog("Rex", 3)', "d.age = 4"] },
   { name: "st-unused-comparison", code: [B, "def double(n: int) -> int:", "    return n * 2", "", "def test_double():", "    double(2) == 4"] },
   { name: "st-unused-value", code: [B, "def order(order_amt: float) -> float:", "    order_amt + 8", "    return order_amt"] },
+  { name: "st-unused-sorted", code: [B, "def tidy(xs: list[int]) -> list[int]:", "    sorted(xs)", "    return xs"] },
+  { name: "st-unused-upper", code: [B, "def shout(name: str) -> str:", "    name.upper()", "    return name"] },
   { name: "st-unused-comparison-function", code: [B, "def is_five(x: int) -> bool:", "    x == 5"] },
   { name: "st-unused-constant", code: [B, "def lemonade_price() -> int:", "    2"] },
   { name: "st-missing-return-print", code: [B, "def lemonade_stand(cups: int) -> int:", "    profit = cups * 2 - 3", "    print(profit)"] },
   { name: "st-missing-return", code: [B, "def lemonade_stand(cups: int) -> int:", "    profit = cups * 2 - 3"] },
-  { name: "st-unused-value-field", code: [B, ...dataclass("@dataclass", "class Account:", "    balance: float", "", "def deposit(ac: Account, amt: float) -> Account:", "    ac.balance + amt", "    return ac")] },
+  { name: "st-unused-value-field", code: [B, "@dataclass", "class Account:", "    balance: float", "", "def deposit(ac: Account, amt: float) -> Account:", "    ac.balance + amt", "    return ac"] },
   { name: "st-assert-tuple", code: [B, "def test_total():", "    assert(1, 2)"] },
   { name: "st-pattern-unknown-class", code: [B, ...PETS("        case Aardvark(b):", "            return b", "        case Boa(n, l):", "            return n", "        case Armadillo(n, l):", "            return n")] },
   { name: "st-pattern-never-matches", code: [B, ...PETS("        case Boa(n, l):", "            return n", "        case Rock(w):", '            return "a rock"')] },
@@ -218,12 +227,12 @@ export const CASES = [
   { name: "st-annotation-not-a-type", code: [B, "def f(t: table) -> int:", "    return 1"] },
   { name: "st-annotation-row", code: [B, "def f(r: row) -> int:", "    return 1"] },
   { name: "st-test-not-named", code: [B, "def double(n: int) -> int:", "    return n * 2", "", "def check_double():", "    assert double(2) == 4", "", 'print("ran")'] },
-  { name: "st-field-no-type", code: [B, ...dataclass("@dataclass", "class Song:", "    title: str", "    year = 1999")] },
-  { name: "st-field-assigned-type", code: [B, ...dataclass("@dataclass", "class Song:", "    title: str", "    year = int")] },
+  { name: "st-field-no-type", code: [B, "@dataclass", "class Song:", "    title: str", "    year = 1999"] },
+  { name: "st-field-assigned-type", code: [B, "@dataclass", "class Song:", "    title: str", "    year = int"] },
   { name: "st-class-needs-dataclass", code: [B, "class Song:", "    title: str", "    year: int"] },
-  { name: "st-compared-with-class", code: [B, ...dataclass("@dataclass", "class Boa:", "    name: str", "", "def is_boa(a) -> bool:", "    return a == Boa")] },
+  { name: "st-compared-with-class", code: [B, "@dataclass", "class Boa:", "    name: str", "", "def is_boa(a) -> bool:", "    return a == Boa"] },
   { name: "st-duplicate-function", code: [B, "def f():", "    return 1", "", "def f():", "    return 2"] },
-  { name: "st-duplicate-class", code: [B, ...dataclass("@dataclass", "class A:", "    x: int", "@dataclass", "class A:", "    y: int")] },
+  { name: "st-duplicate-class", code: [B, "@dataclass", "class A:", "    x: int", "@dataclass", "class A:", "    y: int"] },
   { name: "st-several", code: [B, "total = 1", "total = 2", "list = 3", "def test_x():", "    assert(1, 2)"] },
   { name: "st-warning-and-error", code: [B, 'm = table(["r"], [[1]])', "def avg():", "    return m.length", "total = 1", "total = 2"] },
 

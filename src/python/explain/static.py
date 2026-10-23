@@ -128,6 +128,11 @@ def _pll_word_shadowing_builtin(f, level):
     ]
 
 
+#: What each name PLL gives every file at the student levels is, said where
+#: a definition of the student's reuses one.
+_PLL_LEVEL_NAME_IS = {"Callable": "the type of a function", "dataclass": "for `@dataclass` above a class"}
+
+
 @_pll_words("shadowing-library")
 def _pll_word_shadowing_library(f, level):
     """A name every session starts with, like `circle` or `table`."""
@@ -135,11 +140,14 @@ def _pll_word_shadowing_library(f, level):
     noun = _PLL_LIBRARY_NOUN.get(f.get("library"), "the PLL libraries")
     binding = f.get("binding")
     if f.get("library") == "level":
-        # `Callable`, which every file at the student levels starts with.
+        # `Callable` or `dataclass`, which every file at the student levels starts with.
         given = "PLL gives every file `%s` at `#level %s`" % (name, level)
         if binding in ("import", "importfrom"):
-            return "`%s` needs no import: %s." % (name, given), ["Delete this import."]
-        return "`%s` is already defined: %s, the type of a function." % (name, given), [
+            kept = f.get("kept_import")
+            return "`%s` needs no import: %s." % (name, given), [
+                "Take `%s` out of this import: `%s`." % (name, kept) if kept else "Delete this import."
+            ]
+        return "`%s` is already defined: %s, %s." % (name, given, _PLL_LEVEL_NAME_IS.get(name, "for you")), [
             "Pick a different name for your definition - a word that describes what yours represents."
         ]
     if binding in ("import", "importfrom"):
@@ -261,8 +269,7 @@ def _pll_word_disallowed_keyword(f, level):
 
 @_pll_words("unbinding")
 def _pll_word_unbinding(f, level):
-    """`del x` at a level that refuses it. Taking an item out of a value,
-    `del d[key]`, is allowed, so the wording says that too."""
+    """`del x` at a level that refuses it."""
     names = f.get("names") or [f["name_token"]]
     headline = "`del` removes the name%s %s, which is not allowed at the %s level." % (
         "s" if len(names) > 1 else "", _pll_list_names(names), level
@@ -279,7 +286,6 @@ def _pll_word_unbinding(f, level):
                 ", and a function's names go away by themselves when it returns"
                 if f.get("scope_kind") == "function" else "",
             ),
-            "`del` can still take an item out of a dictionary or a list: `del d[key]`, `del items[0]`.",
         ]
     fixes.append("`#level advanced` allows removing a name with `del`, if you have a reason to.")
     return headline, fixes
@@ -362,6 +368,9 @@ def _pll_word_unused_value(f, level):
         fixes = ["Did you mean `return %s`? A function gives back only what it `return`s." % expression]
     else:
         fixes = ["Did you mean `return %s`? On its own, the value is worked out and thrown away." % expression]
+    unchanged = f.get("unchanged")
+    if unchanged and expression is not None:
+        return headline, fixes + ["`%s` gives back a new value, and `%s` stays as it was." % (expression, unchanged)]
     return headline, fixes + ["Nothing in Python changes as a result of this line."]
 
 
@@ -480,10 +489,10 @@ def _pll_word_field_assigned_type(f, level):
 def _pll_word_class_needs_dataclass(f, level):
     """A class with annotated fields and no `@dataclass`."""
     name = f["name_token"] or "this class"
-    return "`%s` lists fields but has no `@dataclass`, so `%s(...)` takes no arguments." % (name, name), [
-        "Write `@dataclass` on the line above `class %s`." % name,
-        "Add `from dataclasses import dataclass` at the top of the file if it is not there.",
-    ]
+    fixes = ["Write `@dataclass` on the line above `class %s`." % name]
+    if level not in _PLL_STUDENT_LEVELS:
+        fixes.append("Add `from dataclasses import dataclass` at the top of the file if it is not there.")
+    return "`%s` lists fields but has no `@dataclass`, so `%s(...)` takes no arguments." % (name, name), fixes
 
 
 @_pll_words("compared-with-class")
