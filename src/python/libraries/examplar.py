@@ -419,7 +419,21 @@ def _pll_examplar_level(source):
     return _PLL_LEVEL_RAW
 
 
-def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), only=None, given=None):
+def _pll_examplar_unwritten(test_source, filename):
+    """The functions the student's file has still to write - a body of `...`
+    (`_pll_is_unwritten`) - which are not theirs to run their tests against."""
+    try:
+        tree = _ex_ast.parse(test_source, filename=filename)
+    except SyntaxError:
+        return frozenset()
+    return frozenset(
+        node.name
+        for node in tree.body
+        if isinstance(node, (_ex_ast.FunctionDef, _ex_ast.AsyncFunctionDef)) and _pll_is_unwritten(node)
+    )
+
+
+def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), only=None, given=None, unwritten=()):
     """Run every `test_*` the student defined against one implementation.
 
     Their definitions are loaded first and the implementation second, so a
@@ -478,12 +492,13 @@ def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), onl
                 # Deliberately `Exception`, not `BaseException`: a
                 # `KeyboardInterrupt` from the Stop button has to get out.
                 unloaded.append({"line": line, "error": "%s: %s" % (type(e).__name__, e)})
-        # Which provided names the student has written themselves, recorded
+        # Which provided names the student has written themselves - not one
+        # still to be written, whose `...` is no implementation - recorded
         # *before* the overlay replaces them. The host uses this to decide
         # whether running their tests against their own code makes sense yet:
         # early in the exercise there is no implementation, and doing so would
-        # just spray NameErrors.
-        student_defines = sorted(name for name in provided if name in namespace)
+        # just spray NameErrors, or failures against `...`.
+        student_defines = sorted(name for name in provided if name in namespace and name not in unwritten)
         try:
             with _pll_examplar_budget():
                 exec(_ex_marshal.loads(_ex_b64.b64decode(code_blob)), namespace)
@@ -599,6 +614,7 @@ def _pll_examplar_judge(test_source, bundle_json, filename):
 
     attribution = _pll_examplar_attribution(test_source, provides)
     given = _pll_level_names(_pll_examplar_level(test_source))
+    unwritten = _pll_examplar_unwritten(test_source, filename)
     result = {
         "ok": True,
         "provides": provides,
@@ -624,7 +640,7 @@ def _pll_examplar_judge(test_source, bundle_json, filename):
         return True
 
     for entry in bundle.get("wheats") or []:
-        ran = _pll_examplar_run_one(test_pieces, entry.get("pyc", ""), filename, provides, given=given)
+        ran = _pll_examplar_run_one(test_pieces, entry.get("pyc", ""), filename, provides, given=given, unwritten=unwritten)
         ran["id"] = entry.get("id", "?")
         result["wheats"].append(ran)
         if stopped_by(ran, "wheat"):

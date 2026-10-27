@@ -973,6 +973,29 @@ existing Ctrl+C handler cannot fire. `main.js` therefore also listens on the
 document while blocked, skipping the interrupt when there is a selection so
 copying output still works.
 
+## The API for other extensions
+
+`activate` returns PLL's API (`src/editor/api.ts`), which another extension
+reads as `vscode.extensions.getExtension("pll.python-language-levels")?.exports`.
+Assignment Crits uses it to share the interactions panel with the panelists
+watching a presentation. It has a `version` (1), and a change that isn't
+backwards-compatible gets a new one.
+
+`interactions` is the panel as its webview sees it, and adds no state of
+its own: `current()` is the session shown (its file's URI, or null for the
+session with no file), its entries and header, and whether the panel is on
+screen; `onDidChange` is every message `InteractionsView` sends its webview
+but `focusInput` - `show` naming the session's file, the batched
+`appendMany`, `reactorPatch`, `clear` and `state` - and each change of
+whether the panel is visible. The events fire whether or not the webview
+has loaded, so a panel never opened still reports what it would show. The
+entries are PLL's own objects, and a reactor's card changes in place as it
+plays, so a reader copies what it keeps.
+
+The two extensions see each other only in the same extension host, as they
+are by default: the Node host on the desktop, the browser's on vscode.dev.
+`smoke-interactions-api` runs the real view against a recorded webview.
+
 ## Development
 
 ```bash

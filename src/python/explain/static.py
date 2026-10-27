@@ -485,6 +485,15 @@ def _pll_word_field_assigned_type(f, level):
     ]
 
 
+@_pll_words("function-not-written")
+def _pll_word_function_not_written(f, level):
+    """A function whose body is still `...`, or only its docstring."""
+    name = f["name_token"] or "this function"
+    return "`%s` is not written yet: until it is, calling it gives back `None`." % name, [
+        "Write its body once its tests are written; until then they fail.",
+    ]
+
+
 @_pll_words("class-needs-dataclass")
 def _pll_word_class_needs_dataclass(f, level):
     """A class with annotated fields and no `@dataclass`."""

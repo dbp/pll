@@ -1709,6 +1709,20 @@ stderr:
   
   Static analysis found 1 problem. The file was not run.
 
+=== st-function-not-written (exit 3)
+stderr:
+  student.py [beginner]
+  NotWrittenYet: `area` is not written yet: until it is, calling it gives back `None`.
+    at student.py:2:1
+  
+  How to fix:
+    - Write its body once its tests are written; until then they fail.
+  
+  Tests: 1 failed
+    FAILED test_area (line 6)
+          assert None == 3.14
+          where None = area(1.0)
+
 === st-unused-sorted (exit 2)
 stderr:
   student.py [beginner]

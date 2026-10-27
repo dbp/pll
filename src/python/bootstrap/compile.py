@@ -267,13 +267,31 @@ class _PllContractScopes(_ast.NodeVisitor):
         self.current.bound.add(node.name.id)
 
 
+def _pll_is_unwritten(node):
+    """Whether the function `node` is still to be written: its body is `...`,
+    its docstring, or the two - a design recipe's signature and purpose,
+    whose tests come before its body."""
+    body = node.body
+    if body and isinstance(body[0], _ast.Expr) and isinstance(body[0].value, _ast.Constant) and isinstance(
+        body[0].value.value, str
+    ):
+        body = body[1:]
+    return not body or (
+        len(body) == 1
+        and isinstance(body[0], _ast.Expr)
+        and isinstance(body[0].value, _ast.Constant)
+        and body[0].value.value is Ellipsis
+    )
+
+
 class _PllContracts(_ast.NodeTransformer):
     """Put a program's annotations in force as contracts
     (bootstrap/contracts.py):
 
     - an annotated `def` gets its contract, from the decorator
       `pll:contract_def` innermost of its decorators, and each `return` in
-      it notes its line (`pll:returning`);
+      it notes its line (`pll:returning`) - with no result to check for one
+      still to be written (`_pll_is_unwritten`), whose `None` is no answer;
     - each reference to what may be a contracted function becomes the
       obligation for it (`pll:ref`), made by the definition it is in;
     - an annotated variable's value is checked each time it is given one
@@ -342,7 +360,7 @@ class _PllContracts(_ast.NodeTransformer):
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def _contract(self, node, scope):
-        """`pll:contract_def(party, written, quoted)` for `node`."""
+        """`pll:contract_def(party, written, quoted, unwritten)` for `node`."""
         written, quoted = [], []
         annotated = [(arg.arg, arg.annotation) for arg in _pll_all_args(node.args) if arg.annotation is not None]
         if node.returns is not None:
@@ -357,6 +375,7 @@ class _PllContracts(_ast.NodeTransformer):
                 _ast.Constant(value=scope.party),
                 _ast.Constant(value=tuple(written)),
                 _ast.Constant(value=tuple(quoted)),
+                _ast.Constant(value=_pll_is_unwritten(node)),
             ],
             node,
         )

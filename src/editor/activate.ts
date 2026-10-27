@@ -10,15 +10,17 @@ import { ReplSession } from "./replSession";
 import type { PythonRuntime } from "../run/python";
 import { connectUniverse } from "./reactors/universe";
 import { createMementoStore } from "./bundleStore";
+import { makeApi, type PllApi } from "./api";
 
 /**
  * Shared activation for both hosts. The desktop and web entrypoints differ
- * only in which `PythonRuntime` they hand over.
+ * only in which `PythonRuntime` they hand over. What it returns is the API
+ * other extensions see (`api.ts`).
  */
 export function activateWithRuntime(
   context: vscode.ExtensionContext,
   runtime: PythonRuntime,
-): void {
+): PllApi {
   const diagnostics = new Diagnostics(context.extensionUri);
   const view = new InteractionsView(context.extensionUri);
   const levelLine = new LevelLineKeeper();
@@ -43,4 +45,5 @@ export function activateWithRuntime(
 
   registerCommands(context, { repl, view, levelLine });
   void checkConflictingExtensions(context);
+  return makeApi(view, repl);
 }

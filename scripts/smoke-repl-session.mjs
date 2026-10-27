@@ -259,8 +259,11 @@ function makeView() {
       for (const clock of view.clocks.values()) clearInterval(clock);
       view.clocks.clear();
     },
-    show(entries, state) {
+    /** The file of the session last shown: its URI, or null for the session with no file. */
+    file: undefined,
+    show(entries, state, file) {
       view.stopClocks();
+      view.file = file;
       view.entries = [...entries];
       for (const entry of view.entries) view.clock(entry);
       view.setState(state);
@@ -3307,6 +3310,25 @@ console.log("\n[81] a finding that comes after the file was edited is not marked
   expect(view.entries.some((e) => e.kind === "finding"), "the panel still says what happened");
   expect(!diagnostics.calls.some((c) => c[0] === "setFinding"), `but the editor is not marked: ${JSON.stringify(diagnostics.calls)}`);
   repl.dispose();
+}
+
+console.log("\n[82] the session shown, for PLL's API: its file, entries and header");
+{
+  const { repl, view, doc } = await harness({
+    events: () => [{ kind: "result", repr: "7" }, { kind: "done" }],
+  });
+  expect(view.file === doc.uri.toString(), `the view is told the file it shows: ${view.file}`);
+  view.handlers.onSubmit("1 + 6");
+  await settle();
+  const shown = repl.shown();
+  expect(shown?.file === doc.uri.toString(), `shown() names the file: ${shown?.file}`);
+  expect(shown.entries.map((e) => e.kind).join(",") === "echo,result", `and its entries: ${shown.entries.map((e) => e.kind)}`);
+  expect(shown.state.title === view.title, `and its header: ${shown.state.title}`);
+  repl.dispose();
+
+  const none = await harness({}, null);
+  expect(none.view.file === null && none.repl.shown()?.file === null, "the session with no file has none");
+  none.repl.dispose();
 }
 
 console.log(`\nsmoke-repl-session: ${passed() ? "ok" : "FAILED"}`);

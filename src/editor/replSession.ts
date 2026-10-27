@@ -399,7 +399,18 @@ export class ReplSession implements vscode.Disposable {
 
   /** Show `session` from scratch. */
   private show(session: Session): void {
-    this.deps.view.show(session.entries, this.panelState(session));
+    this.deps.view.show(session.entries, this.panelState(session), session.documentUri?.toString() ?? null);
+  }
+
+  /**
+   * The session the panel shows: its file's URI (null for the session with
+   * no file), its entries and its header and input row. Null before any is
+   * shown.
+   */
+  shown(): { file: string | null; entries: readonly Entry[]; state: PanelState } | null {
+    const session = this.activeSession();
+    if (session === null) return null;
+    return { file: session.documentUri?.toString() ?? null, entries: session.entries, state: this.panelState(session) };
   }
 
   /**

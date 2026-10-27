@@ -1483,6 +1483,67 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
     console.log("    no import needed; an import of it is said, and one of more keeps the rest; advanced allows it");
   }
 
+  console.log("\n[34] a function still to be written is a warning, and not one where Examplar checks its tests");
+  {
+    const notWritten = (code) => analyze(code, "beginner", "stub.py").filter((f) => f.id === "function-not-written");
+    for (const [label, code] of [
+      ["`...`", "def area(r):\n    ...\n"],
+      ["its docstring and `...`", 'def area(r: float) -> float:\n    """area of a circle of radius r"""\n    ...\n'],
+      ["only its docstring", 'def area(r: float) -> float:\n    """area of a circle of radius r"""\n'],
+      ["on one line", "def area(r: float) -> float: ...\n"],
+    ]) {
+      const found = analyze(code, "beginner", "stub.py");
+      expect(
+        found.length === 1 && found[0].id === "function-not-written" && found[0].severity === "warning" && found[0].line_number === 1,
+        `${label}: ${JSON.stringify(found)}`,
+      );
+    }
+    const [said] = wordStatic(notWritten("def area(r):\n    ...\n"), "beginner", "stub.py");
+    expect(
+      said?.headline === "`area` is not written yet: until it is, calling it gives back `None`." &&
+        JSON.stringify(said.howToFix) === JSON.stringify(["Write its body once its tests are written; until then they fail."]),
+      `said: ${JSON.stringify(said)}`,
+    );
+    // Not a function with a body, nor `pass` (which may mean to do nothing), an overload or an abstract method.
+    for (const [label, code] of [
+      ["a body", "def area(r: float) -> float:\n    return 3.14 * r * r\n"],
+      ["`pass`", "def on_key(key: str) -> None:\n    pass\n"],
+      ["an overload", "from typing import overload\n\n\n@overload\ndef f(x: int) -> int: ...\n\n\ndef f(x):\n    return x\n"],
+      ["an abstract method", "from abc import ABC, abstractmethod\n\n\nclass Shape(ABC):\n    @abstractmethod\n    def area(self) -> float: ...\n"],
+    ]) {
+      expect(notWritten(code).length === 0, `${label}: ${JSON.stringify(notWritten(code))}`);
+    }
+    // With an `#examplar` line its tests come first, so once one calls it there is nothing to say.
+    const STUB = "def initials(name: str) -> str:\n    ...\n\n\n";
+    const TEST = 'def test_initials():\n    assert initials("Ada Lovelace") == "A.L."\n';
+    const EXAMPLAR = "#examplar http://localhost:8123/hw.json\n";
+    expect(notWritten(EXAMPLAR + STUB + TEST).length === 0, `checked by Examplar, with a test: ${JSON.stringify(notWritten(EXAMPLAR + STUB + TEST))}`);
+    expect(notWritten(EXAMPLAR + STUB).length === 1, "checked by Examplar, with no test of it yet");
+    expect(notWritten(STUB + TEST).length === 1, "with a test, and no Examplar");
+    // And Examplar does not take one for the student's own, which the editor runs their tests against.
+    const built = JSON.parse(
+      pllCall(
+        "_pll_examplar_build",
+        JSON.stringify([
+          JSON.stringify({
+            wheats: { reference: 'def initials(name):\n    return "".join(w[0].upper() + "." for w in name.split())\n' },
+            chaffs: { initials: { "initials/1": 'def initials(name):\n    return name[0] + "."\n' } },
+          }),
+        ]),
+      ),
+    );
+    expect(built.ok, `a bundle builds: ${built.error}`);
+    const judged = (source) => JSON.parse(pllCall("_pll_examplar_run", JSON.stringify([source, JSON.stringify(built.bundle), "hw.py"])));
+    const stubbed = judged("#level beginner\n" + EXAMPLAR + STUB + TEST);
+    expect(
+      stubbed.ok && JSON.stringify(stubbed.wheats[0].studentDefines) === "[]" && stubbed.wheats[0].tests.test_initials?.outcome === "pass",
+      `a stub is not theirs yet, and their test is checked all the same: ${JSON.stringify(stubbed.wheats?.[0])}`,
+    );
+    const writtenOne = judged("#level beginner\n" + EXAMPLAR + "def initials(name: str) -> str:\n    return name\n\n\n" + TEST);
+    expect(JSON.stringify(writtenOne.wheats?.[0]?.studentDefines) === '["initials"]', `a body is: ${JSON.stringify(writtenOne.wheats?.[0]?.studentDefines)}`);
+    console.log("    `...` or only a docstring warned, and run all the same; quiet where Examplar checks its tests, which does not count it as written");
+  }
+
   fn.destroy?.();
 
   console.log(passed() ? "\nALL SMOKE TESTS PASSED" : "\nFAILED");

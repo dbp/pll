@@ -1,9 +1,10 @@
 import * as path from "node:path";
 import type * as vscode from "vscode";
 import { activateWithRuntime } from "../editor/activate";
+import type { PllApi } from "../editor/api";
 import { desktopPython } from "./pyodideRuntime";
 
-export function activate(context: vscode.ExtensionContext): void {
+export function activate(context: vscode.ExtensionContext): PllApi {
   const root = context.extensionPath;
   const runtime = desktopPython({
     indexUrlCandidates: [
@@ -14,7 +15,7 @@ export function activate(context: vscode.ExtensionContext): void {
     missingAssetsHint:
       "Pyodide runtime assets not found. Run `pnpm run build` to copy them into vendor/pyodide.",
   });
-  activateWithRuntime(context, runtime);
+  return activateWithRuntime(context, runtime);
 }
 
 export function deactivate(): void {

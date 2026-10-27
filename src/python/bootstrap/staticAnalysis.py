@@ -299,7 +299,7 @@ class _PllScopeBuilder:
 
 #: The kinds that are said but do not stop the code running: each can be
 #: right as written. Every other kind is an error, which does.
-_PLL_WARNING_KINDS = frozenset(("method-not-called", "test-not-named", "pattern-never-matches"))
+_PLL_WARNING_KINDS = frozenset(("method-not-called", "test-not-named", "pattern-never-matches", "function-not-written"))
 
 
 def _pll_finding(kind, error_type, line, column, name_token=None, **extras):
@@ -526,6 +526,8 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         "_modules",
         "_imported",
         "_library",
+        "_tested",
+        "_examplar",
     )
 
     def __init__(self, code, defined, known=frozenset()):
@@ -574,6 +576,11 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         self._imported = {}
         # PLL's own names, by library (`circle`: "image").
         self._library = _pll_predefined_library_names()
+        # The names the file's tests call, and whether an `#examplar` line
+        # checks those tests: a function still to be written that they call
+        # is having its tests written first, as the course has it.
+        self._tested = set()
+        self._examplar = any(_PLL_EXAMPLAR_LINE.match(line.strip()) for line in code.split("\n"))
 
     # ---- functions ----
 
@@ -588,6 +595,11 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         for node in _ast.walk(tree):
             if isinstance(node, _ast.Attribute) and isinstance(node.ctx, _ast.Store):
                 self._fields.add(node.attr)
+            elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+                self._tested.update(
+                    call.func.id for call in _ast.walk(node)
+                    if isinstance(call, _ast.Call) and isinstance(call.func, _ast.Name)
+                )
             elif isinstance(node, _ast.Import):
                 for alias in node.names:
                     if alias.asname:
@@ -641,9 +653,23 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
             )
         self._not_a_type(node.returns)
         self._missing_return(node)
+        self._not_written(node)
 
     visit_FunctionDef = _function
     visit_AsyncFunctionDef = _function
+
+    def _not_written(self, node):
+        """A function still to be written (`_pll_is_unwritten`): a warning,
+        as calling it gives `None` - but not where an `#examplar` line checks
+        the tests that call it, which are being written first. Not an
+        abstract method or an overload, whose `...` is all there is."""
+        if not _pll_is_unwritten(node):
+            return
+        if any(_pll_decorator_name(d) in ("abstractmethod", "overload") for d in node.decorator_list):
+            return
+        if self._examplar and node.name in self._tested:
+            return
+        self.found.append(_pll_finding("function-not-written", "NotWrittenYet", node.lineno, node.col_offset, node.name))
 
     def _ends_thrown_away(self, statements):
         """Whether every way `statements` can end is a value on a line of

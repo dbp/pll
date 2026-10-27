@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Added
+- **An API for other extensions**, returned by `activate`: the
+  interactions panel's session, its entries and header, whether it is on
+  screen, and every change to it, as the panel itself gets them. Assignment
+  Crits uses it to share the panel with the panelists watching a
+  presentation. See ARCHITECTURE.md, "The API for other extensions".
 - **`dataclass` needs no import at `beginner`, `intermediate` and
   `advanced`**, as `Callable` needs none: every data definition starts with
   it. At `beginner` and `intermediate`, importing it anyway is said as such
@@ -42,6 +47,14 @@
   panel, say nothing.
 
 ### Changed
+- **A function still to be written - its body `...`, or only its docstring -
+  is a warning, not an error**, as the design recipe writes its tests first:
+  "`area` is not written yet: until it is, calling it gives back `None`."
+  What it gives back is not checked, so a test of it fails, where it was a
+  `TypeMismatch` saying it "finished without returning a value"; what it is
+  given still is. In a file with an `#examplar` line, nothing is said of one
+  its tests call, and the editor does not run the file's own tests against
+  it, as it does not against a function the file has not defined.
 - **Taking an item out with `del` - `del xs[0]`, `del d[key]` - is refused
   at `beginner` and `intermediate`**, as changing one in place is. 0.6.0
   allowed it.

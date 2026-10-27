@@ -22,6 +22,22 @@ function ran(source, level = "beginner") {
 // `Callable` needs no import at the student levels.
 const CALLABLE = "";
 
+console.log("[a function still to be written: what it gives back is not checked, what it is given is]");
+{
+  const STUB = 'def area(r: float) -> float:\n    """area of a circle of radius r"""\n    ...\n\n';
+  const called = ran(`${STUB}print(area(1.0))\n`);
+  expect(called.error === null && called.stdout === "None\n", `its None: ${called.stdout} ${called.error?.message ?? ""}`);
+  const given = ran(`${STUB}area("one")\n`);
+  expect(given.error?.errorType === "TypeMismatch", `its argument: ${given.error?.errorType} ${given.error?.message}`);
+  // One with a body that gives back nothing is still a broken promise.
+  const written = ran("def area(r: float) -> float:\n    print(r)\n\narea(1.0)\n");
+  expect(
+    written.error?.errorType === "TypeMismatch" && /finished without returning a value/.test(written.finding?.headline ?? ""),
+    `a body with no return: ${written.finding?.headline}`,
+  );
+  console.log("    `...` gives back None unchecked; its argument and a written body are checked");
+}
+
 console.log("[`dataclass` needs no import at the student levels; raw is Python]");
 {
   const DOG = '@dataclass\nclass Dog:\n    name: str\n\nprint(Dog("Rex"))\n';

@@ -700,14 +700,17 @@ def _pll_returning(value, line):
 class _PllDefinition:
     """An annotated `def`: whose it is (`party`), how its annotations were
     written (`written`, by parameter, with "return"), which were written in
-    quotes (`quoted`), and the contract they make - made at its first call."""
+    quotes (`quoted`), whether it is still to be written (`unwritten`, its
+    body `...`: what it gives back is not checked), and the contract they
+    make - made at its first call."""
 
-    def __init__(self, function, party, written, quoted, level):
+    def __init__(self, function, party, written, quoted, level, unwritten=False):
         self.function = function
         self.party = party
         self.written = written
         self.quoted = quoted
         self.level = level
+        self.unwritten = unwritten
         self.code = function.__code__
         self.signature = _pll_inspect.signature(function)
         self._contract = None
@@ -755,7 +758,7 @@ class _PllDefinition:
         params = [
             (p.name, p.kind, made(p.name), self.written.get(p.name, "")) for p in signature.parameters.values()
         ]
-        result = made("return")
+        result = _PLL_ANY if self.unwritten else made("return")
         return _PllFunctionContract(
             params, result, self.written.get("return", ""), signature=signature, code=self.code
         )
@@ -823,14 +826,14 @@ def _pll_boundary(function, definition):
     return contracted
 
 
-def _pll_contract_def(party, written, quoted):
+def _pll_contract_def(party, written, quoted, unwritten=False):
     """The decorator compile.py puts innermost on each annotated `def`: the
     function, under its contract, at its boundary (`_pll_boundary`). A
     reference compile.py has rewritten makes its own obligation instead."""
 
     def attach(function):
         level = function.__globals__.get("__pll_level__")
-        definition = _PllDefinition(function, _pll_party(party), dict(written), frozenset(quoted), level)
+        definition = _PllDefinition(function, _pll_party(party), dict(written), frozenset(quoted), level, unwritten)
         definition.validate()
         return _pll_boundary(function, definition)
 

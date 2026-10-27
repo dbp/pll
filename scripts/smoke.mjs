@@ -45,6 +45,7 @@ const JOB_TIMEOUT_MS = 10 * 60_000;
 /** The test files, each run as `node scripts/<file>.mjs`. */
 const FILES = [
   "smoke-repl-session",
+  "smoke-interactions-api",
   "smoke-new-file-level",
   "smoke-worker-protocol",
   "smoke-static-analyze",

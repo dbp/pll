@@ -20,9 +20,13 @@ import { showInfo } from "../notify";
  * --------
  * The view itself is unaware of sessions; the session manager owns one
  * `Session` per Python file, and the one with no file, and uses
- * `show(entries, state)` to swap which session's content is visible - there
- * is always one. Updates go through `append`, `clear`, `updateReactor` and
- * `setState`, which the session manager calls only for the session shown.
+ * `show(entries, state, file)` to swap which session's content is visible -
+ * there is always one. Updates go through `append`, `clear`, `updateReactor`
+ * and `setState`, which the session manager calls only for the session shown.
+ *
+ * Everything the view sends its webview, and each change of whether it is
+ * visible, is also an `onDidChange` event, which PLL's API passes on to other
+ * extensions (`../api.ts`). It fires whether or not the webview has loaded.
  */
 
 /* -------------------------------------------------------------- */
@@ -125,10 +129,18 @@ type HostToView =
   | HostMessageAppendMany
   | HostMessageReactorPatch
   | { type: "clear" }
-  /** A session, from scratch: its entries and its state. */
-  | { type: "show"; entries: Entry[]; state: PanelState }
+  /**
+   * A session, from scratch: its entries and its state, and its file's URI
+   * (null for the session with no file).
+   */
+  | { type: "show"; entries: Entry[]; state: PanelState; file: string | null }
   | { type: "state"; state: PanelState }
   | { type: "focusInput" };
+
+/** What the panel shows changing, as `onDidChange` tells it. */
+export type InteractionsChange =
+  | Exclude<HostToView, { type: "focusInput" }>
+  | { type: "visible"; visible: boolean };
 
 /* -------------------------------------------------------------- */
 /* View-side message types                                         */
@@ -250,7 +262,15 @@ export class InteractionsView
   // Optional callbacks - the session manager installs these.
   private handlers: InteractionsHandlers | null = null;
 
+  private readonly changes = new vscode.EventEmitter<InteractionsChange>();
+  readonly onDidChange = this.changes.event;
+
   constructor(private readonly extensionUri: vscode.Uri) {}
+
+  /** Whether the view is on screen. */
+  get visible(): boolean {
+    return this.view?.visible ?? false;
+  }
 
   setHandlers(handlers: InteractionsHandlers): void {
     this.handlers = handlers;
@@ -262,10 +282,10 @@ export class InteractionsView
    * Show a session from scratch: when the active editor changes to another
    * Python file, and when the webview (re)loads.
    */
-  show(entries: ReadonlyArray<Entry>, state: PanelState): void {
+  show(entries: ReadonlyArray<Entry>, state: PanelState, file: string | null): void {
     // This carries every entry, so anything queued is already in it.
     this.dropPendingAppends();
-    this.post({ type: "show", entries: [...entries], state });
+    this.post({ type: "show", entries: [...entries], state, file });
   }
 
   /** The header and the input row, as they are now. */
@@ -332,11 +352,14 @@ export class InteractionsView
 
     this.disposables.push(
       view.webview.onDidReceiveMessage((msg) => this.handleMessage(msg)),
+      view.onDidChangeVisibility(() => this.changes.fire({ type: "visible", visible: view.visible })),
       view.onDidDispose(() => {
         this.view = null;
         this.webviewReady = false;
+        this.changes.fire({ type: "visible", visible: false });
       }),
     );
+    this.changes.fire({ type: "visible", visible: view.visible });
   }
 
   private handleMessage(msg: unknown): void {
@@ -424,12 +447,14 @@ export class InteractionsView
   }
 
   private send(msg: HostToView): void {
+    if (msg.type !== "focusInput") this.changes.fire(msg);
     if (!this.view || !this.webviewReady) return;
     void this.view.webview.postMessage(msg);
   }
 
   dispose(): void {
     this.dropPendingAppends();
+    this.changes.dispose();
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
     this.view = null;

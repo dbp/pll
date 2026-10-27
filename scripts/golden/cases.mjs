@@ -212,6 +212,7 @@ export const CASES = [
   { name: "mut-field", code: [B, "@dataclass", "class Dog:", "    name: str", "    age: int", "", 'd = Dog("Rex", 3)', "d.age = 4"] },
   { name: "st-unused-comparison", code: [B, "def double(n: int) -> int:", "    return n * 2", "", "def test_double():", "    double(2) == 4"] },
   { name: "st-unused-value", code: [B, "def order(order_amt: float) -> float:", "    order_amt + 8", "    return order_amt"] },
+  { name: "st-function-not-written", code: [B, "def area(r: float) -> float:", '    """area of a circle of radius r"""', "    ...", "", "def test_area():", "    assert area(1.0) == 3.14"] },
   { name: "st-unused-sorted", code: [B, "def tidy(xs: list[int]) -> list[int]:", "    sorted(xs)", "    return xs"] },
   { name: "st-unused-upper", code: [B, "def shout(name: str) -> str:", "    name.upper()", "    return name"] },
   { name: "st-unused-comparison-function", code: [B, "def is_five(x: int) -> bool:", "    x == 5"] },
