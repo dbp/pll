@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.1 (2026-10-29)
+
 ### Changed
 - **A `...` the program reaches stops it, at `beginner`, `intermediate` and
   `advanced`**: there it holds the place of code still to be written, which
