@@ -40,3 +40,7 @@ coverage/
 # Smoke-test scratch dirs
 .smoke-*/
 dist-cli/
+
+
+# Misc
+docs/
