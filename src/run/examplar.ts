@@ -375,10 +375,18 @@ function cardBody(card: Omit<ExamplarFunctionEntry, "body">): ExamplarBlock[] {
     body.push({
       kind: "line",
       tone: "warn",
-      text: `${BUGGY}caught ${card.caught} of ${card.total} - missed ${card.missed.join(", ")}.`,
+      text: `${BUGGY}caught ${card.caught} of ${card.total} - missed ${card.missed.map(chaffLabel).join(", ")}.`,
     });
   }
   return body;
+}
+
+/**
+ * A missed chaff as the card names it. A numbered one is `#2`, since
+ * "missed 2" reads as how many were missed rather than which.
+ */
+function chaffLabel(id: string): string {
+  return /^\d+$/.test(id) ? `#${id}` : id;
 }
 
 /**

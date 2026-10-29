@@ -260,7 +260,7 @@ try {
   expect(addCard?.source === "https://example.test/hw.json", `the bundle as the tooltip: ${addCard?.source}`);
   drawn.examplar.forEach((c, i) =>
     expect(c.blocks.length === examplar[i].body.length, `every block drawn: ${JSON.stringify(c.blocks)}`));
-  expect(addCard?.blocks.some((b) => b.startsWith("exLine exWarn") && /missed 2\b/.test(b)),
+  expect(addCard?.blocks.some((b) => b.startsWith("exLine exWarn") && /missed #2\./.test(b)),
     `the missed chaff by its id: ${JSON.stringify(addCard?.blocks)}`);
   expect(doubleCard?.blocks.some((b) => b.startsWith("exFailure exFailureBad") && b.endsWith("|test_double")),
     `the wrong test by name: ${JSON.stringify(doubleCard?.blocks)}`);

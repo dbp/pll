@@ -301,7 +301,7 @@ After that, every run adds a card for each function the assignment asks for:
 ```
 total                                                        Examplar
   Against correct implementations: all 3 of your tests pass.
-  Against buggy implementations: caught 4 of 6 - missed 2, 5.
+  Against buggy implementations: caught 4 of 6 - missed #2, #5.
 ```
 
 The first line asks whether your tests are **right** — do they agree with

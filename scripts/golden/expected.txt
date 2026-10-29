@@ -2431,10 +2431,10 @@ stderr:
   student.py [beginner]
   examplar: initials
     Against correct implementations: your test passes.
-    Against buggy implementations: caught 1 of 3 - missed 2, 3.
+    Against buggy implementations: caught 1 of 3 - missed #2, #3.
   examplar: longest
     Against correct implementations: your test passes.
-    Against buggy implementations: caught 1 of 3 - missed 1, 2.
+    Against buggy implementations: caught 1 of 3 - missed #1, #2.
   Tests: 2 errors
     ERROR test_initials_two_names (line 4)
           NameError: Python doesn't know what `initials` means.
@@ -2458,7 +2458,7 @@ stderr:
     Against buggy implementations: waiting until all your tests of initials pass.
   examplar: longest
     Against correct implementations: your test passes.
-    Against buggy implementations: caught 1 of 3 - missed 1, 2.
+    Against buggy implementations: caught 1 of 3 - missed #1, #2.
   Tests: 2 errors
     ERROR test_initials_lower (line 4)
           NameError: Python doesn't know what `initials` means.
@@ -2484,7 +2484,7 @@ stderr:
     Against buggy implementations: waiting until all your tests of initials pass.
   examplar: longest
     Against correct implementations: your test passes.
-    Against buggy implementations: caught 1 of 3 - missed 1, 2.
+    Against buggy implementations: caught 1 of 3 - missed #1, #2.
   Tests: 2 errors
     ERROR test_initials_from_file (line 4)
           NameError: Python doesn't know what `initials` means.
@@ -2529,10 +2529,10 @@ stderr:
   student.py [beginner]
   examplar: initials
     Against correct implementations: your test passes.
-    Against buggy implementations: caught 1 of 3 - missed 2, 3.
+    Against buggy implementations: caught 1 of 3 - missed #2, #3.
   examplar: longest
     Against correct implementations: your test passes.
-    Against buggy implementations: caught 1 of 3 - missed 1, 2.
+    Against buggy implementations: caught 1 of 3 - missed #1, #2.
   Tests: 2 passed
     ok   test_initials
     ok   test_longest
@@ -2552,10 +2552,10 @@ stderr:
   student.py [beginner]
   examplar: initials
     Against correct implementations: your test passes.
-    Against buggy implementations: caught 1 of 3 - missed 2, 3.
+    Against buggy implementations: caught 1 of 3 - missed #2, #3.
   examplar: longest
     Against correct implementations: your test passes.
-    Against buggy implementations: caught 1 of 3 - missed 1, 2.
+    Against buggy implementations: caught 1 of 3 - missed #1, #2.
   MalformedTest: `test_initials` takes a parameter, `name`, so it cannot be run as a test.
     at student.py:4
   

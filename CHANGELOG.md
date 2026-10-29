@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+- **Examplar's card marks a missed buggy implementation's number with `#`**:
+  "caught 1 of 3 - missed #2, #3", since "missed 2, 3" read as how many were
+  missed rather than which. A chaff with a name rather than a number is
+  shown by its name, as before.
+
 ## 0.8.1 (2026-10-29)
 
 ### Changed

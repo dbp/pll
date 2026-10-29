@@ -1600,7 +1600,7 @@ const EX_URL = "https://course.example/hw3.json";
  * An examplarRun reply, shaped like the real primitive's.
  *
  * `failing` tests fail on the wheat, `raising` tests error on it, `missed`
- * chaffs pass. Chaffs belong to a function and are judged only by that
+ * chaffs pass, and each function has the chaffs `chaffIds`. Chaffs belong to a function and are judged only by that
  * function's tests, and phase two is gated per function - so the fixture
  * has to reproduce both, or it would be testing replies the worker cannot
  * produce.
@@ -1610,6 +1610,7 @@ function examplarReply({
   failing = [],
   raising = [],
   missed = [],
+  chaffIds = ["1", "2"],
   defines = [],
   provides = ["shout"],
   // test -> the provided names it exercises. Everything, by default.
@@ -1632,7 +1633,7 @@ function examplarReply({
   for (const fn of provides) {
     if (!settled.includes(fn)) continue;
     const mine = tests.filter((t) => (attributed[t] ?? []).includes(fn));
-    for (const id of ["1", "2"]) {
+    for (const id of chaffIds) {
       const key = `${fn}/${id}`;
       chaffs.push({
         id,
@@ -1841,7 +1842,22 @@ console.log("\n[41] a missed chaff names the id and nothing else");
     !JSON.stringify(card).includes("assert"),
     `no chaff assertion may reach the card, got ${JSON.stringify(card)}`,
   );
-  console.log(`    missed ${card.missed.join(", ")} with no hint as to why`);
+  // "#2", because "missed 2" reads as how many.
+  const said = card.body.at(-1)?.text;
+  expect(said === "Against buggy implementations: caught 1 of 2 - missed #2.", `the card says: ${said}`);
+  console.log(`    ${said}`);
+  repl.dispose();
+}
+{
+  // A chaff with a name is named as it is: "#loud" is no number.
+  const { repl, view, doc } = await harness(
+    withBundle({ examplarResult: examplarReply({ chaffIds: ["1", "loud"], missed: ["shout/loud"] }) }),
+  );
+  await repl.runFile(EX_SRC, "hw.py", doc);
+  await settle();
+  const said = fnCard(view, "shout").body.at(-1)?.text;
+  expect(said === "Against buggy implementations: caught 1 of 2 - missed loud.", `the card says: ${said}`);
+  console.log(`    ${said}`);
   repl.dispose();
 }
 
