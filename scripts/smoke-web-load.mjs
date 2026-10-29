@@ -30,7 +30,7 @@ import { mkdtempSync, copyFileSync, readFileSync, rmSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright";
-import { openFile } from "./webbench.mjs";
+import { openFile, COMMIT_ARGS } from "./webbench.mjs";
 import { expect, fail, passed } from "./lib/check.mjs";
 import { ROOT } from "./lib/bundle.mjs";
 
@@ -154,7 +154,7 @@ await new Promise((r) => data.listen(Number(DATA_PORT), "127.0.0.1", r));
 
 const web = spawn(
   "npx",
-  ["vscode-test-web", "--browser=none", "--quality=insiders", "--coi",
+  ["vscode-test-web", "--browser=none", "--quality=insiders", ...COMMIT_ARGS, "--coi",
     "--extensionDevelopmentPath=.", `--port=${PORT}`, work],
   { stdio: ["ignore", "pipe", "pipe"], detached: true },
 );

@@ -5,6 +5,12 @@
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * `--commit=...` for `vscode-test-web` when `VSCODE_WEB_COMMIT` names a build -
+ * one already downloaded, so that a run needs no network - and nothing otherwise.
+ */
+export const COMMIT_ARGS = process.env.VSCODE_WEB_COMMIT ? [`--commit=${process.env.VSCODE_WEB_COMMIT}`] : [];
+
+/**
  * Open a file from the explorer, scrolling to it first.
  *
  * The explorer list is **virtualised**: only the rows in view exist in the

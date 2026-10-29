@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 (2026-10-27)
 
 ### Added
 - **An API for other extensions**, returned by `activate`: the
@@ -31,7 +31,6 @@
   of value are refused: reading one (`xs.index(4)`, `d.get(key)`), `n += 1`
   on a number, and an `append` method or a `shuffle` function of one's own
   work as they always have. `#level advanced` allows it.
-
 - **A call that only gives back a new value, on a line of its own in a
   function, is caught before the run**, as `xs + [4]` there is: `sorted(xs)`,
   `name.upper()`, `replace(p, age=2)`, `t.add_column(...)`, `circle(...)`,
@@ -56,7 +55,7 @@
   its tests call, and the editor does not run the file's own tests against
   it, as it does not against a function the file has not defined.
 - **Taking an item out with `del` - `del xs[0]`, `del d[key]` - is refused
-  at `beginner` and `intermediate`**, as changing one in place is. 0.6.0
+  at `beginner` and `intermediate`**, as changing one in place is. 0.7.0
   allowed it.
 - **`s |= t` on a set is refused at `beginner` and `intermediate`**, which
   0.7.0 allowed, as it is not a bitwise operator between numbers: it

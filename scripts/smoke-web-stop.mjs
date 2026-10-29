@@ -19,7 +19,7 @@
  */
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { openFile } from "./webbench.mjs";
+import { openFile, COMMIT_ARGS } from "./webbench.mjs";
 
 const PORT = process.env.VSCODE_WEB_PORT ?? "3014";
 const URL = process.env.VSCODE_WEB_URL ?? `http://localhost:${PORT}`;
@@ -50,6 +50,7 @@ function startServer() {
       "vscode-test-web",
       "--browser=none",
       `--quality=${QUALITY}`,
+      ...COMMIT_ARGS,
       "--coi",
       "--extensionDevelopmentPath=.",
       `--port=${PORT}`,

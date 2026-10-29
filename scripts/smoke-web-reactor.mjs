@@ -14,7 +14,7 @@
  */
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { openFile } from "./webbench.mjs";
+import { openFile, COMMIT_ARGS } from "./webbench.mjs";
 import { expect, passed } from "./lib/check.mjs";
 const PORT = process.env.VSCODE_WEB_PORT || "3017";
 /**
@@ -42,7 +42,7 @@ async function requireFreePort(port) {
 }
 
 function startServer() {
-  const c = spawn("npx", ["vscode-test-web", "--browser=none", "--quality=insiders", "--coi",
+  const c = spawn("npx", ["vscode-test-web", "--browser=none", "--quality=insiders", ...COMMIT_ARGS, "--coi",
     "--extensionDevelopmentPath=.", `--port=${PORT}`, "samples"],
     { stdio: ["ignore", "pipe", "pipe"], detached: true });
   return new Promise((res, rej) => {

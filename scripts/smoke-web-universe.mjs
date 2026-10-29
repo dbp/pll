@@ -16,7 +16,7 @@
  */
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
-import { openFile } from "./webbench.mjs";
+import { openFile, COMMIT_ARGS } from "./webbench.mjs";
 import { expect, fail, passed } from "./lib/check.mjs";
 const PORT = process.env.VSCODE_WEB_PORT || "3018";
 // The sample registers with ws://localhost:8080, so the test has to use
@@ -64,7 +64,7 @@ universe.stderr.on("data", (b) => srvLog.push(b.toString()));
 await sleep(1200);
 console.log("1 server:", srvLog.join("").trim().split("\n")[0]);
 
-const web = spawn("npx", ["vscode-test-web", "--browser=none", "--quality=insiders", "--coi",
+const web = spawn("npx", ["vscode-test-web", "--browser=none", "--quality=insiders", ...COMMIT_ARGS, "--coi",
   "--extensionDevelopmentPath=.", `--port=${PORT}`, "samples"],
   { stdio: ["ignore", "pipe", "pipe"], detached: true });
 await new Promise((res, rej) => {

@@ -7,6 +7,7 @@
  *   node scripts/smoke-web-nofile.mjs
  *   VSCODE_WEB_HEADED=1 node scripts/...     # watch it
  */
+import { COMMIT_ARGS } from "./webbench.mjs";
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { expect, fail, passed } from "./lib/check.mjs";
@@ -39,7 +40,7 @@ await requireFreePort(Number(PORT), "vscode-test-web");
 // No folder argument: the workbench opens with nothing in it.
 const web = spawn(
   "npx",
-  ["vscode-test-web", "--browser=none", "--quality=insiders", "--coi",
+  ["vscode-test-web", "--browser=none", "--quality=insiders", ...COMMIT_ARGS, "--coi",
     "--extensionDevelopmentPath=.", `--port=${PORT}`],
   { stdio: ["ignore", "pipe", "pipe"], detached: true },
 );

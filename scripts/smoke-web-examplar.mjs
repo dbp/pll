@@ -36,7 +36,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { chromium } from "playwright";
-import { openFile } from "./webbench.mjs";
+import { openFile, COMMIT_ARGS } from "./webbench.mjs";
 import { expect, passed } from "./lib/check.mjs";
 import { ROOT } from "./lib/bundle.mjs";
 
@@ -234,7 +234,7 @@ console.log(
 const bundleSrv = await startBundleServer(Number(BUNDLE_PORT), bundleJson);
 console.log(`2 serving it at http://localhost:${BUNDLE_PORT}/hw.json`);
 
-const web = spawn("npx", ["vscode-test-web", "--browser=none", "--quality=insiders", "--coi",
+const web = spawn("npx", ["vscode-test-web", "--browser=none", "--quality=insiders", ...COMMIT_ARGS, "--coi",
   "--extensionDevelopmentPath=.", `--port=${PORT}`, work],
   { stdio: ["ignore", "pipe", "pipe"], detached: true });
 await new Promise((res, rej) => {

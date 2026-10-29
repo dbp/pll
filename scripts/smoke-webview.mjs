@@ -16,8 +16,23 @@ import { importSource, ROOT } from "./lib/bundle.mjs";
 
 const ORIGIN = "https://pll-webview.test";
 
-/** Just enough `vscode` for the view: paths, and no save dialog. */
+/** Just enough `vscode` for the view: paths, no save dialog, and the events it sends. */
 const VSCODE_STUB = `
+export class EventEmitter {
+  constructor() {
+    this.listeners = [];
+    this.event = (listener) => {
+      this.listeners.push(listener);
+      return { dispose: () => (this.listeners = this.listeners.filter((l) => l !== listener)) };
+    };
+  }
+  fire(value) {
+    for (const listener of [...this.listeners]) listener(value);
+  }
+  dispose() {
+    this.listeners = [];
+  }
+}
 export const Uri = {
   file: (path) => ({ path, fsPath: path }),
   joinPath: (base, ...parts) => ({ path: [base.path, ...parts].join("/") }),
@@ -165,7 +180,13 @@ const webview = {
     return { dispose() {} };
   },
 };
-view.resolveWebviewView({ webview, onDidDispose: () => ({ dispose() {} }), show() {} });
+view.resolveWebviewView({
+  webview,
+  visible: true,
+  onDidChangeVisibility: () => ({ dispose() {} }),
+  onDidDispose: () => ({ dispose() {} }),
+  show() {},
+});
 
 const fromView = [];
 await page.exposeFunction("__pllToHost", (msg) => {
