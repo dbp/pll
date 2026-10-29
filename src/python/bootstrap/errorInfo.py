@@ -126,7 +126,8 @@ _PLL_NOT_CALLABLE_RE = _pll_src_re.compile(r"^'([\w.]+)' object is not callable"
 def _pll_enrich_not_callable(exc, run):
     """Record what was called, for `'int' object is not callable`: the name
     as written, how many arguments it was given, and whether it hides one
-    of Python's own functions (`called`).
+    of Python's own functions (`called`) - or, for a number written before
+    brackets, the multiplication it stands for (`multiplication`).
 
     The message names only the type. The name counts only when its call is
     the one that failed, in the student's own frame, and its value there is
@@ -143,9 +144,10 @@ def _pll_enrich_not_callable(exc, run):
     # The failing instruction spans the call, and no two calls end at the
     # same `)`.
     where = _tb_mod.extract_tb(tb)[-1]
+    source = _pll_source_of(frame.f_code, run)
     try:
         with _pll_without_syntax_warnings():
-            tree = _ast.parse(_pll_source_of(frame.f_code, run))
+            tree = _ast.parse(source)
     except (SyntaxError, ValueError):
         return
     call = next(
@@ -158,6 +160,10 @@ def _pll_enrich_not_callable(exc, run):
         None,
     )
     if call is None:
+        return
+    meant = _pll_multiplication_meant(call, source)
+    if meant is not None:
+        _pll_add_facts(exc, multiplication=meant)
         return
     attributes, called = [], call.func
     while isinstance(called, _ast.Attribute):
@@ -185,6 +191,43 @@ def _pll_enrich_not_callable(exc, run):
             "hides": callable(frame.f_builtins.get(name)),
         },
     )
+
+
+#: What can follow a `*` as it is written: a single value - a name, a
+#: literal, or what an attribute, a subscript or a call gives - which no
+#: operator beside it can take a part of.
+_PLL_SINGLE_VALUES = (
+    _ast.Name, _ast.Constant, _ast.JoinedStr, _ast.Attribute, _ast.Subscript, _ast.Call,
+    _ast.List, _ast.Tuple, _ast.Set, _ast.Dict, _ast.ListComp, _ast.SetComp, _ast.DictComp, _ast.GeneratorExp,
+)
+
+
+def _pll_multiplication_meant(call, source):
+    """The multiplication a number written before brackets stands for:
+    `{"number": "2", "product": "2 * (3 + 4)", "written": "2(3 + 4)"}` for
+    the call `2(3 + 4)` in `source`.
+
+    The brackets stay unless they hold a single value: without them,
+    `2 * 3 + 4` is 10. None for a call of anything but a number; for brackets
+    that hold no one expression, as `3(4, 5)`'s do, since those are not a
+    multiplication; and for a call over several lines, which a message
+    cannot quote.
+    """
+    number = call.func
+    if not (isinstance(number, _ast.Constant) and type(number.value) in (int, float)):
+        return None
+    if call.keywords or len(call.args) > 1 or call.lineno != call.end_lineno:
+        return None
+    if call.args and isinstance(call.args[0], _ast.Starred):
+        return None
+    shown = _ast.get_source_segment(source, number)
+    written = _ast.get_source_segment(source, call)
+    operand = _ast.get_source_segment(source, call.args[0]) if call.args else "..."
+    if shown is None or written is None or operand is None:
+        return None
+    if call.args and not isinstance(call.args[0], _PLL_SINGLE_VALUES):
+        operand = "(%s)" % operand
+    return {"number": shown, "product": "%s * %s" % (shown, operand), "written": written}
 
 
 def _pll_innermost_tb(tb, count):

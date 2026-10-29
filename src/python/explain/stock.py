@@ -1166,11 +1166,10 @@ def _pll_not_callable(m, e):
         return headline, [generic]
     # `3(width)` - a number followed by brackets is nearly always a missing
     # `*`. Python's own "perhaps you missed a comma?" points elsewhere.
-    juxtaposed = _pll_src_re.search(r"(\d+(?:\.\d+)?)\s*\(([^()]*)\)", e.text or "")
-    if juxtaposed and _pll_last_segment(m.group(1)) in ("int", "float"):
-        written, number, inside = juxtaposed.group(0), juxtaposed.group(1), juxtaposed.group(2)
-        return "Brackets after `%s` look like a function call, not multiplication." % number, [
-            "To multiply, write the `*`: `%s * %s`, not `%s`." % (number, inside.strip() or "...", written)
+    meant = e.facts.get("multiplication")
+    if meant is not None:
+        return "Brackets after `%s` look like a function call, not multiplication." % meant["number"], [
+            "To multiply, write the `*`: `%s`, not `%s`." % (meant["product"], meant["written"])
         ]
     return "%s cannot be called like a function." % _pll_capitalized(_pll_a_friendly(m.group(1))), [generic]
 

@@ -567,6 +567,15 @@ stderr:
   How to fix:
     - To multiply, write the `*`: `3 * width`, not `3(width)`.
 
+=== not-callable-int-sum (exit 1)
+stderr:
+  student.py [raw]
+  TypeError: Brackets after `2` look like a function call, not multiplication.
+    at student.py:1:7
+  
+  How to fix:
+    - To multiply, write the `*`: `2 * (3 + 4)`, not `2(3 + 4)`.
+
 === not-callable-name (exit 1)
 stderr:
   student.py [raw]

@@ -88,6 +88,7 @@ export const CASES = [
   { name: "index-range-in-fn", code: ["def third(xs: list) -> int:", "    return xs[3]", "", "print(third([1, 2]))"] },
   { name: "index-range-string", code: ['word = "hi"', "print(word[9])"] },
   { name: "not-callable-int", code: ["width = 3", "print(3(width))"] },
+  { name: "not-callable-int-sum", code: ["print(2(3 + 4))"] },
   { name: "not-callable-name", code: ["total = 5", "print(total(2))"] },
   { name: "pattern-arity", code: dataclass("@dataclass", "class Boa:", "    name: str", "    length: int", "", 'b = Boa("x", 3)', "match b:", "    case Boa(n, l, extra):", "        print(n)") },
   { name: "missing-comma-rows", code: ["rows = [", '    ("a", 1)', '    ("b", 2)', "]"] },

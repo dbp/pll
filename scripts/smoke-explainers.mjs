@@ -965,12 +965,8 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
   );
 
   // -- calls that are not calls ------------------------------------------
-  const times = raised(
-    "width = 4\nprint(3(width))\n",
-    2,
-    "<module>",
-    "TypeError: 'int' object is not callable",
-  );
+  // Run, since the product is read off the call that failed.
+  const times = ran("width = 4\nprint(3(width))\n");
   expect(
     /Brackets after `3` look like a function call, not multiplication/.test(times.headline),
     `missing star: ${times.headline}`,
@@ -1546,7 +1542,25 @@ console.log("[not callable: the name that was called; pictures as images]");
     ["what a call gave back", "class C:\n    n = 5\n\n\nC().n()\n", "A whole number cannot be called like a function.", BARE],
     ["given a keyword", "x = 5\nprint(x(n=3))\n", "`x` is a whole number, not a function.", BARE],
     ["a type a module names", "import datetime\nd = datetime.date(2026, 1, 1)\nd()\n", "`d` is a `date`, not a function.", LEAVE("d")],
-    ["a number before brackets", "print(3(4))\n", "Brackets after `3` look like a function call, not multiplication.", null],
+    ["a number before brackets", "print(3(4))\n", "Brackets after `3` look like a function call, not multiplication.",
+      "To multiply, write the `*`: `3 * 4`, not `3(4)`."],
+    // The brackets stay unless they hold a single value: `2 * 3 + 4` is 10.
+    ["brackets holding a sum", "print(2(3 + 4))\n", "Brackets after `2` look like a function call, not multiplication.",
+      "To multiply, write the `*`: `2 * (3 + 4)`, not `2(3 + 4)`."],
+    ["brackets holding what `*` would group the other way", "print(2(7 // 2))\n",
+      "Brackets after `2` look like a function call, not multiplication.", "To multiply, write the `*`: `2 * (7 // 2)`, not `2(7 // 2)`."],
+    ["brackets holding a call", "xs = [1, 2]\nprint(2(len(xs)))\n", "Brackets after `2` look like a function call, not multiplication.",
+      "To multiply, write the `*`: `2 * len(xs)`, not `2(len(xs))`."],
+    // The call that failed, and not brackets in a string before it.
+    ["brackets in a string first", 'print("2(a)", 3(4))\n', "Brackets after `3` look like a function call, not multiplication.",
+      "To multiply, write the `*`: `3 * 4`, not `3(4)`."],
+    ["the number as it is written", "print(1e3(2))\n", "Brackets after `1e3` look like a function call, not multiplication.",
+      "To multiply, write the `*`: `1e3 * 2`, not `1e3(2)`."],
+    // Two values in the brackets are no multiplication.
+    ["two values in them", "print(3(4, 5))\n", "A whole number cannot be called like a function.", BARE],
+    ["a list's values in them", "xs = [1]\nprint(3(*xs))\n", "A whole number cannot be called like a function.", BARE],
+    // Nor is a call that a message cannot quote on one line.
+    ["a call over two lines", "total = 2(\n    3 + 4\n)\n", "A whole number cannot be called like a function.", BARE],
     // The picture classes, wherever a rule names a type.
     ["a `for` over an image", `${IMAGE}for x in empty_image:\n    pass\n`, "An image is not something to loop over.", null],
     ["square brackets", `${IMAGE}empty_image[0]\n`, "Square brackets do not work on an image.", null],
@@ -1581,6 +1595,11 @@ console.log("[not callable: the name that was called; pictures as images]");
   expect(
     prompt.error?.finding?.headline === "`empty_image` is an image, not a function.",
     `a prompt line: ${prompt.error?.finding?.headline}`,
+  );
+  const times = JSON.parse(pllCall("_pll_repl_eval", JSON.stringify(["2(3 + 4)", "callable-prompt", "raw"])));
+  expect(
+    times.error?.finding?.howToFix?.[0] === "To multiply, write the `*`: `2 * (3 + 4)`, not `2(3 + 4)`.",
+    `a prompt line's product: ${JSON.stringify(times.error?.finding?.howToFix)}`,
   );
   console.log(`    ${CASES.length} programs and a prompt line`);
 }
@@ -2014,8 +2033,9 @@ console.log("[second review: advice that has to come from the program in hand]")
   );
   expect(variable.lineNumber === 2, `rows in a variable keep the table( line: ${variable.lineNumber}`);
 
-  // `3(width)` uses the student's operand, not a placeholder.
-  const times = raised("width = 4\nh = 3(width)\n", 2, "TypeError: 'int' object is not callable");
+  // `3(width)` uses the student's operand, not a placeholder - read off the
+  // call that failed, so run.
+  const times = ran("width = 4\nh = 3(width)\n", "lab.py", "raw");
   expect(
     times.howToFix.some((l) => /`3 \* width`, not `3\(width\)`/.test(l)),
     `the fix is written with their own operand: ${JSON.stringify(times.howToFix)}`,

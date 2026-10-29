@@ -512,6 +512,10 @@ async function main() {
       "    return 3(4)",
       "",
       "",
+      "def nor_this(w):",
+      "    return 2(w + 1)",
+      "",
+      "",
       'print("ran")',
     );
     const r2 = await run([idle]);
@@ -519,6 +523,8 @@ async function main() {
     const said = (r2.stderr.match(/warning: line 5:/g) ?? []).length;
     expect(said === 1, `said exactly once, got ${said}: ${r2.stderr}`);
     expect(/`3 \* 4`, not `3\(4\)`/.test(r2.stderr), `with their own operand: ${r2.stderr}`);
+    // Not `2 * w + 1`, another sum.
+    expect(/line 9: .*`2 \* \(w \+ 1\)`, not `2\(w \+ 1\)`/.test(r2.stderr), `with its brackets: ${r2.stderr}`);
     expect(!/perhaps you missed a comma/.test(r2.stderr), `and not the misleading guess: ${r2.stderr}`);
     console.log("    none beside a finding; one, reworded, for a line that never runs");
   }

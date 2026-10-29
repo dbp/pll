@@ -8,6 +8,14 @@
   missed rather than which. A chaff with a name rather than a number is
   shown by its name, as before.
 
+### Fixed
+- **A number before brackets is told the multiplication it stands for**:
+  `2(3 + 4)` gets "write the `*`: `2 * (3 + 4)`", where it got `2 * 3 + 4`,
+  which is 10. Only a single value loses its brackets (`3 * width`). The
+  call quoted is the one that failed, not brackets in a string before it,
+  and `3(4, 5)`, which holds two values, is no longer told `3 * 4, 5`. The
+  warning for such a line that never runs says the same.
+
 ## 0.8.1 (2026-10-29)
 
 ### Changed

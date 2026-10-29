@@ -1125,13 +1125,11 @@ def _pll_say_compile_warnings(stream, error_message, source="", filename=None):
     `source` is the text of `filename`, the file run; a warning about a
     file it imported names that file.
     """
-    lines = source.split("\n") if source else []
     for where, lineno, message in _pll_compile_warnings:
         if error_message and message.startswith(error_message):
             continue
         if filename is None or where == filename:
-            text = lines[lineno - 1] if isinstance(lineno, int) and 0 < lineno <= len(lines) else ""
-            stream.write("warning: line %s: %s\n" % (lineno, _pll_reword_warning(message, text)))
+            stream.write("warning: line %s: %s\n" % (lineno, _pll_reword_warning(message, source, lineno)))
         else:
             stream.write(
                 "warning: %s, line %s: %s\n" % (_pll_shown_file(where), lineno, _pll_reword_warning(message))
@@ -1139,7 +1137,7 @@ def _pll_say_compile_warnings(stream, error_message, source="", filename=None):
     del _pll_compile_warnings[:]
 
 
-def _pll_reword_warning(message, line=""):
+def _pll_reword_warning(message, source="", lineno=None):
     """Python's wording, except where it points the wrong way.
 
     "'int' object is not callable; perhaps you missed a comma?" is Python's
@@ -1147,25 +1145,42 @@ def _pll_reword_warning(message, line=""):
     missing is a `*`. For a string or a tuple the comma guess is usually
     right - a list of rows with one comma left out - so those stay.
 
-    The example is taken from the student's own line when it can be read,
+    The example is the student's own call, from line `lineno` of `source`,
     rather than one fixed example shown whatever they wrote.
     """
     if not _pll_src_re.match(
         r"'(int|float)' object is not callable; perhaps you missed a comma\?", message
     ):
         return message
-    written = _pll_src_re.search(r"(\d+(?:\.\d+)?)\s*\(([^()]*)\)", line)
-    if written is None:
+    meant = _pll_multiplication_on_line(source, lineno)
+    if meant is None:
         return (
             "brackets after a number are a function call, not multiplication. "
             "To multiply, write a `*` between them."
         )
-    number, inside = written.group(1), written.group(2).strip()
     return (
         "brackets after a number are a function call, not multiplication. "
-        "To multiply, write the `*`: `%s * %s`, not `%s`."
-        % (number, inside or "...", written.group(0))
+        "To multiply, write the `*`: `%s`, not `%s`." % (meant["product"], meant["written"])
     )
+
+
+def _pll_multiplication_on_line(source, lineno):
+    """The multiplication the first number written before brackets on line
+    `lineno` of `source` stands for (`_pll_multiplication_meant`), or None."""
+    try:
+        with _pll_without_syntax_warnings():
+            tree = _ast.parse(source)
+    except (SyntaxError, ValueError):
+        return None
+    calls = sorted(
+        (node for node in _ast.walk(tree) if isinstance(node, _ast.Call) and node.lineno == lineno),
+        key=lambda node: node.col_offset,
+    )
+    for call in calls:
+        meant = _pll_multiplication_meant(call, source)
+        if meant is not None:
+            return meant
+    return None
 
 
 def _pll_parse_and_instrument(code, filename, level):
