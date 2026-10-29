@@ -524,6 +524,7 @@ _g = _pll_get_session("smoke-lib")
         2,
       ],
       ["a new list thrown away", "def tidy(xs: list[int]) -> list[int]:\n    sorted(xs)\n    return xs\n", "unused-value", 2],
+      ["a value thrown away in a dunder method, which is no template", "class A:\n    def __init__(self, x: int):\n        x + 1\n", "unused-value", 3],
       ["a string method's answer thrown away", "def shout(name: str) -> str:\n    name.upper()\n    return name\n", "unused-value", 2],
       [
         "replace's answer thrown away",
@@ -613,6 +614,12 @@ _g = _pll_get_session("smoke-lib")
       ["a method of their own named like a string's", 'class Pen:\n    def split(self):\n        print("split")\n\n\ndef f(p):\n    p.split()\n    return p\n'],
       ["a library function that does something", "import random\n\n\ndef f(xs):\n    random.seed(1)\n    return xs\n"],
       ["a function handed in", "def apply(f, x):\n    f(x)\n    return x\n"],
+      // A template - a function named with a `_` in front - has each part of
+      // its data on a line of its own, with nothing done to it.
+      [
+        "a template's parts",
+        "def _order_amount_temp(order_amt: float) -> ...:\n    if order_amt <= 10:\n        order_amt\n        return ...\n    else:\n        order_amt\n        return ...\n",
+      ],
       // So is an attribute a class sets for itself, a class attribute, and
       // a property: each is data, read without a call.
       [
@@ -1489,7 +1496,6 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
     for (const [label, code] of [
       ["`...`", "def area(r):\n    ...\n"],
       ["its docstring and `...`", 'def area(r: float) -> float:\n    """area of a circle of radius r"""\n    ...\n'],
-      ["only its docstring", 'def area(r: float) -> float:\n    """area of a circle of radius r"""\n'],
       ["on one line", "def area(r: float) -> float: ...\n"],
     ]) {
       const found = analyze(code, "beginner", "stub.py");
@@ -1500,10 +1506,26 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
     }
     const [said] = wordStatic(notWritten("def area(r):\n    ...\n"), "beginner", "stub.py");
     expect(
-      said?.headline === "`area` is not written yet: until it is, calling it gives back `None`." &&
-        JSON.stringify(said.howToFix) === JSON.stringify(["Write its body once its tests are written; until then they fail."]),
+      said?.headline === "`area` is not written yet: until it is, calling it stops at its `...`." &&
+        JSON.stringify(said.howToFix) === JSON.stringify(["Write its body once its tests are written."]),
       `said: ${JSON.stringify(said)}`,
     );
+    // Only a docstring is no way to write one: its body is to be `...` until it is written.
+    for (const code of ['def area(r: float) -> float:\n    """area of a circle of radius r"""\n', 'def area(r):\n    """area"""\n']) {
+      const found = analyze(code, "beginner", "stub.py");
+      expect(
+        found.length === 1 && found[0].id === "function-body-missing" && found[0].severity === "warning" && found[0].line_number === 1,
+        `only a docstring: ${JSON.stringify(found)}`,
+      );
+    }
+    const [bodiless] = wordStatic(analyze('def area(r):\n    """area"""\n', "beginner", "stub.py"), "beginner", "stub.py");
+    expect(
+      bodiless?.headline === "`area` has a docstring but no body." &&
+        JSON.stringify(bodiless.howToFix) === JSON.stringify(["Until its body is written, write `...` on the line below its docstring."]),
+      `only a docstring, said: ${JSON.stringify(bodiless)}`,
+    );
+    const abstractDoc = 'from abc import ABC, abstractmethod\n\n\nclass Shape(ABC):\n    @abstractmethod\n    def area(self) -> float:\n        """the area"""\n';
+    expect(!analyze(abstractDoc, "beginner", "stub.py").some((f) => f.id === "function-body-missing"), "an abstract method's docstring is all it needs");
     // Not a function with a body, nor `pass` (which may mean to do nothing), an overload or an abstract method.
     for (const [label, code] of [
       ["a body", "def area(r: float) -> float:\n    return 3.14 * r * r\n"],
@@ -1539,9 +1561,12 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
       stubbed.ok && JSON.stringify(stubbed.wheats[0].studentDefines) === "[]" && stubbed.wheats[0].tests.test_initials?.outcome === "pass",
       `a stub is not theirs yet, and their test is checked all the same: ${JSON.stringify(stubbed.wheats?.[0])}`,
     );
+    // A test with a `...` in it stops there, against every implementation, as in the file's own run.
+    const unfinished = judged("#level beginner\n" + EXAMPLAR + STUB + 'def test_initials():\n    assert initials("Ada Lovelace") == ...\n');
+    expect(unfinished.wheats?.[0]?.tests?.test_initials?.outcome === "error", `a test with a \`...\`: ${JSON.stringify(unfinished.wheats?.[0]?.tests)}`);
     const writtenOne = judged("#level beginner\n" + EXAMPLAR + "def initials(name: str) -> str:\n    return name\n\n\n" + TEST);
     expect(JSON.stringify(writtenOne.wheats?.[0]?.studentDefines) === '["initials"]', `a body is: ${JSON.stringify(writtenOne.wheats?.[0]?.studentDefines)}`);
-    console.log("    `...` or only a docstring warned, and run all the same; quiet where Examplar checks its tests, which does not count it as written");
+    console.log("    `...` warned, and only a docstring told to have `...`, and run all the same; quiet where Examplar checks its tests");
   }
 
   fn.destroy?.();

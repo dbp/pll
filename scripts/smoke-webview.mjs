@@ -460,6 +460,37 @@ try {
     }
   }
 
+  console.log("\n[12] a header that changes while the editor has the focus does not take it");
+  {
+    // As before a file's first run, when each edit to its `#level` line changes
+    // the header. `document.hasFocus()` is what the browser would say.
+    await page.evaluate(() => {
+      window.__focused = 0;
+      const focus = HTMLTextAreaElement.prototype.focus;
+      HTMLTextAreaElement.prototype.focus = function (...args) {
+        window.__focused += 1;
+        return focus.apply(this, args);
+      };
+    });
+    const focusedAfter = async (hasFocus, state) => {
+      await page.evaluate((has) => {
+        window.__focused = 0;
+        document.hasFocus = () => has;
+      }, hasFocus);
+      view.setState(state);
+      await settle();
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r())));
+      return page.evaluate(() => window.__focused);
+    };
+    const idle = { title: "t.py [beginner]", prompt: "primary", status: null, awaitingInput: false, inputPrefix: "" };
+    expect((await focusedAfter(false, idle)) === 0, "the editor keeps the focus as the header changes");
+    expect((await focusedAfter(false, { ...idle, title: "t.py [intermediate]" })) === 0, "and as it changes again");
+    expect((await focusedAfter(true, idle)) > 0, "with the panel's focus, an idle prompt takes the caret");
+    await page.evaluate(() => {
+      delete document.hasFocus;
+    });
+  }
+
   console.log("\n[11] a `load` fired by a script, not the browser, does not reach the webview host");
   {
     // As AdGuard fires one in Safari. The host listens on the window, not

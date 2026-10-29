@@ -267,21 +267,98 @@ class _PllContractScopes(_ast.NodeVisitor):
         self.current.bound.add(node.name.id)
 
 
-def _pll_is_unwritten(node):
-    """Whether the function `node` is still to be written: its body is `...`,
-    its docstring, or the two - a design recipe's signature and purpose,
-    whose tests come before its body."""
-    body = node.body
+def _pll_only_ellipsis(body):
+    """Whether `body` is `...`, after a docstring if it has one."""
     if body and isinstance(body[0], _ast.Expr) and isinstance(body[0].value, _ast.Constant) and isinstance(
         body[0].value.value, str
     ):
         body = body[1:]
-    return not body or (
+    return (
         len(body) == 1
         and isinstance(body[0], _ast.Expr)
         and isinstance(body[0].value, _ast.Constant)
         and body[0].value.value is Ellipsis
     )
+
+
+def _pll_is_unwritten(node):
+    """Whether the function `node` is still to be written: its body is `...`
+    - a design recipe's signature and purpose, whose tests come before its
+    body."""
+    return _pll_only_ellipsis(node.body)
+
+
+class _PllPlaceholders(_ast.NodeTransformer):
+    """At the student levels, a `...` the program reaches stops it
+    (`pll:not_written`): there it holds the place of code still to be
+    written, which Python would go on past - a value that does nothing.
+
+    Not one in an annotation or a type alias, nor one among a subscript's
+    keys (`tuple[int, ...]`, `Callable[..., str]`), each a part of a type -
+    and Python evaluates an annotation when its `def` runs. Nor a class
+    body that is only `...`, Python's way to write a class with nothing in
+    it.
+    """
+
+    def __init__(self):
+        # The `def` each `...` is in, innermost last.
+        self.functions = []
+
+    def visit_Constant(self, node):
+        if node.value is not Ellipsis:
+            return node
+        function = self.functions[-1] if self.functions else None
+        call = _ast.Call(
+            func=_ast.copy_location(_ast.Name(id="pll:not_written", ctx=_ast.Load()), node),
+            args=[_ast.copy_location(_ast.Constant(value=function), node)],
+            keywords=[],
+        )
+        return _ast.copy_location(call, node)
+
+    def visit_FunctionDef(self, node):
+        annotated = [(arg, arg.annotation) for arg in _pll_all_args(node.args)]
+        returns, type_params = node.returns, getattr(node, "type_params", [])
+        for arg, _ in annotated:
+            arg.annotation = None
+        node.returns, node.type_params = None, []
+        self.functions.append(node.name)
+        self.generic_visit(node)
+        self.functions.pop()
+        for arg, annotation in annotated:
+            arg.annotation = annotation
+        node.returns, node.type_params = returns, type_params
+        return node
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node):
+        if not _pll_only_ellipsis(node.body):
+            self.generic_visit(node)
+            return node
+        node.decorator_list = [self.visit(d) for d in node.decorator_list]
+        node.bases = [self.visit(b) for b in node.bases]
+        node.keywords = [self.visit(k) for k in node.keywords]
+        return node
+
+    def visit_AnnAssign(self, node):
+        node.target = self.visit(node.target)
+        if node.value is not None:
+            node.value = self.visit(node.value)
+        return node
+
+    def visit_TypeAlias(self, node):
+        return node
+
+    def visit_Subscript(self, node):
+        node.value = self.visit(node.value)
+        if isinstance(node.slice, _ast.Tuple):
+            node.slice.elts = [
+                elt if isinstance(elt, _ast.Constant) and elt.value is Ellipsis else self.visit(elt)
+                for elt in node.slice.elts
+            ]
+        else:
+            node.slice = self.visit(node.slice)
+        return node
 
 
 class _PllContracts(_ast.NodeTransformer):
@@ -290,8 +367,7 @@ class _PllContracts(_ast.NodeTransformer):
 
     - an annotated `def` gets its contract, from the decorator
       `pll:contract_def` innermost of its decorators, and each `return` in
-      it notes its line (`pll:returning`) - with no result to check for one
-      still to be written (`_pll_is_unwritten`), whose `None` is no answer;
+      it notes its line (`pll:returning`);
     - each reference to what may be a contracted function becomes the
       obligation for it (`pll:ref`), made by the definition it is in;
     - an annotated variable's value is checked each time it is given one
@@ -360,7 +436,7 @@ class _PllContracts(_ast.NodeTransformer):
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def _contract(self, node, scope):
-        """`pll:contract_def(party, written, quoted, unwritten)` for `node`."""
+        """`pll:contract_def(party, written, quoted)` for `node`."""
         written, quoted = [], []
         annotated = [(arg.arg, arg.annotation) for arg in _pll_all_args(node.args) if arg.annotation is not None]
         if node.returns is not None:
@@ -375,7 +451,6 @@ class _PllContracts(_ast.NodeTransformer):
                 _ast.Constant(value=scope.party),
                 _ast.Constant(value=tuple(written)),
                 _ast.Constant(value=tuple(quoted)),
-                _ast.Constant(value=_pll_is_unwritten(node)),
             ],
             node,
         )
@@ -1117,6 +1192,7 @@ def _pll_with_contracts(tree, code, filename, level):
             # Before the contracts, so the decorators it looks for are as
             # they were written.
             _PllDataclassChecks().visit(instrumented)
+            _PllPlaceholders().visit(instrumented)
             if level in _PLL_TEACHING_LEVELS:
                 _PllTeachingChecks(code).visit(instrumented)
             scopes = _PllContractScopes(filename).build(instrumented)

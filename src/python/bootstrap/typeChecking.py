@@ -146,6 +146,26 @@ _pll_hidden("bitwise_not", _pll_bitwise_not)
 # -- changing a list, a dictionary or a set in place, at the teaching levels ---------
 
 
+class _PllNotWritten(NotImplementedError):
+    """A `...` the program reached, at a student level: code still to be
+    written, whose `def` is in its facts (`not_written`)."""
+
+
+_PllNotWritten.__name__ = _PllNotWritten.__qualname__ = "NotWrittenYet"
+_PllNotWritten.__module__ = "builtins"
+
+
+def _pll_not_written(function):
+    """Stop where the program reached a `...` (`_PllPlaceholders`,
+    compile.py): `function` is the name of the `def` it is in, or None."""
+    error = _PllNotWritten("`...` stands for code still to be written")
+    _pll_add_facts(error, not_written={"function": function})
+    raise error
+
+
+_pll_hidden("not_written", _pll_not_written)
+
+
 class _PllMutation(Exception):
     """A list, a dictionary, a set or a dataclass changed in place, at a level
     that refuses it: what the explanation needs is in its facts (`mutation`)."""

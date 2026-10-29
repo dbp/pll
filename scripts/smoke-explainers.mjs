@@ -1848,6 +1848,52 @@ console.log("[an iterator shown or printed: Python's text, and a warning that sa
   console.log("    once for each line, after Python's text; not at raw, nor for what is printed elsewhere");
 }
 
+console.log("[a `...` the program reaches stops it, at the student levels: code still to be written]");
+{
+  let dotRuns = 0;
+  const runOf = (source, level) => {
+    dotRuns += 1;
+    return JSON.parse(pllCall("_pll_run_file", JSON.stringify([source, "dots.py", `dots-${dotRuns}`, level, false])));
+  };
+  const FIX = ["Write that code in place of the `...`."];
+  for (const [what, source, line, headline] of [
+    ["a body of `...`", 'def area(r: float) -> float:\n    """area of a circle of radius r"""\n    ...\n\nprint(area(1.0))\n', 3,
+      "`area` is not written yet: the `...` here stands for code still to be written."],
+    ["a `...` in an expression", "def AND(b1, b2):\n    return b1(b2, ...)\n\nprint(AND(lambda x, y: x, 3))\n", 2,
+      "`AND` is not written yet: the `...` here stands for code still to be written."],
+    ["a condition", 'if ...:\n    print("took the branch")\n', 1, "The `...` here stands for code still to be written."],
+    ["at the top, after a function", "def helper() -> int:\n    return 1\n\nif ...:\n    print(helper())\n", 4,
+      "The `...` here stands for code still to be written."],
+    ["in a lambda", "g = lambda: ...\ng()\n", 1, "The `...` here stands for code still to be written."],
+    ["in a lambda in a function", "def f() -> int:\n    g = lambda: ...\n    return g()\n\nf()\n", 2,
+      "`f` is not written yet: the `...` here stands for code still to be written."],
+    ["a key", "d = {1: 2}\nprint(d[...])\n", 2, "The `...` here stands for code still to be written."],
+  ]) {
+    const ran = runOf(source, "beginner");
+    const found = ran.error?.finding;
+    expect(
+      ran.error?.errorType === "NotWrittenYet" && found?.headline === headline && JSON.stringify(found?.howToFix) === JSON.stringify(FIX) &&
+        found?.lineNumber === line && ran.stdout === "",
+      `${what}: ${found?.headline} at ${found?.lineNumber} ${JSON.stringify(found?.howToFix)} ${ran.stdout}`,
+    );
+  }
+  // At `advanced` too; `raw` is Python, where `...` is a value.
+  expect(runOf("def f() -> int:\n    ...\n\nf()\n", "advanced").error?.errorType === "NotWrittenYet", "advanced stops at it");
+  const raw = runOf("print(...)\nif ...:\n    print('took the branch')\n", "raw");
+  expect(raw.error === null && raw.stdout === "Ellipsis\ntook the branch\n", `raw: ${raw.stdout} ${raw.error?.message ?? ""}`);
+  // Where `...` is part of a type, or a class has nothing in it, it is left alone.
+  const types = runOf(
+    "Pair = tuple[int, ...]\n\ndef first(t: tuple[int, ...], f: Callable[..., int]) -> int:\n    return f(t[0])\n\n" +
+      "class Nothing: ...\n\nprint(first((4, 5), lambda n: n + 1), Pair, type(Nothing()).__name__)\n",
+    "beginner",
+  );
+  expect(types.error === null && types.stdout === "5 tuple[int, ...] Nothing\n", `types and an empty class: ${types.stdout} ${types.error?.message ?? ""}`);
+  // A function of `...` is defined, and caught by `except NotImplementedError`, as Python's own would be.
+  const caught = runOf("def f() -> int:\n    ...\n\ntry:\n    f()\nexcept NotImplementedError:\n    print('not yet')\n", "intermediate");
+  expect(caught.error === null && caught.stdout === "not yet\n", `caught: ${caught.stdout} ${caught.error?.message ?? ""}`);
+  console.log("    in a body, an expression, a condition, a lambda and a key; not in a type or an empty class, nor at raw");
+}
+
 console.log("[annotations: the function wording only where there is a function]");
 {
   const annotation = (written) =>

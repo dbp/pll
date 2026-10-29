@@ -1712,16 +1712,38 @@ stderr:
 === st-function-not-written (exit 3)
 stderr:
   student.py [beginner]
-  NotWrittenYet: `area` is not written yet: until it is, calling it gives back `None`.
+  NotWrittenYet: `area` is not written yet: until it is, calling it stops at its `...`.
     at student.py:2:1
   
   How to fix:
-    - Write its body once its tests are written; until then they fail.
+    - Write its body once its tests are written.
   
-  Tests: 1 failed
-    FAILED test_area (line 6)
-          assert None == 3.14
-          where None = area(1.0)
+  Tests: 1 error
+    ERROR test_area (line 6)
+          NotWrittenYet: `area` is not written yet: the `...` here stands for code still to be written.
+          at student.py:4
+          - Write that code in place of the `...`.
+
+=== rt-placeholder-in-expression (exit 1)
+stderr:
+  student.py [intermediate]
+  NotWrittenYet: `AND` is not written yet: the `...` here stands for code still to be written.
+    at student.py:3
+  
+  How to fix:
+    - Write that code in place of the `...`.
+
+=== st-function-body-missing (exit 0)
+stdout:
+  ran
+stderr:
+  student.py [beginner]
+  NotWrittenYet: `area` has a docstring but no body.
+    at student.py:2:1
+  
+  How to fix:
+    - Until its body is written, write `...` on the line below its docstring.
+  
 
 === st-unused-sorted (exit 2)
 stderr:

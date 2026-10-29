@@ -118,8 +118,13 @@
     // Only offered while a program is actually running.
     stopBtn.hidden = !blocked;
     statusEl.textContent = panel.status ?? "";
+    // Back to the prompt once it takes a line - but only while the panel has
+    // focus: the header changes as the file is edited, and the editor's keys
+    // must stay in the editor.
     if (!blocked && shown) {
-      requestAnimationFrame(() => textarea.focus());
+      requestAnimationFrame(() => {
+        if (document.hasFocus()) textarea.focus();
+      });
     }
     if (entries.length === 0) renderEmpty();
   }

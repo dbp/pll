@@ -124,6 +124,12 @@ reported, with what to delete. At `#level raw`, as in Python, they are
 `from dataclasses import dataclass` and `from collections.abc import
 Callable`.
 
+A `...` stops the program when it runs, at those three levels: there it
+holds the place of code still to be written, so a function whose body is
+`...` can be defined, and its tests written, but stops when it is called.
+A `...` in a type (`tuple[int, ...]`) is left alone. At `#level raw`, as in
+Python, `...` is a value that does nothing.
+
 The level is the only thing that decides what gets checked — there is no
 separate setting to keep in sync with it.
 

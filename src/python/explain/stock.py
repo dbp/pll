@@ -1542,3 +1542,20 @@ def _pll_explain_mutation(e):
         "headline": headline,
         "howToFix": ([instead] if instead else []) + [allowed],
     }
+
+
+@_pll_explains("NotWrittenYet")
+def _pll_explain_not_written(e):
+    """A `...` the program reached at a student level (`_pll_not_written`):
+    code still to be written, which Python itself would go on past."""
+    function = (e.facts.get("not_written") or {}).get("function")
+    if function:
+        headline = "`%s` is not written yet: the `...` here stands for code still to be written." % function
+    else:
+        headline = "The `...` here stands for code still to be written."
+    return {
+        "id": "not-written",
+        "errorType": "NotWrittenYet",
+        "headline": headline,
+        "howToFix": ["Write that code in place of the `...`."],
+    }

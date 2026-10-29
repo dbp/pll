@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **A `...` the program reaches stops it, at `beginner`, `intermediate` and
+  `advanced`**: there it holds the place of code still to be written, which
+  Python goes on past - a value, and a true one in an `if`. "`area` is not
+  written yet: the `...` here stands for code still to be written." A
+  function whose body is `...` is defined as before, and Examplar checks
+  the tests that call it as before; calling it is what stops, where 0.8.0
+  gave back `None`. A `...` in an annotation or a type alias, among a
+  subscript's keys (`tuple[int, ...]`, `Callable[..., str]`), or as all of
+  a class's body is left alone, and `#level raw` is Python. The error is a
+  `NotImplementedError`, for an `except` that catches one.
+- **A function with only a docstring is told to have `...` as its body**,
+  as a warning: "`area` has a docstring but no body." 0.8.0 took it for one
+  still to be written.
+
+### Added
+- **A template's parts can each be on a line of their own**: in a function
+  whose name starts with `_` - the convention for a template, an outline
+  rather than a function to call - a value on a line of its own is not taken
+  for one thrown away. A dunder method (`__init__`) is not a template.
+
+### Fixed
+- **Typing in the editor stays in the editor.** Before a file's first run,
+  each edit changes the interactions panel's header, and the panel put the
+  caret in its prompt every time - so after the panel had once had the
+  focus, every keystroke but the first went to the prompt. The prompt now
+  takes the caret only while the panel has the focus.
+
 ## 0.8.0 (2026-10-27)
 
 ### Added

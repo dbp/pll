@@ -299,7 +299,9 @@ class _PllScopeBuilder:
 
 #: The kinds that are said but do not stop the code running: each can be
 #: right as written. Every other kind is an error, which does.
-_PLL_WARNING_KINDS = frozenset(("method-not-called", "test-not-named", "pattern-never-matches", "function-not-written"))
+_PLL_WARNING_KINDS = frozenset((
+    "method-not-called", "test-not-named", "pattern-never-matches", "function-not-written", "function-body-missing",
+))
 
 
 def _pll_finding(kind, error_type, line, column, name_token=None, **extras):
@@ -654,6 +656,7 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         self._not_a_type(node.returns)
         self._missing_return(node)
         self._not_written(node)
+        self._body_missing(node)
 
     visit_FunctionDef = _function
     visit_AsyncFunctionDef = _function
@@ -670,6 +673,16 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         if self._examplar and node.name in self._tested:
             return
         self.found.append(_pll_finding("function-not-written", "NotWrittenYet", node.lineno, node.col_offset, node.name))
+
+    def _body_missing(self, node):
+        """A function with only its docstring, which is to have `...` as its
+        body until it is written (`_pll_is_unwritten`). Not an abstract
+        method or an overload."""
+        if not (len(node.body) == 1 and _pll_is_docstring(node.body[0])):
+            return
+        if any(_pll_decorator_name(d) in ("abstractmethod", "overload") for d in node.decorator_list):
+            return
+        self.found.append(_pll_finding("function-body-missing", "NotWrittenYet", node.lineno, node.col_offset, node.name))
 
     def _ends_thrown_away(self, statements):
         """Whether every way `statements` can end is a value on a line of
@@ -945,8 +958,9 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
     def visit_Expr(self, node):
         value = node.value
         # A method named but not called is the more specific thing to say
-        # about `t.mean` on a line of its own, so it wins.
-        if not self._method_not_called(value) and self._depth > 0:
+        # about `t.mean` on a line of its own, so it wins. In a template its
+        # parts are on lines of their own, with nothing done to them.
+        if not self._method_not_called(value) and self._depth > 0 and not self._in_template():
             unchanged = self._new_value_call(value)
             if unchanged is not None or self._discarded(value):
                 extras = {"unchanged": unchanged} if unchanged else {}
@@ -965,6 +979,14 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
                     )
                 )
         self.generic_visit(node)
+
+    def _in_template(self):
+        """Whether this is inside a template: a function named with a `_` in
+        front (`_order_amount_temp`), the convention for an outline rather
+        than a function to call - a dunder method is not one."""
+        return any(
+            f.name.startswith("_") and not (f.name.startswith("__") and f.name.endswith("__")) for f in self._functions
+        )
 
     def _new_value_call(self, value):
         """For a call that only gives back a new value - `sorted(xs)`,

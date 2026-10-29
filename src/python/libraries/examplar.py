@@ -389,6 +389,9 @@ def _pll_examplar_compiled_definitions(test_source, filename):
         # Rewriting can leave the tree half-modified, so start again from the
         # source rather than compiling whatever it got to.
         tree = _ex_ast.parse(test_source, filename=filename)
+    if _pll_examplar_level(test_source) in _PLL_STUDENT_LEVELS:
+        # As the student's own run has it: a `...` reached stops a test.
+        _PllPlaceholders().visit(tree)
     pieces = []
     # Recorded and dropped, like the test phase's: the run that follows
     # compiles the same file and says each warning once.
