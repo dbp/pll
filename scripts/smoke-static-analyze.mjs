@@ -1490,31 +1490,25 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
     console.log("    no import needed; an import of it is said, and one of more keeps the rest; advanced allows it");
   }
 
-  console.log("\n[34] a function still to be written is a warning, and not one where Examplar checks its tests");
+  console.log("\n[34] a function still to be written: nothing said until it is called, and only a docstring told to have `...`");
   {
-    const notWritten = (code) => analyze(code, "beginner", "stub.py").filter((f) => f.id === "function-not-written");
+    // Its `...` stops a call to it (smoke-explainers); before then there is nothing to say.
     for (const [label, code] of [
       ["`...`", "def area(r):\n    ...\n"],
       ["its docstring and `...`", 'def area(r: float) -> float:\n    """area of a circle of radius r"""\n    ...\n'],
       ["on one line", "def area(r: float) -> float: ...\n"],
+      ["with a test of it", 'def area(r: float) -> float:\n    ...\n\n\ndef test_area():\n    assert area(1.0) == 3.14\n'],
+      ["an overload", "from typing import overload\n\n\n@overload\ndef f(x: int) -> int: ...\n\n\ndef f(x):\n    return x\n"],
     ]) {
-      const found = analyze(code, "beginner", "stub.py");
-      expect(
-        found.length === 1 && found[0].id === "function-not-written" && found[0].severity === "warning" && found[0].line_number === 1,
-        `${label}: ${JSON.stringify(found)}`,
-      );
+      const found = analyze(code, "beginner", "stub.py").filter((f) => f.id !== "reassignment");
+      expect(found.length === 0, `${label}: ${JSON.stringify(found)}`);
     }
-    const [said] = wordStatic(notWritten("def area(r):\n    ...\n"), "beginner", "stub.py");
-    expect(
-      said?.headline === "`area` is not written yet: until it is, calling it stops at its `...`." &&
-        JSON.stringify(said.howToFix) === JSON.stringify(["Write its body once its tests are written."]),
-      `said: ${JSON.stringify(said)}`,
-    );
     // Only a docstring is no way to write one: its body is to be `...` until it is written.
     for (const code of ['def area(r: float) -> float:\n    """area of a circle of radius r"""\n', 'def area(r):\n    """area"""\n']) {
       const found = analyze(code, "beginner", "stub.py");
       expect(
-        found.length === 1 && found[0].id === "function-body-missing" && found[0].severity === "warning" && found[0].line_number === 1,
+        found.length === 1 && found[0].id === "function-body-missing" && found[0].error_type === "NoBody" &&
+          found[0].severity === "warning" && found[0].line_number === 1,
         `only a docstring: ${JSON.stringify(found)}`,
       );
     }
@@ -1526,23 +1520,10 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
     );
     const abstractDoc = 'from abc import ABC, abstractmethod\n\n\nclass Shape(ABC):\n    @abstractmethod\n    def area(self) -> float:\n        """the area"""\n';
     expect(!analyze(abstractDoc, "beginner", "stub.py").some((f) => f.id === "function-body-missing"), "an abstract method's docstring is all it needs");
-    // Not a function with a body, nor `pass` (which may mean to do nothing), an overload or an abstract method.
-    for (const [label, code] of [
-      ["a body", "def area(r: float) -> float:\n    return 3.14 * r * r\n"],
-      ["`pass`", "def on_key(key: str) -> None:\n    pass\n"],
-      ["an overload", "from typing import overload\n\n\n@overload\ndef f(x: int) -> int: ...\n\n\ndef f(x):\n    return x\n"],
-      ["an abstract method", "from abc import ABC, abstractmethod\n\n\nclass Shape(ABC):\n    @abstractmethod\n    def area(self) -> float: ...\n"],
-    ]) {
-      expect(notWritten(code).length === 0, `${label}: ${JSON.stringify(notWritten(code))}`);
-    }
-    // With an `#examplar` line its tests come first, so once one calls it there is nothing to say.
-    const STUB = "def initials(name: str) -> str:\n    ...\n\n\n";
+    // Examplar does not take one for the student's own, which the editor runs their tests against.
+    const STUB = 'def initials(name: str) -> str:\n    """the initials of name"""\n    ...\n\n\n';
     const TEST = 'def test_initials():\n    assert initials("Ada Lovelace") == "A.L."\n';
     const EXAMPLAR = "#examplar http://localhost:8123/hw.json\n";
-    expect(notWritten(EXAMPLAR + STUB + TEST).length === 0, `checked by Examplar, with a test: ${JSON.stringify(notWritten(EXAMPLAR + STUB + TEST))}`);
-    expect(notWritten(EXAMPLAR + STUB).length === 1, "checked by Examplar, with no test of it yet");
-    expect(notWritten(STUB + TEST).length === 1, "with a test, and no Examplar");
-    // And Examplar does not take one for the student's own, which the editor runs their tests against.
     const built = JSON.parse(
       pllCall(
         "_pll_examplar_build",
@@ -1566,7 +1547,7 @@ json.dumps([sum(n for n, _ in results), [d for _, ds in results for d in ds]])
     expect(unfinished.wheats?.[0]?.tests?.test_initials?.outcome === "error", `a test with a \`...\`: ${JSON.stringify(unfinished.wheats?.[0]?.tests)}`);
     const writtenOne = judged("#level beginner\n" + EXAMPLAR + "def initials(name: str) -> str:\n    return name\n\n\n" + TEST);
     expect(JSON.stringify(writtenOne.wheats?.[0]?.studentDefines) === '["initials"]', `a body is: ${JSON.stringify(writtenOne.wheats?.[0]?.studentDefines)}`);
-    console.log("    `...` warned, and only a docstring told to have `...`, and run all the same; quiet where Examplar checks its tests");
+    console.log("    `...` says nothing before a call, only a docstring is told to have `...`, and Examplar does not count a stub as written");
   }
 
   fn.destroy?.();

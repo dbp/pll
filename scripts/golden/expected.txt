@@ -1709,20 +1709,15 @@ stderr:
   
   Static analysis found 1 problem. The file was not run.
 
-=== st-function-not-written (exit 3)
+=== rt-stub-called (exit 3)
 stderr:
   student.py [beginner]
-  NotWrittenYet: `area` is not written yet: until it is, calling it stops at its `...`.
-    at student.py:2:1
-  
-  How to fix:
-    - Write its body once its tests are written.
-  
   Tests: 1 error
     ERROR test_area (line 6)
           NotWrittenYet: `area` is not written yet: the `...` here stands for code still to be written.
           at student.py:4
           - Write that code in place of the `...`.
+          - In Python, `...` is an ordinary value, and the program would carry on past it; PLL expects every `...` to have its code filled in before it runs.
 
 === rt-placeholder-in-expression (exit 1)
 stderr:
@@ -1732,13 +1727,14 @@ stderr:
   
   How to fix:
     - Write that code in place of the `...`.
+    - In Python, `...` is an ordinary value, and the program would carry on past it; PLL expects every `...` to have its code filled in before it runs.
 
 === st-function-body-missing (exit 0)
 stdout:
   ran
 stderr:
   student.py [beginner]
-  NotWrittenYet: `area` has a docstring but no body.
+  NoBody: `area` has a docstring but no body.
     at student.py:2:1
   
   How to fix:

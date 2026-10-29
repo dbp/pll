@@ -212,7 +212,7 @@ export const CASES = [
   { name: "mut-field", code: [B, "@dataclass", "class Dog:", "    name: str", "    age: int", "", 'd = Dog("Rex", 3)', "d.age = 4"] },
   { name: "st-unused-comparison", code: [B, "def double(n: int) -> int:", "    return n * 2", "", "def test_double():", "    double(2) == 4"] },
   { name: "st-unused-value", code: [B, "def order(order_amt: float) -> float:", "    order_amt + 8", "    return order_amt"] },
-  { name: "st-function-not-written", code: [B, "def area(r: float) -> float:", '    """area of a circle of radius r"""', "    ...", "", "def test_area():", "    assert area(1.0) == 3.14"] },
+  { name: "rt-stub-called", code: [B, "def area(r: float) -> float:", '    """area of a circle of radius r"""', "    ...", "", "def test_area():", "    assert area(1.0) == 3.14"] },
   { name: "rt-placeholder-in-expression", code: [I, "def AND(b1, b2):", "    return b1(b2, ...)", "", "print(AND(lambda x, y: x, 3))"] },
   { name: "st-function-body-missing", code: [B, "def area(r: float) -> float:", '    """area of a circle of radius r"""', "", 'print("ran")'] },
   { name: "st-unused-sorted", code: [B, "def tidy(xs: list[int]) -> list[int]:", "    sorted(xs)", "    return xs"] },

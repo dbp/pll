@@ -6,10 +6,12 @@
 - **A `...` the program reaches stops it, at `beginner`, `intermediate` and
   `advanced`**: there it holds the place of code still to be written, which
   Python goes on past - a value, and a true one in an `if`. "`area` is not
-  written yet: the `...` here stands for code still to be written." A
-  function whose body is `...` is defined as before, and Examplar checks
-  the tests that call it as before; calling it is what stops, where 0.8.0
-  gave back `None`. A `...` in an annotation or a type alias, among a
+  written yet: the `...` here stands for code still to be written", and the
+  message says that Python would carry on past it, where PLL expects every
+  `...` to have its code filled in before it runs. A
+  function whose body is `...` is defined with nothing said - the warning
+  0.8.0 gave one is gone - and Examplar checks the tests that call it as
+  before; calling it is what stops, where 0.8.0 gave back `None`. A `...` in an annotation or a type alias, among a
   subscript's keys (`tuple[int, ...]`, `Callable[..., str]`), or as all of
   a class's body is left alone, and `#level raw` is Python. The error is a
   `NotImplementedError`, for an `except` that catches one.

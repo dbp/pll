@@ -1855,7 +1855,10 @@ console.log("[a `...` the program reaches stops it, at the student levels: code 
     dotRuns += 1;
     return JSON.parse(pllCall("_pll_run_file", JSON.stringify([source, "dots.py", `dots-${dotRuns}`, level, false])));
   };
-  const FIX = ["Write that code in place of the `...`."];
+  const FIX = [
+    "Write that code in place of the `...`.",
+    "In Python, `...` is an ordinary value, and the program would carry on past it; PLL expects every `...` to have its code filled in before it runs.",
+  ];
   for (const [what, source, line, headline] of [
     ["a body of `...`", 'def area(r: float) -> float:\n    """area of a circle of radius r"""\n    ...\n\nprint(area(1.0))\n', 3,
       "`area` is not written yet: the `...` here stands for code still to be written."],
@@ -1877,8 +1880,12 @@ console.log("[a `...` the program reaches stops it, at the student levels: code 
       `${what}: ${found?.headline} at ${found?.lineNumber} ${JSON.stringify(found?.howToFix)} ${ran.stdout}`,
     );
   }
-  // At `advanced` too; `raw` is Python, where `...` is a value.
-  expect(runOf("def f() -> int:\n    ...\n\nf()\n", "advanced").error?.errorType === "NotWrittenYet", "advanced stops at it");
+  // At `advanced` too, said the same way, as no level is named; `raw` is Python, where `...` is a value.
+  const advanced = runOf("def f() -> int:\n    ...\n\nf()\n", "advanced").error?.finding;
+  expect(
+    advanced?.errorType === "NotWrittenYet" && advanced.howToFix.at(-1) === FIX[1],
+    `advanced stops at it: ${JSON.stringify(advanced?.howToFix)}`,
+  );
   const raw = runOf("print(...)\nif ...:\n    print('took the branch')\n", "raw");
   expect(raw.error === null && raw.stdout === "Ellipsis\ntook the branch\n", `raw: ${raw.stdout} ${raw.error?.message ?? ""}`);
   // Where `...` is part of a type, or a class has nothing in it, it is left alone.

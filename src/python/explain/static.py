@@ -485,15 +485,6 @@ def _pll_word_field_assigned_type(f, level):
     ]
 
 
-@_pll_words("function-not-written")
-def _pll_word_function_not_written(f, level):
-    """A function whose body is still `...`."""
-    name = f["name_token"] or "this function"
-    return "`%s` is not written yet: until it is, calling it stops at its `...`." % name, [
-        "Write its body once its tests are written.",
-    ]
-
-
 @_pll_words("function-body-missing")
 def _pll_word_function_body_missing(f, level):
     """A function with only its docstring."""

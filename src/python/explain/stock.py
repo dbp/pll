@@ -1557,5 +1557,10 @@ def _pll_explain_not_written(e):
         "id": "not-written",
         "errorType": "NotWrittenYet",
         "headline": headline,
-        "howToFix": ["Write that code in place of the `...`."],
+        # (every student level stops at it, so none is named)
+        "howToFix": [
+            "Write that code in place of the `...`.",
+            "In Python, `...` is an ordinary value, and the program would carry on past it; PLL expects every `...`"
+            " to have its code filled in before it runs.",
+        ],
     }
