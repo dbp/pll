@@ -15,6 +15,24 @@
   call quoted is the one that failed, not brackets in a string before it,
   and `3(4, 5)`, which holds two values, is no longer told `3 * 4, 5`. The
   warning for such a line that never runs says the same.
+- **`pll examplar build --verify` loads the packages the suite imports**, as
+  a student's run loads those of their file before its check. A suite with
+  `import pandas as pd` failed on every wheat with "name 'pd' is not
+  defined", and the bundle was not written.
+- **Importing pandas no longer stops an Examplar check.** The import counted
+  against the 2 seconds a definition is given, and can take that long on
+  its own, so the check often stopped with "Loading your definitions ...
+  took more than 2 seconds" - and the import it cut short left pandas half
+  loaded, so the program failed too, with "partially initialized module
+  'pandas'", and none of its tests ran. In the editor every later run
+  failed the same way. The check's clock now stops while a library is
+  imported - by the student's file, a test, or an implementation - so its
+  import is never cut short.
+- **A Stop pressed while a library is being imported waits for the import
+  to finish**, and then stops the program. Pressed during `import pandas`,
+  it left pandas half loaded, and every later run in the window failed with
+  "partially initialized module 'pandas'" until the window was reloaded. A
+  Stop in a module of the student's own still stops it at once.
 
 ## 0.8.1 (2026-10-29)
 

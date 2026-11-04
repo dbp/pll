@@ -20,7 +20,11 @@ def _pll_call(name, args_json):
     an infinity in the result, which JSON has no word for, fails the call
     rather than reaching the host as something it cannot read.
     """
-    return _pll_json.dumps(globals()[name](*_pll_json.loads(args_json)), allow_nan=False)
+    try:
+        result = globals()[name](*_pll_json.loads(args_json))
+    finally:
+        _pll_drop_put_off_stop()
+    return _pll_json.dumps(result, allow_nan=False)
 
 
 # -----------------------------------------------------------------------------

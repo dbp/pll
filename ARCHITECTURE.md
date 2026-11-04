@@ -844,7 +844,11 @@ acknowledge it - and only while a request that was running when Stop was
 pressed is still running, so a retry cannot carry over into whatever runs
 next. The handler consumes repeats of a Stop it has already raised, so a
 retry that loses the race with the acknowledgement does not raise a second
-`KeyboardInterrupt` into PLL's own clean-up.
+`KeyboardInterrupt` into PLL's own clean-up. One that lands in a library's
+import it leaves unacknowledged, so a retry delivers it once the import is
+done: cut short, the import would leave the package half made in
+`sys.modules`, broken for every later run. If the call ends first,
+`_pll_call` drops the Stop, as there is nothing left for it to stop.
 
 `_pll_run_file` catches `BaseException`, so a Stop in the student's code
 arrives as an ordinary error result (`errorType: "KeyboardInterrupt"`)
@@ -1471,10 +1475,13 @@ function's: an implementation that will not load (correct or buggy - a
 buggy one that does not load would count as caught by every test), and
 anything that runs past `_PLL_EXAMPLAR_SECONDS` (2) - a test against an
 implementation, one of the student's definitions, or an implementation
-loading. That is a trace-function budget, so it works with or without the
-interrupt channel Stop uses; a loop inside a single call into C is not
-caught. Nothing after it runs, and `--verify` refuses a bundle that does
-either, so an author finds a chaff that never finishes before a class does.
+loading, leaving out time spent importing a library. That is a
+trace-function budget, so it works with or without the interrupt channel
+Stop uses; a loop inside a single call into C is not caught, and an import
+is never cut short, which would leave its package half made in
+`sys.modules` for the program's own run. Nothing after it runs, and
+`--verify` refuses a bundle that does either, so an author finds a chaff
+that never finishes before a class does.
 
 Two details that earn their place:
 

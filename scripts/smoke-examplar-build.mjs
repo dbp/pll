@@ -5,7 +5,8 @@
  * This is the authoring half of Examplar, and it runs the real worker: the
  * bytecode in a bundle is compiled by the Pyodide this package pins, which
  * is the whole reason bundles are built with this tool rather than a local
- * python. Driving the CLI as a child process is what checks that.
+ * python. Driving the CLI as a child process is what checks that. Section
+ * 12 alone drives the Python directly, for modules only it can put in place.
  *
  * Requires `pnpm run build`.
  */
@@ -17,6 +18,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expect, passed, section } from "./lib/check.mjs";
 import { ROOT } from "./lib/bundle.mjs";
+import { bootPll } from "./lib/pyodide.mjs";
 
 const CLI = resolve(ROOT, "dist-cli", "cli.cjs");
 
@@ -433,6 +435,61 @@ async function main() {
       `a chaff that will not load: ${verifyBroken.stderr}`);
     await new Promise((r) => server.close(r));
     console.log("    libraries present; nothing given away; stuck and broken bundles stopped");
+  }
+
+  if (section("11", "--verify loads the packages the suite imports")) {
+    // A lab with tables: the implementations are given a DataFrame, which
+    // only the suite makes, so without pandas every test fails.
+    write("frames/wheats/reference.py", "def total(df):", '    return int(df["n"].sum())');
+    write("frames/chaffs/total/1.py", "def total(df):", "    return len(df)");
+    write("frames_tests.py", "import pandas as pd", "", "def test_total():", '    assert total(pd.DataFrame({"n": [3, 4]})) == 7');
+    const r = await run(["examplar", "build", "frames", "-o", "frames.json", "--verify", "frames_tests.py"]);
+    expect(r.code === 0 && /verified\./.test(r.stderr), `a suite that imports pandas verifies: ${r.code} ${r.stderr}`);
+    expect(/chaff total\/1: caught by test_total/.test(r.stderr), `and catches the chaff: ${r.stderr}`);
+    console.log("    a suite that imports pandas verifies");
+  }
+
+  if (section("12", "the check's clock stops while a library is imported")) {
+    // Importing pandas can take all the time a definition is given, and an
+    // import cut short leaves it half made for the program that runs next.
+    // Modules slower than that stand in for it, where a check can import
+    // them - which the command line has nowhere to put, so this drives the
+    // Python directly.
+    const pyodide = await bootPll();
+    const call = (name, ...args) => JSON.parse(pyodide.globals.get("_pll_call")(name, JSON.stringify(args)));
+    const slowly = [
+      "import time",
+      `_until = time.monotonic() + ${pyodide.globals.get("_PLL_EXAMPLAR_SECONDS") + 0.5}`,
+      "while time.monotonic() < _until:",
+      "    pass",
+    ];
+    pyodide.FS.mkdirTree("/slow/slow_package");
+    pyodide.FS.writeFile("/slow/slow_module.py", slowly.join("\n") + "\n");
+    pyodide.FS.writeFile("/slow/slow_package/__init__.py", ["from .part import VALUE", ...slowly].join("\n") + "\n");
+    pyodide.FS.writeFile("/slow/slow_package/part.py", "VALUE = 1\n");
+    pyodide.runPython('import sys; sys.path.append("/slow")');
+    const sources = { wheats: { reference: WHEAT.join("\n") }, chaffs: { shout: { 1: NO_BANG.join("\n") }, total: { 1: SKIPS.join("\n") } } };
+    const built = call("_pll_examplar_build", JSON.stringify(sources));
+    const judged = (...lines) => call("_pll_examplar_run", lines.join("\n") + "\n", JSON.stringify(built.bundle), "hw.py");
+
+    const imported = judged("import slow_module", "", "def test_shout():", '    assert shout("hi") == "HI!"');
+    expect(
+      imported.timedOut === null && imported.wheats[0].tests.test_shout?.outcome === "pass",
+      `a student's import does not stop the check: ${JSON.stringify(imported.timedOut ?? imported.wheats)}`,
+    );
+    expect(imported.chaffs.some((c) => c.targets === "shout" && c.tests.test_shout?.outcome === "fail"), "which goes on to the chaffs");
+
+    // Nor is one in a test cut short, and the clock runs again after it.
+    const looping = judged("def test_shout():", "    import slow_package", "    while True:", "        pass");
+    expect(looping.timedOut?.test === "test_shout", `the loop after it is stopped: ${JSON.stringify(looping.timedOut)}`);
+    let part;
+    try {
+      part = pyodide.runPython("import slow_package\nslow_package.part.VALUE");
+    } catch (err) {
+      part = String(err.message).trim().split("\n").pop();
+    }
+    expect(part === 1, `and the package is whole for the program's own import: ${part}`);
+    console.log("    an import, of the student's or in a test, is neither timed nor cut short");
   }
 
   rmSync(work, { recursive: true, force: true });

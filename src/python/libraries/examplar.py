@@ -36,7 +36,8 @@ import types as _ex_types
 EXAMPLAR_FORMAT = 2
 
 #: How long one test may run against one implementation - or one of the
-#: student's definitions, or an implementation, take to load. Anything that
+#: student's definitions, or an implementation, take to load - leaving out
+#: the time spent importing libraries (`_pll_examplar_budget`). Anything that
 #: runs longer is stuck, and the check stops there (`_PllExamplarTimeout`).
 _PLL_EXAMPLAR_SECONDS = 2.0
 
@@ -56,14 +57,26 @@ def _pll_examplar_budget():
     A trace function rather than the interrupt channel Stop uses, so it
     works wherever the check runs, with or without one. A loop in Python
     code is caught; one inside a single call into C is not.
+
+    The clock stops while a library is being imported, which is never to be
+    cut short (`_pll_importing_library`) - and importing pandas can take the
+    whole time on its own.
     """
-    deadline = _ex_time.monotonic() + _PLL_EXAMPLAR_SECONDS
-    events = [0]
+    start = _ex_time.monotonic()
+    deadline = start + _PLL_EXAMPLAR_SECONDS
+    last_look = start
+    events = 0
 
     def tracer(frame, event, arg):
-        events[0] += 1
-        if events[0] % _PLL_EXAMPLAR_CLOCK_EVERY == 0 and _ex_time.monotonic() > deadline:
-            raise _PllExamplarTimeout()
+        nonlocal deadline, last_look, events
+        events += 1
+        if events % _PLL_EXAMPLAR_CLOCK_EVERY == 0:
+            now = _ex_time.monotonic()
+            if _pll_importing_library(frame):
+                deadline += now - last_look
+            elif now > deadline:
+                raise _PllExamplarTimeout()
+            last_look = now
         return tracer
 
     previous = _ex_sys.gettrace()

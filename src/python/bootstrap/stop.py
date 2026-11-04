@@ -10,26 +10,37 @@ _pll_interrupt_view = None
 #: while this did not move was raised by the program itself.
 _pll_stops_delivered = 0
 
+#: Whether a Stop is waiting for a library's import to be done.
+_pll_stop_put_off = False
+
 
 def _pll_on_sigint(signum, frame):
     """Deliver a Stop as `KeyboardInterrupt`, once, and say it was delivered.
 
     Pyodide's check can overwrite a Stop that arrives at the wrong moment,
-    so the host re-asserts it until it is acknowledged. Two jobs follow:
+    so the host re-asserts it until it is acknowledged. Three jobs follow:
 
       - acknowledge, by setting byte 1, so the host stops re-asserting;
       - ignore a repeat of a Stop already delivered. The host can store one
         more signal just before it sees the acknowledgement, and raising it
         would land a second `KeyboardInterrupt` in PLL's own clean-up after
-        the first, turning a clean stop into an internal error.
+        the first, turning a clean stop into an internal error;
+      - leave unacknowledged a Stop that lands in a library's import
+        (`_pll_importing_library`), so that the host asks again, and the
+        Stop is delivered once the import is done - or dropped, if the
+        call ends first (`_pll_drop_put_off_stop`).
 
     A new press clears byte 1 first, so a program that caught the first
     `KeyboardInterrupt` and carried on can still be stopped.
     """
+    global _pll_stop_put_off
     view = _pll_interrupt_view
     if view is not None:
         try:
             if view[1]:
+                return
+            if _pll_importing_library(frame):
+                _pll_stop_put_off = True
                 return
             view[1] = 1
         except Exception:
@@ -41,11 +52,22 @@ def _pll_on_sigint(signum, frame):
 
 def _pll_deliver_stop():
     """Raise a Stop the host has taken and acknowledged, as `KeyboardInterrupt`."""
-    global _pll_stops_delivered
+    global _pll_stops_delivered, _pll_stop_put_off
     _pll_stops_delivered += 1
+    _pll_stop_put_off = False
     stop = KeyboardInterrupt()
     _pll_add_facts(stop, stop=True)
     raise stop
+
+
+def _pll_drop_put_off_stop():
+    """Acknowledge a Stop put off for an import, when the call it came in
+    ends without taking it: there is nothing left for it to stop, and taken
+    now it would land in the host's own code after the call."""
+    global _pll_stop_put_off
+    if _pll_stop_put_off:
+        _pll_interrupt_view[1] = 1
+        _pll_stop_put_off = False
 
 
 def _pll_install_sigint():

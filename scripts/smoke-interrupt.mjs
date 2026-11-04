@@ -521,6 +521,62 @@ async function main() {
       }
       console.log("    stopped at the program's line; the next request answered");
     }
+
+    console.log("\n[14] a Stop waits for a library's import to be done, and for nothing else");
+    {
+      // An import cut short leaves its package half made in `sys.modules`,
+      // and every later import of it fails, run after run - so a Stop that
+      // lands in one waits for it. Two packages that take a while, outside
+      // the student's files, stand in for pandas.
+      const slow = "from .part import VALUE\nimport time\n_until = time.monotonic() + 1.5\nwhile time.monotonic() < _until:\n    pass\n";
+      const files = {};
+      for (const name of ["slow_package", "slow_ending"]) {
+        files[`/slow_library/${name}/__init__.py`] = slow;
+        files[`/slow_library/${name}/part.py`] = "VALUE = 1\n";
+      }
+      const runCode = (code, fileName) => session.send({ type: "runFile", code, fileName, sessionKey: "s1", level: "raw" });
+      await runCode(
+        `import json, os, sys\nfor path, text in json.loads(${JSON.stringify(JSON.stringify(files))}).items():\n` +
+          "    os.makedirs(os.path.dirname(path), exist_ok=True)\n    open(path, 'w').write(text)\nsys.path.append('/slow_library')\n",
+        "plant.py",
+      );
+
+      const importing = runCode('print("importing")\nimport slow_package\nprint("imported")\nwhile True:\n    pass\n', "imports.py");
+      await session.waitForOutput("importing");
+      await sleep(300);
+      stop(importing);
+      const { result } = await withDeadline(importing, INTERRUPT_DEADLINE_MS, "a Stop during an import");
+      expect(
+        result.error?.errorType === "KeyboardInterrupt" && result.stdout.includes("imported"),
+        `the import is done before the program stops: ${result.error?.errorType} ${JSON.stringify(result.stdout)}`,
+      );
+      const whole = await runCode("import slow_package\nprint(slow_package.part.VALUE)\n", "whole.py");
+      expect(whole.result.stdout === "1\n", `and the package is whole: ${whole.result.error?.message ?? whole.result.stdout}`);
+
+      // A program that ends with the import ends; the Stop it never took is
+      // dropped rather than left to land in the host's own code after it.
+      const ending = runCode('print("ending soon")\nimport slow_ending\n', "ends.py");
+      await session.waitForOutput("ending soon");
+      await sleep(300);
+      stop(ending);
+      await withDeadline(ending, INTERRUPT_DEADLINE_MS, "a Stop the program ended before");
+      expect(Atomics.load(new Uint8Array(interruptBuffer), INTERRUPT_ACK_INDEX) === 1, "the Stop is taken or dropped");
+      const prompt = await session.send({ type: "replEval", code: 'print("after")', sessionKey: "s1" });
+      expect(
+        JSON.stringify(prompt.result.displays).includes("after"),
+        `and the next prompt line shows its output: ${JSON.stringify(prompt.result.displays)}`,
+      );
+
+      // A file of the student's own is their code, which may never end.
+      await session.send({ type: "mountWorkspace", files: [{ name: "own_module.py", contents: 'print("own module")\nwhile True:\n    pass\n' }] });
+      const own = runCode("import own_module\n", "own.py");
+      await session.waitForOutput("own module");
+      stop(own);
+      const { result: ownResult } = await withDeadline(own, 5000, "a Stop in the student's own module");
+      expect(ownResult.error?.errorType === "KeyboardInterrupt", `stopped at once: ${ownResult.error?.errorType}`);
+      await session.send({ type: "mountWorkspace", files: [] });
+      console.log("    a library's import finished first; the student's own module stopped at once");
+    }
   } finally {
     await worker.terminate();
   }

@@ -237,6 +237,14 @@ async function verify(
   } catch {
     view.note("could not load pytest; assertion messages will be terse.");
   }
+  // And the packages the suite imports, as a student's run loads those of
+  // their file before its check: without them `import pandas as pd` fails,
+  // and with it every test that uses `pd`.
+  try {
+    await runtime.ensurePackages(testSource);
+  } catch (err) {
+    view.note(`could not load libraries (${errorText(err)}); imports may fail.`);
+  }
 
   const result: ExamplarOutcome = await runtime.examplarRun(
     testSource,

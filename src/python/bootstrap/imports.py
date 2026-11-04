@@ -47,6 +47,30 @@ def _pll_student_path(path):
     return None
 
 
+def _pll_importing_library(frame):
+    """Whether `frame` is part of the import of a module that is not the
+    student's: Python's import system, frozen in as `importlib._bootstrap`,
+    is under it on the stack, with none of the student's files between.
+
+    Nothing cuts such an import short - not a Stop, nor the time Examplar
+    gives a test. One cut short leaves the package half made in
+    `sys.modules`, and every later import of it fails: the program's, and in
+    the editor every run's after it. Taking its modules out again does not
+    mend it, as numpy's compiled parts keep hold of the first import's
+    objects. A file of the student's is theirs, and stops like the rest of
+    their code.
+    """
+    prefix = _PLL_WORK_DIR + "/"
+    while frame is not None:
+        filename = frame.f_code.co_filename
+        if filename.startswith("<frozen importlib._bootstrap"):
+            return True
+        if filename.startswith(prefix):
+            return False
+        frame = frame.f_back
+    return False
+
+
 def _pll_level_of_file(path):
     return _pll_file_levels.get(_pll_student_path(path), (_PLL_LEVEL_RAW, None))
 
