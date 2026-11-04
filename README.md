@@ -234,8 +234,8 @@ A function with a type variable, `def first[T](lst: list[T]) -> T`, promises
 to work for every type, and at `#level beginner` and `#level intermediate`
 PLL holds it to that, as LSL's `All` does. A value it is given as a `T` can
 only be passed along - to a function, into a list or a dataclass, or back:
-adding one, comparing one (even with `==`), printing one or asking its type
-stops. And what it gives back as a `T` must be one of those:
+adding one, comparing one (even with `==`), printing one or testing it with
+`isinstance` stops. And what it gives back as a `T` must be one of those:
 
 ```python
 #level intermediate

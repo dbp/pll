@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.0 (2026-11-04)
+
 ### Changed
 - **Examplar's card marks a missed buggy implementation's number with `#`**:
   "caught 1 of 3 - missed #2, #3", since "missed 2, 3" read as how many were
@@ -13,14 +15,14 @@
   `intermediate`, as LSL's `All` checks them. A value a `def f[T](...)` is
   given as a `T` can only be passed along - to a function, into a list or a
   dataclass, or back - so adding one, comparing one (with `==` too),
-  printing one or asking its type stops: "`total` can't add a `T`: `T`
-  stands for any type." What it gives back as a `T` must be one it was given
-  in that call: "`wrong_first` says it returns a `T`, but this line returns
-  `5`, which it wasn't given as a `T`." A `T | None` can still be told from
-  `None`, with `is None` or `== None`. A generic function is handed copies
-  of its lists and dataclasses, with their `T`s sealed, so `#level
-  advanced`, where a change to a copy would not reach the caller, leaves
-  type variables unchecked.
+  printing one or testing it with `isinstance` stops: "`total` can't add a
+  `T`: `T` stands for any type." What it gives back as a `T` must be one it
+  was given in that call: "`wrong_first` says it returns a `T`, but this
+  line returns `5`, which it wasn't given as a `T`." A `T | None` can still
+  be told from `None`, with `is None` or `== None`. A generic function is
+  handed copies of its lists and dataclasses, with their `T`s sealed, so
+  `#level advanced`, where a change to a copy would not reach the caller,
+  leaves type variables unchecked.
 
 ### Fixed
 - **A number before brackets is told the multiplication it stands for**:
