@@ -228,6 +228,34 @@ is given whole numbers. A function handed over only has to take the right
 number of arguments; the rest is checked when it is called. The same goes
 for a function another one returns.
 
+### Generic functions
+
+A function with a type variable, `def first[T](lst: list[T]) -> T`, promises
+to work for every type, and at `#level beginner` and `#level intermediate`
+PLL holds it to that, as LSL's `All` does. A value it is given as a `T` can
+only be passed along - to a function, into a list or a dataclass, or back:
+adding one, comparing one (even with `==`), printing one or asking its type
+stops. And what it gives back as a `T` must be one of those:
+
+```python
+#level intermediate
+
+def wrong_first[T](lst: list[T], default: T) -> T:
+    return 5
+
+wrong_first(["oak"], "none")
+```
+
+> `wrong_first` says it returns a `T`, but this line returns `5`, which it
+> wasn't given as a `T`.
+
+A `T | None` can still be told from `None`, with `is None` or `== None`.
+To seal the `T`s in a list or a dataclass, PLL hands the function a copy,
+so `#level advanced`, where a list can be changed, leaves type variables
+unchecked. So does a `T` in a `set`, among a dictionary's keys or in an
+`Iterable`, which cannot be copied that way; one with a bound or
+constraints (`T: (int, float)`) is checked as them.
+
 At `#level beginner` and `#level intermediate`, `True` and `False` are
 **not** accepted where `int` or `float` is annotated:
 

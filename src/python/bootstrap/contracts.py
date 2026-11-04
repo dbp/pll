@@ -89,11 +89,16 @@ class _PllBlame:
     A step is a tuple whose first item says what it is - `("argument",
     name, index, written)`, `("result", returned_at, written)`, `("item",
     index)` - and whose last-but-structure is what a message needs.
+
+    `gives` is whether the owner gives the value - a result - rather than
+    being given it, which a recursive call cannot tell from the parties,
+    the owner being both; and `seals` are the seals of the generic call
+    under way, by type variable (`_PllSeal`), or None.
     """
 
-    __slots__ = ("positive", "negative", "owner", "path", "site", "level")
+    __slots__ = ("positive", "negative", "owner", "path", "site", "level", "gives", "seals")
 
-    def __init__(self, positive, negative, owner, path=(), site=None, level=None):
+    def __init__(self, positive, negative, owner, path=(), site=None, level=None, gives=True, seals=None):
         self.positive = positive
         self.negative = negative
         self.owner = owner
@@ -102,14 +107,26 @@ class _PllBlame:
         # The level of the file the contract is written in, which decides
         # how strictly it was checked.
         self.level = level
+        self.gives = gives
+        self.seals = seals
 
     def swapped(self, step):
         """For a function's argument: whoever took the function gives it."""
-        return _PllBlame(self.negative, self.positive, self.owner, self.path + (step,), self.site, self.level)
+        return _PllBlame(
+            self.negative, self.positive, self.owner, self.path + (step,), self.site, self.level, not self.gives, self.seals
+        )
 
     def into(self, step):
         """For a part of the value - an item, a field, a result: the same giver."""
-        return _PllBlame(self.positive, self.negative, self.owner, self.path + (step,), self.site, self.level)
+        return _PllBlame(
+            self.positive, self.negative, self.owner, self.path + (step,), self.site, self.level, self.gives, self.seals
+        )
+
+    def sealed(self, seals):
+        """For one call of a generic function: with its own seals as well."""
+        merged = dict(self.seals or {})
+        merged.update(seals)
+        return _PllBlame(self.positive, self.negative, self.owner, self.path, self.site, self.level, self.gives, merged)
 
 
 # -- what is raised ------------------------------------------------------------
@@ -179,6 +196,23 @@ class _PllContract:
         """Whether `value` is the kind of thing this contract is about - the
         class, the container - whatever is inside it. A union whose one
         such member rejects the value says where inside it went wrong."""
+        return False
+
+    def fits(self, value, blame):
+        """For a union choosing among its members that are not flat: whether
+        this one is for `value`, by its first-order check."""
+        return self.accepts(value)
+
+    def variables_in(self):
+        """The type variables that a call seals in this contract
+        (`_PllVariableContract`). With any, a value is remade as it crosses,
+        its parts sealed or unsealed, rather than checked where it is."""
+        return frozenset()
+
+    def mentions_variables(self):
+        return bool(self.variables_in())
+
+    def is_variable(self):
         return False
 
 
@@ -259,13 +293,17 @@ class _PllUnionContract(_PllContract):
         return any(member.accepts(value) for member in self.members)
 
     def check(self, value, blame):
-        higher = []
+        higher, variables = [], []
         for member in self.members:
             if member.flat:
                 if member.accepts(value):
                     return value
-            elif member.accepts(value):
-                higher.append(member)
+            elif member.fits(value, blame):
+                (variables if member.is_variable() else higher).append(member)
+        # A type variable takes whatever it is given, so it is for a value
+        # that no other member is.
+        if not higher:
+            higher = variables[:1]
         if len(higher) == 1:
             return higher[0].check(value, blame)
         if higher:
@@ -289,6 +327,9 @@ class _PllUnionContract(_PllContract):
     def expected(self):
         return [text for member in self.members for text in member.expected()]
 
+    def variables_in(self):
+        return frozenset().union(*(member.variables_in() for member in self.members))
+
 
 class _PllItemsContract(_PllContract):
     """`list[T]`, `set[T]` and their kind: the container and every item in
@@ -303,11 +344,36 @@ class _PllItemsContract(_PllContract):
         self.item = item
         self.ordered = ordered
 
+    @property
+    def flat(self):
+        return not self.mentions_variables()
+
+    def variables_in(self):
+        return self.item.variables_in()
+
     def shaped(self, value):
         return isinstance(value, self.kind)
 
+    def fits(self, value, blame):
+        return self.shaped(value) if self.mentions_variables() else self.accepts(value)
+
     def accepts(self, value):
         return isinstance(value, self.kind) and all(self.item.accepts(item) for item in value)
+
+    def check(self, value, blame):
+        if self.is_flat():
+            self.check_now(value, blame)
+            return value
+        if not isinstance(value, self.kind):
+            _pll_broken(self, value, blame)
+        holder = _pll_type_name(value)
+        items = [
+            self.item.check(item, blame.into(("item", index, holder) if self.ordered else ("member", holder)))
+            for index, item in enumerate(value)
+        ]
+        if isinstance(value, _pll_collections.deque):
+            return _pll_collections.deque(items, value.maxlen)
+        return items
 
     def check_now(self, value, blame):
         if not isinstance(value, self.kind):
@@ -330,8 +396,38 @@ class _PllMappingContract(_PllContract):
         self.key = key
         self.value = value
 
+    @property
+    def flat(self):
+        return not self.mentions_variables()
+
+    def variables_in(self):
+        # Only its values': a key is hashed, which a sealed value refuses, so
+        # a type variable among the keys is not sealed (`_pll_unsealable`).
+        return self.value.variables_in()
+
     def shaped(self, value):
         return isinstance(value, self.kind)
+
+    def fits(self, value, blame):
+        return self.shaped(value) if self.mentions_variables() else self.accepts(value)
+
+    def check(self, value, blame):
+        if self.is_flat():
+            self.check_now(value, blame)
+            return value
+        if not isinstance(value, self.kind):
+            _pll_broken(self, value, blame)
+        holder = _pll_type_name(value)
+        pairs = []
+        for key, item in value.items():
+            if not self.key.accepts(key):
+                self.key.check_now(key, blame.into(("key", key, holder)))
+            pairs.append((key, self.value.check(item, blame.into(("value", key, holder)))))
+        if isinstance(value, _pll_collections.defaultdict):
+            return _pll_collections.defaultdict(value.default_factory, pairs)
+        if isinstance(value, _pll_collections.OrderedDict):
+            return _pll_collections.OrderedDict(pairs)
+        return dict(pairs)
 
     def accepts(self, value):
         return isinstance(value, self.kind) and all(
@@ -369,8 +465,31 @@ class _PllTupleContract(_PllContract):
     def shaped(self, value):
         return self._shaped(value)
 
+    @property
+    def flat(self):
+        return not self.mentions_variables()
+
+    def variables_in(self):
+        return frozenset().union(*(item.variables_in() for item in self.items))
+
+    def fits(self, value, blame):
+        return self._shaped(value) if self.mentions_variables() else self.accepts(value)
+
     def accepts(self, value):
         return self._shaped(value) and all(contract.accepts(item) for item, contract in self._parts(value))
+
+    def check(self, value, blame):
+        if self.is_flat():
+            self.check_now(value, blame)
+            return value
+        if not self._shaped(value):
+            _pll_broken(self, value, blame)
+        items = [
+            contract.check(item, blame.into(("item", index, "tuple")))
+            for index, (item, contract) in enumerate(self._parts(value))
+        ]
+        # A named tuple is remade as one.
+        return value._make(items) if hasattr(type(value), "_make") else tuple(items)
 
     def check_now(self, value, blame):
         if not self._shaped(value):
@@ -395,6 +514,11 @@ class _PllClassOfContract(_PllContract):
 #: contains itself must not start again.
 _PLL_CHECKING = set()
 
+#: The copies being made of dataclasses with a type variable in them
+#: (`_PllDataContract.check`), by value, contract and call, so that a value
+#: that contains itself is copied once.
+_PLL_REMAKING = {}
+
 
 class _PllDataContract(_PllContract):
     """A generic dataclass with its type filled in, `Leaf[float]`: the class,
@@ -402,11 +526,51 @@ class _PllDataContract(_PllContract):
     again (`left: "BinTree[T]"`), a whole tree is checked to its leaves.
     `fields` gives `{name: contract}`, and is asked once, when first needed."""
 
-    def __init__(self, cls, fields, written):
+    def __init__(self, cls, fields, written, mentions=frozenset()):
         super().__init__(written)
         self.cls = cls
         self._fields = fields
         self._made = None
+        # The type variables a call seals among its type arguments: said by
+        # what it was made from, as its fields - which can name the class
+        # again - are made only when first needed.
+        self._mentions = mentions
+
+    @property
+    def flat(self):
+        return not self._mentions
+
+    def variables_in(self):
+        return self._mentions
+
+    def fits(self, value, blame):
+        return self.shaped(value) if self._mentions else self.accepts(value)
+
+    def check(self, value, blame):
+        """The value, or - with a type variable in it - a copy of it whose
+        fields are as their contracts give them back: made without its
+        `__init__`, which would check them again and run `__post_init__`."""
+        if not self._mentions:
+            self.check_now(value, blame)
+            return value
+        if not isinstance(value, self.cls):
+            _pll_broken(self, value, blame)
+        key = (id(value), id(self), id(blame.seals), blame.gives)
+        made = _PLL_REMAKING.get(key)
+        if made is not None:
+            return made
+        made = _PLL_REMAKING[key] = object.__new__(type(value))
+        try:
+            fields = self.fields()
+            for name, contract in fields.items():
+                part = contract.check(getattr(value, name, None), blame.into(("part", name, self.cls.__name__)))
+                object.__setattr__(made, name, part)
+            for name, part in getattr(value, "__dict__", {}).items():
+                if name not in fields:
+                    object.__setattr__(made, name, part)
+        finally:
+            del _PLL_REMAKING[key]
+        return made
 
     def fields(self):
         if self._made is None:
@@ -450,10 +614,13 @@ class _PllLaterContract(_PllContract):
     """A contract made when first needed: a name in quotes, or a type alias,
     either of which may name something the file defines further down."""
 
-    def __init__(self, make, written):
+    def __init__(self, make, written, mentions=None):
         super().__init__(written)
         self._make = make
         self._made = None
+        # The type variables a call seals in it, where that is known before
+        # it is made: a generic type alias's arguments say.
+        self._mentions = mentions
 
     def made(self):
         if self._made is None:
@@ -479,6 +646,17 @@ class _PllLaterContract(_PllContract):
     def shaped(self, value):
         return self.made().shaped(value)
 
+    def fits(self, value, blame):
+        return self.made().fits(value, blame)
+
+    def variables_in(self):
+        if self._mentions is not None:
+            return self._mentions
+        return self.made().variables_in()
+
+    def is_variable(self):
+        return self.made().is_variable()
+
 
 class _PllFunctionContract(_PllContract):
     """A function's contract. From a `def`, `params` are its parameters as
@@ -493,12 +671,14 @@ class _PllFunctionContract(_PllContract):
 
     flat = False
 
-    def __init__(self, params, result, written, signature=None, code=None):
+    def __init__(self, params, result, written, signature=None, code=None, variables=()):
         super().__init__(written)
         self.params = params
         self.result = result
         self.signature = signature
         self.code = code
+        # The type variables each call seals: a generic `def`'s own.
+        self.variables = variables
         if signature is not None:
             self.positional = [
                 (contract, ("argument", name, index, written))
@@ -514,8 +694,11 @@ class _PllFunctionContract(_PllContract):
     def contract(self):
         return self
 
+    def variables_in(self):
+        return frozenset().union(self.result.variables_in(), *(p[2].variables_in() for p in self.params or ()))
+
     def accepts(self, value):
-        if not callable(value):
+        if not callable(value) or isinstance(value, _PllSealed):
             return False
         if self.params is None or self.signature is not None:
             return True
@@ -594,6 +777,262 @@ def _pll_takes(function, count):
     return True
 
 
+# -- type variables, sealed ------------------------------------------------------
+#
+# A generic `def`'s own type variables are checked as LSL's `All` checks
+# them (Racket's `parametric->/c`, after Guha, Matthews, Findler and
+# Krishnamurthi, "Relationally-Parametric Polymorphic Contracts", DLS 2007):
+# each call makes a seal for each, a value the function is given as one is
+# sealed, and a value it gives back as one must be one that call sealed - and
+# is unsealed. A sealed value can only be passed along. Every operation on it
+# is refused, `==` and showing it too, so nothing the function does can
+# depend on the type it was called with.
+
+
+class _PllSealed:
+    """A value a generic function was given as one of its type variables.
+
+    Its class is made for the type variable and named after it
+    (`_pll_sealed_class`), which is what Python's own messages call it. Its
+    value and seal are read through the slots' descriptors, as
+    `__getattribute__` refuses every name - but to PLL's own code
+    (`<pll:...>`), which is told only its class, for `isinstance`, and
+    otherwise that it has no such attribute, as `getattr(value, name, None)`
+    expects.
+    """
+
+    __slots__ = ("_pll_value", "_pll_seal")
+
+    def __getattribute__(self, name):
+        if _sys._getframe(1).f_code.co_filename.startswith("<pll:"):
+            if name == "__class__":
+                return type(self)
+            raise AttributeError(name)
+        _pll_refuse_sealed(self, "type" if name == "__class__" else "attribute")
+
+    def __setattr__(self, name, value):
+        _pll_refuse_sealed(self, "change")
+
+    def __delattr__(self, name):
+        _pll_refuse_sealed(self, "change")
+
+    def __eq__(self, other):
+        return _pll_sealed_is_none(self, other, False, "equal")
+
+    def __ne__(self, other):
+        return _pll_sealed_is_none(self, other, True, "equal")
+
+    __hash__ = None
+
+
+_pll_sealed_value = _PllSealed.__dict__["_pll_value"].__get__
+_pll_sealed_seal = _PllSealed.__dict__["_pll_seal"].__get__
+_pll_set_sealed_value = _PllSealed.__dict__["_pll_value"].__set__
+_pll_set_sealed_seal = _PllSealed.__dict__["_pll_seal"].__set__
+
+#: What a sealed value refuses, by what the refusal calls it: the special
+#: methods Python calls for each operation.
+_PLL_SEALED_OPERATIONS = {
+    "add": ("__add__", "__radd__", "__iadd__"),
+    "subtract": ("__sub__", "__rsub__", "__isub__"),
+    "multiply": ("__mul__", "__rmul__", "__imul__", "__matmul__", "__rmatmul__", "__imatmul__"),
+    "divide": (
+        "__truediv__", "__rtruediv__", "__itruediv__", "__floordiv__", "__rfloordiv__", "__ifloordiv__",
+        "__mod__", "__rmod__", "__imod__", "__divmod__", "__rdivmod__",
+    ),
+    "power": ("__pow__", "__rpow__", "__ipow__"),
+    "bitwise": (
+        "__and__", "__rand__", "__iand__", "__or__", "__ror__", "__ior__", "__xor__", "__rxor__", "__ixor__",
+        "__lshift__", "__rlshift__", "__ilshift__", "__rshift__", "__rrshift__", "__irshift__", "__invert__",
+    ),
+    "negate": ("__neg__", "__pos__", "__abs__"),
+    "compare": ("__lt__", "__le__", "__gt__", "__ge__"),
+    "hash": ("__hash__",),
+    "condition": ("__bool__",),
+    "show": ("__str__", "__repr__", "__format__", "__bytes__"),
+    "length": ("__len__",),
+    "loop": ("__iter__", "__next__", "__reversed__"),
+    "contains": ("__contains__",),
+    "index": ("__getitem__",),
+    "change": ("__setitem__", "__delitem__"),
+    "call": ("__call__",),
+    "number": ("__int__", "__float__", "__complex__", "__index__", "__round__", "__trunc__", "__floor__", "__ceil__"),
+    "copy": ("__reduce__", "__reduce_ex__", "__copy__", "__deepcopy__"),
+    "with": ("__enter__", "__exit__"),
+    "attribute": ("__dir__",),
+}
+
+
+def _pll_refusing(operation, name):
+    def refuse(self, *args):
+        _pll_refuse_sealed(self, operation)
+
+    refuse.__name__ = refuse.__qualname__ = name
+    return refuse
+
+
+for _pll_operation, _pll_special in _PLL_SEALED_OPERATIONS.items():
+    for _pll_name in _pll_special:
+        setattr(_PllSealed, _pll_name, _pll_refusing(_pll_operation, _pll_name))
+
+
+def _pll_sealed_is_none(value, other, negated, operation):
+    """`value == None` (or `is`; `!=`, `is not` when `negated`) for a sealed
+    `value`: told as Python tells it, since a `T | None` keeps its `None`
+    out of the seal, so that a generic function can tell the two apart.
+    Anything else is refused as `operation`, and so is `None` itself sealed
+    - given as a bare `T` - of which Python's answer would be the other."""
+    if other is not None:
+        _pll_refuse_sealed(value, operation)
+    inner = value
+    while isinstance(inner, _PllSealed):
+        inner = _pll_sealed_value(inner)
+    if inner is None:
+        _pll_refuse_sealed(value, "none")
+    return negated
+
+
+def _pll_sealed_class(name):
+    """The class of the values sealed as the type variable `name`."""
+    return type(name, (_PllSealed,), {"__slots__": (), "__module__": "builtins"})
+
+
+class _PllSeal:
+    """One call's seal for one of its function's type variables."""
+
+    __slots__ = ("variable",)
+
+    def __init__(self, variable):
+        self.variable = variable
+
+    def wrap(self, value):
+        sealed = object.__new__(self.variable.cls)
+        _pll_set_sealed_value(sealed, value)
+        _pll_set_sealed_seal(sealed, self)
+        return sealed
+
+
+class _PllVariableContract(_PllContract):
+    """One of a generic `def`'s own type variables, `T`, as its calls seal
+    it. A value the function is given as a `T` is sealed with the call's seal
+    for `T`, and one it gives back as a `T` must be one sealed so, and is
+    unsealed: a generic function can give back as a `T` only what it was
+    given as one. `party` is the `def`'s."""
+
+    flat = False
+
+    def __init__(self, typevar, party):
+        super().__init__(typevar.__name__)
+        self.typevar = typevar
+        self.name = typevar.__name__
+        self.party = party
+        self.cls = _pll_sealed_class(self.name)
+        # Where the function is given its values (`_pll_variable_sources`):
+        # known once its contract is made.
+        self.sources = []
+
+    def is_variable(self):
+        return True
+
+    def variables_in(self):
+        return frozenset((self,))
+
+    def accepts(self, value):
+        return False
+
+    def fits(self, value, blame):
+        if not blame.gives:
+            return True
+        seal = (blame.seals or {}).get(self.typevar)
+        return seal is not None and isinstance(value, _PllSealed) and _pll_sealed_seal(value) is seal
+
+    def check(self, value, blame):
+        seal = (blame.seals or {}).get(self.typevar)
+        if seal is None:
+            return value
+        if not blame.gives:
+            return seal.wrap(value)
+        if isinstance(value, _PllSealed) and _pll_sealed_seal(value) is seal:
+            return _pll_sealed_value(value)
+        _pll_broken(self, value, blame)
+
+    def check_now(self, value, blame):
+        self.check(value, blame)
+
+    def fact(self):
+        return {"name": self.name, "function": self.party.name, "sources": self.sources}
+
+
+def _pll_refuse_sealed(value, operation):
+    """Raise the error for `operation` - a key of `_PLL_SEALED_OPERATIONS`,
+    or "type" for asking its class - on the sealed `value`. The facts say
+    whose type variable it is, the type of the value inside, and `where` the
+    student's code doing it is: in the generic function itself ("inside"),
+    in code the function gave the value to ("given"), or in code it gave the
+    value back to through a place its Signature does not say the type
+    variable ("returned")."""
+    seal = _pll_sealed_seal(value)
+    variable = seal.variable
+    inner = value
+    while isinstance(inner, _PllSealed):
+        inner = _pll_sealed_value(inner)
+    frame = _sys._getframe(1)
+    while frame is not None and not _pll_is_students(frame.f_code.co_filename):
+        frame = frame.f_back
+    party = variable.party
+    if frame is None or party.owns(frame.f_code):
+        where = "inside"
+    else:
+        caller = frame.f_back
+        while caller is not None and not party.owns(caller.f_code):
+            caller = caller.f_back
+        where = "given" if caller is not None else "returned"
+    error = _PllTypeMismatch("a value of type %s can only be passed along (%s)" % (variable.name, operation))
+    _pll_add_facts(
+        error,
+        sealed_use={
+            "operation": operation,
+            "variable": variable.name,
+            "function": party.name,
+            "where": where,
+            "in": _pll_party_of_code(frame.f_code).name if frame is not None else None,
+            "type": _pll_type_name(inner),
+            # The student's line that did it, past PLL's own code that did
+            # it for them, as `print` and `pll:attribute` do.
+            "file": _pll_shown_file(frame.f_code.co_filename) if frame is not None else None,
+            "line": frame.f_lineno if frame is not None else None,
+        },
+    )
+    raise error
+
+
+def _pll_variable_sources(variable, params):
+    """Where a generic function is given `variable`'s values, for a message:
+    `{"name": parameter, "how": how}`, `how` being "value" - in what the
+    parameter is given - or "result", what a function it is given gives
+    back."""
+    sources = []
+    for name, _kind, contract, _written in params:
+        how = _pll_source_how(contract, variable)
+        if how is not None and name is not None:
+            sources.append({"name": name, "how": how})
+    return sources
+
+
+def _pll_source_how(contract, variable):
+    """How `contract`, on what a function is given, gives it `variable`'s
+    values: "value", "result" or None (`_pll_variable_sources`)."""
+    if variable not in contract.variables_in():
+        return None
+    if isinstance(contract, _PllFunctionContract):
+        # A type variable among a function's own parameters is one it is
+        # given, not one it gives.
+        return "result" if variable in contract.result.variables_in() else None
+    if isinstance(contract, _PllUnionContract):
+        return next((how for how in (_pll_source_how(m, variable) for m in contract.members) if how), None)
+    return "value"
+
+
 # -- functions under contract ----------------------------------------------------
 
 
@@ -644,8 +1083,10 @@ def _pll_wrapped(function, source, blame):
 
     def contracted(*args, **kwargs):
         contract = source.contract()
+        # A generic function's call seals its type variables afresh.
+        made = blame.sealed({v.typevar: _PllSeal(v) for v in contract.variables}) if contract.variables else blame
         try:
-            args, kwargs = contract.check_arguments(args, kwargs, blame)
+            args, kwargs = contract.check_arguments(args, kwargs, made)
         except _PllUnresolved as unresolved:
             _pll_unresolved_inside(unresolved, blame)
         call = _PllCall(contract.code)
@@ -658,7 +1099,7 @@ def _pll_wrapped(function, source, blame):
         try:
             if wanted.is_flat() and wanted.accepts(result):
                 return result
-            return wanted.check(result, blame.into(("result", call.returned_at, wanted.written)))
+            return wanted.check(result, made.into(("result", call.returned_at, wanted.written)))
         except _PllUnresolved as unresolved:
             _pll_unresolved_inside(unresolved, blame)
         except _PllTypeMismatch as error:
@@ -737,13 +1178,14 @@ class _PllDefinition:
     def _make(self):
         hints = self.annotations()
         namespace = self.function.__globals__
+        typevars = self._type_variables(hints, namespace)
 
         def made(name):
             if name not in hints:
                 return _PLL_ANY
             written = self.written.get(name)
             try:
-                return _pll_compile(hints[name], written, namespace, self.level, forced=True)
+                return _pll_compile(hints[name], written, namespace, self.level, typevars, forced=True)
             except _PllUnresolved as unresolved:
                 _pll_not_a_type(
                     unresolved.reason, written or _pll_type_text(hints[name]), self.party,
@@ -756,9 +1198,45 @@ class _PllDefinition:
             (p.name, p.kind, made(p.name), self.written.get(p.name, "")) for p in signature.parameters.values()
         ]
         result = made("return")
+        variables = tuple(contract for contract in typevars.values() if contract.is_variable())
+        for variable in variables:
+            variable.sources = _pll_variable_sources(variable, params)
         return _PllFunctionContract(
-            params, result, self.written.get("return", ""), signature=signature, code=self.code
+            params, result, self.written.get("return", ""), signature=signature, code=self.code, variables=variables
         )
+
+    def _type_variables(self, hints, namespace):
+        """What each of the `def`'s own type parameters is checked as, at the
+        teaching levels: a type variable is sealed (`_PllVariableContract`),
+        one with a bound is checked as its bound, and one with constraints
+        as any of them. At the other levels, and where a type variable's
+        values could not be sealed (`_pll_unsealable`), it is any type."""
+        if self.level not in _PLL_TEACHING_LEVELS:
+            return {}
+        typevars, free = {}, set()
+        for param in getattr(self.function, "__type_params__", ()):
+            if not isinstance(param, _pll_typing.TypeVar):
+                continue
+            try:
+                constraints, bound = param.__constraints__, param.__bound__
+                if constraints:
+                    typevars[param] = _PllUnionContract(
+                        [_pll_compile(c, None, namespace, self.level) for c in constraints],
+                        " | ".join(_pll_type_text(c) for c in constraints),
+                    )
+                elif bound is not None:
+                    typevars[param] = _pll_compile(bound, None, namespace, self.level)
+                else:
+                    free.add(param)
+            except (_PllUnresolved, NameError):
+                pass
+        unsealable = set()
+        for annotation in hints.values():
+            _pll_unsealable(annotation, free, namespace, unsealable, set())
+        for param in getattr(self.function, "__type_params__", ()):
+            if param in free and param not in unsealable:
+                typevars[param] = _PllVariableContract(param, self.party)
+        return typevars
 
 
 _PLL_ANY = _PllAnyContract("Any")
@@ -890,8 +1368,9 @@ def _pll_compile(annotation, written, namespace, level, typevars=None, forced=Fa
     if annotation is _pll_typing.NoReturn or annotation is _pll_typing.Never:
         return _PllNeverContract(text)
     if isinstance(annotation, (_pll_typing.TypeVar, _pll_typing.ParamSpec, _pll_typing.TypeVarTuple)):
-        # A type parameter stands for any type: Racket would seal the value
-        # (`parametric->/c`), and a sealed leaf is one `tree_fold` cannot read.
+        # What `typevars` says: a generic `def`'s own type variable, sealed
+        # (`_PllVariableContract`), or a generic type's, as its argument.
+        # Any other stands for any type.
         return typevars.get(annotation, _PllAnyContract(text))
     if isinstance(annotation, _pll_typing.TypeAliasType):
         return _PllLaterContract(
@@ -915,8 +1394,12 @@ def _pll_compile(annotation, written, namespace, level, typevars=None, forced=Fa
         return _pll_compile(args[0], text, namespace, level, typevars) if args else _PllAnyContract(text)
     if isinstance(origin, _pll_typing.TypeAliasType):
         bound = dict(typevars)
-        bound.update(zip(origin.__type_params__, [part(arg) for arg in args]))
-        return _PllLaterContract(lambda: _pll_compile(origin.__value__, text, namespace, level, bound), text)
+        given = [part(arg) for arg in args]
+        bound.update(zip(origin.__type_params__, given))
+        return _PllLaterContract(
+            lambda: _pll_compile(origin.__value__, text, namespace, level, bound), text,
+            frozenset().union(*(contract.variables_in() for contract in given)),
+        )
     if origin is _pll_abc.Callable:
         return _pll_callable_contract(args, text, part)
     if origin is tuple:
@@ -965,7 +1448,8 @@ def _pll_callable_contract(args, text, part):
 
 def _pll_data_contract(cls, args, text, level, part):
     """`Leaf[float]`: the dataclass `Leaf` with its `T` as `float`."""
-    bound = dict(zip(cls.__type_params__, [part(arg) for arg in args]))
+    given = [part(arg) for arg in args]
+    bound = dict(zip(cls.__type_params__, given))
     namespace = _PLL_CLASS_NAMESPACES.get(cls) or vars(_sys.modules.get(cls.__module__, _sys))
 
     def fields():
@@ -974,7 +1458,7 @@ def _pll_data_contract(cls, args, text, level, part):
             made[field.name] = _pll_compile(field.type, None, namespace, level, bound)
         return made
 
-    return _PllDataContract(cls, fields, text)
+    return _PllDataContract(cls, fields, text, frozenset().union(*(contract.variables_in() for contract in given)))
 
 
 def _pll_contract_resolve(quoted, namespace, typevars):
@@ -988,6 +1472,99 @@ def _pll_contract_resolve(quoted, namespace, typevars):
         raise _PllUnresolved("not-a-name", quoted) from None
     except Exception:
         raise _PllUnresolved("not-a-type", quoted) from None
+
+
+#: Where a type variable's values could be sealed in place of the
+#: container's own items: those a check remakes (`_PllItemsContract`).
+_PLL_REMADE_ITEMS = (list, _pll_collections.deque)
+_PLL_REMADE_MAPPINGS = (dict, _pll_collections.OrderedDict, _pll_collections.defaultdict)
+
+
+def _pll_unsealable(annotation, candidates, namespace, found, seen):
+    """Add to `found` the type variables among `candidates` that `annotation`
+    puts where a check could not remake the value with them sealed: in a set
+    or among a dictionary's keys, which hash them; in a `Sequence`, an
+    iterator or any other class that is not a dataclass, which could not be
+    copied as what it is. Those are left as any type, rather than refuse
+    what the function gives back from there. `seen` stops a recursive type
+    being gone through again."""
+    if not candidates:
+        return
+    if isinstance(annotation, (str, _pll_typing.ForwardRef)):
+        quoted = annotation if isinstance(annotation, str) else annotation.__forward_arg__
+        try:
+            annotation = _pll_contract_resolve(quoted, namespace, candidates)
+        except _PllUnresolved:
+            return
+    mentioned = _pll_typevars_in(annotation, candidates)
+    if not mentioned or isinstance(annotation, _pll_typing.TypeVar):
+        return
+    origin = _pll_typing.get_origin(annotation)
+    args = _pll_typing.get_args(annotation)
+
+    def walk(arg):
+        _pll_unsealable(arg, candidates, namespace, found, seen)
+
+    if origin is _pll_typing.Union or origin is _pll_types.UnionType:
+        for arg in args:
+            walk(arg)
+    elif origin in (_pll_typing.Annotated, _pll_typing.ClassVar, _pll_typing.Final):
+        walk(args[0])
+    elif origin is _pll_abc.Callable:
+        for arg in args[0] if isinstance(args[0], list) else ():
+            walk(arg)
+        walk(args[-1])
+    elif origin is tuple:
+        for arg in args:
+            if arg is not Ellipsis:
+                walk(arg)
+    elif origin in _PLL_REMADE_ITEMS:
+        walk(args[0])
+    elif origin in _PLL_REMADE_MAPPINGS and len(args) == 2:
+        found.update(_pll_typevars_in(args[0], candidates))
+        walk(args[1])
+    elif isinstance(origin, _pll_typing.TypeAliasType):
+        _pll_unsealable_through(
+            origin, origin.__type_params__, args, [origin.__value__], candidates, namespace, found, seen
+        )
+    elif isinstance(origin, type) and _pll_dataclasses.is_dataclass(origin) and getattr(origin, "__type_params__", ()):
+        own = _PLL_CLASS_NAMESPACES.get(origin) or vars(_sys.modules.get(origin.__module__, _sys))
+        _pll_unsealable_through(
+            origin, origin.__type_params__, args, [f.type for f in _pll_dataclasses.fields(origin)],
+            candidates, own, found, seen,
+        )
+    else:
+        found.update(mentioned)
+
+
+def _pll_unsealable_through(origin, params, args, bodies, candidates, namespace, found, seen):
+    """For a generic alias or dataclass given `args` for its `params`: the
+    candidates in each argument, if what its parameter stands for in
+    `bodies` - the alias's value, the class's fields - is a place a value
+    could not be sealed (`_pll_unsealable`)."""
+    inner = {}
+    for param, arg in zip(params, args):
+        _pll_unsealable(arg, candidates, namespace, found, seen)
+        if _pll_typevars_in(arg, candidates):
+            inner[param] = _pll_typevars_in(arg, candidates)
+    key = (origin, frozenset(inner))
+    if not inner or key in seen:
+        return
+    seen.add(key)
+    within = set()
+    for body in bodies:
+        _pll_unsealable(body, set(inner), namespace, within, seen)
+    for param in within:
+        found.update(inner[param])
+
+
+def _pll_typevars_in(annotation, candidates):
+    """The type variables among `candidates` that `annotation` names, to
+    any depth."""
+    if isinstance(annotation, _pll_typing.TypeVar):
+        return {annotation} & candidates
+    parts = annotation if isinstance(annotation, (list, tuple)) else _pll_typing.get_args(annotation)
+    return set().union(*(_pll_typevars_in(part, candidates) for part in parts))
 
 
 def _pll_is_typing_form(annotation):
@@ -1182,7 +1759,31 @@ def _pll_violation(contract, value, blame):
         "applied": _pll_applied(blame.positive),
         "level": blame.level,
         "arity": _pll_arity(contract, value),
+        # A type variable the value was refused for, and a sealed value
+        # refused where its type variable was not wanted.
+        "variables": [variable.fact() for variable in _pll_variables_wanted(contract)] or None,
+        "sealed": _pll_sealed_fact(value),
     }
+
+
+def _pll_variables_wanted(contract):
+    """The type variables `contract` would have taken the value as: itself,
+    or members of a union."""
+    if isinstance(contract, _PllLaterContract):
+        contract = contract.made()
+    if isinstance(contract, _PllVariableContract):
+        return [contract]
+    if isinstance(contract, _PllUnionContract):
+        return [variable for member in contract.members for variable in _pll_variables_wanted(member)]
+    return []
+
+
+def _pll_sealed_fact(value):
+    """For a sealed value: whose type variable it is."""
+    if not isinstance(value, _PllSealed):
+        return None
+    variable = _pll_sealed_seal(value).variable
+    return {"variable": variable.name, "function": variable.party.name}
 
 
 def _pll_arity(contract, value):
@@ -1258,7 +1859,10 @@ def _pll_type_name(value):
 
 
 def _pll_shown_value(value):
-    """A value as a message quotes it: a string in double quotes."""
+    """A value as a message quotes it: a string in double quotes, and a sealed
+    one as its type variable, which is all there is to know of it."""
+    if isinstance(value, _PllSealed):
+        return type(value).__name__
     if isinstance(value, str) and '"' not in value:
         return '"%s"' % value
     try:

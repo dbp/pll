@@ -1016,6 +1016,67 @@ stderr:
     - If it should be a whole number (`int`), convert it with `int(...)`.
     - Or, if `n` really should be a string (`str`), change its annotation in `double` from `int` to `str`.
 
+=== tv-not-given (exit 1)
+stderr:
+  student.py [intermediate]
+  TypeMismatch: `wrong_first` says it returns a `T`, but this line returns `5`, which it wasn't given as a `T`.
+    at student.py:3
+  
+  How to fix:
+    - `T` stands for whatever type `wrong_first` is called with, so the only `T` values it has are the ones it is given, in `lst` and `default`.
+    - If it always gives back a whole number (`int`), write `int` in place of `T` in its Signature.
+
+=== tv-swapped (exit 1)
+stderr:
+  student.py [intermediate]
+  TypeMismatch: `swap` says it returns `Pair[B, A]`, but the `left` of the `Pair` this line returns is an `A`, which it wasn't given as a `B`.
+    at student.py:8
+  
+  How to fix:
+    - `B` stands for whatever type `swap` is called with, so the only `B` values it has are the ones it is given, in `p`.
+    - `A` and `B` can be different types, so a value `swap` was given as an `A` can't be given back as a `B`.
+
+=== tv-added (exit 1)
+stderr:
+  student.py [intermediate]
+  TypeMismatch: `total` can't add a `T`: `T` stands for any type.
+    at student.py:3
+  
+  How to fix:
+    - A function with `[T]` in its Signature can only pass a `T` along: give it to a function, keep it in a list or a dataclass, or give it back.
+    - If every `T` here is a whole number (`int`), write `int` in place of `T` in `total`'s Signature.
+
+=== tv-compared (exit 1)
+stderr:
+  student.py [intermediate]
+  TypeMismatch: `count_of` can't compare a `T` for equality: `T` stands for any type.
+    at student.py:3
+  
+  How to fix:
+    - A function with `[T]` in its Signature can only pass a `T` along: give it to a function, keep it in a list or a dataclass, or give it back.
+    - To tell whether two of them are the same, `count_of` has to be given a function that does it, as `same: Callable[[T, T], bool]`.
+    - If every `T` here is a whole number (`int`), write `int` in place of `T` in `count_of`'s Signature.
+
+=== tv-given-back (exit 3)
+stderr:
+  student.py [intermediate]
+  Tests: 1 error
+    ERROR test_first (line 5)
+          TypeMismatch: What `first` gave back is still a `T`, so `test_first` can't compare it for equality.
+          at student.py:6
+          - `first` was given it as a `T`, and its Signature doesn't say it gives back a `T`, so it is still one: it can only be passed along.
+          - If what `first` gives back is one of the values it was given as a `T`, write `-> T` in its Signature.
+
+=== tv-as-int (exit 1)
+stderr:
+  student.py [intermediate]
+  TypeMismatch: `f` says it returns a whole number (`int`), but this line returns a `T`.
+    at student.py:3
+  
+  How to fix:
+    - `f` was given this value as a `T`, which stands for any type - not only a whole number (`int`).
+    - If what `f` is given as a `T` is always a whole number (`int`), write `int` in place of `T` in its Signature.
+
 === tc-annotation-string-type (exit 2)
 stderr:
   student.py [beginner]

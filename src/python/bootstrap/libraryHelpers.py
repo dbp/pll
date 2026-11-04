@@ -50,6 +50,8 @@ def _pll_describe(value):
     """
     if value is None:
         return "None"
+    if isinstance(value, _PllSealed):
+        return "a `%s`" % type(value).__name__
     if isinstance(value, bool):
         return "%s" % value
     if isinstance(value, str):

@@ -8,6 +8,20 @@
   missed rather than which. A chaff with a name rather than a number is
   shown by its name, as before.
 
+### Added
+- **A generic function's type variables are checked**, at `beginner` and
+  `intermediate`, as LSL's `All` checks them. A value a `def f[T](...)` is
+  given as a `T` can only be passed along - to a function, into a list or a
+  dataclass, or back - so adding one, comparing one (with `==` too),
+  printing one or asking its type stops: "`total` can't add a `T`: `T`
+  stands for any type." What it gives back as a `T` must be one it was given
+  in that call: "`wrong_first` says it returns a `T`, but this line returns
+  `5`, which it wasn't given as a `T`." A `T | None` can still be told from
+  `None`, with `is None` or `== None`. A generic function is handed copies
+  of its lists and dataclasses, with their `T`s sealed, so `#level
+  advanced`, where a change to a copy would not reach the caller, leaves
+  type variables unchecked.
+
 ### Fixed
 - **A number before brackets is told the multiplication it stands for**:
   `2(3 + 4)` gets "write the `*`: `2 * (3 + 4)`", where it got `2 * 3 + 4`,

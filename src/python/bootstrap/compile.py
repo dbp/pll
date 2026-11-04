@@ -627,7 +627,10 @@ class _PllTeachingChecks(_ast.NodeTransformer):
       targets), a loop whose target is an item (`pll:iterating_into`),
       `xs += ys` (`pll:in_place`), `xs[i] += v` (`pll:setitem_in_place`)
       and `x.a += v` (`pll:attribute_in_place`) - where aliasing would make
-      one change show up through another name.
+      one change show up through another name;
+    - `a is b` with a value a generic function was given as a type variable
+      (`pll:identical`), which can only be passed along (contracts.py) and
+      whose `is` Python would answer of its seal, not of the value.
 
     Annotations are left as they are: under `from __future__ import
     annotations` Python keeps them as their text, which a call in place of
@@ -650,6 +653,14 @@ class _PllTeachingChecks(_ast.NodeTransformer):
         )
         _ast.copy_location(call, at)
         return call
+
+    def visit_Compare(self, node):
+        self.generic_visit(node)
+        if len(node.ops) != 1 or not isinstance(node.ops[0], (_ast.Is, _ast.IsNot)):
+            return node
+        negated = _ast.Constant(value=isinstance(node.ops[0], _ast.IsNot))
+        call = self._call("pll:identical", [node.left, node.comparators[0], negated], [], node)
+        return _ast.copy_location(call, node)
 
     def _statement(self, call, at):
         statement = _ast.Expr(value=call)

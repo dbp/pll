@@ -137,6 +137,13 @@ export const CASES = [
   { name: "tc-reactor-init", code: [B, "def draw(n: int) -> Image:", '    return circle(10, "solid", "red")', "", 'r = reactor(init="zero", to_draw=draw)', "r.interact()"] },
   { name: "tc-raw-unchecked", code: ["def double(n: int) -> int:", "    return n * 2", "", 'print(double("4"))'] },
   { name: "tc-intermediate", code: [I, "def double(n: int) -> int:", "    return n * 2", "", 'print(double("4"))'] },
+  // A generic function's type variables, sealed at each call.
+  { name: "tv-not-given", code: [I, "def wrong_first[T](lst: list[T], default: T) -> T:", "    return 5", "", 'print(wrong_first(["oak"], "none"))'] },
+  { name: "tv-swapped", code: [I, "@dataclass", "class Pair[A, B]:", "    left: A", "    right: B", "", "def swap[A, B](p: Pair[A, B]) -> Pair[B, A]:", "    return p", "", "print(swap(Pair(1, 2)))"] },
+  { name: "tv-added", code: [I, "def total[T](xs: list[T]) -> int:", "    return sum(xs)", "", "print(total([1, 2]))"] },
+  { name: "tv-compared", code: [I, "def count_of[T](x: T, lst: list[T]) -> int:", "    return len([y for y in lst if y == x])", "", "print(count_of(2, [1, 2]))"] },
+  { name: "tv-given-back", code: [I, "def first[T](lst: list[T]):", "    return lst[0]", "", "def test_first():", "    assert first([1, 2]) == 1"] },
+  { name: "tv-as-int", code: [I, "def f[T](x: T) -> int:", "    return x", "", "print(f(3))"] },
   { name: "tc-annotation-string-type", code: [B, "def f(n: string) -> int:", "    return 1", "", "print(f(1))"] },
 
   // ---- names --------------------------------------------------------------

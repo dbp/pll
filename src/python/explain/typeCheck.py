@@ -23,6 +23,19 @@ _PLL_RETURNS_NONE = ("append", "extend", "insert", "remove", "sort", "reverse", 
 
 @_pll_explains("TypeMismatch")
 def _pll_explain_type_check(e):
+    used = e.facts.get("sealed_use")
+    if used is not None:
+        headline, how_to_fix = _pll_sealed_use_wording(used)
+        return {
+            "id": "type-variable-used",
+            "errorType": "TypeMismatch",
+            "headline": headline,
+            "howToFix": how_to_fix,
+            "fileName": used.get("file") or (e.run[0] if e.run else None),
+            "lineNumber": used.get("line") or e.info["lineNumber"],
+            "column": None,
+            "nameToken": None,
+        }
     check = e.facts.get("check")
     file, line = _pll_contract_place(e, check or {})
     headline, how_to_fix = _pll_type_check_wording(e, check, line)
@@ -98,6 +111,14 @@ def _pll_line_text(e, line):
 
 def _pll_type_check_wording(e, check, line):
     c = _PllCheck(e, check, line)
+    if c.check.get("variables"):
+        said = _pll_tc_variable_wanted(c)
+        if said is not None:
+            return said
+    if c.check.get("sealed"):
+        said = _pll_tc_sealed_given(c)
+        if said is not None:
+            return said
     if c.check.get("higher_order"):
         said = _pll_tc_higher_order(c)
         if said is not None:
@@ -187,6 +208,245 @@ def _pll_tc_higher_order(c):
         "`%s`'s return annotation, `%s`, says what that function gives back." % (function, annotation),
         "Change the function `%s` returns, or the annotation." % function,
     ]
+
+
+#: What code tried to do with a value a generic function was given as a
+#: type variable, which can only be passed along (bootstrap/contracts.py):
+#: by the operation the refusal names, with `{t}` for the value.
+_PLL_SEALED_DOING = {
+    "add": "add {t}",
+    "subtract": "subtract {t}",
+    "multiply": "multiply {t}",
+    "divide": "divide {t}",
+    "power": "raise {t} to a power",
+    "bitwise": "use a bitwise operator on {t}",
+    "negate": "use `-` or `abs` on {t}",
+    "compare": "compare {t} with `<` or `>`",
+    "equal": "compare {t} for equality",
+    "identical": "compare {t} with `is`",
+    "none": "check whether {t} is `None`",
+    "hash": "put {t} in a set, or use it as a dictionary key",
+    "condition": "use {t} as true or false",
+    "show": "print {t}, or make a string of it",
+    "length": "take the length of {t}",
+    "loop": "go through {t}",
+    "contains": "look for something in {t}",
+    "index": "look inside {t} with `[...]`",
+    "change": "change {t}",
+    "call": "call {t}",
+    "number": "turn {t} into a number",
+    "copy": "copy {t}",
+    "with": "use {t} in a `with`",
+    "attribute": "read a field or method of {t}",
+    "type": "ask what type {t} is",
+}
+
+#: Those that ask whether two values are the same, which a generic function
+#: given a function that tells can do with that.
+_PLL_SEALED_SAMENESS = ("equal", "identical", "hash")
+
+#: Letters whose names begin with a vowel sound, so take "an": an `R`.
+_PLL_AN_LETTERS = "AEFHILMNORSX"
+
+
+def _pll_a_variable(name):
+    """"a `T`", "an `R`": a type variable with its article."""
+    if len(name) == 1:
+        article = "an" if name.upper() in _PLL_AN_LETTERS else "a"
+    else:
+        article = "an" if name[:1] in "AEIOUaeiou" else "a"
+    return "%s `%s`" % (article, name)
+
+
+def _pll_sealed_use_wording(used):
+    """A value a generic function was given as `T`, which code then tried to
+    do something with: in the function itself, in code it gave the value
+    to, or in code it gave the value back to through a place its Signature
+    does not say `T`, where the value is still a `T`."""
+    variable, function, where = used["variable"], used["function"], used["where"]
+    a_t = _pll_a_variable(variable)
+    doing = _PLL_SEALED_DOING.get(used["operation"], "use {t}")
+    within = "`%s`" % used["in"] if used.get("in") else "This line"
+    only = "A function with `[%s]` in its Signature can only pass %s along: give it to a function, keep it in a list or a dataclass, or give it back." % (
+        variable, a_t
+    )
+    if where == "returned":
+        headline = "What `%s` gave back is still %s, so %s can't %s." % (
+            function, a_t, within if within != "This line" else "this line", doing.format(t="it")
+        )
+        return headline, [
+            "`%s` was given it as %s, and its Signature doesn't say it gives back %s, so it is still one: it can only be passed along."
+            % (function, a_t, a_t),
+            "If what `%s` gives back is one of the values it was given as %s, write `-> %s` in its Signature." % (
+                function, a_t, variable
+            ),
+        ]
+    if used["operation"] == "none":
+        # `None` itself, given where the Signature says only `T`.
+        headline = "`%s` was given `None` as %s, so it can't check whether it is `None`: `%s` stands for any type." % (
+            function, a_t, variable
+        )
+        how_to_fix = [only]
+    elif where == "given":
+        headline = "%s can't %s: `%s` was given it as %s, and `%s` stands for any type." % (
+            within, doing.format(t="this value"), function, a_t, variable
+        )
+        how_to_fix = [only + " Passing it to %s doesn't change what it is." % within]
+    else:
+        headline = "`%s` can't %s: `%s` stands for any type." % (function, doing.format(t=a_t), variable)
+        how_to_fix = [only]
+    if used["operation"] == "none":
+        # `None` that is not one of the `T`s is not sealed, so `is None`
+        # tells it apart.
+        how_to_fix.append(
+            "If `%s` may be given `None` there as well as %s, write `%s | None` in its Signature: then `None` is not %s, and `is None` can tell it apart."
+            % (function, a_t, variable, a_t)
+        )
+        return headline, how_to_fix
+    if used["operation"] in _PLL_SEALED_SAMENESS:
+        how_to_fix.append(
+            "To tell whether two of them are the same, `%s` has to be given a function that does it, as `same: Callable[[%s, %s], bool]`."
+            % (function, variable, variable)
+        )
+    inside = _pll_clean_type_name(used["type"])
+    if inside not in ("None", "NoneType"):
+        how_to_fix.append(
+            "If every %s here is %s, write `%s` in place of `%s` in `%s`'s Signature." % (
+                "`%s`" % variable, _pll_describe_type(inside), inside, variable, function
+            )
+        )
+    return headline, how_to_fix
+
+
+def _pll_variable_sources_said(variable):
+    """Where a generic function gets its `T` values, as a sentence."""
+    name, function = variable["name"], variable["function"]
+    given = [source["name"] for source in variable["sources"] if source["how"] == "value"]
+    made = [source["name"] for source in variable["sources"] if source["how"] == "result"]
+    parts = []
+    if given:
+        parts.append("the ones it is given, in %s" % _pll_list_names(given))
+    if made:
+        parts.append("what %s gives back" % _pll_list_names(made).replace(" and ", " or "))
+    if not parts:
+        return "`%s` stands for whatever type `%s` is called with, and it is given no %s, so it has none to give back." % (
+            name, function, "`%s` values" % name
+        )
+    return "`%s` stands for whatever type `%s` is called with, so the only `%s` values it has are %s." % (
+        name, function, name, ", and ".join(parts)
+    )
+
+
+def _pll_reach(steps):
+    """The part of what was given back that failed, as a phrase: "item 1 of
+    the list", "the `left` of the `Pair`"."""
+    words = []
+    for step in steps:
+        if step["kind"] == "item":
+            words.append("item %d of the %s" % (step["index"], _pll_clean_type_name(step["in"])))
+        elif step["kind"] == "field":
+            words.append("the `%s` of the `%s`" % (step["name"], _pll_clean_type_name(step["in"])))
+        elif step["kind"] == "value":
+            words.append("the value for key %s of the dictionary" % _pll_plain_key(step["key"]))
+        else:
+            return None
+    # Outermost first in the path; said inmost first.
+    return " in ".join(reversed(words)) if words else None
+
+
+def _pll_tc_variable_wanted(c):
+    """A value given back as one of a generic function's type variables, `T`,
+    that is not one of those it was given as a `T`: one of another type, or
+    one it was given as another type variable."""
+    variable = c.check["variables"][0]
+    name = variable["name"]
+    a_t = _pll_a_variable(name)
+    wanted = " or ".join(
+        _pll_a_variable(t) if any(v["name"] == t for v in c.check["variables"]) else _pll_with_article(_pll_describe_type(t))
+        for t in c.expected
+    )
+    sealed = c.check.get("sealed")
+    element_value = c.e.facts.get("element_value")
+    if sealed is not None:
+        got = _pll_a_variable(sealed["variable"])
+        why = "`%s` and `%s` can be different types, so a value `%s` was given as %s can't be given back as %s." % (
+            sealed["variable"], name, sealed["function"], got, a_t
+        ) if sealed["variable"] != name else "Each call of `%s` has its own `%s` values, and this is one from another call." % (
+            sealed["function"], name
+        )
+    else:
+        # An item is described already ("the number 0"); a value is quoted.
+        if c.element:
+            got = element_value or "something else"
+        else:
+            got = "`%s`" % c.check["value"] if c.check.get("value") is not None else "something else"
+        actual = c.e.facts.get("element_type") if c.element else c.actual
+        why = None
+        if actual and _pll_clean_type_name(actual) not in ("None", "NoneType"):
+            plain = _pll_clean_type_name(actual)
+            if c.kind == "argument":
+                why = "If `%s` always takes %s, write `%s` in place of `%s` in `%s`'s Signature." % (
+                    (c.check.get("path") or [{}])[0].get("name"), _pll_describe_type(plain), plain, name, variable["function"]
+                )
+            else:
+                why = "If it always gives back %s, write `%s` in place of `%s` in its Signature." % (
+                    _pll_describe_type(plain), plain, name
+                )
+    path = c.check.get("path") or []
+    calls = [index for index, step in enumerate(path) if step["kind"] in ("argument", "result")]
+    inside = path[calls[-1] + 1 :] if calls else []
+    owner = variable["function"]
+    if c.kind == "return" and len(calls) == 1:
+        if inside:
+            reach = _pll_reach(inside)
+            if reach is None:
+                return None
+            headline = "`%s` says it returns `%s`, but %s this line returns is %s, which it wasn't given as %s." % (
+                owner, c.check.get("annotation"), reach, got, a_t
+            )
+        else:
+            headline = "`%s` says it returns %s, but this line returns %s, which it wasn't given as %s." % (
+                owner, wanted, got, a_t
+            )
+    elif c.kind == "argument" and len(calls) == 2 and path[calls[1]]["kind"] == "argument" and not inside:
+        parameter = path[0]["name"]
+        headline = "`%s` calls `%s` with %s, but `%s` takes %s, and that isn't one `%s` was given." % (
+            owner, parameter, got, parameter, wanted, owner
+        )
+    else:
+        return None
+    how_to_fix = [_pll_variable_sources_said(variable)]
+    if why is not None:
+        how_to_fix.append(why)
+    return headline, how_to_fix
+
+
+def _pll_tc_sealed_given(c):
+    """A value a generic function was given as a type variable, where a type
+    that is not one was wanted: it could be any type."""
+    sealed = c.check["sealed"]
+    a_t = _pll_a_variable(sealed["variable"])
+    if c.element:
+        return None
+    if c.kind == "return":
+        headline = "%s says it returns %s, but this line returns %s." % (c.owner, c.wanted, a_t)
+    elif c.kind == "argument":
+        headline = "%s expects %s to be %s, but got %s." % (c.owner, c.named, c.wanted, a_t)
+    elif c.kind == "variable":
+        headline = "%s is annotated as %s, but %s was assigned here." % (c.named, c.wanted, a_t)
+    elif c.kind == "field":
+        headline = "The %s field of `%s` should be %s, but got %s." % (c.named, c.check.get("owner") or "this class", c.wanted, a_t)
+    else:
+        return None
+    how_to_fix = [
+        "`%s` was given this value as %s, which stands for any type - not only %s." % (sealed["function"], a_t, c.wanted),
+    ]
+    if c.annotation:
+        how_to_fix.append(
+            "If what `%s` is given as %s is always %s, write `%s` in place of `%s` in its Signature."
+            % (sealed["function"], a_t, c.wanted, c.annotation, sealed["variable"])
+        )
+    return headline, how_to_fix
 
 
 @_pll_explains("NotAType")

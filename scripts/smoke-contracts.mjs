@@ -248,5 +248,117 @@ console.log("[a prompt line calls what the file defined]");
   console.log("    checked, and blamed on the prompt");
 }
 
+console.log("[type variables: a generic function passes its `T`s along, and gives back as a `T` only one it was given]");
+{
+  const I = "intermediate";
+  const lines = (...ls) => `${ls.join("\n")}\n`;
+  const PAIR = ["@dataclass", "class Pair[A, B]:", "    left: A", "    right: B", ""];
+  // The course's own: lists, chains and pairs remade with their `T`s
+  // sealed, functions given in and given back, recursion, and `T | None`.
+  const course = ran(lines(
+    "@dataclass", "class End[T]:", "    pass", "", "@dataclass", "class Link[T]:", "    first: T", '    rest: "Chain[T]"', "",
+    "type Chain[T] = End[T] | Link[T]", "", ...PAIR,
+    "def length[T](lst: list[T]) -> int:", "    match lst:", "        case []:", "            return 0",
+    "        case [f, *r]:", "            return 1 + length(r)", "",
+    "def first_or_none[T](lst: list[T]) -> T | None:", "    return lst[0] if lst != [] else None", "",
+    "def or_else[T](x: T | None, d: T) -> T:", "    return d if x is None else x", "",
+    "def or_default[T](x: T | None, d: T) -> T:", "    return d if x == None else x", "",
+    "def swap[A, B](p: Pair[A, B]) -> Pair[B, A]:", "    return Pair(p.right, p.left)", "",
+    "def chain_to_list[T](c: Chain[T]) -> list[T]:", "    match c:", "        case End():", "            return []",
+    "        case Link(first, rest):", "            return [first] + chain_to_list(rest)", "",
+    "def my_map[T, R](change: Callable[[T], R], lst: list[T]) -> list[R]:", "    return [change(x) for x in lst]", "",
+    "def const[T](x: T) -> Callable[[], T]:", "    return lambda: x", "",
+    'print(length(["oak", "elm"]), length(list(range(300))), first_or_none([]), or_else(None, 3), or_else(4, 3), or_default(4, 3))',
+    'print(swap(Pair("elm", 3)), chain_to_list(Link(1, Link(2, End()))), my_map(str, [1, 2]), const("a")())',
+  ), I);
+  expect(
+    course.finding === null && course.stdout === "2 300 None 3 4 4\nPair(left=3, right='elm') [1, 2] ['1', '2'] a\n",
+    `the course's own: ${course.stdout} ${course.finding?.headline ?? ""}`,
+  );
+
+  /** The finding for `source` at intermediate: its headline at `line`. */
+  const said = (what, source, headline, line) => {
+    const got = ran(source, I);
+    expect(
+      got.finding?.errorType === "TypeMismatch" && got.finding?.headline === headline && got.finding?.lineNumber === line,
+      `${what}: ${got.finding?.headline} at ${got.finding?.lineNumber}`,
+    );
+    return got;
+  };
+  // What it gives back as a `T` must be one it was given.
+  const WRONG = ["def wrong_first[T](lst: list[T], default: T) -> T:", "    return 5", ""];
+  const wrong = said("a value it was not given", lines(...WRONG, 'wrong_first(["oak"], "none")'),
+    "`wrong_first` says it returns a `T`, but this line returns `5`, which it wasn't given as a `T`.", 2);
+  expect(
+    wrong.finding?.howToFix[0] ===
+      "`T` stands for whatever type `wrong_first` is called with, so the only `T` values it has are the ones it is given, in `lst` and `default`." &&
+      wrong.error?.facts?.check?.blamed?.name === "wrong_first",
+    `where its \`T\`s come from: ${JSON.stringify(wrong.finding?.howToFix)}`,
+  );
+  // Even when both are whole numbers: each type variable has its own seal.
+  said("a swap that does not swap", lines(...PAIR, "def swap[A, B](p: Pair[A, B]) -> Pair[B, A]:", "    return p", "", "swap(Pair(1, 2))"),
+    "`swap` says it returns `Pair[B, A]`, but the `left` of the `Pair` this line returns is an `A`, which it wasn't given as a `B`.", 7);
+  said("a function given in, called with a value it was not given",
+    lines("def apply[T](f: Callable[[T], T], x: T) -> T:", "    return f(5)", "", 'apply(lambda n: n, "a")'),
+    "`apply` calls `f` with `5`, but `f` takes a `T`, and that isn't one `apply` was given.", 2);
+  said("a method's own type variable", lines("class Tool:", "    def bad[U](self, x: U) -> U:", "        return 0", "", 'Tool().bad("hi")'),
+    "`Tool.bad` says it returns a `U`, but this line returns `0`, which it wasn't given as a `U`.", 3);
+
+  // Anything but passing it along is refused - `==` and printing too - at
+  // the student's own line, past the PLL code that did it for them.
+  const total = said("added", lines("def total[T](xs: list[T]) -> int:", "    return sum(xs)", "", "total([1, 2])"),
+    "`total` can't add a `T`: `T` stands for any type.", 2);
+  expect(
+    total.finding?.howToFix.at(-1) === "If every `T` here is a whole number (`int`), write `int` in place of `T` in `total`'s Signature.",
+    `the type to say instead: ${JSON.stringify(total.finding?.howToFix)}`,
+  );
+  const same = said("compared with ==", lines("def count_of[T](x: T, lst: list[T]) -> int:", "    return len([y for y in lst if y == x])", "", "count_of(2, [1, 2])"),
+    "`count_of` can't compare a `T` for equality: `T` stands for any type.", 2);
+  expect(same.finding?.howToFix.some((l) => l.includes("`same: Callable[[T, T], bool]`")), `a function to tell: ${JSON.stringify(same.finding?.howToFix)}`);
+  said("printed", lines("def show_all[T](lst: list[T]) -> None:", "    for x in lst:", "        print(x)", "", "show_all([1])"),
+    "`show_all` can't print a `T`, or make a string of it: `T` stands for any type.", 3);
+  said("a method read", lines("def grow[T](x: T) -> T:", "    x.append(1)", "    return x", "", "grow([1])"),
+    "`grow` can't read a field or method of a `T`: `T` stands for any type.", 2);
+  said("asked its type", lines("def kind[T](x: T) -> str:", '    return "int" if isinstance(x, int) else "other"', "", "kind(3)"),
+    "`kind` can't ask what type a `T` is: `T` stands for any type.", 2);
+  said("matched by class", lines("def kind[T](x: T) -> str:", "    match x:", "        case int():", '            return "int"', "        case _:", '            return "other"', "", "kind(3)"),
+    "`kind` can't ask what type a `T` is: `T` stands for any type.", 3);
+  said("in a function it was given to", lines("def helper(xs):", "    return sum(xs)", "", "def total[T](xs: list[T]) -> int:", "    return helper(xs)", "", "total([1])"),
+    "`helper` can't add this value: `total` was given it as a `T`, and `T` stands for any type.", 2);
+  said("given back where the Signature does not say `T`", lines("def first[T](lst: list[T]):", "    return lst[0]", "", "print(first([1]) + 1)"),
+    "What `first` gave back is still a `T`, so this line can't add it.", 4);
+  said("`None` given as a bare `T`", lines("def is_none[T](x: T) -> bool:", "    return x is None", "", "is_none(None)"),
+    "`is_none` was given `None` as a `T`, so it can't check whether it is `None`: `T` stands for any type.", 2);
+  said("where a type that is not `T` was wanted", lines("def g(n: int) -> int:", "    return n", "", "def f[T](x: T) -> int:", "    return g(x)", "", "f(3)"),
+    "`g` expects `n` to be a whole number (`int`), but got a `T`.", 5);
+
+  // Not sealed: where a value could not be remade with its `T`s sealed, a
+  // class's own type variable, one with constraints, and the levels that
+  // do not check them.
+  const unchecked = (what, source, stdout, level = I) => {
+    const got = ran(source, level);
+    expect(got.finding === null && got.stdout === stdout, `${what}: ${got.stdout} ${got.finding?.headline ?? ""}`);
+  };
+  unchecked("in a set", lines("def pick[T](xs: set[T]) -> T:", "    return 5", "", 'print(pick({"a"}))'), "5\n");
+  unchecked("among a dictionary's keys", lines("def keys_of[T](d: dict[T, int]) -> list[T]:", "    return list(d)", "", 'print(keys_of({"a": 1}))'), "['a']\n");
+  unchecked("in an Iterable", lines("from collections.abc import Iterable", "", "def first_of[T](xs: Iterable[T]) -> T:",
+    "    for x in xs:", "        return x", "    return 0", "", 'print(first_of(["a"]))'), "a\n");
+  unchecked("a class's own", lines("@dataclass", "class Box[T]:", "    item: T", "", "    def get(self) -> T:", "        return self.item", "", "print(Box(3).get())"), "3\n");
+  unchecked("with constraints, checked as them", lines("def bigger[T: (int, float)](a: T, b: T) -> T:", "    return a if a > b else b", "", "print(bigger(2, 3.5))"), "3.5\n");
+  for (const level of ["advanced", "raw"]) {
+    unchecked(`at ${level}`, lines(...WRONG, 'print(wrong_first(["oak"], "none"))'), "5\n", level);
+  }
+
+  // At a prompt line, as in the file.
+  const key = "contracts-generic";
+  pllCall("_pll_run_file", JSON.stringify([lines(...WRONG), "lab.py", key, I, false]));
+  const prompt = JSON.parse(pllCall("_pll_repl_eval", JSON.stringify(['wrong_first(["oak"], "none")', key, I])));
+  expect(
+    prompt.error?.errorType === "TypeMismatch" && prompt.error?.facts?.check?.variables?.[0]?.name === "T",
+    `a prompt line: ${prompt.error?.errorType} ${JSON.stringify(prompt.error?.facts?.check?.variables)}`,
+  );
+  console.log("    the course's own pass; given back, refused uses and unsealed places, each said");
+}
+
 console.log(passed() ? "\nsmoke-contracts: ok" : "\nsmoke-contracts: FAILED");
 if (!passed()) process.exitCode = 1;

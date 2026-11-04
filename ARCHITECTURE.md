@@ -592,10 +592,20 @@ What a contract is made of, from the annotation (`_pll_compile`): a class
 is `isinstance`, with PEP 484's numeric tower; `A | B` is Racket's `or/c`;
 `list[T]`, `dict[K, V]`, `tuple[...]` check every item as the container
 crosses; a generic dataclass with its type filled in (`BinTree[float]`) is
-checked field by field, to the leaves; a type parameter (`[A, B]`, `T`) is
-`any`; a name in quotes is looked up when first needed. Lists and
-dataclasses are shared, so a function among their items is checked
-first-order only, and a change made to one later is not checked.
+checked field by field, to the leaves; a name in quotes is looked up when
+first needed. Lists and dataclasses are shared, so a function among their
+items is checked first-order only, and a change made to one later is not
+checked.
+
+A generic `def`'s own type variables are sealed at each call at the
+teaching levels, as LSL's `All` seals them (`_PllVariableContract`; D5 of
+docs/contracts.md): what the function is given as a `T` is a `_PllSealed`,
+whose class is named after `T` and which refuses every operation, and what
+it gives back as a `T` must carry that call's seal (`_PllSeal`). A
+container with a type variable in it is remade as it crosses, its items
+sealed or unsealed, which is why that is only done where nothing can
+change one; `_pll_unsealable` leaves a type variable `any` where a value
+could not be remade. Elsewhere a type parameter is `any`.
 
 At `#level beginner` and `#level intermediate`, a `bool` is rejected where
 `int` or `float` is annotated. Python makes `bool` a subclass of `int`, so

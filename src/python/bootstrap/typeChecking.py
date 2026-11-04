@@ -258,6 +258,8 @@ def _pll_attribute(value, name, written, value_text, arguments):
     4)`, whose first argument is what it changes; and when what is fetched
     is a library function that changes what it is given. `arguments` are
     what the call it is fetched for gives it, as written - or None."""
+    if isinstance(value, _PllSealed):
+        _pll_refuse_sealed(value, "attribute")
     kind = _pll_mutable_kind(value)
     if kind is not None and name in _PLL_MUTATORS[kind]:
         _pll_refuse_mutation(
@@ -273,6 +275,20 @@ def _pll_attribute(value, name, written, value_text, arguments):
     if name in _PLL_LIBRARY_MUTATOR_NAMES:
         _pll_check_library(fetched, written, value_text, arguments)
     return fetched
+
+
+def _pll_identical(left, right, negated):
+    """`left is right`, or `is not` - for a sealed value, which can only be
+    passed along, and of which `is` would ask about its seal: refused, but
+    against `None`, which a `T | None` must be told apart from
+    (`_pll_sealed_is_none`)."""
+    for value, other in ((left, right), (right, left)):
+        if isinstance(value, _PllSealed):
+            return _pll_sealed_is_none(value, other, negated, "identical")
+    return (left is not right) if negated else (left is right)
+
+
+_pll_hidden("identical", _pll_identical)
 
 
 def _pll_named(function, written, arguments):
