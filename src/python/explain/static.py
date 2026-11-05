@@ -139,6 +139,18 @@ def _pll_word_shadowing_library(f, level):
     name = f["name_token"] or "this name"
     noun = _PLL_LIBRARY_NOUN.get(f.get("library"), "the PLL libraries")
     binding = f.get("binding")
+    if f.get("library") == "bundle":
+        given = "the `#bundle` line on line %s gives it to this file" % f.get("bundle_line")
+        if binding == "import" and f.get("module") == name:
+            return "`%s` needs no import: %s." % (name, given), ["Delete this import."]
+        if binding in ("argument", "for"):
+            what = _PLL_BINDING_NOUN[binding]
+            return "`%s` is already defined: %s, and this %s hides it." % (name, given, what), [
+                "Give the %s another name - a word for what it holds." % what
+            ]
+        return "`%s` is already defined: %s." % (name, given), [
+            "Pick a different name for your definition - a word that describes what yours represents."
+        ]
     if f.get("library") == "level":
         # `Callable` or `dataclass`, which every file at the student levels starts with.
         given = "PLL gives every file `%s` at `#level %s`" % (name, level)

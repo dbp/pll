@@ -64,6 +64,7 @@ const FILES = [
   "smoke-universe",
   "smoke-examplar",
   "smoke-examplar-build",
+  "smoke-bundle",
   "smoke-cli",
   "smoke-golden",
   "smoke-interrupt",

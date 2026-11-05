@@ -13,7 +13,8 @@
  *   2. the explanations      - `explain/`: what each error and finding
  *                              says to the student
  *   3. the libraries         - images, tables and charts, reactors (after
- *                              images: handlers draw with them), Examplar
+ *                              images: handlers draw with them), Examplar,
+ *                              bundles
  *   4. `install.py`          - registers `pll.image` / `pll.table` /
  *                              `pll.reactor` and copies their public names
  *                              into `_pll_initial_globals`
@@ -47,6 +48,7 @@ import imageLibSource from "../python/libraries/image.py";
 import tableLibSource from "../python/libraries/table.py";
 import reactorLibSource from "../python/libraries/reactor.py";
 import examplarLibSource from "../python/libraries/examplar.py";
+import bundleLibSource from "../python/libraries/bundle.py";
 import installSource from "../python/install.py";
 import httpSource from "../python/libraries/http.py";
 import matplotlibBackendSource from "../python/libraries/matplotlibBackend.py";
@@ -105,6 +107,7 @@ const PLL_LIBRARIES_PY: ReadonlyArray<PythonSource> = [
   { file: PLL_LIBRARY_FILES.table, source: tableLibSource },
   { file: PLL_LIBRARY_FILES.reactor, source: reactorLibSource },
   { file: PLL_LIBRARY_FILES.examplar, source: examplarLibSource },
+  { file: PLL_LIBRARY_FILES.bundle, source: bundleLibSource },
 ];
 
 /**

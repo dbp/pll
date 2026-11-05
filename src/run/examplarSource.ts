@@ -1,7 +1,8 @@
 import { errorText } from "../core/errorText";
 
 /**
- * Finding and fetching an Examplar bundle.
+ * Finding and fetching an Examplar bundle. The fetching, with its cache, is
+ * also how the modules `#bundle` lines name arrive (`bundles.ts`).
  *
  * The directive is scanned line by line anywhere in the file, rather than
  * from a header block, so that adding it cannot perturb how `#level` is
@@ -98,6 +99,15 @@ export interface BundleLoad {
   error?: string;
 }
 
+/** What a fetched bundle has to look like, and what a message calls it. */
+export interface BundleKind {
+  /** As a message names it: "an Examplar bundle". */
+  noun: string;
+  looksRight(json: string): boolean;
+}
+
+export const EXAMPLAR_BUNDLE: BundleKind = { noun: "an Examplar bundle", looksRight: looksLikeBundle };
+
 type FetchLike = (url: string, init?: { headers?: Record<string, string> }) => Promise<{
   ok: boolean;
   status: number;
@@ -118,6 +128,7 @@ export async function loadBundle(
   url: string,
   store: BundleStore,
   fetchImpl: FetchLike = globalThis.fetch as unknown as FetchLike,
+  kind: BundleKind = EXAMPLAR_BUNDLE,
 ): Promise<BundleLoad> {
   const cached = await store.read(url).catch(() => undefined);
   let response;
@@ -156,10 +167,10 @@ export async function loadBundle(
   }
   // A page that is not a bundle - a login page, a 404 served as 200 - is
   // never cached: it would replace the good copy a student offline needs.
-  if (!looksLikeBundle(json)) {
+  if (!kind.looksRight(json)) {
     return cached
       ? { json: cached.json, fromCache: true, note: `${url} did not return a bundle; using the cached copy` }
-      : { fromCache: false, error: `${url} did not return an Examplar bundle` };
+      : { fromCache: false, error: `${url} did not return ${kind.noun}` };
   }
   const etag = response.headers.get("etag") ?? undefined;
   try {

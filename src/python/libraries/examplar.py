@@ -561,7 +561,7 @@ def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), onl
     return ended(False)
 
 
-def _pll_examplar_run(test_source, bundle_json, filename="hw.py"):
+def _pll_examplar_run(test_source, bundle_json, filename="hw.py", session_key=None):
     """Run a student's suite against a bundle, per function and in two phases.
 
     Returns a dict the host turns into one report per provided function.
@@ -584,13 +584,15 @@ def _pll_examplar_run(test_source, bundle_json, filename="hw.py"):
     that will not load - the bundle is broken - and anything that runs past
     `_PLL_EXAMPLAR_SECONDS` (`timedOut`), which no later result could be
     trusted after. What the code prints is dropped: the file's own tests,
-    which run next, show it once.
+    which run next, show it once. The modules the file's `#bundle` lines
+    name are given to its definitions, as the program is given them,
+    when they were loaded for `session_key`'s run.
     """
     with _ex_contextlib.redirect_stdout(_ex_io.StringIO()), _ex_contextlib.redirect_stderr(_ex_io.StringIO()):
-        return _pll_examplar_judge(test_source, bundle_json, filename)
+        return _pll_examplar_judge(test_source, bundle_json, filename, session_key)
 
 
-def _pll_examplar_judge(test_source, bundle_json, filename):
+def _pll_examplar_judge(test_source, bundle_json, filename, session_key=None):
     import json as _ex_json
 
     try:
@@ -629,7 +631,8 @@ def _pll_examplar_judge(test_source, bundle_json, filename):
         }
 
     attribution = _pll_examplar_attribution(test_source, provides)
-    given = _pll_level_names(_pll_examplar_level(test_source))
+    given = dict(_pll_level_names(_pll_examplar_level(test_source)))
+    given.update(_pll_session_bundles.get(session_key, {}))
     unwritten = _pll_examplar_unwritten(test_source, filename)
     result = {
         "ok": True,

@@ -15,6 +15,8 @@
 
 import contextlib
 import json as _pll_json
+import keyword as _pll_keyword
+import re as _pll_re
 import sys as _sys
 import types as _pll_types
 
@@ -53,6 +55,32 @@ _pll_sessions = {}
 # at the end of bootstrap so the template includes the PLL image
 # library + the auto-display helper.
 _pll_initial_globals = {"__name__": "__main__", "__builtins__": __builtins__}
+
+# The modules a session's next Run File gives its program, by the names its
+# `#bundle` lines give them: made by `_pll_bundle_load` (bundle.py) just
+# before the run, and taken by `_pll_run_file`.
+_pll_session_bundles = {}
+
+# A `#bundle <name> <url>` line, as `bundles.ts` reads it: a whole line,
+# whose address has a scheme, so a comment that only uses the word is not
+# one.
+_PLL_BUNDLE_LINE_RE = _pll_re.compile(r"^#\s*bundle\s+(\S+)\s+(\S+://\S*)\s*$")
+_PLL_BUNDLE_NAME_RE = _pll_re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _pll_bundle_lines(code):
+    """The names `code`'s `#bundle` lines give it, each with its 1-based
+    line. Only a name a program can use counts: the host refuses a line
+    with any other before the program runs."""
+    names = {}
+    for number, line in enumerate(code.splitlines(), 1):
+        found = _PLL_BUNDLE_LINE_RE.match(line.strip())
+        if found is None:
+            continue
+        name = found.group(1)
+        if _PLL_BUNDLE_NAME_RE.fullmatch(name) and not _pll_keyword.iskeyword(name):
+            names.setdefault(name, number)
+    return names
 
 # Display emissions captured during the most recent `_pll_run_file` /
 # `_pll_repl_eval` call. The host drains this list after the call.

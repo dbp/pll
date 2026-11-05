@@ -197,13 +197,57 @@ more — `dis` still tells the whole story to anyone who looks. That is a
 deliberate trade: the autograder holds the grade, so this check is there to
 be fast and honest rather than secret.
 
+## Bundles
+
+A bundle is a module of yours that a student's program uses without seeing
+its code - in a lab on working out what code does, say. The program names it
+with a line of its own, and then uses it by that name, with no `import`:
+
+```python
+#level beginner
+#bundle mystery https://cs2000.example/lab5.json
+
+mystery.shuffle([1, 2, 3])
+```
+
+Write the module as an ordinary file, at the level you like, with tests, and
+build it:
+
+```bash
+pll bundle build mystery.py -o lab5.json
+```
+
+```
+built for Python 3.13.2, at #level intermediate: defines shuffle, Deck
+wrote lab5.json (1240 bytes)
+```
+
+Its top-level `test_` functions, and an `import pytest`, are left out of the
+bundle. Everything else goes in, docstrings too, so leave out one that would
+give away what a function does. Only bytecode is written, compiled by the
+Pyodide this package pins, so it matches the interpreter that will run it;
+as with Examplar bundles, that hides the code from `inspect.getsource`, and
+`dis` would still show it. The module's code starts with its level's names,
+`dataclass` and `Callable` among them, wherever it is used.
+
+Publish the bundle as you would an Examplar bundle: at an https address,
+with the same CORS headers for vscode.dev, and it is cached the same way for
+a run without a network. A bundle that can't be had - unreachable with no
+copy kept, built for another version of Python, or one whose top level
+raises - stops the student's run before it starts, at its `#bundle` line.
+
+Nothing checks a bundle's code: it runs as the student's own does, files and
+all, so publish only code you would give them to run. An error raised inside
+one of its functions is shown at the student's line that called it, as
+"Inside `shuffle`: ...", with the one fix they can make: what they give it.
+
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | 0 | Ran, and any tests passed |
 | 1 | The program raised, or Ctrl+C stopped it (even if it caught the `KeyboardInterrupt`; its tests are then not run) |
-| 2 | Level checks found problems, so it was not run |
+| 2 | Level checks found problems, or a bundle could not be loaded, so it was not run |
 | 3 | A test failed, or could not be run (it takes parameters) |
 | 64 | Bad usage, or Python could not start (it is given two minutes) |
 | 130 | A second Ctrl+C gave up waiting for the program to stop |

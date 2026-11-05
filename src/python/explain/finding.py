@@ -101,8 +101,16 @@ class _PllError:
 def _pll_explain_error(info, run, level):
     """The finding for the error `info` describes: from the first rule that
     explains it, or the catch-all - never None, so no student is shown a
-    traceback through PLL's own internals."""
+    traceback through PLL's own internals. One raised in a bundle's code
+    says so (`_pll_in_bundle`)."""
     error = _PllError(info, run, level)
+    finding = _pll_explained(error)
+    called = _pll_bundle_called(error)
+    return finding if called is None else _pll_in_bundle(finding, called)
+
+
+def _pll_explained(error):
+    """The finding from the first rule that explains `error`, or the catch-all's."""
     for types, explain in _PLL_EXPLAINERS:
         if error.type not in types:
             continue
@@ -113,6 +121,29 @@ def _pll_explain_error(info, run, level):
             said = dict(zip(("id", "headline", "howToFix"), said))
         return _pll_runtime_finding(error, **said)
     return _pll_catch_all(error)
+
+
+def _pll_bundle_called(e):
+    """When the error was raised in a bundle's code (bundle.py), the
+    function of the bundle's that the student's code called; else None."""
+    if not e.frames or not (e.frames[-1]["file"] or "").startswith("<bundle:"):
+        return None
+    theirs = [i for i, frame in enumerate(e.frames) if frame["user"]]
+    called = e.frames[theirs[-1] + 1] if theirs else e.frames[0]
+    return called["function"] or None
+
+
+def _pll_in_bundle(finding, function):
+    """A finding about an error raised in a bundle's code: said to be inside
+    the function the student called, which they can't see or change, and
+    with what they can change instead of fixes for code that is not theirs."""
+    finding = dict(finding)
+    finding["headline"] = "Inside `%s`: %s" % (function, finding["headline"])
+    finding["howToFix"] = [
+        "`%s` comes from a bundle, whose code you can't see: look at what this line gives it, "
+        "and try other values." % function
+    ]
+    return finding
 
 
 def _pll_catch_all(e):

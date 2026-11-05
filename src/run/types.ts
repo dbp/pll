@@ -296,6 +296,31 @@ export interface ExamplarBuildResult {
   error?: string;
 }
 
+/** A module a program names with `#bundle`, as `pll bundle build` writes it. */
+export interface ModuleBundle {
+  bundle: number;
+  built: { python: string; magic: string };
+  /** The level of its source's `#level` line, whose names its code starts with. */
+  level: string;
+  /** The public names its top level defines. */
+  defines: string[];
+  /** base64 of the marshalled code object. */
+  pyc: string;
+}
+
+export interface BundleBuildResult {
+  ok: boolean;
+  bundle?: ModuleBundle;
+  error?: string;
+}
+
+export interface BundleLoadResult {
+  ok: boolean;
+  /** The bundle that could not be made into a module. */
+  name?: string;
+  error?: string;
+}
+
 export interface ExamplarTestOutcome {
   /**
    * `fail` when the test disagrees with the implementation - an assertion,

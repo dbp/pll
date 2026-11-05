@@ -1,5 +1,6 @@
 import { explainTestReport, findRuntimeFinding, levelHeaderFinding, type AnalysisFinding } from "./finding";
 import { runExamplarStep, type ExamplarEntry } from "./examplar";
+import { runBundleStep } from "./bundles";
 import type { BundleStore } from "./examplarSource";
 import { levelHasStaticChecks, parseLevel, type Level } from "../core/level";
 import { needsPackages, type SiblingSource } from "./packages";
@@ -16,9 +17,10 @@ import { PythonLostError, StoppedError } from "../pyodide/runtime";
 
 /**
  * The steps of a run, the same for every host. A file run is: the `#level`
- * line, the level's static checks, libraries, the Examplar check, the files
- * next to the program, the program - followed by its own tests - and
- * writing back the files it changed. A host says only how to show things.
+ * line, the level's static checks, libraries, the modules its `#bundle`
+ * lines name, the Examplar check, the files next to the program, the
+ * program - followed by its own tests - and writing back the files it
+ * changed. A host says only how to show things.
  *
  * Stop (Ctrl+C) is checked between the steps. A Stop lands in whichever
  * step is running, but what was asked for is that nothing more runs; and one
@@ -66,7 +68,7 @@ export interface FilePlan {
    * depend on whether the bundle could be fetched.
    */
   testsOfIncompleteFile?: boolean;
-  /** Where fetched Examplar bundles are cached, for a file with `#examplar`. */
+  /** Where fetched bundles are cached: Examplar's, and those `#bundle` lines name. */
   bundles: BundleStore;
 }
 
@@ -131,9 +133,16 @@ export async function runFilePlan(
     if (stopped(host, STOPPED.beforeStart)) {
       return "stopped";
     }
+    if ((await runBundleStep(runtime, plan.bundles, host, code, sessionKey)) === "failed") {
+      host.say("The file was not run.", "problem");
+      return "blocked";
+    }
+    if (stopped(host, STOPPED.beforeStart)) {
+      return "stopped";
+    }
     // Before the files are mounted: the known implementations run without
     // access to the student's files.
-    const complete = await runExamplarStep(runtime, plan.bundles, host, code, fileName);
+    const complete = await runExamplarStep(runtime, plan.bundles, host, code, fileName, sessionKey);
     if (complete !== null && stopped(host, STOPPED.checking)) {
       return "stopped";
     }

@@ -12,6 +12,7 @@ export const PLL_LIBRARY_FILES = {
   table: "<pll:table>",
   reactor: "<pll:reactor>",
   examplar: "<pll:examplar>",
+  bundle: "<pll:bundle>",
   matplotlib: "<pll:matplotlib>",
 } as const;
 

@@ -1327,6 +1327,8 @@ def _pll_teaching_findings(tree, code, level, session_key):
     builtins_set = set(dir(_builtins_mod)) - _PLL_BUILTINS_MODULE_META
     library_names = _pll_predefined_library_names()
     library_names.update((name, "level") for name in _pll_level_names(level))
+    bundle_lines = _pll_bundle_lines(code)
+    library_names.update((name, "bundle") for name in bundle_lines)
 
     for scope in builder.scopes:
         # Names visible from any enclosing scope, paired with the *nearest*
@@ -1399,6 +1401,7 @@ def _pll_teaching_findings(tree, code, level, session_key):
                     module=defining_loc[3],
                     library_type=isinstance(_pll_initial_globals.get(name), type),
                     **({"kept_import": kept} if kept else {}),
+                    **({"bundle_line": bundle_lines[name]} if name in bundle_lines else {}),
                 ))
 
         # ---- Reassignment ----

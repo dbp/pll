@@ -1,5 +1,7 @@
 import { deliverDisplay, WorkerConnection, type LiveOutput } from "../pyodide/runtime";
 import type {
+  BundleBuildResult,
+  BundleLoadResult,
   ExamplarBuildResult,
   ExamplarOutcome,
   ExecutionEventHandler,
@@ -107,10 +109,29 @@ export class Python extends WorkerConnection {
   /**
    * Run a student's tests against every implementation in a bundle.
    * `fileName` is the student's file, whose own errors are told from the
-   * implementation's.
+   * implementation's; its definitions are given the modules its `#bundle`
+   * lines name, loaded for `sessionKey`'s run (`bundleLoad`).
    */
-  examplarRun(testSource: string, bundle: string, fileName: string): Promise<ExamplarOutcome> {
-    return this.call<ExamplarOutcome>("_pll_examplar_run", [testSource, bundle, fileName]);
+  examplarRun(testSource: string, bundle: string, fileName: string, sessionKey = ""): Promise<ExamplarOutcome> {
+    return this.call<ExamplarOutcome>("_pll_examplar_run", [testSource, bundle, fileName, sessionKey]);
+  }
+
+  /**
+   * Compile a module into a bundle, for `pll bundle build`. Authoring only;
+   * the bytecode is this interpreter's, as `examplarBuild`'s is.
+   */
+  bundleBuild(source: string, fileName: string): Promise<BundleBuildResult> {
+    return this.call<BundleBuildResult>("_pll_bundle_build", [source, fileName]);
+  }
+
+  /**
+   * Make the modules a file's `#bundle` lines name, which `sessionKey`'s
+   * next file run gives its program. `entries` is the JSON of
+   * `[{name, json}]`, each `json` a fetched bundle. Their top levels run
+   * here.
+   */
+  bundleLoad(sessionKey: string, entries: string): Promise<BundleLoadResult> {
+    return this.call<BundleLoadResult>("_pll_bundle_load", [sessionKey, entries]);
   }
 
   /**

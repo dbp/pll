@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseCommandLine, subcommandIndex, type CliOption } from "./args";
+import { runBundle } from "./bundle";
 import { runExamplar } from "./examplar";
 import { createCliRuntime } from "./runtime";
 import { EXIT, runFile } from "./run";
@@ -22,6 +23,8 @@ same everywhere.
 
 Subcommands
   examplar build       author an Examplar bundle; see \`pll examplar --help\`
+  bundle build         compile a module a \`#bundle\` line names; see
+                       \`pll bundle --help\`
 
 Options
   --no-tests           do not run the file's \`test_*\` functions, which
@@ -40,7 +43,8 @@ everything PLL says about the run goes to stderr.
 Exit codes
   0    ran, and any tests passed
   1    the program raised, or was stopped
-  2    level checks found problems, so it was not run
+  2    level checks found problems, or a bundle could not be loaded,
+       so it was not run
   3    a test failed
   64   bad usage, or Python could not start
   130  a second Ctrl+C gave up waiting for it to stop
@@ -99,7 +103,7 @@ const OPTIONS: Record<string, CliOption> = {
   version: { type: "boolean", short: "V" },
 };
 
-/** What may come before \`examplar\`: the options that mean the same to it. */
+/** What may come before a subcommand: the options that mean the same to it. */
 const LEADING_OPTIONS: Record<string, CliOption> = {
   quiet: OPTIONS.quiet,
   "no-color": OPTIONS["no-color"],
@@ -147,16 +151,25 @@ function isFile(at: string): boolean {
   }
 }
 
+/** The subcommands, each given its own view and Python. */
+const SUBCOMMANDS: Record<string, (runtime: PythonRuntime, view: CliView, argv: string[]) => Promise<number>> = {
+  examplar: runExamplar,
+  bundle: runBundle,
+};
+
 export async function main(argv: string[]): Promise<number> {
   // Dispatch subcommands before flag parsing, so `examplar` is never taken
   // for a file name. Options may come first (`pll --no-color examplar
   // ...`) - and an option's value is not a subcommand: `--save-images
   // examplar hw.py` saves pictures into a folder called examplar.
-  const at = subcommandIndex(argv, "examplar", OPTIONS);
-  if (at !== -1) {
+  for (const [name, run] of Object.entries(SUBCOMMANDS)) {
+    const at = subcommandIndex(argv, name, OPTIONS);
+    if (at === -1) {
+      continue;
+    }
     const leading = parseCommandLine(argv.slice(0, at), LEADING_OPTIONS);
     if ("error" in leading) {
-      process.stderr.write(`pll: ${leading.error} before examplar\n${USAGE_HINT}\n`);
+      process.stderr.write(`pll: ${leading.error} before ${name}\n${USAGE_HINT}\n`);
       return EXIT.usage;
     }
     const view = new CliView({
@@ -166,7 +179,7 @@ export async function main(argv: string[]): Promise<number> {
     const runtime = createCliRuntime();
     sayPackageNotes(runtime, view);
     try {
-      return await runExamplar(runtime, view, argv.slice(at + 1));
+      return await run(runtime, view, argv.slice(at + 1));
     } catch (err) {
       view.problem(`pll: ${errorText(err)}`);
       return EXIT.usage;

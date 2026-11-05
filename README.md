@@ -357,6 +357,32 @@ so rather than calling that test wrong.
 None of this is a grade. It shows you where your tests are thin while you
 still have time to do something about it.
 
+## Using your course's code
+
+An assignment can give you functions to use without showing you their code:
+to work out what they do, say. Your course gives you a line for your file,
+naming the **bundle** they come in:
+
+```python
+#level beginner
+#bundle mystery https://example.edu/lab5.json
+
+mystery.shuffle([1, 2, 3])
+```
+
+The line gives your file the name `mystery`, with no `import`, and its
+functions are `mystery.shuffle` and the rest. The bundle is fetched when the
+file runs, and kept, so a run without a network uses the copy it got last.
+
+An error inside one of its functions is shown at your line that called it,
+and says which function it was in, as "Inside `shuffle`: ...". The code is
+your course's, so what you can change is what you give it.
+
+A bundle's code runs as your own does, with nothing checking it, so only use
+`#bundle` lines your course gives you. Courses make bundles with the command
+line, `pll bundle build`: see [pll-python on
+npm](https://www.npmjs.com/package/pll-python).
+
 ## Images
 
 You can make pictures with built-in functions. You do not need to
@@ -768,8 +794,8 @@ npx pll-python hw.py
 ```
 
 The level still comes from the file's own `#level` line, an `#examplar` line
-still checks your tests, tests still run after the program, and errors are
-worded the same way. Pictures cannot be drawn in a
+still checks your tests, a `#bundle` line still gives the file its bundle,
+tests still run after the program, and errors are worded the same way. Pictures cannot be drawn in a
 terminal (each prints a note, or use `--save-images`) and reactors do not
 animate, but tables print as text and everything else is the same code.
 
@@ -778,7 +804,7 @@ program raised or was stopped, `2` level checks blocked it, `3` a test
 failed. A program that ends itself with `sys.exit(n)` exits with `n`, as
 under `python`.
 
-Course staff can also build Examplar bundles with it. See
+Course staff can also build Examplar bundles and bundles with it. See
 [pll-python on npm](https://www.npmjs.com/package/pll-python) for that and
 the full list of options.
 

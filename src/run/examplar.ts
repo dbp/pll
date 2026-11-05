@@ -128,6 +128,7 @@ export async function runExamplarStep(
   host: ExamplarHost,
   code: string,
   fileName: string,
+  sessionKey: string,
 ): Promise<boolean | null> {
   const bundle = await fetchBundle(bundles, host, code);
   if (bundle === null) {
@@ -162,7 +163,7 @@ export async function runExamplarStep(
   }
   let result: ExamplarOutcome;
   try {
-    result = await runtime.examplarRun(code, bundle.json, fileName);
+    result = await runtime.examplarRun(code, bundle.json, fileName, sessionKey);
   } catch (err) {
     // A Stop is not a reason the check failed; the run plan says it.
     if (!(err instanceof StoppedError)) {

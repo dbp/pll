@@ -221,6 +221,12 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
     # exploration since then.
     _pll_protect_import_path()
     user_globals = _pll_reset_session(session_key, level)
+    # The modules its `#bundle` lines name, loaded for this run; one made
+    # for a line the file no longer has is left out.
+    loaded = _pll_session_bundles.pop(session_key, {})
+    for name in _pll_bundle_lines(code):
+        if name in loaded:
+            user_globals[name] = loaded[name]
     _pll_set_recursion_limit(level)
     # Where the file is beside the files it was given, so
     # `os.path.dirname(__file__)` finds them.

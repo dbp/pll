@@ -47,8 +47,8 @@ src/
 │   │   ├── stock.py               Python's own messages, reworded for a beginner
 │   │   └── static.py              each static finding's wording
 │   ├── libraries/                 image, table (and charts), reactor, examplar,
-│   │                              http (urllib and requests on the host's network),
-│   │                              matplotlibBackend
+│   │                              bundle, http (urllib and requests on the host's
+│   │                              network), matplotlibBackend
 │   └── install.py                 registers `pll.image` / `pll.table` / `pll.reactor`
 ├── pyodide/                       the worker and the one contract with it
 │   ├── protocol.ts                five requests (init, call, load, mount, collect)
@@ -70,7 +70,8 @@ src/
 │   │                              line check; Python's finding for an error
 │   ├── packages.ts                whether a program may need packages, from its text
 │   ├── examplar.ts                an Examplar check's cards
-│   └── examplarSource.ts          the #examplar directive, fetch and cache
+│   ├── examplarSource.ts          the #examplar directive, fetch and cache
+│   └── bundles.ts                 the #bundle lines, and loading their modules
 ├── core/                          what every layer uses: level.ts (the levels, and the
 │                                  `#level` line), levelLine.ts (that line, kept in place
 │                                  through an edit), files.ts (which files beside a program
@@ -1071,6 +1072,9 @@ would get right by accident. `smoke-examplar-build` drives
 `pll examplar build` for the authoring half, including that a bundle
 contains no source text, that `--verify` refuses an unsound one, and that a
 suite with a program attached to it still produces a verdict.
+`smoke-bundle` does both halves for `#bundle`, through the CLI against a
+local server: the build, a program using a bundle, the static checks on its
+name, an error inside one, each way one can't be had, and the cached copy.
 
 `samples/examplar_bundle` is the worked example of the authoring workflow -
 two wheats, six chaffs, and the staff suite that verifies them - and
@@ -1637,6 +1641,49 @@ Bundles are fetched host-side with a conditional request and cached by URL.
 Offline with a cached copy is a note; offline without one is an error and
 the file still runs - the same fail-open stance as every other optional
 layer here.
+
+## Bundles (`#bundle`)
+
+A `#bundle <name> <url>` line gives a file a module the course compiled with
+`pll bundle build`, by that name and with no import: functions a student
+calls without seeing their code. The build is Examplar's - bytecode
+compiled by the pinned Pyodide, its magic number in the bundle - minus the
+source's top-level `test_` functions and `import pytest`, which would say
+what the functions do.
+
+The lines are read twice, by the same rule: `parseBundleDirectives`
+(`run/bundles.ts`) for what to fetch, and `_pll_bundle_lines` (sessions.py)
+for the names they give. A line is whole, and its address has a scheme, so
+`# bundle of joy` is a comment. A file may have several, each with its own
+name.
+
+In the run plan they come after the libraries and before the Examplar check,
+whose implementations may call them: each is fetched through `loadBundle`
+and the shared store, with `MODULE_BUNDLE`'s shape check, then
+`_pll_bundle_load` runs each module's top level in a fresh module that
+starts with the names of its source's level, and keeps the modules in
+`_pll_session_bundles`. `_pll_run_file` gives them to the program, after
+resetting the session, keeping only names the code's lines still give - a
+load whose run was stopped before the program leaves nothing a later run
+picks up. Unlike Examplar this fails closed: the program uses the name, so
+a bundle that can't be had, or can't be made into a module, stops the run
+at its line.
+
+The static checks take a bundle's name as given, like `circle`: it is in
+the names `undefinedNames.py` starts with, and in `_pll_teaching_findings`'s
+library names as `"bundle"`, so `mystery = 3` and `import mystery` are
+worded with its `#bundle` line.
+
+An error raised in a bundle's code is placed, as any library's, at the
+student's frame that called it - but the rule that explains it reads that
+frame as having done the work, and offers fixes for it. So when the
+innermost frame is `<bundle:...>`, `_pll_in_bundle` (explain/finding.py)
+says which of its functions the student called, and replaces the fixes
+with the one thing they can change: what they gave it.
+
+Nothing checks a bundle's code, as nothing checks Examplar's: the course
+decides what it publishes. A check on the student's side would have to
+verify bytecode, which CPython does not do safely, or ship the source.
 
 ## Minimum VS Code version
 

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.9.1 (2026-11-04)
+
+### Added
+- **`#bundle mystery <url>` gives a file a module the course compiled, as
+  `mystery`, with no import**: functions to call whose code the student
+  doesn't see. `pll bundle build mystery.py` makes one, leaving out its
+  `test_` functions. Like an Examplar bundle it comes from an https
+  address, is kept for a run without a network, and runs unchecked; one
+  that can't be had stops the run, at its line. An error raised inside one
+  of its functions is shown at the student's call as "Inside `shuffle`:
+  ...", and reusing or importing `mystery` is reported at `beginner` and
+  `intermediate`.
+
 ## 0.9.0 (2026-11-04)
 
 ### Changed
