@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Fixed
+- **A mistake in a student's function is theirs, though a bundle called
+  it.** In `mystery.check(shout)`, a `shout` that returned a number where
+  it promised a string was reported as "Inside `check`: ...", with a fix
+  about the bundle's code. It now gets what a direct call gets, at its
+  `return`: "Convert the returned value with `str(...)`". When the bundle
+  calls it with an argument its annotation refuses, or with more or fewer
+  values than it takes, the fix is the one a library's call gets: "`check`
+  calls `shout` for you, so `s` is whatever it hands over", or "..., with
+  1 value, so give it 1 parameter".
+- **An index past the end of a string is said to be a string's**, and a
+  tuple's a tuple's: inside a bundle's function, `s[0]` on `""` said "This
+  list has no item at that position", and a subscript on the student's
+  line was taken for the one that failed.
+
 ## 0.9.1 (2026-11-04)
 
 ### Added

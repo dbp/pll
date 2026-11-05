@@ -5,9 +5,10 @@
  * The directive is read without Pyodide. The rest runs the real CLI as a
  * child process against a local server, as smoke-cli does: building a
  * bundle, a program using one by its name with no import, its name to the
- * static checks, an error raised inside one, what is said when one can't be
- * had, Examplar's check of a file that has one, and the copy kept for a run
- * without a network.
+ * static checks, an error raised inside one, a mistake in the student's own
+ * function that one called, what is said when one can't be had, Examplar's
+ * check of a file that has one, and the copy kept for a run without a
+ * network.
  *
  * Requires `pnpm run build` so dist-cli/ exists.
  */
@@ -134,13 +135,19 @@ async function main() {
     "def flip(p: Point) -> Point:",
     "    return Point(p.y, p.x)",
     "",
+    "def initial(s):",
+    "    return s[0]",
+    "",
+    "def apply(f, x):",
+    "    return f(x)",
+    "",
     "def test_twice_plus():",
     "    assert twice_plus(3) == pytest.approx(7)",
   );
   const built = await run(["bundle", "build", source, "-o", join(work, "mystery.json")]);
   expect(built.code === 0, `build exits 0, got ${built.code}: ${built.stderr}`);
   expect(
-    /built for Python 3\.\d+\.\d+, at #level intermediate: defines Point, twice_plus, flip/.test(built.stderr),
+    /built for Python 3\.\d+\.\d+, at #level intermediate: defines Point, twice_plus, flip, initial, apply\n/.test(built.stderr),
     `what it built: ${built.stderr}`,
   );
   const bundle = JSON.parse(readFileSync(join(work, "mystery.json"), "utf8"));
@@ -160,7 +167,7 @@ async function main() {
   expect(usage.code === 64 && /bundle needs a subcommand/.test(usage.stderr), `no subcommand: ${usage.stderr}`);
   const boom = await run(["bundle", "build", fixture("boom.py", "print(boom)"), "-o", join(work, "boom.json")]);
   expect(boom.code === 0, `a bundle whose top level raises still builds: ${boom.stderr}`);
-  // An Examplar bundle too, for [7].
+  // An Examplar bundle too, for [8].
   mkdirSync(join(work, "ex", "wheats"), { recursive: true });
   mkdirSync(join(work, "ex", "chaffs", "f"), { recursive: true });
   fixture("ex/wheats/reference.py", "def f(n: int) -> int:", "    return n * 2 + 1");
@@ -233,9 +240,67 @@ async function main() {
       expect(/at inside\.py:4/.test(inside.stderr), `at the student's call: ${inside.stderr}`);
       expect(/comes from a bundle, whose code you can't see/.test(inside.stderr), `the fix: ${inside.stderr}`);
       expect(!/str\(\.\.\.\)/.test(inside.stderr), `no fixes for code that is not theirs: ${inside.stderr}`);
+      // The subscript on their line is not the one that failed.
+      const indexed = await run([
+        fixture(
+          "indexed.py",
+          "#level beginner",
+          `#bundle mystery ${base}/mystery.json`,
+          "",
+          'words = ["", "b"]',
+          "print(mystery.initial(words[0]))",
+        ),
+      ]);
+      expect(
+        /IndexError: Inside `initial`: A string has no item at that position\./.test(indexed.stderr),
+        `a string, not \`words\`: ${indexed.stderr}`,
+      );
     }
 
-    console.log("\n[6] a bundle that can't be had stops the run, at its line");
+    console.log("\n[6] a mistake in their own function is theirs, though a bundle's function called it");
+    {
+      const line = `#bundle mystery ${base}/mystery.json`;
+      const returned = await run([
+        fixture("returned.py", "#level beginner", line, "", "def shout(s: str) -> str:", "    return len(s)", "", 'print(mystery.apply(shout, "hi"))'),
+      ]);
+      expect(
+        returned.code === 1 &&
+          /TypeMismatch: `shout` says it returns a string \(`str`\), but this line returns a whole number \(`int`\)\./.test(
+            returned.stderr,
+          ) &&
+          /at returned\.py:5/.test(returned.stderr),
+        `its result, at its return: ${returned.stderr}`,
+      );
+      expect(
+        /Convert the returned value with `str\(\.\.\.\)`/.test(returned.stderr) && !/Inside|from a bundle/.test(returned.stderr),
+        `the fixes a direct call gets: ${returned.stderr}`,
+      );
+      const given = await run([
+        fixture("given.py", "#level beginner", line, "", "def shout(n: int) -> str:", "    return str(n)", "", 'print(mystery.apply(shout, "hi"))'),
+      ]);
+      expect(
+        given.code === 1 &&
+          /TypeMismatch: `shout` expects `n` to be a whole number \(`int`\), but got a string \(`str`\)\./.test(given.stderr),
+        `its parameter: ${given.stderr}`,
+      );
+      expect(
+        /`apply` calls `shout` for you, so `n` is whatever it hands over/.test(given.stderr) && !/Inside/.test(given.stderr),
+        `called as a library's function calls it: ${given.stderr}`,
+      );
+      const arity = await run([
+        fixture("arity.py", "#level beginner", line, "", "def shout(s: str, t: str) -> str:", "    return s + t", "", 'print(mystery.apply(shout, "hi"))'),
+      ]);
+      expect(
+        arity.code === 1 && /TypeError: `shout` takes 2 arguments \(`s` and `t`\), but got 1\./.test(arity.stderr),
+        `its parameters: ${arity.stderr}`,
+      );
+      expect(
+        /`apply` calls `shout` for you, with 1 value, so give it 1 parameter\./.test(arity.stderr) && !/Inside/.test(arity.stderr),
+        `how many it is given: ${arity.stderr}`,
+      );
+    }
+
+    console.log("\n[7] a bundle that can't be had stops the run, at its line");
     for (const [name, url, said] of [
       ["unreachable.py", "http://127.0.0.1:4/nothing.json", /could not load the bundle `mystery`: could not reach/],
       ["missing.py", `${base}/missing.json`, /could not load the bundle `mystery`: .*returned 404/],
@@ -252,7 +317,7 @@ async function main() {
     const builtin = await run([fixture("builtin.py", "#level beginner", `#bundle list ${base}/mystery.json`, "", "print(1)")]);
     expect(builtin.code === 2 && /`list` is the name of a Python built-in/.test(builtin.stderr), `a built-in's name: ${builtin.stderr}`);
 
-    console.log("\n[7] Examplar's check gives the student's tests the bundle, as the program has it");
+    console.log("\n[8] Examplar's check gives the student's tests the bundle, as the program has it");
     {
       const r = await run([
         fixture(
@@ -276,7 +341,7 @@ async function main() {
     server.close();
   }
 
-  console.log("\n[8] without the server, the copy from the last run is used");
+  console.log("\n[9] without the server, the copy from the last run is used");
   {
     const r = await run([student]);
     expect(r.code === 0 && r.stdout === "11\nPoint(x=2, y=1)\n", `offline: ${r.code} ${JSON.stringify(r.stdout)} ${r.stderr}`);

@@ -125,12 +125,31 @@ def _pll_explained(error):
 
 def _pll_bundle_called(e):
     """When the error was raised in a bundle's code (bundle.py), the
-    function of the bundle's that the student's code called; else None."""
-    if not e.frames or not (e.frames[-1]["file"] or "").startswith("<bundle:"):
+    function of the bundle's that the student's code called; else None.
+
+    Never for a mistake in how a function of the student's is written,
+    though a bundle's function called it: a `TypeMismatch`, from the checks
+    on their definitions - a bundle runs unchecked - or their function
+    taking more or fewer values than the bundle gives it
+    (`_pll_bundle_calls_theirs`)."""
+    if e.type == "TypeMismatch" or not e.frames or not _pll_is_bundle_frame(e.frames[-1]):
         return None
-    theirs = [i for i, frame in enumerate(e.frames) if frame["user"]]
-    called = e.frames[theirs[-1] + 1] if theirs else e.frames[0]
-    return called["function"] or None
+    if _pll_bundle_calls_theirs(e) is not None:
+        return None
+    return _pll_bundle_caller(e.frames)
+
+
+def _pll_is_bundle_frame(frame):
+    return (frame["file"] or "").startswith("<bundle:")
+
+
+def _pll_bundle_caller(frames):
+    """The first function of a bundle's inside the student's innermost
+    frame, if there is one: the one their code called, or a library called
+    for them."""
+    theirs = [i for i, frame in enumerate(frames) if frame["user"]]
+    after = frames[theirs[-1] + 1 :] if theirs else frames
+    return next((frame["function"] for frame in after if _pll_is_bundle_frame(frame)), None)
 
 
 def _pll_in_bundle(finding, function):

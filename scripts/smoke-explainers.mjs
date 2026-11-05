@@ -750,6 +750,28 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     `too many args: ${tooMany.headline}`,
   );
 
+  // A function of theirs that a bundle's function called: the bundle is
+  // trusted to call it rightly, so the fix is their parameters.
+  const shout = 'def shout() -> str:\n    return "hi"\n\n\nprint(mystery.apply(shout, "hi"))\n';
+  const fromBundle = (students) =>
+    finding(
+      pyErrorLine(
+        "TypeError: shout() takes 0 positional arguments but 1 was given",
+        [["<pll:bootstrap/running>", 560, "run"], ["lab.py", 5], ["<bundle:mystery.py>", 9, "apply"]],
+        { facts: { definitions: { shout: { ...defFunction([]), students } } } },
+      ),
+      shout,
+    );
+  const theirs = fromBundle(true);
+  expect(
+    theirs.headline === "`shout` takes 0 arguments, but got 1." &&
+      JSON.stringify(theirs.howToFix) === JSON.stringify(["`apply` calls `shout` for you, with 1 value, so give it 1 parameter."]),
+    `a bundle's call of theirs: ${theirs.headline} ${JSON.stringify(theirs.howToFix)}`,
+  );
+  // One that is not theirs is the bundle's own.
+  const notTheirs = fromBundle(false);
+  expect(/^Inside `apply`: /.test(notTheirs.headline), `the bundle's own: ${notTheirs.headline}`);
+
   // A library function has no `def` in the file, but Python has its
   // definition, so the total is named just as it is for the student's.
   const lib = "from pll.image import circle\n\ncircle(50)\n";
@@ -962,6 +984,23 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
       index.howToFix.some((l) => /len\(nums\)/.test(l)) &&
       !index.howToFix.some((l) => /list of 3/.test(l)),
     `and explains numbering: ${JSON.stringify(index.howToFix)}`,
+  );
+  // A string is called one, by Python's message.
+  const unnamed = raised('word = "abc"\nprint(word.upper()[5])\n', 2, "<module>", "IndexError: string index out of range");
+  expect(unnamed.headline === "This string has no item at that position.", `a string: ${unnamed.headline}`);
+  // Raised in a bundle's function: the subscript on their line is not the
+  // one that failed.
+  const inBundle = finding(
+    pyErrorLine("IndexError: string index out of range", [
+      ["<pll:bootstrap/running>", 560, "run"],
+      ["lab.py", 2],
+      ["<bundle:mystery.py>", 2, "initial"],
+    ]),
+    'words = ["", "b"]\nprint(mystery.initial(words[0]))\n',
+  );
+  expect(
+    inBundle.headline === "Inside `initial`: A string has no item at that position.",
+    `inside a bundle: ${inBundle.headline}`,
   );
 
   // -- calls that are not calls ------------------------------------------

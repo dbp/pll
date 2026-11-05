@@ -74,8 +74,8 @@ def _pll_union_members(obj):
 def _pll_definition(obj, drop_first=False):
     """What `obj` is, as the explanations use it, or None.
 
-    - a function: its positional `parameters`, and the `required` ones;
-      `drop_first` leaves out a method's `self`
+    - a function: its positional `parameters`, the `required` ones, and
+      whether it is the student's; `drop_first` leaves out a method's `self`
     - a class: whether it is the student's, and if so its `fields`, in
       order, and whether it is a `dataclass`
     - a union: its `members`
@@ -106,10 +106,13 @@ def _pll_definition(obj, drop_first=False):
     if drop_first:
         parameters = parameters[1:]
     positional = [p for p in parameters if p.kind in _PLL_POSITIONAL]
+    # A function of theirs may be wrapped in its contract, whose code is PLL's.
+    code = getattr(_pll_inspect.unwrap(obj), "__code__", None)
     return {
         "kind": "function",
         "parameters": [p.name for p in positional],
         "required": [p.name for p in positional if p.default is p.empty],
+        "students": code is not None and _pll_is_students(code.co_filename),
     }
 
 

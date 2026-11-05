@@ -94,7 +94,8 @@ class _PllCheck:
         # The line the finding is on: for a result, the `return` itself - or,
         # when the function ran off its end, its `def`.
         self.line = _pll_line_text(e, line)
-        self.called_by = _pll_library_caller(e.frames)
+        # A bundle's function calls theirs for them as a library's does.
+        self.called_by = _pll_library_caller(e.frames) or _pll_bundle_caller(e.frames)
         function = check.get("function")
         self.wanted = _pll_describe_types(self.expected)
         self.owner = "`%s`" % function if function else "this function"

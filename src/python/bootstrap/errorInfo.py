@@ -107,10 +107,14 @@ def _pll_enrich_index_error(exc, run):
     """
     if type(exc) is not IndexError or "out of range" not in str(exc):
         return
-    frames = _pll_student_frames(exc)
-    if not frames:
+    tb = exc.__traceback__
+    while tb is not None and tb.tb_next is not None:
+        tb = tb.tb_next
+    # Raised in a bundle's code, or a library's, the subscript is not on
+    # the student's line.
+    if tb is None or not _pll_is_students(tb.tb_frame.f_code.co_filename):
         return
-    frame, lineno = frames[-1]
+    frame, lineno = tb.tb_frame, tb.tb_lineno
     text = _pll_source_line(frame.f_code, lineno, run)
     for name in _pll_src_re.findall(r"([A-Za-z_]\w*)\s*\[", text):
         value = frame.f_locals.get(name, frame.f_globals.get(name))

@@ -646,17 +646,16 @@ def _pll_too_few_arguments(m, e):
         return "`%s` is a test, so it cannot take any parameters." % name, [
             _pll_test_fix(name, named or _pll_parameters_of(e, name, "required") or [], False, ())
         ]
-    check = _pll_arity_check(e, name, "Check the call on this line - one value is needed for each parameter.")
     # Wherever it was defined: the student's file, another of theirs, or
     # PLL's own library.
     names = _pll_parameters_of(e, name, "required")
+    got = max(len(names) - missing, 0) if names is not None else None
+    check = _pll_arity_check(e, name, "Check the call on this line - one value is needed for each parameter.", got)
     if names is None:
         # An imported function from somewhere else: say only what is
         # missing, which Python did name, rather than inventing a total.
         return _pll_needs_more(name, missing, e.message), [check]
-    return "`%s` %s, but got %d." % (name, _pll_takes_clause(names, len(names)), max(len(names) - missing, 0)), [
-        check
-    ] + _pll_library_hint(name)
+    return "`%s` %s, but got %d." % (name, _pll_takes_clause(names, len(names)), got), [check] + _pll_library_hint(name)
 
 
 def _pll_malformed_test_finding(name, parameters, filename, line, unused=()):
@@ -705,13 +704,39 @@ def _pll_test_fix(function, parameters, method, unused):
     )
 
 
-def _pll_arity_check(e, name, otherwise):
+def _pll_arity_check(e, name, otherwise, given=None):
     """What to look at for a wrong number of values: the call on this line,
-    or - when a table method made the call - the function's parameters."""
+    or - when a table method or a bundle's function made the call, with
+    `given` values - the function's parameters."""
     taker = _PLL_FUNCTION_TAKERS.get(_pll_library_caller(e.frames))
-    if taker is None or "param" not in taker:
-        return otherwise
-    return "%s, so give it one parameter: `def %s(%s):`." % (taker["calls"], name, taker["param"])
+    if taker is not None and "param" in taker:
+        return "%s, so give it one parameter: `def %s(%s):`." % (taker["calls"], name, taker["param"])
+    bundle = _pll_bundle_calls_theirs(e)
+    if bundle is not None and given is not None:
+        return "`%s` calls `%s` for you, with %s, so give it %s." % (
+            bundle, name, _pll_plural(given, "value"), _pll_plural(given, "parameter")
+        )
+    return otherwise
+
+
+#: How Python says a function was called with the wrong number of values.
+_PLL_ARITY_RE = _pll_src_re.compile(
+    r"^(\w+)\(\) (?:missing \d+ required positional argument|takes \d+ positional arguments? but \d+ (?:was|were) given)"
+)
+
+
+def _pll_bundle_calls_theirs(e):
+    """When a bundle's function called one of the student's functions with
+    the wrong number of values, the bundle's function; else None. The
+    bundle is trusted to call it as it should be called, so what to change
+    is their function's parameters."""
+    if e.type != "TypeError" or not e.frames or not _pll_is_bundle_frame(e.frames[-1]):
+        return None
+    called = _PLL_ARITY_RE.match(e.message)
+    found = _pll_defined_as(e, called.group(1)) if called else None
+    if not (found and found["kind"] == "function" and found.get("students")):
+        return None
+    return _pll_bundle_caller(e.frames)
 
 
 @_pll_stock("TypeError", r"^(\w+)\(\) takes (\d+) positional arguments? but (\d+) (?:was|were) given")
@@ -728,6 +753,7 @@ def _pll_too_many_arguments(m, e):
             "Check the call on this line - there are %d values too many." % extra
             if extra > 1
             else "Check the call on this line - there is one value too many.",
+            given,
         )
     ] + _pll_library_hint(name)
 
@@ -1112,10 +1138,17 @@ def _pll_bad_int_literal(m, e):
     return "`int` cannot turn %s into a whole number." % shown, how_to_fix
 
 
+#: What else Python's "... index out of range" can say was indexed; any
+#: other message is about a list (`pop index out of range`).
+_PLL_INDEXED_NOT_LISTS = ("string", "tuple", "range")
+
+
 @_pll_stock("IndexError", r"index out of range")
 def _pll_index_range(m, e):
-    """`list index out of range`"""
-    subscript = _pll_src_re.search(r"([A-Za-z_][\w.]*)\s*\[\s*([^\]]+?)\s*\]", e.text or "")
+    """`list index out of range`, `string index out of range`"""
+    # A subscript in a bundle's code, or a library's, is not on their line.
+    theirs = bool(e.frames) and e.frames[-1]["user"]
+    subscript = _pll_src_re.search(r"([A-Za-z_][\w.]*)\s*\[\s*([^\]]+?)\s*\]", e.text or "") if theirs else None
     # Python read the real length from the frame; a made-up "list of 3"
     # read as a claim about theirs.
     sequence, length = e.facts.get("sequence"), e.facts.get("length")
@@ -1126,9 +1159,11 @@ def _pll_index_range(m, e):
             else "`%s` has %d item%s, numbered 0 to %d - positions start at 0."
             % (sequence, length, "" if length == 1 else "s", length - 1)
         ]
-    named = "`%s`" % subscript.group(1) if subscript else "This list"
+    first = e.message.split(" ", 1)[0]
+    kind = first if first in _PLL_INDEXED_NOT_LISTS else "list"
+    named = "`%s`" % subscript.group(1) if subscript else ("This %s" if theirs else "A %s") % kind
     return "%s has no item at that position." % named, [
-        "Positions start at 0, so the last item of a list is at position `len(...) - 1`.",
+        "Positions start at 0, so the last item of a %s is at position `len(...) - 1`." % kind,
         "`len(%s)` gives the number of items." % subscript.group(1) if subscript else "`len(...)` gives the number of items.",
     ]
 

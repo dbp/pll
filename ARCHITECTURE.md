@@ -1681,6 +1681,20 @@ innermost frame is `<bundle:...>`, `_pll_in_bundle` (explain/finding.py)
 says which of its functions the student called, and replaces the fixes
 with the one thing they can change: what they gave it.
 
+Not for a `TypeMismatch`. The contracts' own frames are left out of every
+traceback, so a contract broken while a bundle's function was calling the
+student's has the bundle's frame innermost - but contracts are only on the
+student's definitions, so the mistake is theirs, and keeps its usual fixes.
+For an argument their annotation refuses, the bundle's function is named
+as a library's would be (`_pll_bundle_caller`): "`check` calls `shout` for
+you".
+
+Nor when a bundle's function calls one of theirs with the wrong number of
+values (`_pll_bundle_calls_theirs`, which goes by the function definition's
+`students`). The bundle is trusted to call it rightly, so the fix is about
+their parameters: "`check` calls `shout` for you, with 1 value, so give it
+1 parameter".
+
 Nothing checks a bundle's code, as nothing checks Examplar's: the course
 decides what it publishes. A check on the student's side would have to
 verify bytecode, which CPython does not do safely, or ship the source.

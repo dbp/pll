@@ -1142,7 +1142,7 @@ async function main() {
         { name: "shapes.py", contents: "def area(w, h):\n    return w * h\n" },
       ]);
       expect(
-        same(area.defs.area, { kind: "function", parameters: ["w", "h"], required: ["w", "h"] }),
+        same(area.defs.area, { kind: "function", parameters: ["w", "h"], required: ["w", "h"], students: true }),
         `a function in another file: ${JSON.stringify(area.defs)}`,
       );
       const areaFinding = findRuntimeFinding("hello.py", "advanced", area.result.error);
@@ -1158,7 +1158,12 @@ async function main() {
       );
       const plotDefs = (await definitions('t = table(["a", "b"], [[1, 2]])\nt.scatter_plot("a")\n')).defs;
       expect(
-        same(plotDefs["Table.scatter_plot"], { kind: "function", parameters: ["x", "y", "title"], required: ["x", "y"] }),
+        same(plotDefs["Table.scatter_plot"], {
+          kind: "function",
+          parameters: ["x", "y", "title"],
+          required: ["x", "y"],
+          students: false,
+        }),
         `a library method, without its self: ${JSON.stringify(plotDefs["Table.scatter_plot"])}`,
       );
       expect(plotDefs.Table?.kind === "class" && plotDefs.Table.students === false, `and its class is PLL's: ${JSON.stringify(plotDefs.Table)}`);
