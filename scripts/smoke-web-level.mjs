@@ -7,7 +7,7 @@
  *   1. Select All, then Delete, Paste or Cut: the line stays, and one undo
  *      brings everything back
  *   2. Typing into the line, Backspace in it, and deleting it: the line
- *      stays, and what was typed lands on the line below
+ *      stays, and what was typed lands on the line below, in its order
  *   3. A program pasted in with its own `#level` line brings it
  *   4. The CodeLens above the line opens the picker, which changes the level
  *      and removes the line; then nothing is held
@@ -158,12 +158,30 @@ async function main() {
     const header = page.locator(".monaco-editor .view-line", { hasText: HEADER }).first();
     await header.click();
     await page.keyboard.press("End");
-    await page.keyboard.type("xy");
-    const typed = await textWhen(page, (t) => t.startsWith(HEADER + "\nxy\n"));
-    expect(typed.startsWith(HEADER + "\nxy\n"), `typed at its end, landed below: ${JSON.stringify(typed)}`);
+    await page.keyboard.type("x");
+    const typed = await textWhen(page, (t) => t.startsWith(HEADER + "\nx\n"));
+    expect(typed.startsWith(HEADER + "\nx\n"), `typed at its end, landed below: ${JSON.stringify(typed)}`);
     expect((await statusBar(page)).includes("PLL keeps the #level line"), "and the status bar says why");
     await page.keyboard.press("Control+z");
     expect((await textWhen(page, (t) => t === original)) === original, "and one undo takes it back");
+    // A second key comes before the first is put back, or after: either
+    // way the two stay in the order they were typed. Each key put back on
+    // its own is undone on its own.
+    for (const pause of [0, 5, 10, 20, 40]) {
+      await header.click();
+      await page.keyboard.press("End");
+      await page.keyboard.type("x");
+      await page.waitForTimeout(pause);
+      await page.keyboard.type("y");
+      const both = await textWhen(page, (t) => t.startsWith(HEADER + "\nxy\n"));
+      expect(both.startsWith(HEADER + "\nxy\n"), `a second key ${pause} ms later, in order: ${JSON.stringify(both)}`);
+      for (let undo = 0; undo < 2 && (await editorText(page)) !== original; undo++) {
+        const before = await editorText(page);
+        await page.keyboard.press("Control+z");
+        await textWhen(page, (t) => t !== before, 1000);
+      }
+      expect((await editorText(page)) === original, `and undo takes them back: ${JSON.stringify(await editorText(page))}`);
+    }
     await header.click();
     await page.keyboard.press("End");
     await page.keyboard.press("Backspace");

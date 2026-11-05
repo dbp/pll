@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.2 (2026-11-04)
+
 ### Fixed
 - **A mistake in a student's function is theirs, though a bundle called
   it.** In `mystery.check(shout)`, a `shout` that returned a number where
@@ -16,6 +18,10 @@
   tuple's a tuple's: inside a bundle's function, `s[0]` on `""` said "This
   list has no item at that position", and a subscript on the student's
   line was taken for the one that failed.
+- **Typing fast at the end of the `#level` line keeps what is typed in
+  order.** What is typed there is moved to the line below, with the cursor
+  after it; a key pressed before the cursor got there landed in front, so
+  `xy` could come out `yx`. The cursor now goes in with the move.
 
 ## 0.9.1 (2026-11-04)
 

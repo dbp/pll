@@ -351,6 +351,12 @@ web (`test-web:level` checks the behaviour that follows):
 - PLL's own edits replace whole lines: an edit from the middle of one line
   to the middle of another, made just after a paste, is tokenized wrongly
   by the editor ("Token length and text length do not match").
+- The cursor after what was moved goes in with the put-back, as a snippet's
+  final tab stop (`insertSnippet`, keeping its whitespace). Set in a
+  message of its own afterwards, it lets a key pressed in between land
+  where the whole-line edit left the cursor, at the start of the line
+  below: `xy` typed fast at the end of the line comes out `yx`. A snippet
+  focuses its editor, so this is only done in the active one.
 - A CodeLens runs on a plain click; an inlay hint's command needs Ctrl/Cmd
   and a click, so it would be a poor thing to click. That is why the
   `[python]` defaults leave CodeLens on (Editor defaults, below).

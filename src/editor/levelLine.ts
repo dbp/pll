@@ -275,10 +275,23 @@ export class LevelLineKeeper implements vscode.Disposable {
     const range = new vscode.Range(document.positionAt(change.offset), document.positionAt(change.offset + change.length));
     // No undo stop before it: it joins the edit it puts right, where that
     // edit has not closed its step (Cut and Paste do; Delete and typing do not).
-    const applied = await editor.edit((edit) => edit.replace(range, change.text), {
-      undoStopBefore: false,
-      undoStopAfter: false,
-    });
+    const stops = { undoStopBefore: false, undoStopAfter: false };
+    // A cursor that goes after what was moved goes in with the text, as a
+    // snippet's final tab stop: put there afterwards, a key pressed in
+    // between would land wherever the edit left it, out of order. A snippet
+    // focuses its editor, so only in the active one.
+    const cursor = editor === vscode.window.activeTextEditor ? cursorIn(repair, change) : null;
+    const applied =
+      cursor === null
+        ? await editor.edit((edit) => edit.replace(range, change.text), stops)
+        : await editor.insertSnippet(
+            new vscode.SnippetString()
+              .appendText(change.text.slice(0, cursor))
+              .appendTabstop(0)
+              .appendText(change.text.slice(cursor)),
+            range,
+            { ...stops, keepWhitespace: true },
+          );
     const now = document.getText();
     if (!applied) {
       // Another key came first. With nothing else on the way, try again
@@ -297,14 +310,16 @@ export class LevelLineKeeper implements vscode.Disposable {
     if (now !== repair.text) {
       return;
     }
-    if (repair.cursor === "before") {
+    if (typeof repair.cursor === "number") {
+      const at = document.positionAt(repair.cursor);
+      if (cursor === null) {
+        editor.selection = new vscode.Selection(at, at);
+      }
+      editor.revealRange(new vscode.Range(at, at));
+    } else if (repair.cursor === "before") {
       editor.selections = selections.map(
         (s) => new vscode.Selection(document.validatePosition(s.anchor), document.validatePosition(s.active)),
       );
-    } else if (repair.cursor !== "editor") {
-      const at = document.positionAt(repair.cursor);
-      editor.selection = new vscode.Selection(at, at);
-      editor.revealRange(new vscode.Range(at, at));
     }
     if (repair.kind === "kept") {
       this.explain(document);
@@ -436,6 +451,19 @@ function levelLineOf(document: vscode.TextDocument): { line: number; level: Leve
     }
   }
   return null;
+}
+
+/**
+ * Where the cursor goes after a put-back that moved what was typed, as an
+ * offset into the text `change` writes; null for any other put-back, or a
+ * place outside that text.
+ */
+function cursorIn(repair: LevelLineRepair, change: TextChange): number | null {
+  if (typeof repair.cursor !== "number") {
+    return null;
+  }
+  const at = repair.cursor - change.offset;
+  return at >= 0 && at <= change.text.length ? at : null;
 }
 
 /** The editor showing `uri` - the active one first - or the active editor. */
