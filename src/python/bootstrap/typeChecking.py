@@ -2,6 +2,7 @@
 # the names the instrumentation calls. The checks themselves are contracts
 # (contracts.py).
 
+import __future__ as _pll_future
 import builtins as _pll_builtins
 import collections.abc as _pll_level_abc
 import dataclasses as _pll_level_dataclasses
@@ -37,6 +38,15 @@ def _pll_level_names(level):
     if level not in _PLL_STUDENT_LEVELS:
         return {}
     return {"Callable": _pll_level_abc.Callable, "dataclass": _pll_level_dataclasses.dataclass, "print": _pll_print}
+
+
+def _pll_compile_flags(level):
+    """The flags code at `level` is compiled with. At the student levels,
+    `from __future__ import annotations`: no annotation is read as the code
+    runs, so a class can name a type written after it - the union it is part
+    of - with no quotes. The checks read each one where it was written, when
+    they need it (`_PllContracts`, compile.py)."""
+    return _pll_future.annotations.compiler_flag if level in _PLL_STUDENT_LEVELS else 0
 
 
 def _pll_hidden(name, value):

@@ -97,10 +97,7 @@ def _pll_syntax_wording(error_type, message, line, source=None, line_number=None
     capture = _pll_src_re.search(r"name capture '(\w+)' makes remaining patterns unreachable", message)
     if capture:
         name = capture.group(1)
-        return "`case %s:` needs brackets: `case %s():`." % (name, name), [
-            "Without them, `%s` is a new name that matches anything, so no `case` after it can ever run." % name,
-            "With them, `case %s():` matches only %s; put one name inside for each field." % (name, _pll_a("`%s`" % name)),
-        ]
+        return _pll_case_brackets(name, name + "()", [name], followed=True)
     assigned = _pll_src_re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=[^=]", line)
     if assigned and assigned.group(1) in _PLL_KEYWORDS:
         keyword = assigned.group(1)
@@ -108,6 +105,33 @@ def _pll_syntax_wording(error_type, message, line, source=None, line_number=None
             "Pick another name, such as `%s_value` or something describing what it holds." % keyword
         ]
     return (_pll_punctuated(message) if message.strip() else "Python could not read this line."), []
+
+
+def _pll_case_brackets(written, fixed, names, followed):
+    """What to say of a `case` pattern, as `written`, in which the classes
+    `names` have their brackets left off, and how it reads `fixed` - None
+    for a pattern on more than one line. `followed`: the pattern is one such
+    name with a `case` after it, which Python itself refuses."""
+    listed = _pll_listed(["`%s`" % name for name in names])
+    if fixed is None:
+        headline = "In this `case`, %s %s brackets: %s." % (
+            listed, "needs" if len(names) == 1 else "need", _pll_listed(["`%s()`" % name for name in names])
+        )
+    else:
+        headline = "`case %s:` needs brackets: `case %s:`." % (written, fixed)
+    if len(names) > 1:
+        return headline, [
+            "Without them, %s are new names that match anything." % listed,
+            "With them, each matches only its own class.",
+        ]
+    name = names[0]
+    a_name = _pll_a("`%s`" % name)
+    if followed:
+        without = "Without them, `%s` is a new name that matches anything, so no `case` after it can ever run." % name
+    else:
+        without = "Without them, `%s` is a new name that matches anything, not only %s." % (name, a_name)
+    with_them = "`case %s():`" % name if written == name else "`%s()`" % name
+    return headline, [without, "With them, %s matches only %s." % (with_them, a_name)]
 
 
 #: A line that starts a function the way another language does, or with

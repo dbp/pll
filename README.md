@@ -199,6 +199,23 @@ accepted wherever a `float` is expected, as it is in normal Python.
 An annotation has to name a type. `-> 12345`, or a variable that holds a
 number or a string, is an error as soon as the `def` runs.
 
+An annotation may name a type defined further down the file, so a type that
+refers to itself needs no quotes:
+
+```python
+@dataclass
+class Node:
+    first: int
+    rest: Chain
+
+type Chain = Node | None
+```
+
+At the student levels, annotations are read when they are needed, as they
+are with `from __future__ import annotations`. At `#level raw`, which is
+plain Python, they are read as the file runs, so `rest` would need the
+quotes: `rest: "Chain"`.
+
 ### Functions passed to functions
 
 A `Callable` annotation is a promise about a function that is handed over,

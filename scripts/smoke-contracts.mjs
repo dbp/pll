@@ -198,15 +198,74 @@ console.log("[annotations that are not types]");
 
 console.log("[what a contracted function still is]");
 {
+  // Its annotations are kept as text (`_pll_compile_flags`), and its
+  // signature shows them as written.
   const same = ran(`import inspect\n${ADD1}print(inspect.signature(add1))\nfs = [add1 for _ in range(2)]\nprint(fs[0] is fs[1], add1.__name__, add1.__annotations__)\n`);
   expect(
-    same.stdout === "(x: int) -> int\nTrue add1 {'x': <class 'int'>, 'return': <class 'int'>}\n",
+    same.stdout === "(x: int) -> int\nTrue add1 {'x': 'int', 'return': 'int'}\n",
     `its signature, name and annotations, and one function per reference: ${JSON.stringify(same.stdout)}`,
   );
   // Nothing of PLL's is left in a program PLL could not instrument, but it says so.
   const plain = ran(`${ADD1}print(add1(1))\n`, "raw");
   expect(plain.stdout === "2\n" && !/not checked/.test(plain.stderr), `raw: ${plain.stdout} ${plain.stderr}`);
   console.log("    a signature, a name, one wrapper per reference");
+}
+
+console.log("[annotations read when needed, where they were written: types named before they are defined]");
+{
+  const lines = (...code) => code.join("\n") + "\n";
+  const NODE = ["@dataclass", "class Node:", "    first: int", "    rest: Chain", "", "type Chain = Node | None", ""];
+  const TOTAL = ["def total(c: Chain) -> int:", "    return 0 if c is None else c.first + total(c.rest)", ""];
+  for (const level of ["beginner", "intermediate", "advanced"]) {
+    const got = ran(lines(...NODE, ...TOTAL, "print(total(Node(1, Node(2, None))))"), level);
+    expect(got.stdout === "3\n" && got.error === null, `a recursive type with no quotes at ${level}: ${got.stdout} ${got.finding?.headline ?? ""}`);
+  }
+  const raw = ran(lines("from dataclasses import dataclass", ...NODE), "raw");
+  expect(raw.error?.errorType === "NameError", `raw is Python, and reads it as the file runs: ${raw.error?.errorType}`);
+  const field = ran(lines(...NODE, "Node(1, 2)"));
+  expect(
+    /The `rest` field of `Node` should be `Node` or `None`, but got `2`/.test(field.finding?.headline ?? ""),
+    `a field is still checked: ${field.finding?.headline}`,
+  );
+  const cases = [
+    ["a method naming its own class", ["@dataclass", "class Point:", "    x: int", "    y: int", "", "    def flip(self) -> Point:",
+      "        return Point(self.y, self.x)", "", "print(Point(1, 2).flip())"], "Point(x=2, y=1)\n"],
+    ["a generic function's own `T`", ["@dataclass", "class Pair[T]:", "    first: T", "    rest: Chain[T]", "", "type Chain[T] = Pair[T] | None",
+      "", "def length[T](c: Chain[T]) -> int:", "    return 0 if c is None else 1 + length(c.rest)", "", 'print(length(Pair("a", Pair("b", None))))'], "2\n"],
+    ["a generic class's `T`, in a method", ["@dataclass", "class Box[T]:", "    item: T", "", "    def put(self, x: T) -> Box[T]:",
+      "        return Box(x)", "", "print(Box(1).put(2))"], "Box(item=2)\n"],
+    ["a local class, in a nested function", ["def outer() -> int:", "    @dataclass", "    class Item:", "        n: int", "",
+      "    def inner(b: Item) -> int:", "        return b.n", "", "    return inner(Item(3))", "", "print(outer())"], "3\n"],
+    ["the `T` of the function it is in", ["def keep[T](xs: list[T]) -> list[T]:", "    def same(x: T) -> T:", "        return x",
+      "    return [same(x) for x in xs]", "", "print(keep([1, 2]))"], "[1, 2]\n"],
+    ["a class inside the class", ["class Outer:", "    class Inner:", "        pass", "", "    def make(self) -> Inner:",
+      "        return Outer.Inner()", "", "print(type(Outer().make()).__name__)"], "Inner\n"],
+    ["a variable given its value before its type is defined", ["@dataclass", "class Link:", "    rest: Chain", "", "EMPTY: Chain = None",
+      "", "type Chain = Link | None", "", "print(EMPTY)"], "None\n"],
+  ];
+  for (const [what, code, out] of cases) {
+    const got = ran(lines(...code));
+    expect(got.stdout === out && got.error === null, `${what}: ${JSON.stringify(got.stdout)} ${got.finding?.headline ?? ""}`);
+  }
+  // Checked as they were when Python read them as the file ran.
+  const local = ran(lines("def outer() -> int:", "    @dataclass", "    class Item:", "        n: int", "", "    @dataclass", "    class Box:",
+    "        inner: Item", "", "    return Box(5).inner", "", "outer()"));
+  expect(/The `inner` field of `Box` should be/.test(local.finding?.headline ?? ""), `a local class's field: ${local.finding?.headline}`);
+  const after = ran(lines("type Chain = Link | None", "", "@dataclass", "class Link:", "    rest: Chain", "", "start: Chain = 5"));
+  expect(/`start` is annotated as `Link` or `None`/.test(after.finding?.headline ?? ""), `a variable after its type: ${after.finding?.headline}`);
+  const number = ran(lines("def f(x: 5) -> int:", "    return 1"));
+  expect(
+    number.finding?.headline === "The annotation of `x` in `f`, `5`, is a number, not a type." && number.finding?.lineNumber === 1,
+    `no type, said where the def is, though it is never called: ${number.finding?.headline} ${number.finding?.lineNumber}`,
+  );
+  // At a prompt line: a type the next line defines.
+  const key = "contracts-later";
+  pllCall("_pll_run_file", JSON.stringify(["", "lab.py", key, "beginner", false]));
+  const early = JSON.parse(pllCall("_pll_repl_eval", JSON.stringify(["def make() -> Later:\n    return Later()", key, "beginner"])));
+  pllCall("_pll_repl_eval", JSON.stringify(["class Later:\n    pass", key, "beginner"]));
+  const made = JSON.parse(pllCall("_pll_repl_eval", JSON.stringify(["type(make()).__name__", key, "beginner"])));
+  expect(early.error === null && made.resultRepr === "'Later'", `at the prompt: ${early.error?.message ?? ""} ${made.error?.message ?? made.resultRepr}`);
+  console.log("    a recursive type, a class's own name, type parameters and local names, all checked as before");
 }
 
 console.log("[`Callable` at the student levels, and not at raw]");

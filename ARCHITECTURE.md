@@ -632,6 +632,34 @@ program PLL cannot instrument still runs - unchecked, with a warning that
 says so: a student who annotated the file should know nothing is checking
 it.
 
+### Annotations read when needed
+
+At the student levels, code is compiled with `from __future__ import
+annotations` (`_pll_compile_flags`): a file, a prompt line, another of the
+student's files, the definitions Examplar loads and its implementations,
+and a bundle built at one. Python reads no annotation as the code runs, so
+a class can name a type defined after it - the union it is part of - with
+no quotes, and the static check reads annotations as if from the end of
+the file.
+
+The checks do not read the text Python keeps, which would lose the scope
+it was written in. `pll:contract_def` and `pll:assigned` are given
+`lambda: <annotation>` (`_pll_reading`), which sees a local class, an
+enclosing function's type parameter and a generic class's `T` as Python
+would have. A generic `def`'s decorators run outside the scope of its own
+type parameters, so those are the lambda's arguments. A `def` reads its
+annotations as it runs, to refuse one that is no type there, and one
+naming something not defined yet again at its first call. What no function
+can reach is read elsewhere: a class's own names from its body's namespace
+(`_PllDefinition._in_class`), and the fields of a dataclass defined in a
+function among that function's names (`_pll_read_around`). A variable
+given a value before its annotation's type exists is not checked that
+time.
+
+The text is what `inspect` sees, so a contracted function's signature shows
+it as written (`_PllWritten`), and a dataclass made from it looks its module
+up in `sys.modules`, so a bundle's module is put there while its code runs.
+
 ### Error messages
 
 A broken contract raises `TypeMismatch` with its facts (`check`): what the

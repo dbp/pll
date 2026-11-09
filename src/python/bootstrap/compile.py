@@ -22,6 +22,21 @@ def _pll_is_quoted(annotation):
     return isinstance(annotation, _ast.Constant) and isinstance(annotation.value, str)
 
 
+def _pll_reading(annotation, type_params=()):
+    """`lambda: <annotation>`: the annotation, read when it is called, in the
+    scope it was written in. A generic `def`'s decorators run outside the
+    scope of its type parameters, so its own are given as arguments
+    (`type_params`, their names), in the order `__type_params__` has them."""
+    reading = _ast.Lambda(
+        args=_ast.arguments(
+            posonlyargs=[], args=[_ast.arg(arg=name) for name in type_params], vararg=None,
+            kwonlyargs=[], kw_defaults=[], kwarg=None, defaults=[],
+        ),
+        body=_pll_copy.deepcopy(annotation),
+    )
+    return _ast.copy_location(reading, annotation)
+
+
 def _pll_bound_names(target):
     """The names an assignment's target binds: `a`, or each of `a, (b, c)`."""
     if isinstance(target, _ast.Name):
@@ -373,8 +388,12 @@ class _PllContracts(_ast.NodeTransformer):
     - an annotated variable's value is checked each time it is given one
       (`pll:assigned`).
 
-    Annotations are left as they are: the `def` records them, and a name in
-    one is not a reference.
+    Annotations are left as they are, and a name in one is not a reference.
+    At the levels that check, Python keeps them as text and reads none of
+    them (`_pll_compile_flags`); a check reads each one with a function
+    written beside it (`_pll_reading`), in the scope it was written in, when
+    it needs it - by then a type written further down the file is defined,
+    and a local class or a type parameter is still in reach.
     """
 
     def __init__(self, scopes, source, filename):
@@ -382,7 +401,6 @@ class _PllContracts(_ast.NodeTransformer):
         self.source = source
         self.filename = filename
         self.current = None
-        self.all_quoted = False
 
     def _call(self, name, args, at):
         call = _ast.Call(func=_ast.Name(id=name, ctx=_ast.Load()), args=args, keywords=[])
@@ -415,12 +433,6 @@ class _PllContracts(_ast.NodeTransformer):
 
     def visit_Module(self, node):
         self.current = self.scopes.scope_of(node)
-        self.all_quoted = any(
-            isinstance(statement, _ast.ImportFrom)
-            and statement.module == "__future__"
-            and any(alias.name == "annotations" for alias in statement.names)
-            for statement in node.body
-        )
         node.body = self._statements(node.body)
         return node
 
@@ -436,21 +448,27 @@ class _PllContracts(_ast.NodeTransformer):
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def _contract(self, node, scope):
-        """`pll:contract_def(party, written, quoted)` for `node`."""
+        """`pll:contract_def(party, written, quoted, reading)` for `node`."""
         written, quoted = [], []
         annotated = [(arg.arg, arg.annotation) for arg in _pll_all_args(node.args) if arg.annotation is not None]
         if node.returns is not None:
             annotated.append(("return", node.returns))
         for name, annotation in annotated:
             written.append((name, self._text(annotation)))
-            if self.all_quoted or _pll_is_quoted(annotation):
+            if _pll_is_quoted(annotation):
                 quoted.append(name)
+        own = [param.name for param in getattr(node, "type_params", None) or ()]
+        reading = _ast.Dict(
+            keys=[_ast.Constant(value=name) for name, _annotation in annotated],
+            values=[_pll_reading(annotation, own) for _name, annotation in annotated],
+        )
         decorator = self._call(
             _PLL_CONTRACT_DEF,
             [
                 _ast.Constant(value=scope.party),
                 _ast.Constant(value=tuple(written)),
                 _ast.Constant(value=tuple(quoted)),
+                reading,
             ],
             node,
         )
@@ -543,12 +561,12 @@ class _PllContracts(_ast.NodeTransformer):
             _PLL_ASSIGNED,
             [
                 value,
-                _pll_copy.deepcopy(annotation),
+                _pll_reading(annotation),
                 _ast.Constant(value=self._text(annotation)),
                 _ast.Constant(value=name),
                 _ast.Constant(value=self.current.party),
                 _ast.Constant(value=at.lineno),
-                _ast.Constant(value=self.all_quoted or _pll_is_quoted(annotation)),
+                _ast.Constant(value=_pll_is_quoted(annotation)),
             ],
             at,
         )
@@ -632,9 +650,8 @@ class _PllTeachingChecks(_ast.NodeTransformer):
       (`pll:identical`), which can only be passed along (contracts.py) and
       whose `is` Python would answer of its seal, not of the value.
 
-    Annotations are left as they are: under `from __future__ import
-    annotations` Python keeps them as their text, which a call in place of
-    `|` would garble.
+    Annotations are left as they are: Python keeps them as their text
+    (`_pll_compile_flags`), which a call in place of `|` would garble.
     """
 
     def __init__(self, source):
@@ -1027,14 +1044,19 @@ def _pll_check_dataclass_fields(cls):
     A field's annotation is read in the globals the class was defined in, the
     student's, taken from the frame that applied the decorator - not from
     `sys.modules[cls.__module__]`, which is Pyodide's `__main__`, a different
-    dict from the session's. It is read when first needed: a recursive
-    definition names a class that does not exist yet (`rest: "NumList"`). A
-    generic class's own type parameters (`value: T`) stand for any type.
+    dict from the session's - and, for a class defined in a function or
+    another class, among that one's names too. It is read when first needed:
+    a recursive definition names a class that does not exist yet (`rest:
+    NumList`). A generic class's own type parameters (`value: T`) stand for
+    any type.
     """
     try:
-        namespace = _sys._getframe(1).f_globals
+        frame = _sys._getframe(1)
+        namespace = frame.f_globals
+        around = frame.f_locals if frame.f_locals is not namespace else None
     except Exception:
         namespace = getattr(_sys.modules.get(cls.__module__), "__dict__", {})
+        around = None
     _PLL_CLASS_NAMESPACES[cls] = namespace
     level = namespace.get("__pll_level__")
     typevars = {param: _PllAnyContract(param.__name__) for param in getattr(cls, "__type_params__", ())}
@@ -1043,7 +1065,8 @@ def _pll_check_dataclass_fields(cls):
     def contracts():
         if not made:
             for field in _pll_dataclasses.fields(cls):
-                made[field.name] = _pll_compile(field.type, None, namespace, level, typevars)
+                annotation = _pll_read_around(field.type, namespace, around, typevars)
+                made[field.name] = _pll_compile(annotation, None, namespace, level, typevars)
         return made
 
     _PLL_DATACLASS_FIELDS[cls] = contracts
@@ -1073,6 +1096,21 @@ def _pll_check_dataclass_fields(cls):
 
 
 _pll_hidden("check_dataclass_fields", _pll_check_dataclass_fields)
+
+
+def _pll_read_around(annotation, namespace, around, typevars):
+    """A field's annotation, kept as text, read among the names of the
+    function or class its class was defined in (`around`), which the
+    globals do not have - or, when it cannot be read there, as it is, to be
+    read in the globals when first checked."""
+    if around is None or not isinstance(annotation, str):
+        return annotation
+    names = dict(around)
+    names.update((param.__name__, param) for param in typevars)
+    try:
+        return eval(annotation, namespace, names)
+    except Exception:
+        return annotation
 
 
 #: Compile-time warnings for the current file: `(line, message)`, each once.

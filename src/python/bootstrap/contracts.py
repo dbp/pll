@@ -1141,33 +1141,69 @@ def _pll_returning(value, line):
 class _PllDefinition:
     """An annotated `def`: whose it is (`party`), how its annotations were
     written (`written`, by parameter, with "return"), which were written in
-    quotes (`quoted`), and the contract they make - made at its first call."""
+    quotes (`quoted`), how each is read where it was written (`reading`,
+    compile.py's `_pll_reading`), and the contract they make - made at its
+    first call. `scope` is the namespace of the class it is defined in, if
+    any, whose names a function defined there cannot reach."""
 
-    def __init__(self, function, party, written, quoted, level):
+    def __init__(self, function, party, written, quoted, level, reading, scope=None):
         self.function = function
         self.party = party
         self.written = written
         self.quoted = quoted
         self.level = level
+        self.reading = reading
+        self.scope = scope
         self.code = function.__code__
-        self.signature = _pll_inspect.signature(function)
+        self.signature = _pll_shown_signature(_pll_inspect.signature(function))
         self._contract = None
 
     def annotations(self):
-        return getattr(self.function, "__annotations__", None) or {}
+        """Each annotation, read now - one in quotes is its text - or, for
+        one that cannot be read, why (`_PllUnresolved`)."""
+        read = {}
+        own = getattr(self.function, "__type_params__", ())
+        for name, reading in self.reading.items():
+            try:
+                read[name] = reading(*own)
+            except NameError as error:
+                read[name] = self._in_class(name, error)
+            except Exception:
+                read[name] = _PllUnresolved("not-a-type", self.written.get(name, name))
+        return read
+
+    def _in_class(self, name, error):
+        """The annotation of `name`, read among the names of the class the
+        `def` is in - a class defined inside it, say - or why it cannot be."""
+        missing = _PllUnresolved("undefined", getattr(error, "name", None) or self.written.get(name, name))
+        if self.scope is None or name not in self.written:
+            return missing
+        names = dict(self.scope)
+        names.update((param.__name__, param) for param in getattr(self.function, "__type_params__", ()))
+        try:
+            return eval(self.written[name], self.function.__globals__, names)
+        except NameError:
+            return missing
+        except Exception:
+            return _PllUnresolved("not-a-type", self.written[name])
 
     def validate(self):
-        """Refuse an annotation that is no type, while the `def` runs. A name
-        in quotes is looked up later, when it may have been defined."""
+        """Refuse an annotation that is no type, while the `def` runs. One
+        naming something not defined yet - the class it is in, a union
+        written below it - is read again at the first call, and so is a name
+        in quotes."""
         for name, annotation in self.annotations().items():
             if name in self.quoted:
+                continue
+            place = (("result" if name == "return" else "argument"), name)
+            if isinstance(annotation, _PllUnresolved):
+                if annotation.reason != "undefined":
+                    _pll_not_a_type(annotation.reason, self.written[name], self.party, place, missing=annotation.name)
                 continue
             reason = _pll_why_not_a_type(annotation)
             if reason is not None:
                 _pll_not_a_type(
-                    reason, self.written.get(name, _pll_type_text(annotation)), self.party,
-                    (("result" if name == "return" else "argument"), name),
-                    value=annotation,
+                    reason, self.written.get(name, _pll_type_text(annotation)), self.party, place, value=annotation
                 )
 
     def contract(self):
@@ -1185,6 +1221,8 @@ class _PllDefinition:
                 return _PLL_ANY
             written = self.written.get(name)
             try:
+                if isinstance(hints[name], _PllUnresolved):
+                    raise hints[name]
                 return _pll_compile(hints[name], written, namespace, self.level, typevars, forced=True)
             except _PllUnresolved as unresolved:
                 _pll_not_a_type(
@@ -1232,7 +1270,8 @@ class _PllDefinition:
                 pass
         unsealable = set()
         for annotation in hints.values():
-            _pll_unsealable(annotation, free, namespace, unsealable, set())
+            if not isinstance(annotation, _PllUnresolved):
+                _pll_unsealable(annotation, free, namespace, unsealable, set())
         for param in getattr(self.function, "__type_params__", ()):
             if param in free and param not in unsealable:
                 typevars[param] = _PllVariableContract(param, self.party)
@@ -1301,14 +1340,44 @@ def _pll_boundary(function, definition):
     return contracted
 
 
-def _pll_contract_def(party, written, quoted):
+class _PllWritten:
+    """An annotation kept as text, shown as it was written - `int`, not
+    `'int'` - where `inspect` shows a signature, as `help` does."""
+
+    __slots__ = ("text",)
+
+    def __init__(self, text):
+        self.text = text
+
+    def __repr__(self):
+        return self.text
+
+
+def _pll_shown_signature(signature):
+    """`signature`, with each annotation kept as text shown as written."""
+
+    def shown(annotation):
+        return _PllWritten(annotation) if isinstance(annotation, str) else annotation
+
+    return signature.replace(
+        parameters=[p.replace(annotation=shown(p.annotation)) for p in signature.parameters.values()],
+        return_annotation=shown(signature.return_annotation),
+    )
+
+
+def _pll_contract_def(party, written, quoted, reading):
     """The decorator compile.py puts innermost on each annotated `def`: the
     function, under its contract, at its boundary (`_pll_boundary`). A
     reference compile.py has rewritten makes its own obligation instead."""
 
     def attach(function):
         level = function.__globals__.get("__pll_level__")
-        definition = _PllDefinition(function, _pll_party(party), dict(written), frozenset(quoted), level)
+        # Where the `def` ran: a class body's names are a dict of their own.
+        names = _sys._getframe(1).f_locals
+        scope = names if isinstance(names, dict) and names is not function.__globals__ else None
+        definition = _PllDefinition(
+            function, _pll_party(party), dict(written), frozenset(quoted), level, reading, scope
+        )
         definition.validate()
         return _pll_boundary(function, definition)
 
@@ -1669,10 +1738,17 @@ def _pll_contract_of(annotation, written, namespace, level):
     return made
 
 
-def _pll_contract_assigned(value, annotation, written, name, party, line, quoted):
+def _pll_contract_assigned(value, reading, written, name, party, line, quoted):
     """The value an annotated variable is given, checked against its
-    annotation. The code that gives it is the party that answers for it - it
-    gives the value, and takes it again by using the variable."""
+    annotation, read where it was written (`reading`). The code that gives
+    it is the party that answers for it - it gives the value, and takes it
+    again by using the variable."""
+    try:
+        annotation = reading()
+    except NameError:
+        # It names a type the file defines further down: nothing to check
+        # the value against yet.
+        return value
     frame = _sys._getframe(1)
     namespace = frame.f_globals
     level = namespace.get("__pll_level__")

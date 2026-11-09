@@ -426,10 +426,11 @@ async function main() {
 
   if (section(17, "code that parses but does not compile, in a file with tests")) {
     // `case Boa:` parses and fails at compile time: reported as the
-    // program's syntax error, not as `pll` failing (exit 64).
+    // program's syntax error, not as `pll` failing (exit 64). At `raw`, where
+    // no static check refuses it before the run.
     const file = fixture(
       "capture.py",
-      "#level beginner",
+      "from dataclasses import dataclass",
       "@dataclass",
       "class Boa:",
       "    name: str",

@@ -1005,7 +1005,7 @@ _g = _pll_get_session("smoke-lib")
       unknown?.id === "unknown-pattern-class" && unknown.severity === "error" && unknown.name_token === "Aardvark" &&
         unknown.said.headline === "There is no class `Aardvark`: an `Animal` is a `Boa` or an `Armadillo`." &&
         unknown.said.howToFix.join("|") ===
-          "Match one of them: `case Boa(...)` or `case Armadillo(...)`.|If an `Aardvark` is a new kind of `Animal`, define `class Aardvark` and add it: `Animal = Boa | Armadillo | Aardvark`.",
+          "Match one of them: `case Boa()` or `case Armadillo()`.|If an `Aardvark` is a new kind of `Animal`, define `class Aardvark` and add it: `Animal = Boa | Armadillo | Aardvark`.",
       `a class nothing defines, said with the subject's variants: ${JSON.stringify(unknown)}`,
     );
     // Every way an annotation writes the union, and a misspelling.
@@ -1060,6 +1060,76 @@ _g = _pll_get_session("smoke-lib")
     expect(top.map((f) => f.id).join() === "unknown-pattern-class", `and one it does not have: ${JSON.stringify(top.map((f) => f.id))}`);
     pyodide.runPython("_pll_sessions.pop('pets:repl', None)");
     console.log("    the class nothing defines, with the variants; the case that never matches; nothing else");
+  }
+
+  console.log("\n[26b] a class in a `case` with its brackets left off: a new name that matches anything");
+  {
+    const CLASSES = ["@dataclass", "class Boa:\n    length: float", "@dataclass", "class Armadillo:\n    alive: bool", "Animal = Boa | Armadillo", ""].join("\n");
+    const matching = (...cases) =>
+      `${CLASSES}\ndef f(a: Animal) -> str:\n    match a:\n${cases.map((c) => `        case ${c}:\n            return "x"\n`).join("")}    return ""\n`;
+    const found = (code, level = "beginner") =>
+      analyze(code, level, "pets.py").map((f) => ({ ...f, said: wordStatic([f], level, "pets.py")[0] }));
+    const said = (f) => [f?.said.headline, ...(f?.said.howToFix ?? [])].join("|");
+    // The last `case`, which Python lets through: it matches anything.
+    const last = found(matching("Armadillo()", "Boa"));
+    expect(
+      last.length === 1 && last[0].id === "case-needs-brackets" && last[0].severity === "error" &&
+        last[0].error_type === "MatchesAnything" && last[0].name_token === "Boa" && last[0].line_number === 13 && last[0].column === 13,
+      `the last case: ${JSON.stringify(last.map((f) => [f.id, f.name_token, f.line_number, f.column]))}`,
+    );
+    expect(
+      said(last[0]) ===
+        "`case Boa:` needs brackets: `case Boa():`.|Without them, `Boa` is a new name that matches anything, not only a `Boa`.|With them, `case Boa():` matches only a `Boa`.",
+      `worded: ${said(last[0])}`,
+    );
+    // With a `case` after it, worded as Python's own error is.
+    const [followed] = found(matching("Boa", "Armadillo()"), "intermediate");
+    expect(
+      followed?.said.howToFix[0] === "Without them, `Boa` is a new name that matches anything, so no `case` after it can ever run.",
+      `a case after it: ${said(followed)}`,
+    );
+    // A built-in's name is the class too, not a name that hides it.
+    const builtin = found(matching("int"));
+    expect(
+      builtin.map((f) => f.id).join() === "case-needs-brackets" && builtin[0].said.headline === "`case int:` needs brackets: `case int():`.",
+      `a built-in: ${JSON.stringify(builtin.map((f) => [f.id, f.said.headline]))}`,
+    );
+    // Inside a pattern: one finding for the case, with the brackets put in as written.
+    for (const [pattern, headline] of [
+      ["[Boa, Armadillo]", "`case [Boa, Armadillo]:` needs brackets: `case [Boa(), Armadillo()]:`."],
+      ["Boa(length=Armadillo)", "`case Boa(length=Armadillo):` needs brackets: `case Boa(length=Armadillo()):`."],
+      ['["café", Boa]', '`case ["café", Boa]:` needs brackets: `case ["café", Boa()]:`.'],
+      ["Boa if a.length > 1", "`case Boa if a.length > 1:` needs brackets: `case Boa() if a.length > 1:`."],
+    ]) {
+      const got = found(matching(pattern));
+      expect(got.length === 1 && got[0].said.headline === headline, `${pattern}: ${JSON.stringify(got.map((f) => f.said.headline))}`);
+    }
+    const [two] = found(matching("[Boa, Armadillo]"));
+    expect(
+      two?.said.howToFix.join("|") === "Without them, `Boa` and `Armadillo` are new names that match anything.|With them, each matches only its own class.",
+      `two of them: ${said(two)}`,
+    );
+    const [lines] = found(matching("[\n            Boa,\n            Armadillo,\n        ]"));
+    expect(lines?.said.headline === "In this `case`, `Boa` and `Armadillo` need brackets: `Boa()` and `Armadillo()`.", `over lines: ${said(lines)}`);
+    // Not found: the class with its brackets, a name that is no class, `_`,
+    // a union's name.
+    for (const [label, code] of [
+      ["brackets", matching("Boa()", "Armadillo()")],
+      ["a name", matching("Boa()", "other")],
+      ["`_`", matching("Boa()", "_")],
+      ["a union's name", matching("Boa()", "Animal")],
+    ]) {
+      const ids = found(code).map((f) => f.id);
+      expect(!ids.includes("case-needs-brackets"), `${label}: ${ids.join(" ")}`);
+    }
+    // At advanced too, said the same way; raw is Python.
+    const advanced = found(matching("Armadillo()", "Boa"), "advanced");
+    expect(
+      advanced.map((f) => f.id).join() === "case-needs-brackets" && said(advanced[0]) === said(last[0]),
+      `advanced: ${JSON.stringify(advanced.map((f) => [f.id, f.said?.headline]))}`,
+    );
+    expect(found(matching("Armadillo()", "Boa"), "raw").length === 0, "raw: nothing");
+    console.log("    the last case and one with a case after it, a built-in, inside a pattern, at advanced too; nothing else");
   }
 
   console.log("\n[27] `del` of a name is refused at the teaching levels; `del` of an item is not");
@@ -1149,8 +1219,10 @@ _g = _pll_get_session("smoke-lib")
       ["a generator's name nothing defines", "beginner", "def f(xs: list) -> int:\n    return sum(x * k for x in xs)\n", ["NameError k@2"], "later"],
       ["a class's name inside a method", "advanced", "class C:\n    size = 3\n    def area(self):\n        return size * size\nC().area()\n", ["NameError size@4"], "raises", "parity"],
       ["an attribute without `self.`", "advanced", "class C:\n    def __init__(self):\n        self.width = 2\n    def area(self):\n        return width * 2\nC().area()\n", ["NameError width@5"], "raises", "parity"],
-      ["a class's own name in a method's annotation", "advanced", "class Node:\n    def child(self) -> Node:\n        return self\n", ["NameError Node@2"], "raises"],
-      ["a dataclass naming itself", "beginner", "@dataclass\nclass Link:\n    rest: Link | None\n", ["NameError Link@3"], "raises"],
+      // At the student levels an annotation is read when needed, not as the
+      // file runs (`_pll_compile_flags`), so it may name a class not yet made.
+      ["a class's own name in a method's annotation", "advanced", "class Node:\n    def child(self) -> Node:\n        return self\n", [], "clean"],
+      ["a dataclass naming itself", "beginner", "@dataclass\nclass Link:\n    rest: Link | None\n", [], "clean"],
       ["a dataclass naming itself, as a string", "beginner", "@dataclass\nclass Link:\n    rest: 'Link | None'\n", [], "clean"],
       ["type parameters", "beginner", "@dataclass\nclass Leaf[T]:\n    value: T\n    def get(self) -> T:\n        return self.value\nprint(Leaf(1).get())\n", [], "clean"],
       ["`match` captures", "beginner", "def f(lst: list) -> int:\n    match lst:\n        case []:\n            return 0\n        case [first, *rest]:\n            return first + f(rest)\n    return -1\nprint(f([1, 2]))\n", [], "clean"],
@@ -1160,7 +1232,7 @@ _g = _pll_get_session("smoke-lib")
       ["`:=`", "beginner", "xs = [1, 2, 3]\nif (n := len(xs)) > 2:\n    print(n)\n", [], "clean"],
       ["`:=` in a comprehension", "advanced", "ys = [y := 5, y + 1]\nprint(y)\n", [], "clean"],
       ["annotations read later", "advanced", "from __future__ import annotations\ndef f(n: Node) -> int:\n    return 1\nclass Node:\n    pass\nprint(f(Node()))\n", [], "clean"],
-      ["an annotation above its class", "beginner", "def f(n: Node) -> int:\n    return 1\nclass Node:\n    pass\n", ["NameError Node@1"], "raises", "parity"],
+      ["an annotation above its class", "beginner", "def f(n: Node) -> int:\n    return 1\nclass Node:\n    pass\n", [], "clean"],
       ["a `__main__` guard", "beginner", "def main():\n    print('hi')\nif __name__ == '__main__':\n    main()\n", [], "clean"],
       ["an import that may fail", "advanced", "try:\n    import numpy as np\nexcept ImportError:\n    np = None\nprint(np is None or np.pi > 3)\n", [], "clean"],
       ["`with ... as`", "beginner", "with open(__file__) as fh:\n    text = fh.read()\nprint(len(text) > 0)\n", [], "clean"],
@@ -1180,7 +1252,7 @@ _g = _pll_get_session("smoke-lib")
       ["a handler reading what its body set", "advanced", "try:\n    n = 1\n    int('x')\nexcept ValueError:\n    print(n)\n", [], "clean"],
       ["`try` / `finally`", "advanced", "try:\n    x = 1\nfinally:\n    print('done')\nprint(x)\n", [], "clean"],
       ["a default reading a later name", "advanced", "def f(n=limit):\n    return n\nlimit = 3\n", ["NameError limit@1"], "raises", "parity"],
-      ["a type by another language's name", "advanced", "def stand(cups: string) -> int:\n    return 1\n", ["NameError string@1"], "raises", "parity"],
+      ["a type by another language's name", "advanced", "def stand(cups: string) -> int:\n    return 1\n", ["NameError string@1"], "later"],
       ["a call before a name its function reads", "beginner", "def show() -> None:\n    print(title)\nshow()\ntitle = 'x'\n", ["NameError title@2"], "raises"],
       ["a call after it", "beginner", "def show() -> None:\n    print(title)\ntitle = 'x'\nshow()\n", [], "clean"],
       ["a nested function called before its outer name", "advanced", "def outer():\n    def inner():\n        return title\n    r = inner()\n    title = 'x'\n    return r\nouter()\n", ["NameError title@3"], "raises"],

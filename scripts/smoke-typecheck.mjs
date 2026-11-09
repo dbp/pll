@@ -1131,6 +1131,30 @@ async function main() {
         `the sibling's own line: ${JSON.stringify(sibling.error?.facts)}`,
       );
 
+      // A file it imports, at a student level, reads its annotations when
+      // needed, as the file that ran does: a recursive type needs no quotes.
+      const chain = [
+        "#level beginner",
+        "@dataclass",
+        "class Node:",
+        "    first: int",
+        "    rest: Chain",
+        "",
+        "type Chain = Node | None",
+      ].join("\n");
+      await send({
+        type: "mountWorkspace",
+        files: [
+          { name: "hello.py", contents: "#level beginner\nfrom chains import Node\nprint(Node(1, None))\n" },
+          { name: "chains.py", contents: chain + "\n" },
+        ],
+      });
+      const imported = await run("#level beginner\nfrom chains import Node\nprint(Node(1, None))\n", { level: "beginner" });
+      expect(
+        imported.error == null && /Node\(first=1, rest=None\)/.test(imported.stdout ?? ""),
+        `an imported file's recursive type: ${imported.error?.message ?? ""} ${JSON.stringify(imported.stdout)}`,
+      );
+
       // What the names in an error are, from the definitions themselves.
       const definitions = async (code, files = []) => {
         await send({ type: "mountWorkspace", files: [{ name: "hello.py", contents: code }, ...files] });

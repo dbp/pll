@@ -406,7 +406,9 @@ class _PllUndefinedNames:
         self.lines = code.splitlines()
         self.teaching = level in _PLL_TEACHING_LEVELS
         self.initial = frozenset(initial)
-        self.future_annotations = any(
+        # Annotations read when needed, not as the file runs: at the student
+        # levels (`_pll_compile_flags`), or by the file's own choice.
+        self.future_annotations = level in _PLL_STUDENT_LEVELS or any(
             isinstance(s, _ast.ImportFrom)
             and s.module == "__future__"
             and any(a.name == "annotations" for a in s.names)

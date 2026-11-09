@@ -103,7 +103,7 @@ class _PllStudentLoader(_pll_machinery.SourceFileLoader):
             raise error
         tree = _pll_parse_and_instrument(source, path, level)
         with _pll_recording_compile_warnings():
-            return compile(tree, path, "exec", dont_inherit=True)
+            return compile(tree, path, "exec", flags=_pll_compile_flags(level), dont_inherit=True)
 
     def exec_module(self, module):
         own = module.__dict__

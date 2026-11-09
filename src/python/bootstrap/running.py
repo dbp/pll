@@ -249,7 +249,7 @@ def _pll_run_file(code, filename, session_key, level=_PLL_LEVEL_RAW, run_tests=F
             _pll_rewrite_asserts(tree, code, filename)
         tree = _pll_with_contracts(tree, code, filename, level)
         with _pll_recording_compile_warnings():
-            compiled = compile(tree, filename, "exec")
+            compiled = compile(tree, filename, "exec", flags=_pll_compile_flags(level))
     except SyntaxError as e:
         result["error"] = _pll_error_info(e, (filename, code), level)
         return _pll_with_output(result, stdout, stderr)
@@ -322,7 +322,7 @@ def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
         with _pll_as_main(main), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             if tree.body:
                 with _pll_recording_compile_warnings():
-                    compiled_stmts = compile(tree, filename, "exec")
+                    compiled_stmts = compile(tree, filename, "exec", flags=_pll_compile_flags(level))
                 _pll_remember_prompt_source(compiled_stmts, code)
                 exec(compiled_stmts, user_globals)
             if last_expr is not None:

@@ -118,7 +118,7 @@ def _pll_examplar_compile(source, filename):
     `marshal.loads` rather than by an import hook, so the magic number is
     carried once in the bundle's metadata instead of on every blob.
     """
-    code = compile(source, filename, "exec")
+    code = compile(source, filename, "exec", flags=_pll_compile_flags(_pll_examplar_level(source)))
     return _ex_b64.b64encode(_ex_marshal.dumps(code)).decode("ascii")
 
 
@@ -402,7 +402,8 @@ def _pll_examplar_compiled_definitions(test_source, filename):
         # Rewriting can leave the tree half-modified, so start again from the
         # source rather than compiling whatever it got to.
         tree = _ex_ast.parse(test_source, filename=filename)
-    if _pll_examplar_level(test_source) in _PLL_STUDENT_LEVELS:
+    level = _pll_examplar_level(test_source)
+    if level in _PLL_STUDENT_LEVELS:
         # As the student's own run has it: a `...` reached stops a test.
         _PllPlaceholders().visit(tree)
     pieces = []
@@ -414,7 +415,10 @@ def _pll_examplar_compiled_definitions(test_source, filename):
                 if isinstance(node, _PLL_EXAMPLAR_DEFINITIONS):
                     pieces.append((
                         node,
-                        compile(_ex_ast.Module(body=[node], type_ignores=[]), filename, "exec"),
+                        compile(
+                            _ex_ast.Module(body=[node], type_ignores=[]), filename, "exec",
+                            flags=_pll_compile_flags(level),
+                        ),
                     ))
     finally:
         del _pll_compile_warnings[:]

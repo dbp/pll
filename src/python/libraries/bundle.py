@@ -86,7 +86,9 @@ def _pll_bundle_build(source, filename):
         }
     tree.body = [node for node in tree.body if not _pll_bundle_is_test(node)]
     try:
-        code = compile(tree, "<bundle:%s>" % name, "exec", dont_inherit=True)
+        code = compile(
+            tree, "<bundle:%s>" % name, "exec", flags=_pll_compile_flags(_pll_bundle_level(source)), dont_inherit=True
+        )
     except SyntaxError as e:
         return {"ok": False, "error": "%s does not compile: %s (line %s)" % (name, e.msg, e.lineno)}
     return {
@@ -160,10 +162,18 @@ def _pll_bundle_module(name, bundle_json):
             own.setdefault(key, value)
     own.update(_pll_level_names(level))
     own["__pll_level__"] = level
+    # A dataclass made with its annotations kept as text (a student level's
+    # `_pll_compile_flags`) reads its module's names from `sys.modules`.
+    registered = name not in _bd_sys.modules
+    if registered:
+        _bd_sys.modules[name] = module
     try:
         exec(code, own)
     except KeyboardInterrupt:
         raise
     except BaseException as e:
         return None, "its code stopped with %s: %s" % (type(e).__name__, e)
+    finally:
+        if registered:
+            _bd_sys.modules.pop(name, None)
     return module, None

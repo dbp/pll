@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.10.0 (2026-11-05)
+
+### Added
+- **A class in a `case` with its brackets left off is refused at the
+  student levels**, as it is written: `case Boa:` as the last case was
+  a new name that matched anything, without a word, as were `case [Boa,
+  Armadillo]:` and `case Node(left=Leaf):`. Each is told the pattern with
+  the brackets put in - `case [Boa(), Armadillo()]:` - and `case int:` is
+  no longer told to pick another name for `int`.
+
+### Changed
+- **At the student levels an annotation may name a type defined further
+  down the file**, so a type that refers to itself needs no quotes:
+  `rest: Chain` above `type Chain = Node | None`, or a method returning
+  its own class. Annotations are read when they are needed, as with `from
+  __future__ import annotations`, and checked as before, local classes and
+  type parameters included. A function's `__annotations__` hold their
+  text. `#level raw` is plain Python, and reads them as the file runs.
+- **A `case` is suggested with nothing in its brackets**: `case Boa:` is
+  told it needs `case Boa():`, without "put one name inside for each
+  field", and the advice for a value compared with a class, or a `case`
+  naming a class outside the union, writes `case Boa()`, not `case
+  Boa(...)`. A pattern that names fields works as before.
+
 ## 0.9.2 (2026-11-04)
 
 ### Fixed

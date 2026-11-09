@@ -215,12 +215,14 @@ class _PllScopeBuilder:
             self.deletions.append((node, scope))
         # A `case` pattern's captures, and `except ... as e`, bind a name -
         # one of the alternatives, of which only one runs. Not `case Boa:`
-        # for a class `Boa`: that is the class with its brackets left off,
-        # which the compiler's own error, or the match it then fits, says.
+        # for a class `Boa`, or `case int:`: that is the class with its
+        # brackets left off, said as such (`case-needs-brackets`).
         if (
             isinstance(node, (_ast.MatchAs, _ast.MatchStar))
             and node.name is not None
-            and not (isinstance(node, _ast.MatchAs) and node.pattern is None and node.name in self._classes)
+            and not (
+                isinstance(node, _ast.MatchAs) and node.pattern is None and _pll_names_a_class(node.name, self._classes)
+            )
         ):
             self._add(scope, node.name, node.lineno, node.col_offset, "capture")
         if isinstance(node, _ast.MatchMapping) and node.rest is not None:
@@ -302,6 +304,16 @@ class _PllScopeBuilder:
 _PLL_WARNING_KINDS = frozenset((
     "method-not-called", "test-not-named", "pattern-never-matches", "function-body-missing",
 ))
+
+
+def _pll_names_a_class(name, classes):
+    """Whether `name` is a class: one of `classes`, the file's, or Python's
+    or PLL's own (`int`, `Image`)."""
+    return (
+        name in classes
+        or isinstance(getattr(_builtins_mod, name, None), type)
+        or isinstance(_pll_initial_globals.get(name), type)
+    )
 
 
 def _pll_finding(kind, error_type, line, column, name_token=None, **extras):
@@ -504,7 +516,9 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
       - `a == Boa`, which is always False;
       - a `case` pattern naming a class nothing defines, which fails only
         when that case is tried, or one the subject's annotation never
-        allows, which never matches.
+        allows, which never matches;
+      - a class in a `case` pattern with its brackets left off - `case
+        Boa:` - which is a new name that matches anything.
 
     Only inside a function for the first one: at the top level a bare
     expression is displayed, and the course relies on that.
@@ -824,7 +838,28 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
             "members": members,
             "classes": sorted(self._classes),
         }
-        for case in node.cases:
+        for index, case in enumerate(node.cases):
+            captures = [
+                p
+                for p in _ast.walk(case.pattern)
+                if isinstance(p, _ast.MatchAs) and p.pattern is None and p.name
+                and _pll_names_a_class(p.name, self._classes)
+            ]
+            if captures:
+                written, fixed = self._with_brackets(case.pattern, captures)
+                if case.guard is not None and written is not None:
+                    guard = " if " + (_ast.get_source_segment(self._code, case.guard) or _ast.unparse(case.guard))
+                    written += guard
+                    fixed = fixed + guard if fixed is not None else None
+                first = min(captures, key=lambda c: (c.lineno, c.col_offset))
+                self.found.append(_pll_finding(
+                    "case-needs-brackets", "MatchesAnything", first.lineno, first.col_offset, first.name,
+                    written=written,
+                    fixed=fixed,
+                    names=[c.name for c in sorted(captures, key=lambda c: (c.lineno, c.col_offset))],
+                    # Python's own error, when no `case` after this one can run.
+                    followed=case.pattern in captures and case.guard is None and index < len(node.cases) - 1,
+                ))
             for pattern in _ast.walk(case.pattern):
                 if not (isinstance(pattern, _ast.MatchClass) and isinstance(pattern.cls, _ast.Name)):
                     continue
@@ -838,6 +873,20 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
                         _pll_finding("pattern-never-matches", "NeverMatches", cls.lineno, cls.col_offset, cls.id, **facts)
                     )
         self.generic_visit(node)
+
+    def _with_brackets(self, pattern, captures):
+        """`pattern` as written, and with `()` after each of `captures` - or
+        None for that, when the pattern is not all on one line."""
+        written = _ast.get_source_segment(self._code, pattern)
+        if written is None or pattern.lineno != pattern.end_lineno:
+            return written, None
+        # Positions are counted in the line's UTF-8 bytes.
+        line = self._code.split("\n")[pattern.lineno - 1].encode("utf-8")
+        fixed = written
+        for capture in sorted(captures, key=lambda c: c.end_col_offset, reverse=True):
+            at = len(line[pattern.col_offset : capture.end_col_offset].decode("utf-8", "replace"))
+            fixed = fixed[:at] + "()" + fixed[at:]
+        return written, fixed
 
     def _variants(self, subject):
         """The classes `subject` can be, and the name of their union - when
@@ -1267,8 +1316,9 @@ def _pll_static_analyze(code, level, filename, session_key=None):
     as existing module-level bindings. That way a `#level beginner` prompt cannot
     reassign a name the file (or an earlier prompt line) already defined.
 
-    `beginner` and `intermediate` make every check; `advanced` only the one
-    for names read where they have no value (undefinedNames.py); `raw` none.
+    `beginner` and `intermediate` make every check; `advanced` only those
+    for names read where they have no value (undefinedNames.py) and for a
+    `case` pattern's class (`_pll_case_pattern_findings`); `raw` none.
     """
     if level not in _PLL_TEACHING_LEVELS and not _pll_checks_names(level):
         return []
@@ -1282,10 +1332,10 @@ def _pll_static_analyze(code, level, filename, session_key=None):
     findings = _pll_teaching_findings(tree, code, level, session_key) if teaching else []
     if _pll_checks_names(level):
         if not teaching:
-            # A `case` naming no class is a NameError too; the teaching
-            # checks find it with the others, worded with what the subject
-            # can be.
-            findings += _pll_unknown_pattern_classes(tree, code, session_key)
+            # A `case` naming no class is a NameError too, and one naming a
+            # class with its brackets left off matches anything; the teaching
+            # checks find both with the others.
+            findings += _pll_case_pattern_findings(tree, code, session_key)
         findings += _pll_undefined_names(tree, code, level, session_key, findings)
     findings.sort(key=lambda f: (f["line_number"] or 0, f["column"] or 0))
     return findings
@@ -1310,12 +1360,13 @@ def _pll_known_names(builder):
     return set().union(*(scope.bindings for scope in builder.scopes)) | builtins_set | set(_pll_predefined_library_names())
 
 
-def _pll_unknown_pattern_classes(tree, code, session_key):
-    """The `case` patterns whose class nothing defines, as the teaching
-    checks find them, for the level that makes no other of those checks."""
+def _pll_case_pattern_findings(tree, code, session_key):
+    """The `case` patterns whose class nothing defines, or whose class has
+    its brackets left off, as the teaching checks find them, for the level
+    that makes no other of those checks."""
     builder = _pll_built_scopes(tree, session_key)
     found = _PllSilenceVisitor(code, set(builder.scopes[0].bindings), _pll_known_names(builder)).scan(tree)
-    return [f for f in found if f["id"] == "unknown-pattern-class"]
+    return [f for f in found if f["id"] in ("unknown-pattern-class", "case-needs-brackets")]
 
 
 def _pll_teaching_findings(tree, code, level, session_key):

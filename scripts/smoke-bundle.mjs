@@ -141,13 +141,20 @@ async function main() {
     "def apply(f, x):",
     "    return f(x)",
     "",
+    "@dataclass",
+    "class Link:",
+    "    first: int",
+    "    rest: Links",
+    "",
+    "type Links = Link | None",
+    "",
     "def test_twice_plus():",
     "    assert twice_plus(3) == pytest.approx(7)",
   );
   const built = await run(["bundle", "build", source, "-o", join(work, "mystery.json")]);
   expect(built.code === 0, `build exits 0, got ${built.code}: ${built.stderr}`);
   expect(
-    /built for Python 3\.\d+\.\d+, at #level intermediate: defines Point, twice_plus, flip, initial, apply\n/.test(built.stderr),
+    /built for Python 3\.\d+\.\d+, at #level intermediate: defines Point, twice_plus, flip, initial, apply, Link, Links\n/.test(built.stderr),
     `what it built: ${built.stderr}`,
   );
   const bundle = JSON.parse(readFileSync(join(work, "mystery.json"), "utf8"));
@@ -190,6 +197,7 @@ async function main() {
     "",
     "print(mystery.twice_plus(5))",
     "print(mystery.flip(mystery.Point(1, 2)))",
+    "print(mystery.Link(1, None))",
     "",
     "def test_it():",
     "    assert mystery.twice_plus(0) == 1",
@@ -199,7 +207,9 @@ async function main() {
     {
       const r = await run([student]);
       expect(r.code === 0, `exit 0, got ${r.code}: ${r.stderr}`);
-      expect(r.stdout === "11\nPoint(x=2, y=1)\n", `its output: ${JSON.stringify(r.stdout)}`);
+      // Its recursive type needs no quotes: built at a student level, it reads
+      // its annotations when needed, as a student's file does.
+      expect(r.stdout === "11\nPoint(x=2, y=1)\nLink(first=1, rest=None)\n", `its output: ${JSON.stringify(r.stdout)}`);
       expect(/1 passed/.test(r.stderr), `its own test: ${r.stderr}`);
     }
 
@@ -344,7 +354,10 @@ async function main() {
   console.log("\n[9] without the server, the copy from the last run is used");
   {
     const r = await run([student]);
-    expect(r.code === 0 && r.stdout === "11\nPoint(x=2, y=1)\n", `offline: ${r.code} ${JSON.stringify(r.stdout)} ${r.stderr}`);
+    expect(
+      r.code === 0 && r.stdout === "11\nPoint(x=2, y=1)\nLink(first=1, rest=None)\n",
+      `offline: ${r.code} ${JSON.stringify(r.stdout)} ${r.stderr}`,
+    );
     expect(/The bundle `mystery`: could not reach .*; using the cached copy/.test(r.stderr), `the note: ${r.stderr}`);
   }
 

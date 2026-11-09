@@ -490,6 +490,57 @@ async function main() {
     }
     expect(part === 1, `and the package is whole for the program's own import: ${part}`);
     console.log("    an import, of the student's or in a test, is neither timed nor cut short");
+
+    // The student's definitions load as their run has them: at a student
+    // level, a type may name one defined after it.
+    const recursive = judged(
+      "#level beginner",
+      "@dataclass",
+      "class Node:",
+      "    first: str",
+      "    rest: Chain",
+      "",
+      "type Chain = Node | None",
+      "",
+      "def test_shout():",
+      '    assert shout(Node("hi", None).first) == "HI!"',
+    );
+    expect(
+      recursive.wheats[0].unloaded.length === 0 && recursive.wheats[0].tests.test_shout?.outcome === "pass",
+      `a recursive type with no quotes: ${JSON.stringify(recursive.wheats[0])}`,
+    );
+    // And so do the implementations', written at a student level.
+    const linked = [
+      "#level beginner",
+      "@dataclass",
+      "class _Node:",
+      "    first: str",
+      "    rest: _Chain",
+      "",
+      "type _Chain = _Node | None",
+      "",
+    ];
+    const typed = call(
+      "_pll_examplar_build",
+      JSON.stringify({
+        wheats: { reference: [...linked, "def shout(s: str) -> str:", '    return s.upper() + "!"'].join("\n") },
+        chaffs: { shout: { 1: [...linked, "def shout(s: str) -> str:", "    return s.upper()"].join("\n") } },
+      }),
+    );
+    expect(typed.ok, `an implementation's recursive type builds: ${typed.error}`);
+    const onTyped = typed.ok
+      ? call(
+          "_pll_examplar_run",
+          ["#level beginner", "def test_shout():", '    assert shout("hi") == "HI!"', ""].join("\n"),
+          JSON.stringify(typed.bundle),
+          "hw.py",
+        )
+      : null;
+    expect(
+      onTyped?.wheats[0].loaded && onTyped.wheats[0].tests.test_shout?.outcome === "pass",
+      `and loads: ${JSON.stringify(onTyped?.wheats[0])}`,
+    );
+    console.log("    a recursive type with no quotes loads, in the student's file and in an implementation");
   }
 
   rmSync(work, { recursive: true, force: true });

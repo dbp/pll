@@ -516,12 +516,19 @@ def _pll_word_class_needs_dataclass(f, level):
     return "`%s` lists fields but has no `@dataclass`, so `%s(...)` takes no arguments." % (name, name), fixes
 
 
+@_pll_words("case-needs-brackets")
+def _pll_word_case_needs_brackets(f, level):
+    """`case Boa:`: the class `Boa` with its brackets left off, a new name
+    that matches anything."""
+    return _pll_case_brackets(f["written"], f["fixed"], f["names"], f["followed"])
+
+
 @_pll_words("compared-with-class")
 def _pll_word_compared_with_class(f, level):
     """`if a == Boa:`: a value is never equal to the class it was made from."""
     name = f["name_token"] or "a class"
     return "`%s` is a class, so comparing a value with it is always False." % name, [
-        "Use `match` to tell the kinds apart: `case %s(...):`." % name,
+        "Use `match` to tell the kinds apart: `case %s():`." % name,
         "`%s` is the blueprint; a value made from it is never equal to it." % name,
     ]
 
@@ -539,7 +546,7 @@ def _pll_pattern_variants(subject, union, members):
 def _pll_pattern_fixes(name, subject, union, members):
     """Match one of them, or make `name` one of them."""
     classes = [m for m in members if m != "None"]
-    cases = _pll_listed(["`case %s(...)`" % m for m in classes], "or")
+    cases = _pll_listed(["`case %s()`" % m for m in classes], "or")
     widened = " | ".join(members + [name])
     added = (
         "If %s is a new kind of `%s`, define `class %s` and add it: `%s = %s`."

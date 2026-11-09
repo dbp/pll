@@ -1129,7 +1129,7 @@ console.log("[stock messages: Python's own wording replaced with the course's]")
     expect(
       alias?.headline === "There is no class `Aardvark`: an `Animal` is a `Boa` or an `Armadillo`." &&
         alias?.howToFix.join("|") ===
-          "Match one of them: `case Boa(...)` or `case Armadillo(...)`.|If an `Aardvark` is a new kind of `Animal`, define `class Aardvark` and add it: `Animal = Boa | Armadillo | Aardvark`." &&
+          "Match one of them: `case Boa()` or `case Armadillo()`.|If an `Aardvark` is a new kind of `Animal`, define `class Aardvark` and add it: `Animal = Boa | Armadillo | Aardvark`." &&
         alias?.lineNumber === 16,
       `the subject's variants, at the case: ${said(alias ?? { headline: "", howToFix: [] })} ${alias?.lineNumber}`,
     );
@@ -1625,7 +1625,7 @@ console.log("[not callable: the name that was called; pictures as images]");
   expect(own.headline === "object of type '_Box' has no len().", `a class of theirs: ${own.headline}`);
   const capture = raised("class Elephant:\n    pass\n\n\ndef f(a):\n    match a:\n        case Elephant:\n            return 1\n        case int():\n            return 2\n");
   expect(
-    capture.howToFix[1] === "With them, `case Elephant():` matches only an `Elephant`; put one name inside for each field.",
+    capture.howToFix[1] === "With them, `case Elephant():` matches only an `Elephant`.",
     `a capture pattern's article: ${JSON.stringify(capture.howToFix)}`,
   );
   // At a prompt line, whose source is the line itself.

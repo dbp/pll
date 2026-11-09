@@ -1146,17 +1146,21 @@ stderr:
     - Python runs a file from the top, so nothing further down exists yet.
     - Move the definition of `double` above this line.
 
-=== name-forward-annotation (exit 2)
+=== name-forward-annotation (exit 1)
 stderr:
-  student.py [beginner]
-  NameError: `NumList` is defined on line 7, after this line, and an annotation is read as the file runs.
-    at student.py:5:11
+  student.py [raw]
+  NameError: `NumList` is defined on line 8, after this line, and an annotation is read as the file runs.
+    at student.py:6:11
   
   How to fix:
     - Write the type as a string - `rest: "NumList"` - and Python looks it up later, once it exists.
     - A type that names itself can only be written that way: the union needs the class, and the class needs the union.
-  
-  Static analysis found 1 problem. The file was not run.
+
+=== name-forward-annotation-student (exit 0)
+stdout:
+  Node(value=1, rest=Node(value=2, rest=None))
+stderr:
+  student.py [beginner]
 
 === name-type-string (exit 1)
 stderr:
@@ -1293,7 +1297,19 @@ stderr:
   
   How to fix:
     - Without them, `Boa` is a new name that matches anything, so no `case` after it can ever run.
-    - With them, `case Boa():` matches only a `Boa`; put one name inside for each field.
+    - With them, `case Boa():` matches only a `Boa`.
+
+=== case-capture-last (exit 2)
+stderr:
+  student.py [beginner]
+  MatchesAnything: `case Boa:` needs brackets: `case Boa():`.
+    at student.py:14:14
+  
+  How to fix:
+    - Without them, `Boa` is a new name that matches anything, not only a `Boa`.
+    - With them, `case Boa():` matches only a `Boa`.
+  
+  Static analysis found 1 problem. The file was not run.
 
 === syntax-case-capture-tests (exit 1)
 stderr:
@@ -1303,7 +1319,7 @@ stderr:
   
   How to fix:
     - Without them, `Boa` is a new name that matches anything, so no `case` after it can ever run.
-    - With them, `case Boa():` matches only a `Boa`; put one name inside for each field.
+    - With them, `case Boa():` matches only a `Boa`.
   The tests were not run, because of the error above.
 
 === syntax-warning-unrun (exit 0)
@@ -1626,16 +1642,23 @@ stderr:
   
   Static analysis found 1 problem. The file was not run.
 
-=== nm-class-own-name (exit 2)
+=== nm-class-own-name (exit 1)
 stderr:
-  student.py [beginner]
-  NameError: `Link` is the class being defined here, and has no value until the class is finished.
-    at student.py:5:11
+  student.py [raw]
+  NameError: Python doesn't know what `Link` means.
+    at student.py:6:11
   
   How to fix:
-    - Write the type as a string - `rest: "Link | None"` - and Python looks it up later, once the class exists.
+    - Did you mean `line`?
+
+=== nm-class-own-name-student (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: The `rest` field of `Link` should be `Link` or `None`, but got `2`.
+    at student.py:7
   
-  Static analysis found 1 problem. The file was not run.
+  How to fix:
+    - Check the values given to `Link(...)`, in the order its fields are written.
 
 === nm-method-attribute (exit 2)
 stderr:
@@ -1915,7 +1938,7 @@ stderr:
     at student.py:20:14
   
   How to fix:
-    - Match one of them: `case Boa(...)` or `case Armadillo(...)`.
+    - Match one of them: `case Boa()` or `case Armadillo()`.
     - If an `Aardvark` is a new kind of `Animal`, define `class Aardvark` and add it: `Animal = Boa | Armadillo | Aardvark`.
   
   Static analysis found 1 problem. The file was not run.
@@ -1929,7 +1952,7 @@ stderr:
     at student.py:22:14
   
   How to fix:
-    - Match one of them: `case Boa(...)` or `case Armadillo(...)`.
+    - Match one of them: `case Boa()` or `case Armadillo()`.
     - If a `Rock` is a new kind of `Animal`, define `class Rock` and add it: `Animal = Boa | Armadillo | Rock`.
   
 
@@ -1940,7 +1963,7 @@ stderr:
     at student.py:20:14
   
   How to fix:
-    - Match one of them: `case Boa(...)` or `case Armadillo(...)`.
+    - Match one of them: `case Boa()` or `case Armadillo()`.
     - If an `Aardvark` is a new kind of `Animal`, define `class Aardvark` and add it: `Animal = Boa | Armadillo | Aardvark`.
   
   Static analysis found 1 problem. The file was not run.
@@ -2026,7 +2049,7 @@ stderr:
     at student.py:7:17
   
   How to fix:
-    - Use `match` to tell the kinds apart: `case Boa(...):`.
+    - Use `match` to tell the kinds apart: `case Boa():`.
     - `Boa` is the blueprint; a value made from it is never equal to it.
   
   Static analysis found 1 problem. The file was not run.
