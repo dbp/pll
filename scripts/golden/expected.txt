@@ -1299,6 +1299,18 @@ stderr:
     - Without them, `Boa` is a new name that matches anything, so no `case` after it can ever run.
     - With them, `case Boa():` matches only a `Boa`.
 
+=== is-none (exit 2)
+stderr:
+  student.py [beginner]
+  WrongComparison: `is` asks whether two values are the very same object, not whether they are equal.
+    at student.py:3:12
+  
+  How to fix:
+    - Write `xs == None` instead.
+    - `#level advanced` allows `is`: whether two names hold one object matters once values change in place.
+  
+  Static analysis found 1 problem. The file was not run.
+
 === case-capture-last (exit 2)
 stderr:
   student.py [beginner]

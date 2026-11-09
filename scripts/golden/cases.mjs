@@ -172,6 +172,7 @@ export const CASES = [
   { name: "syntax-unclosed", code: ["print((1, 2)", "x = 3"] },
   { name: "syntax-indent", code: ["def f():", "return 1"] },
   { name: "syntax-case-capture", code: dataclass("@dataclass", "class Boa:", "    name: str", "", "def f(b):", "    match b:", "        case Boa:", "            return 1", "        case _:", "            return 2") },
+  { name: "is-none", code: [B, "def is_empty(xs: list[int] | None) -> bool:", "    return xs is None", "", "print(is_empty(None))"] },
   { name: "case-capture-last", code: [B, "@dataclass", "class Boa:", "    name: str", "", "@dataclass", "class Armadillo:", "    name: str", "", "def sound(a: Boa | Armadillo) -> str:", "    match a:", "        case Armadillo():", '            return "?"', "        case Boa:", '            return "hiss"', '    return ""', "", 'print(sound(Armadillo("Ann")))'] },
   { name: "syntax-case-capture-tests", code: dataclass("@dataclass", "class Boa:", "    name: str", "", "def f(b):", "    match b:", "        case Boa:", "            return 1", "        case _:", "            return 2", "", "def test_f():", '    assert f(Boa("x")) == 1') },
   { name: "syntax-warning-unrun", code: ["def area(w):", "    return 3(w)", "", 'print("fine")'] },

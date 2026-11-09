@@ -53,7 +53,7 @@ console.log("\n[1] which line is the `#level` line");
 console.log("\n[2] what an edit leaves of the line, and the cursor");
 {
   // [what, the text, the changes, the text it is kept as (null: as the edit
-  // left it), and the cursor].
+  // left it), the cursor, and the file's line break if the text has none].
   const CASES = [
     ["an edit below it", FILE, [insert(BELOW, "x")], null],
     ["Select All and Delete, from the line below", FILE, [remove(BELOW, END)], null],
@@ -83,13 +83,19 @@ console.log("\n[2] what an edit leaves of the line, and the cursor");
     ["a CRLF file, typing at its end", "#level beginner\r\nprint(1)\r\n", [insert(15, "x")], "#level beginner\r\nx\r\nprint(1)\r\n", 18],
     ["a file that is only the line, typing at its end", "#level beginner", [insert(15, "x")], "#level beginner\nx", 17],
     ["a file that is only the line, all deleted", "#level beginner", [remove(0, 15)], "#level beginner", "before"],
+    // Enter at the end of a file's last line is that line's break, not a line typed into it.
+    ["a file that is only the line, Enter at its end", "#level beginner", [insert(15, "\n")], null],
+    ["a file that is only the line, Enter and a key at its end", "#level beginner", [insert(15, "\nx")], null],
+    ["a file that is only the line, a key and Enter at its end", "#level beginner", [insert(15, "x\n")], "#level beginner\nx\n", 18],
+    ["a CRLF file that is only the line, Enter at its end", "#level beginner", [insert(15, "\r\n")], null, undefined, "\r\n"],
+    ["a CRLF file that is only the line, typing at its end", "#level beginner", [insert(15, "x")], "#level beginner\r\nx", 18, "\r\n"],
     ["typing on a blank line above it", "\n\n#level beginner\nprint(1)\n", [insert(0, "x")], "\n\n#level beginner\nx\nprint(1)\n", 19],
     ["deleting a blank line above it", "\n\n#level beginner\nprint(1)\n", [remove(0, 1)], null],
     ["a file without the line", "print(1)\n", [remove(0, 9)], null],
     ["a file whose first line is not one", "# lab\n#level beginner\n", [remove(0, 6)], null],
   ];
-  for (const [label, before, changes, want, cursor] of CASES) {
-    const got = repairLevelLine(before, changes);
+  for (const [label, before, changes, want, cursor, eol = before.includes("\r\n") ? "\r\n" : "\n"] of CASES) {
+    const got = repairLevelLine(before, changes, eol);
     // A pasted program's own line, or this one put back.
     const kind = cursor === "editor" ? "replaced" : "kept";
     const ok = want === null ? got === null : got?.text === want && got.cursor === cursor && got.kind === kind;
@@ -133,7 +139,7 @@ console.log("\n[4] edits that come too fast to keep apart are read as one, from 
   const typed = "#level beginnerxy\nprint(1)\nprint(2)\n";
   const change = changeBetween(good, typed);
   expect(change.offset === 15 && change.length === 0 && change.text === "xy", `the change: ${JSON.stringify(change)}`);
-  const got = repairLevelLine(good, [change]);
+  const got = repairLevelLine(good, [change], "\n");
   expect(got?.text === "#level beginner\nxy\nprint(1)\nprint(2)\n" && got.cursor === 18 && got.kind === "kept", `kept: ${JSON.stringify(got)}`);
   const swapped = changeBetween("abc", "aXc");
   expect(swapped.offset === 1 && swapped.length === 1 && swapped.text === "X", `a replacement: ${JSON.stringify(swapped)}`);

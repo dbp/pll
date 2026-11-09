@@ -415,16 +415,19 @@ def _pll_word_assert_tuple(f, level):
     ]
 
 
-@_pll_words("is-literal")
-def _pll_word_is_literal(f, level):
-    """`x is 60.5`: `is`, where `==` was meant."""
+@_pll_words("is-comparison")
+def _pll_word_is_comparison(f, level):
+    """`x is None`, `x is 60.5`: `is`, where `==` was meant."""
     negated = f.get("operator") == "is not"
-    literal = f.get("literal") or "a value"
-    return "`%s` asks whether two things are the very same object, not whether they are equal." % (
-        "is not" if negated else "is"
-    ), [
-        "To compare with `%s`, write `%s` instead." % (literal, "!=" if negated else "=="),
-        "`is` is for `None`: `x is None`.",
+    equal = "!=" if negated else "=="
+    headline = (
+        "`is not` asks whether two values are different objects, not whether they are unequal."
+        if negated
+        else "`is` asks whether two values are the very same object, not whether they are equal."
+    )
+    return headline, [
+        "Write `%s` instead." % f["fixed"] if f.get("fixed") else "Compare with `%s` instead." % equal,
+        "`#level advanced` allows `is`: whether two names hold one object matters once values change in place.",
     ]
 
 

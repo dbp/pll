@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+## 0.11.0 (2026-11-9)
+
+### Changed
+- **`is` is refused at `beginner` and `intermediate`**, `x is None` included:
+  it asks whether two values are the same object, which matters only once
+  values change in place. Each is told the `==` meant - `x == None` - and
+  that `#level advanced` allows `is`.
+
+### Fixed
+- **Enter at the end of a `#level` line that is a file's last line gives
+  one line break**, not two - and in a file with Windows line breaks
+  (CRLF), it no longer adds lines until the page is reloaded. PLL put the
+  line back with a `\n` of its own, which the editor made the file's
+  `\r\n`; PLL took that for more typing, and put the line back again. It
+  now writes the file's own line break, knows its edit once the editor has
+  rewritten the line breaks in it, and leaves the text as it is after a
+  few put-backs in a row.
+- **Long recursive data is checked in time that grows with its length**,
+  and no longer runs out of stack: a `Node[int]` longer than about 280
+  cells raised RecursionError (800 for a generic function's copy of one),
+  finding a bad last cell took (n+1)² checks, and `type Nested =
+  list[Nested] | int` raised RecursionError too. A type that names itself
+  is one contract, checks are loops rather than recursion, and a value a
+  contract has accepted is not checked again until a checked dataclass
+  field changes. A list a file at another level changes in place is not
+  seen by its next check.
+- **A function passed on through many calls is wrapped once**:
+  `apply_n(f, 900, 0)` ran `f` through 900 wrappers and raised
+  RecursionError. A function already under the same contract goes on as
+  it is, and a chain of `Callable` parameters with no type variable is one
+  wrapper.
+- **A generic function that calls itself takes time in proportion to its
+  data**: `length[T]` raised RecursionError at 400 cells, and `mapped[T,
+  U](f, l)` took 2 seconds on 300. A call it makes to itself keeps the
+  seals of the call it is in, and its copy of a dataclass fills each field
+  in when it is first read, so `vars()` of one shows only those.
+- **A union inside a union takes what one of its members would**: `def
+  wrap[T](x: T) -> Opt[T] | int: return [x]`, with `Opt` a type alias,
+  was refused.
+- **An annotated variable is checked against the types of this run**:
+  `pets: list["Dog"]` kept the `Dog` of the first run that wrote it, and
+  refused every later run's.
+
 ## 0.10.0 (2026-11-05)
 
 ### Added

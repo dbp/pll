@@ -12,6 +12,9 @@
  *   4. The CodeLens above the line opens the picker, which changes the level
  *      and removes the line; then nothing is held
  *   5. The status-bar item gives a file with no line one
+ *   6. A new file: its `#level` line typed, and Enter at its end - with LF
+ *      line breaks and with CRLF, Windows's, which the editor gives any
+ *      line break PLL writes
  *
  *   node scripts/smoke-web-level.mjs                      # insiders
  *   VSCODE_WEB_QUALITY=stable node scripts/...            # what vscode.dev ships
@@ -101,6 +104,23 @@ async function open(page, name, firstLine) {
 async function selectAll(page) {
   await page.keyboard.press("Control+a");
   await page.waitForTimeout(250);
+}
+
+/** Run a command by its title from the palette, and pick `choice` in the list it shows, if given. */
+async function command(page, title, choice) {
+  await page.keyboard.press("F1");
+  const input = page.locator(".quick-input-widget input");
+  await input.waitFor({ state: "visible" });
+  await input.fill(">" + title);
+  await page.waitForTimeout(400);
+  await page.keyboard.press("Enter");
+  if (choice !== undefined) {
+    await page.waitForTimeout(600);
+    await input.fill(choice);
+    await page.waitForTimeout(400);
+    await page.keyboard.press("Enter");
+  }
+  await page.locator(".quick-input-widget").waitFor({ state: "hidden" });
 }
 
 async function pickInPicker(page, label) {
@@ -227,6 +247,36 @@ async function main() {
     await pickInPicker(page, "beginner");
     const given = await textWhen(page, (t) => t.startsWith(HEADER + "\n\ngreeting"));
     expect(given.startsWith(HEADER + "\n\ngreeting"), `hello.py: ${JSON.stringify(given)}`);
+
+    console.log("\n[6] a new file: its `#level` line typed, and Enter at its end, with LF and with CRLF");
+    // The new file's own editor: the page has others, the one VS Code opens
+    // untitled at the start among them.
+    const textOf = (uri) =>
+      page.evaluate((u) => {
+        const editor = [...document.querySelectorAll(".part.editor .monaco-editor")].find((e) => e.getAttribute("data-uri") === u);
+        const lines = [...(editor?.querySelectorAll(".view-lines .view-line") ?? [])];
+        lines.sort((a, b) => parseFloat(a.style.top) - parseFloat(b.style.top));
+        return lines.map((el) => (el.textContent ?? "").replace(/\u00a0/g, " ")).join("\n");
+      }, uri);
+    for (const eol of ["LF", "CRLF"]) {
+      await command(page, "File: New Untitled Text File");
+      await command(page, "Change Language Mode", "Python");
+      await command(page, "Change End of Line Sequence", eol);
+      const uri = await page.evaluate(() => document.querySelector(".part.editor .monaco-editor.focused")?.getAttribute("data-uri"));
+      await page.keyboard.type("#level intermediate");
+      await page.waitForTimeout(800);
+      expect((await statusBar(page)).includes("PLL: intermediate"), `${eol}: PLL holds the new file's line: ${uri}`);
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(300);
+      const entered = await textOf(uri);
+      await page.waitForTimeout(1000);
+      const later = await textOf(uri);
+      expect(
+        entered === "#level intermediate\n" && later === entered,
+        `${eol}: one line break, and no more after it: ${JSON.stringify(entered)} then ${JSON.stringify(later)}`,
+      );
+      await command(page, "View: Revert and Close Editor");
+    }
     expect(tokenizer.length === 0, `the editor tokenized PLL's edits wrongly: ${tokenizer.join("; ")}`);
   } finally {
     await browser?.close();

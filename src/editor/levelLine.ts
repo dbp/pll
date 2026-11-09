@@ -38,6 +38,14 @@ const LEVEL_SUMMARY: Record<Level, string> = {
 const RETRIES = 3;
 
 /**
+ * How many put-backs in a row, with none of them seen to leave the text as
+ * meant, before the text is taken as it is. Typing cannot come close; an
+ * editor that changed each put-back on its way in would otherwise have it
+ * put back for ever.
+ */
+const ROUNDS = 5;
+
+/**
  * How long to wait for VS Code to say whether an edit left the file dirty,
  * when it says nothing: a saved file's first edit is followed by word that
  * it is dirty, and reverting by word that it is not, while further typing
@@ -61,6 +69,8 @@ interface Kept {
   expected: { text: string; repair: boolean } | null;
   /** The selections from before the edit being put right. */
   selections: readonly vscode.Selection[] | null;
+  /** The put-backs since the text was last as it should be (`ROUNDS`). */
+  rounds: number;
   /** The line and level the CodeLens last showed, as `line:level`, or "". */
   shown: string;
 }
@@ -178,6 +188,7 @@ export class LevelLineKeeper implements vscode.Disposable {
         timer: undefined,
         expected: null,
         selections: null,
+        rounds: 0,
         shown: "",
       };
       this.kept.set(key, kept);
@@ -203,7 +214,7 @@ export class LevelLineKeeper implements vscode.Disposable {
     kept.last = text;
     const expected = kept.expected;
     kept.expected = null;
-    if (expected !== null && text === expected.text) {
+    if (expected !== null && sameText(text, expected.text)) {
       this.settle(document, kept, text);
       return;
     }
@@ -244,11 +255,12 @@ export class LevelLineKeeper implements vscode.Disposable {
     // One edit of the last good text is read as VS Code reported it; more,
     // or one over a put-back still on its way, as one edit of that text.
     const changes = queue.length === 1 && queue[0].before === kept.good ? queue[0].changes : [changeBetween(kept.good, text)];
-    const repair = repairLevelLine(kept.good, changes);
-    if (repair === null) {
+    const repair = repairLevelLine(kept.good, changes, eolOf(document));
+    if (repair === null || kept.rounds >= ROUNDS) {
       this.settle(document, kept, text);
       return;
     }
+    kept.rounds += 1;
     void this.putBack(editor, kept, text, repair, RETRIES);
   }
 
@@ -257,6 +269,7 @@ export class LevelLineKeeper implements vscode.Disposable {
     clearTimeout(kept.timer);
     kept.timer = undefined;
     kept.queue = [];
+    kept.rounds = 0;
     kept.good = findLevelLine(text) !== null ? text : null;
     this.refresh(document, kept);
   }
@@ -298,7 +311,7 @@ export class LevelLineKeeper implements vscode.Disposable {
       // from the last good text.
       if (kept.expected?.text === repair.text && kept.queue.length === 0 && kept.good !== null && retries > 0) {
         kept.expected = null;
-        const again = repairLevelLine(kept.good, [changeBetween(kept.good, now)]);
+        const again = repairLevelLine(kept.good, [changeBetween(kept.good, now)], eolOf(document));
         if (again === null) {
           this.settle(document, kept, now);
         } else {
@@ -307,7 +320,7 @@ export class LevelLineKeeper implements vscode.Disposable {
       }
       return;
     }
-    if (now !== repair.text) {
+    if (!sameText(now, repair.text)) {
       return;
     }
     if (typeof repair.cursor === "number") {
@@ -372,7 +385,7 @@ export class LevelLineKeeper implements vscode.Disposable {
   private async write(editor: vscode.TextEditor, level: Level | null): Promise<void> {
     const document = editor.document;
     const text = document.getText();
-    const next = withLevel(text, level, document.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n");
+    const next = withLevel(text, level, eolOf(document));
     if (next === text) {
       return;
     }
@@ -439,6 +452,16 @@ export class LevelLineKeeper implements vscode.Disposable {
       }),
     ];
   }
+}
+
+/** The file's line break, which the editor gives every line it has. */
+function eolOf(document: vscode.TextDocument): string {
+  return document.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n";
+}
+
+/** Whether `text` is `meant`, or is it with the file's own line breaks, as the editor gives an edit. */
+function sameText(text: string, meant: string): boolean {
+  return text === meant || text.replace(/\r\n/g, "\n") === meant.replace(/\r\n/g, "\n");
 }
 
 /** The `#level` line's number and level, read line by line rather than from the whole text. */

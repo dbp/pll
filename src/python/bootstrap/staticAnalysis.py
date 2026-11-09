@@ -936,33 +936,23 @@ class _PllSilenceVisitor(_ast.NodeVisitor):
         # `if a == Boa:` is always False - a value is never equal to the
         # class it was made from. `type(a) == Boa`, though, is a real check.
         sides = [node.left] + list(node.comparators)
-        # `x is 60.5`, `name is "Ada"`: `is` asks whether two are the same
-        # object, which a number or a string written out need not be -
-        # Python's SyntaxWarning, as a finding of the level's.
+        # `x is None`, `x is 60.5`: `is` asks whether two are the same object,
+        # which equal values need not be, and which matters only once values
+        # change in place - as they may at `advanced`. `==` is what is meant.
         for op, left, right in zip(node.ops, sides, sides[1:]):
             if isinstance(op, (_ast.Is, _ast.IsNot)):
-                literal = next(
-                    (
-                        side
-                        for side in (left, right)
-                        if isinstance(side, _ast.Constant)
-                        and side.value is not None
-                        and not isinstance(side.value, bool)
-                        and side.value is not Ellipsis
-                    ),
-                    None,
-                )
-                if literal is not None:
-                    self.found.append(
-                        _pll_finding(
-                            "is-literal",
-                            "WrongComparison",
-                            node.lineno,
-                            node.col_offset,
-                            operator="is not" if isinstance(op, _ast.IsNot) else "is",
-                            literal=_ast.get_source_segment(self._code, literal),
-                        )
+                written = [_ast.get_source_segment(self._code, side) for side in (left, right)]
+                equal = "!=" if isinstance(op, _ast.IsNot) else "=="
+                self.found.append(
+                    _pll_finding(
+                        "is-comparison",
+                        "WrongComparison",
+                        node.lineno,
+                        node.col_offset,
+                        operator="is not" if isinstance(op, _ast.IsNot) else "is",
+                        fixed=None if None in written else "%s %s %s" % (written[0], equal, written[1]),
                     )
+                )
         if any(isinstance(op, (_ast.Eq, _ast.NotEq)) for op in node.ops):
             for i, side in enumerate(sides):
                 others = sides[:i] + sides[i + 1 :]

@@ -168,8 +168,11 @@ function linesOf(text: string): string[] {
  * there, keeps everything typed. A program pasted in with its own `#level`
  * line, straight under this one or over it, brings that line instead: it
  * is the level the program was written for.
+ *
+ * `eol` is the file's line break, which the editor gives every line - and
+ * every edit's text - whatever the edit was written with.
  */
-export function repairLevelLine(before: string, changes: readonly TextChange[]): LevelLineRepair | null {
+export function repairLevelLine(before: string, changes: readonly TextChange[], eol: string): LevelLineRepair | null {
   const kept = findLevelLine(before);
   if (kept === null || changes.length === 0) {
     return null;
@@ -187,7 +190,6 @@ export function repairLevelLine(before: string, changes: readonly TextChange[]):
   }
 
   // Split each change between the line, what is above it, and what is below.
-  const eol = kept.next > kept.end ? before.slice(kept.end, kept.next) : lineBreakOf(before);
   let above = "";
   let moved = "";
   let below = "";
@@ -224,7 +226,10 @@ export function repairLevelLine(before: string, changes: readonly TextChange[]):
     // everything.
     return result(after, above + joined(moved, below, eol), "replaced", "editor");
   }
-  const head = above + kept.text + (kept.next > kept.end || moved !== "" || below !== "" ? eol : "");
+  // A line break after the line - unless it was the last line, and what
+  // was typed at its end starts with one: Enter there.
+  const breaks = kept.next > kept.end || below !== "" || (moved !== "" && !startsWithBreak(moved));
+  const head = above + kept.text + (breaks ? eol : "");
   const separator = moved !== "" && !endsWithBreak(moved) && below !== "" && !startsWithBreak(below) ? eol : "";
   const text = head + moved + separator + below;
   if (text === before) {
@@ -284,11 +289,6 @@ function withoutLine(text: string, line: string): string {
 /** `top` and then `rest`, on lines of their own. */
 function joined(top: string, rest: string, eol: string): string {
   return top + (top !== "" && rest !== "" && !endsWithBreak(top) && !startsWithBreak(rest) ? eol : "") + rest;
-}
-
-function lineBreakOf(text: string): string {
-  const newline = text.indexOf("\n");
-  return newline > 0 && text[newline - 1] === "\r" ? "\r\n" : "\n";
 }
 
 function endsWithBreak(text: string): boolean {

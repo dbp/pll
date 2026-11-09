@@ -946,21 +946,31 @@ _g = _pll_get_session("smoke-lib")
     console.log("    import, parameter, later loop variable, earlier variable, def");
   }
 
-  console.log("\n[24] `is` with a number or a string is a finding at the teaching levels");
+  console.log("\n[24] `is` is refused at the teaching levels, `is None` too, with the `==` meant");
   {
     for (const level of ["beginner", "intermediate"]) {
-      const found = analyze('x = 60.5\nassert x is 60.5\nname = "Ada"\nprint(name is not "Ada")\nprint(x is None)\n', level, "is.py");
-      const isLiteral = found.filter((f) => f.id === "is-literal");
+      const found = analyze('x = 60.5\nassert x is 60.5\nname = "Ada"\nprint(name is not "Ada")\nprint(x is None)\n', level, "is.py")
+        .filter((f) => f.id === "is-comparison");
       expect(
-        isLiteral.length === 2 && isLiteral[0].operator === "is" && isLiteral[0].literal === "60.5" &&
-          isLiteral[1].operator === "is not" && isLiteral[1].severity === "error",
-        `${level}: two, not \`is None\`: ${JSON.stringify(isLiteral)}`,
+        found.length === 3 && found.map((f) => f.operator).join() === "is,is not,is" &&
+          found.map((f) => f.fixed).join("|") === 'x == 60.5|name != "Ada"|x == None' && found.every((f) => f.severity === "error"),
+        `${level}: all three: ${JSON.stringify(found)}`,
       );
     }
-    const [finding] = wordStatic(analyze("x = 60.5\nassert x is 60.5\n", "beginner", "is.py"), "beginner", "is.py");
-    expect(finding?.howToFix?.[0] === "To compare with `60.5`, write `==` instead.", `the fix: ${JSON.stringify(finding)}`);
-    expect(analyze("x = 1\nprint(x is 1)\n", "advanced", "is.py").length === 0, "advanced is Python");
-    console.log("    `is 60.5` and `is not \"Ada\"`, and never `is None`");
+    const [is] = wordStatic(analyze("x = None\nprint(x is None)\n", "beginner", "is.py"), "beginner", "is.py");
+    expect(
+      is?.headline === "`is` asks whether two values are the very same object, not whether they are equal." &&
+        is?.howToFix?.[0] === "Write `x == None` instead." && /`#level advanced` allows/.test(is?.howToFix?.[1] ?? ""),
+      `worded: ${JSON.stringify(is)}`,
+    );
+    const [isNot] = wordStatic(analyze("x = None\nprint(x is not None)\n", "beginner", "is.py"), "beginner", "is.py");
+    expect(
+      isNot?.headline === "`is not` asks whether two values are different objects, not whether they are unequal." &&
+        isNot?.howToFix?.[0] === "Write `x != None` instead.",
+      `\`is not\`: ${JSON.stringify(isNot)}`,
+    );
+    expect(analyze("x = 1\nprint(x is 1)\nprint(x is None)\n", "advanced", "is.py").length === 0, "advanced is Python");
+    console.log("    `is 60.5`, `is not \"Ada\"` and `is None`, each with its `==`; advanced allows them");
   }
 
   console.log("\n[25] every kind of finding the checks make has its wording");
