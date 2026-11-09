@@ -82,7 +82,8 @@ def _pll_party_of_code(code):
 class _PllBlame:
     """Who answers for a check. `positive` gave the value and `negative` took
     it; `owner` is the definition whose contract it is, `path` the steps from
-    that contract to this check, and `site` where the obligation was made -
+    that contract to this check - `up`'s, then its own `steps` - and `site`
+    where the obligation was made -
     the reference, as `(file, line, column)` - or None where nothing
     referred to the function (a method, called through its object).
 
@@ -96,13 +97,14 @@ class _PllBlame:
     under way, by type variable (`_PllSeal`), or None.
     """
 
-    __slots__ = ("positive", "negative", "owner", "path", "site", "level", "gives", "seals")
+    __slots__ = ("positive", "negative", "owner", "steps", "site", "level", "gives", "seals", "up")
 
-    def __init__(self, positive, negative, owner, path=(), site=None, level=None, gives=True, seals=None):
+    def __init__(self, positive, negative, owner, steps=(), site=None, level=None, gives=True, seals=None, up=None):
         self.positive = positive
         self.negative = negative
         self.owner = owner
-        self.path = path
+        self.steps = steps
+        self.up = up
         self.site = site
         # The level of the file the contract is written in, which decides
         # how strictly it was checked.
@@ -110,23 +112,38 @@ class _PllBlame:
         self.gives = gives
         self.seals = seals
 
+    @property
+    def path(self):
+        """Made when asked: a walk down a value makes a blame for each part,
+        which copying the steps above it would make cost the depth."""
+        parts, blame = [], self
+        while blame is not None:
+            parts.append(blame.steps)
+            blame = blame.up
+        return tuple(step for steps in reversed(parts) for step in steps)
+
     def swapped(self, step):
         """For a function's argument: whoever took the function gives it."""
         return _PllBlame(
-            self.negative, self.positive, self.owner, self.path + (step,), self.site, self.level, not self.gives, self.seals
+            self.negative, self.positive, self.owner, (step,), self.site, self.level, not self.gives, self.seals, self
         )
 
     def into(self, step):
         """For a part of the value - an item, a field, a result: the same giver."""
-        return _PllBlame(
-            self.positive, self.negative, self.owner, self.path + (step,), self.site, self.level, self.gives, self.seals
-        )
+        return _PllBlame(self.positive, self.negative, self.owner, (step,), self.site, self.level, self.gives, self.seals, self)
 
     def sealed(self, seals):
         """For one call of a generic function: with its own seals as well."""
         merged = dict(self.seals or {})
         merged.update(seals)
-        return _PllBlame(self.positive, self.negative, self.owner, self.path, self.site, self.level, self.gives, merged)
+        return _PllBlame(
+            self.positive, self.negative, self.owner, self.steps, self.site, self.level, self.gives, merged, self.up
+        )
+
+    def same(self, other, but=()):
+        return self.path == other.path and all(
+            getattr(self, slot) == getattr(other, slot) for slot in self.__slots__ if slot not in ("steps", "up", *but)
+        )
 
 
 # -- what is raised ------------------------------------------------------------
@@ -155,9 +172,10 @@ class _PllContract:
     """What an annotation promises.
 
     - `accepts(value)`: what can be decided at once - all of it for a flat
-      contract; for a function's, Racket's first-order check.
+      contract; for a function's, Racket's first-order check. A contract on
+      a value's parts says them (`_PllPartsContract`) instead.
     - `check_now(value, blame)`: the same, raising where the value failed -
-      at the deepest part, for a container.
+      at the deepest part, for a container (`_pll_witness`).
     - `check(value, blame)`: the value as it may cross: a function wrapped,
       so the rest is checked at each of its calls.
 
@@ -165,6 +183,7 @@ class _PllContract:
     """
 
     flat = True
+    leaf = True
 
     def __init__(self, written):
         self.written = written
@@ -181,12 +200,18 @@ class _PllContract:
         return True
 
     def check_now(self, value, blame):
-        if not self.accepts(value):
-            _pll_broken(self, value, blame)
+        witness = _pll_witness(self, value)
+        if witness is not None:
+            contract, part, steps = witness
+            for step in steps:
+                blame = blame.into(step)
+            _pll_broken(contract, part, blame)
 
     def check(self, value, blame):
-        self.check_now(value, blame)
-        return value
+        if self.is_flat():
+            self.check_now(value, blame)
+            return value
+        return _pll_remade(self, value, blame)
 
     def expected(self):
         """The types a message says were wanted."""
@@ -212,8 +237,71 @@ class _PllContract:
     def mentions_variables(self):
         return bool(self.variables_in())
 
+    def holds_no_seals(self, seen):
+        """Whether a sealed value can get through this only as one of the
+        function's own type variables (`_PllFunctionContract.reuses`)."""
+        return False
+
     def is_variable(self):
         return False
+
+
+class _PllPartsContract(_PllContract):
+    """A contract on the parts of a value: `parts(value)` is None for a value
+    that is not the kind of thing it is about, else each part's obligation,
+    as `(contract, part, step)`."""
+
+    leaf = False
+
+    def __init__(self, written, level=None):
+        super().__init__(written)
+        self.accepted = _PllAccepted()
+        self.unchanging = _PLL_UNCHANGING_THERE if level in _PLL_TEACHING_LEVELS else _PLL_UNCHANGING
+
+    def accepts(self, value):
+        return _pll_witness(self, value) is None
+
+    def holds_no_seals(self, seen):
+        if self in seen:
+            return True
+        seen.add(self)
+        try:
+            return all(_pll_made(part).holds_no_seals(seen) for part in self.contracts())
+        except _PllUnresolved:
+            return False
+
+    def watched(self, value):
+        """Whether nothing can change `value`'s parts unseen, so that its
+        check is remembered. A file at another level can still change a list
+        that a teaching level's contract checked."""
+        return type(value) in self.unchanging
+
+
+#: The containers whose parts can't change, by exact type - a subclass can
+#: give other items each time - and with them, where a contract is written at
+#: a teaching level, those such a level refuses to change in place.
+_PLL_UNCHANGING = frozenset((tuple, frozenset, str, bytes, range))
+_PLL_UNCHANGING_THERE = _PLL_UNCHANGING | {list, dict, set}
+
+
+def _pll_parts(contract, parts, step):
+    """The obligations of `parts`, each under `contract` at `step(index)`: of
+    a leaf, checked here, only the one it refuses."""
+    if not parts:
+        return ()
+    contract = _pll_made(contract)
+    if contract.leaf:
+        for index, part in enumerate(parts):
+            if not contract.accepts(part):
+                return ((contract, part, step(index)),)
+        return ()
+    return ((contract, part, step(index)) for index, part in enumerate(parts))
+
+
+def _pll_made(contract):
+    while isinstance(contract, _PllLaterContract):
+        contract = contract.made()
+    return contract
 
 
 class _PllAnyContract(_PllContract):
@@ -224,6 +312,9 @@ class _PllAnyContract(_PllContract):
 class _PllNoneContract(_PllContract):
     def accepts(self, value):
         return value is None
+
+    def holds_no_seals(self, seen):
+        return True
 
     def expected(self):
         return ["None"]
@@ -253,8 +344,15 @@ class _PllClassContract(_PllContract):
     def shaped(self, value):
         return isinstance(value, self.cls)
 
+    def holds_no_seals(self, seen):
+        return self.cls in _PLL_ATOMS
+
     def expected(self):
         return [_pll_type_text(self.cls)]
+
+
+#: The classes whose values hold no other value.
+_PLL_ATOMS = frozenset((int, float, complex, str, bytes, bool))
 
 
 class _PllLiteralContract(_PllContract):
@@ -268,6 +366,9 @@ class _PllLiteralContract(_PllContract):
     def accepts(self, value):
         return any(type(value) is type(v) and value == v for v in self.values)
 
+    def holds_no_seals(self, seen):
+        return True
+
 
 class _PllNeverContract(_PllContract):
     """`NoReturn`: nothing comes back at all."""
@@ -275,29 +376,64 @@ class _PllNeverContract(_PllContract):
     def accepts(self, value):
         return False
 
+    def holds_no_seals(self, seen):
+        return True
+
 
 class _PllUnionContract(_PllContract):
     """Racket's `or/c`: a flat member that accepts the value, or else the
     one higher-order member whose first-order check does. Two that both
     could is no answer, and the contract cannot be used."""
 
+    leaf = False
+
     def __init__(self, members, written):
         super().__init__(written)
         self.members = members
+        self._made = None
+        self.leaves = False
 
     @property
     def flat(self):
         return all(member.flat for member in self.members)
 
     def accepts(self, value):
-        return any(member.accepts(value) for member in self.members)
+        if self.made() is not None and self.leaves:
+            return any(member.accepts(value) for member in self._made)
+        return _pll_witness(self, value) is None
 
-    def check(self, value, blame):
+    def made(self):
+        """Its members, each made - or None while one names what is not
+        defined yet, for `_PllTrying` to come to in order, as `any` does.
+        `leaves` says whether they all are."""
+        if self._made is None:
+            try:
+                self._made = [_pll_made(member) for member in self.members]
+            except _PllUnresolved:
+                return None
+            self.leaves = all(member.leaf for member in self._made)
+        return self._made
+
+    def refused(self, value, at):
+        """Where `check_now` says a union of leaves broke: at its one member
+        shaped like `value`, or at the union."""
+        shaped = [member for member in self._made if member.shaped(value)]
+        return (shaped[0] if len(shaped) == 1 else self), value, at
+
+    def holds_no_seals(self, seen):
+        try:
+            return all(_pll_made(member).holds_no_seals(seen) for member in self.members)
+        except _PllUnresolved:
+            return False
+
+    def decide(self, value, blame):
+        """For `_pll_remade`: the member the value is checked by, as
+        `(member, None)`, or what it comes to, as `(None, result)`."""
         higher, variables = [], []
         for member in self.members:
             if member.flat:
                 if member.accepts(value):
-                    return value
+                    return None, value
             elif member.fits(value, blame):
                 (variables if member.is_variable() else higher).append(member)
         # A type variable takes whatever it is given, so it is for a value
@@ -305,24 +441,20 @@ class _PllUnionContract(_PllContract):
         if not higher:
             higher = variables[:1]
         if len(higher) == 1:
-            return higher[0].check(value, blame)
+            return higher[0], None
         if higher:
             _pll_not_a_type(
                 "ambiguous", self.written, blame.owner, blame.path[:1],
                 members=[member.written for member in higher],
             )
         self.check_now(value, blame)
-
-    def check_now(self, value, blame):
-        if self.accepts(value):
-            return
-        shaped = [member for member in self.members if member.shaped(value)]
-        if len(shaped) == 1:
-            shaped[0].check_now(value, blame)
-        _pll_broken(self, value, blame)
+        return None, None
 
     def shaped(self, value):
         return any(member.shaped(value) for member in self.members)
+
+    def fits(self, value, blame):
+        return any(member.accepts(value) if member.is_flat() else member.fits(value, blame) for member in self.members)
 
     def expected(self):
         return [text for member in self.members for text in member.expected()]
@@ -331,15 +463,15 @@ class _PllUnionContract(_PllContract):
         return frozenset().union(*(member.variables_in() for member in self.members))
 
 
-class _PllItemsContract(_PllContract):
+class _PllItemsContract(_PllPartsContract):
     """`list[T]`, `set[T]` and their kind: the container and every item in
     it, checked as it crosses. A function among the items is checked
     first-order only - the container is shared, and wrapping an item would
     mean copying it - and a change made to the container later is not
     checked at all."""
 
-    def __init__(self, kind, item, written, ordered):
-        super().__init__(written)
+    def __init__(self, kind, item, written, ordered, level):
+        super().__init__(written, level)
         self.kind = kind
         self.item = item
         self.ordered = ordered
@@ -357,41 +489,41 @@ class _PllItemsContract(_PllContract):
     def fits(self, value, blame):
         return self.shaped(value) if self.mentions_variables() else self.accepts(value)
 
-    def accepts(self, value):
-        return isinstance(value, self.kind) and all(self.item.accepts(item) for item in value)
+    def parts(self, value):
+        if not isinstance(value, self.kind):
+            return None
+        if self.ordered:
+            return _pll_parts(self.item, value, lambda index: ("item", index, _pll_type_name(value)))
+        return _pll_parts(self.item, value, lambda index: ("member", _pll_type_name(value)))
 
-    def check(self, value, blame):
-        if self.is_flat():
-            self.check_now(value, blame)
-            return value
+    def contracts(self):
+        return [self.item]
+
+    def remake(self, value, blame):
+        """For `_pll_remade`: a list of the items as `item` gives them back -
+        a deque for a deque."""
         if not isinstance(value, self.kind):
             _pll_broken(self, value, blame)
         holder = _pll_type_name(value)
-        items = [
-            self.item.check(item, blame.into(("item", index, holder) if self.ordered else ("member", holder)))
+        items = [None] * len(value)
+        steps = [
+            (self.item, item, blame.into(("item", index, holder) if self.ordered else ("member", holder)),
+             lambda part, index=index: items.__setitem__(index, part))
             for index, item in enumerate(value)
         ]
         if isinstance(value, _pll_collections.deque):
-            return _pll_collections.deque(items, value.maxlen)
-        return items
-
-    def check_now(self, value, blame):
-        if not isinstance(value, self.kind):
-            _pll_broken(self, value, blame)
-        holder = _pll_type_name(value)
-        for index, item in enumerate(value):
-            if not self.item.accepts(item):
-                self.item.check_now(item, blame.into(("item", index, holder) if self.ordered else ("member", holder)))
+            return steps, lambda: _pll_collections.deque(items, value.maxlen)
+        return steps, lambda: items
 
     def expected(self):
         return [self.written]
 
 
-class _PllMappingContract(_PllContract):
+class _PllMappingContract(_PllPartsContract):
     """`dict[K, V]`: every key and every value, as the dictionary crosses."""
 
-    def __init__(self, kind, key, value, written):
-        super().__init__(written)
+    def __init__(self, kind, key, value, written, level):
+        super().__init__(written, level)
         self.kind = kind
         self.key = key
         self.value = value
@@ -411,41 +543,43 @@ class _PllMappingContract(_PllContract):
     def fits(self, value, blame):
         return self.shaped(value) if self.mentions_variables() else self.accepts(value)
 
-    def check(self, value, blame):
-        if self.is_flat():
-            self.check_now(value, blame)
-            return value
+    def contracts(self):
+        return [self.key, self.value]
+
+    def remake(self, value, blame):
+        """For `_pll_remade`: the dictionary, each key checked where it is
+        and each value as `value` gives it back, of the same kind."""
         if not isinstance(value, self.kind):
             _pll_broken(self, value, blame)
         holder = _pll_type_name(value)
-        pairs = []
-        for key, item in value.items():
-            if not self.key.accepts(key):
-                self.key.check_now(key, blame.into(("key", key, holder)))
-            pairs.append((key, self.value.check(item, blame.into(("value", key, holder)))))
+        pairs, steps = [], []
+        for index, (key, item) in enumerate(value.items()):
+            pairs.append((key, None))
+            steps.append(
+                lambda key=key: self.key.accepts(key) or self.key.check_now(key, blame.into(("key", key, holder)))
+            )
+            steps.append((
+                self.value, item, blame.into(("value", key, holder)),
+                lambda part, index=index, key=key: pairs.__setitem__(index, (key, part)),
+            ))
         if isinstance(value, _pll_collections.defaultdict):
-            return _pll_collections.defaultdict(value.default_factory, pairs)
+            return steps, lambda: _pll_collections.defaultdict(value.default_factory, pairs)
         if isinstance(value, _pll_collections.OrderedDict):
-            return _pll_collections.OrderedDict(pairs)
-        return dict(pairs)
+            return steps, lambda: _pll_collections.OrderedDict(pairs)
+        return steps, lambda: dict(pairs)
 
-    def accepts(self, value):
-        return isinstance(value, self.kind) and all(
-            self.key.accepts(k) and self.value.accepts(v) for k, v in value.items()
+    def parts(self, value):
+        if not isinstance(value, self.kind):
+            return None
+        holder = _pll_type_name(value)
+        return (
+            obligation
+            for key, item in value.items()
+            for obligation in ((self.key, key, ("key", key, holder)), (self.value, item, ("value", key, holder)))
         )
 
-    def check_now(self, value, blame):
-        if not isinstance(value, self.kind):
-            _pll_broken(self, value, blame)
-        holder = _pll_type_name(value)
-        for key, item in value.items():
-            if not self.key.accepts(key):
-                self.key.check_now(key, blame.into(("key", key, holder)))
-            if not self.value.accepts(item):
-                self.value.check_now(item, blame.into(("value", key, holder)))
 
-
-class _PllTupleContract(_PllContract):
+class _PllTupleContract(_PllPartsContract):
     """`tuple[int, str]`, so many items of their own types, or `tuple[int,
     ...]`, any number of one."""
 
@@ -475,28 +609,27 @@ class _PllTupleContract(_PllContract):
     def fits(self, value, blame):
         return self._shaped(value) if self.mentions_variables() else self.accepts(value)
 
-    def accepts(self, value):
-        return self._shaped(value) and all(contract.accepts(item) for item, contract in self._parts(value))
+    def parts(self, value):
+        if not self._shaped(value):
+            return None
+        if self.repeated:
+            return _pll_parts(self.items[0], value, lambda index: ("item", index, "tuple"))
+        return ((contract, item, ("item", index, "tuple")) for index, (item, contract) in enumerate(self._parts(value)))
 
-    def check(self, value, blame):
-        if self.is_flat():
-            self.check_now(value, blame)
-            return value
+    def contracts(self):
+        return list(self.items)
+
+    def remake(self, value, blame):
+        """For `_pll_remade`: the tuple remade - a named tuple as one."""
         if not self._shaped(value):
             _pll_broken(self, value, blame)
-        items = [
-            contract.check(item, blame.into(("item", index, "tuple")))
+        items = [None] * len(value)
+        steps = [
+            (contract, item, blame.into(("item", index, "tuple")),
+             lambda part, index=index: items.__setitem__(index, part))
             for index, (item, contract) in enumerate(self._parts(value))
         ]
-        # A named tuple is remade as one.
-        return value._make(items) if hasattr(type(value), "_make") else tuple(items)
-
-    def check_now(self, value, blame):
-        if not self._shaped(value):
-            _pll_broken(self, value, blame)
-        for index, (item, contract) in enumerate(self._parts(value)):
-            if not contract.accepts(item):
-                contract.check_now(item, blame.into(("item", index, "tuple")))
+        return steps, lambda: value._make(items) if hasattr(type(value), "_make") else tuple(items)
 
 
 class _PllClassOfContract(_PllContract):
@@ -514,27 +647,374 @@ class _PllClassOfContract(_PllContract):
 #: contains itself must not start again.
 _PLL_CHECKING = set()
 
+#: How many fields of checked dataclasses have been set: what a contract
+#: accepted before the latest may not hold now.
+_pll_field_writes = 0
+
+#: Moves whenever a check relies on what may not last - a value that
+#: contains itself, a container, a value PLL does not see change - so that
+#: the check is not remembered.
+_pll_unsure = 0
+
+
+def _pll_field_written():
+    """Before a field of a checked dataclass changes: what was accepted is
+    asked again, and the lazy copies are filled in from what they copy."""
+    global _pll_field_writes, _pll_unsure
+    if _PLL_LAZY:
+        _pll_fill_lazy()
+    _pll_field_writes += 1
+    _pll_unsure += 1
+
+
+def _pll_watched(value):
+    """Whether every change to `value`'s fields goes through PLL: its class
+    sets and deletes them through PLL, or is a frozen dataclass's own."""
+    cls = type(value)
+    if id(value) in _PLL_CONSTRUCTING:
+        return False
+    if cls.__setattr__ is _pll_checked_setattr and cls.__delattr__ is _pll_checked_delattr:
+        return True
+    made = next((klass for klass in cls.__mro__ if "__dataclass_params__" in vars(klass)), None)
+    return (
+        made is not None and made.__dataclass_params__.frozen
+        and cls.__setattr__ is vars(made).get("__setattr__") and cls.__delattr__ is vars(made).get("__delattr__")
+    )
+
+
+class _PllAccepted:
+    """The values a contract has accepted, by identity, until the next field
+    write: held weakly where they can be, and otherwise - a list, a tuple -
+    the last `_PLL_HELD` of them held as they are."""
+
+    __slots__ = ("refs", "held", "writes", "sweep", "__weakref__")
+
+    def __init__(self):
+        self.refs, self.held, self.writes, self.sweep = {}, {}, _pll_field_writes, 64
+
+    def __contains__(self, value):
+        if self.writes != _pll_field_writes:
+            self.refs.clear()
+            self.held.clear()
+            self.writes = _pll_field_writes
+        ref = self.refs.get(id(value))
+        if ref is not None:
+            return ref() is value
+        return id(value) in self.held and self.held[id(value)] is value
+
+    def add(self, value):
+        if not type(value).__weakrefoffset__:
+            _PLL_HOLDING.add(self)
+            self.held[id(value)] = value
+            if len(self.held) > _PLL_HELD:
+                del self.held[next(iter(self.held))]
+            return
+        self.refs[id(value)] = _pll_weakref.ref(value)
+        if len(self.refs) >= self.sweep:
+            self.refs = {key: ref for key, ref in self.refs.items() if ref() is not None}
+            self.sweep = 2 * len(self.refs) + 64
+
+
+#: How many values that cannot be held weakly a contract remembers.
+_PLL_HELD = 4
+
+#: The memories holding values as they are, which a contract that outlives
+#: its run - an assignment's (`_PLL_MADE`) - would keep alive.
+_PLL_HOLDING = _pll_weakref.WeakSet()
+
+
+def _pll_let_go():
+    """At the start of a run: no memory holds an earlier run's values."""
+    for accepted in list(_PLL_HOLDING):
+        accepted.held.clear()
+    _PLL_HOLDING.clear()
+
+
+class _PllGoing:
+    """For `_pll_witness`: a contract's parts being checked on a value - what
+    is left of them, and what to note once they all hold."""
+
+    __slots__ = ("parts", "contract", "value", "at", "sure", "key")
+
+    def __init__(self, parts, contract, value, at, sure, key):
+        self.parts, self.contract, self.value, self.at, self.sure, self.key = parts, contract, value, at, sure, key
+
+
+class _PllTrying:
+    """For `_pll_witness`: a union's members tried on a value one at a time,
+    in order, as `any` tries them, and where each one tried failed."""
+
+    __slots__ = ("contract", "value", "at", "next", "failed")
+
+    def __init__(self, contract, value, at):
+        self.contract, self.value, self.at, self.next, self.failed = contract, value, at, 0, {}
+
+    def step(self):
+        """The next member to try, or - with none left - None and what the
+        union comes to: True, or where `check_now` says it failed: inside its
+        one member shaped like the value, or at the union."""
+        members = self.contract.members
+        while self.next < len(members):
+            member = _pll_made(members[self.next])
+            self.next += 1
+            if member.leaf:
+                if member.accepts(self.value):
+                    return None, True
+            elif isinstance(member, _PllUnionContract) or member.shaped(self.value):
+                return member, None
+        shaped = [index for index, member in enumerate(members) if member.shaped(self.value)]
+        if len(shaped) != 1:
+            return None, (self.contract, self.value, self.at)
+        return None, self.failed.get(shaped[0]) or (_pll_made(members[shaped[0]]), self.value, self.at)
+
+
+def _pll_steps(at):
+    """The steps down to `at`, a step and the place it is taken from."""
+    steps = []
+    while at is not None:
+        step, at = at
+        steps.append(step)
+    return tuple(reversed(steps))
+
+
+def _pll_witness(contract, value):
+    """None if `contract` accepts `value`; else where `check_now` finds it
+    broken: the contract and the part it refused, and the steps down to that
+    part. A walk, not a recursion, so no value is too deep for it. A value
+    met again inside itself under the same contract is taken as accepted;
+    one met again under ever new ones (`rest: "Node[list[T]]"`) is as deep
+    as Python goes."""
+    global _pll_unsure
+    frames, around, limit = [], None, _sys.getrecursionlimit()
+    task, at, held = (contract, value), None, None
+    try:
+        while True:
+            if task is not None:
+                (contract, value), task, frame, held = task, None, None, None
+                contract = _pll_made(contract)
+                if contract.leaf:
+                    held = True if contract.accepts(value) else (contract, value, at)
+                elif isinstance(contract, _PllUnionContract):
+                    if contract.made() is not None and contract.leaves:
+                        held = True if contract.accepts(value) else contract.refused(value, at)
+                    else:
+                        frame = _PllTrying(contract, value, at)
+                elif (id(value), id(contract)) in _PLL_CHECKING:
+                    _pll_unsure += 1
+                    held = True
+                elif value in contract.accepted:
+                    held = True
+                else:
+                    sure, parts = _pll_unsure, contract.parts(value)
+                    if parts is not None and not contract.watched(value):
+                        _pll_unsure += 1
+                    if parts is None:
+                        held = (contract, value, at)
+                    elif parts == ():
+                        held = True
+                        if _pll_unsure == sure:
+                            contract.accepted.add(value)
+                    else:
+                        frame = _PllGoing(iter(parts), contract, value, at, sure, (id(value), id(contract)))
+                if frame is not None:
+                    frames.append(frame)
+                    if around is None and len(frames) > limit:
+                        around = {}
+                        for each in frames:
+                            around[id(each.value)] = around.get(id(each.value), 0) + 1
+                    elif around is not None:
+                        around[id(value)] = around.get(id(value), 0) + 1
+                    if around is not None and around[id(value)] > limit:
+                        raise RecursionError("maximum recursion depth exceeded while checking %s" % contract.written)
+                    if isinstance(frame, _PllGoing):
+                        _PLL_CHECKING.add(frame.key)
+            while task is None:
+                if not frames:
+                    return None if held is True else (held[0], held[1], _pll_steps(held[2]))
+                frame = frames[-1]
+                if isinstance(frame, _PllTrying):
+                    if held is not True:
+                        if held is not None:
+                            frame.failed[frame.next - 1] = held
+                        member, held = frame.step()
+                        if member is not None:
+                            task, at = (member, frame.value), frame.at
+                            continue
+                elif held is None or held is True:
+                    held = True
+                    for part_contract, part, step in frame.parts:
+                        part_contract = _pll_made(part_contract)
+                        if not part_contract.leaf:
+                            task, at = (part_contract, part), (step, frame.at)
+                            break
+                        if not part_contract.accepts(part):
+                            held = (part_contract, part, (step, frame.at))
+                            break
+                    if task is not None:
+                        continue
+                frames.pop()
+                if around is not None:
+                    around[id(frame.value)] -= 1
+                    if len(frames) < limit:
+                        around = None
+                if isinstance(frame, _PllGoing):
+                    _PLL_CHECKING.discard(frame.key)
+                    if held is True and _pll_unsure == frame.sure:
+                        frame.contract.accepted.add(frame.value)
+    finally:
+        for frame in frames:
+            if isinstance(frame, _PllGoing):
+                _PLL_CHECKING.discard(frame.key)
+
+
+def _pll_remade(contract, value, blame):
+    """`contract.check(value, blame)` for a contract with a type variable in
+    it: the value remade part by part, its parts sealed or unsealed. A walk,
+    not a recursion, in the order the parts were checked in one by one."""
+    link = next((seal.link for seal in (blame.seals or {}).values() if seal.link.copies is not None), None)
+    result, tasks, before = [], [(contract, value, blame, None)], set(_PLL_REMAKING) if _PLL_REMAKING else ()
+    lazy, sure = True, [True, _pll_unsure]
+    try:
+        while tasks:
+            task = tasks.pop()
+            if callable(task):
+                task()
+                continue
+            contract, value, blame, put = task
+            whole, put = put is None, put or result.append
+            while True:
+                contract = _pll_made(contract)
+                if not isinstance(contract, _PllUnionContract):
+                    break
+                member, decided = contract.decide(value, blame)
+                if member is None:
+                    contract, value = None, decided
+                    break
+                contract = member
+            if contract is None:
+                put(value)
+            elif isinstance(contract, _PllPartsContract) and not contract.is_flat():
+                if link is not None and _pll_passes(link, (id(value), id(contract)), value, blame.gives):
+                    put(_pll_noted(value, contract, link, True) if blame.gives and whole else value)
+                    continue
+                if lazy and not blame.gives and isinstance(contract, _PllDataContract):
+                    # Once refused, the rest of the walk is copied as it goes:
+                    # asking again at each part could walk the rest each time.
+                    lazy = _pll_lazily(value, contract)
+                    if lazy:
+                        put(_pll_noted(_pll_lazy_copy(value, contract, blame), contract, link, False))
+                        continue
+                steps, finish = contract.remake(value, blame)
+                tasks.append(_pll_finishing(finish, put, contract, link, blame.gives and (whole or None), sure))
+                tasks.extend(reversed(steps))
+            else:
+                put(contract.check(value, blame))
+        return result[0]
+    except BaseException:
+        for key in [key for key in _PLL_REMAKING if key not in before]:
+            del _PLL_REMAKING[key]
+        raise
+
+
+def _pll_finishing(finish, put, contract, link, gives, sure):
+    """For `_pll_remade`: the task that makes a copy once its parts are made,
+    noted to be passed on (`_pll_noted`) only while every copy the walk has
+    made so far is one nothing can change unseen (`watched`), and nothing it
+    has read could either (`_pll_unsure`): a deque, say, could be changed
+    before it is passed on."""
+
+    def task():
+        made = finish()
+        sure[0] = sure[0] and contract.watched(made) and _pll_unsure == sure[1]
+        put(_pll_noted(made, contract, link, gives if sure[0] else None))
+
+    return task
+
+
+def _pll_noted(made, contract, link, gives):
+    """`made`, noted where a chain's calls pass it on as it is
+    (`_pll_passes`), while the call whose `link` it is runs: an argument's
+    copy (`gives` False), for the calls it makes; a whole result's (True),
+    for the call it is inside - where its seals sealed nothing and no
+    function in it is wrapped; a part of a result (None), nowhere."""
+    if link is None or not link.running or gives is None:
+        return made
+    key = (id(made), id(contract))
+    if not gives:
+        link.copies[key] = made
+        link.noted.append(key)
+    elif not link.sealed and link.outer is not None and not _pll_wraps(contract):
+        passed = link.outer.passed
+        passed[key] = (made, _pll_field_writes)
+        if len(passed) > _PLL_PASSED:
+            del passed[next(iter(passed))]
+    return made
+
+
+#: How many of its calls' results a call keeps, to take as they are.
+_PLL_PASSED = 4
+
+
+def _pll_passes(link, key, value, gives):
+    """Whether `value`, a copy a call of the chain made, is passed on as it
+    is: an argument's, into a call the function makes to itself; a result's,
+    given back by such a call that sealed nothing to a call that sealed
+    nothing either, for which remaking it could change nothing - unless a
+    checked field was written since."""
+    if not gives:
+        return key in link.copies and link.copies[key] is value
+    entry = link.passed.get(key)
+    return entry is not None and entry[0] is value and entry[1] == _pll_field_writes and not link.sealed
+
+
+def _pll_wraps(contract):
+    """Whether a check by `contract` can wrap a function in what it checks:
+    worked out once."""
+    known = contract.__dict__.get("_wraps")
+    if known is None:
+        seen, todo, known = set(), [contract], False
+        try:
+            while todo and not known:
+                each = _pll_made(todo.pop())
+                if id(each) not in seen:
+                    seen.add(id(each))
+                    known = isinstance(each, _PllFunctionContract)
+                    if isinstance(each, _PllPartsContract):
+                        todo.extend(each.contracts())
+                    elif isinstance(each, _PllUnionContract):
+                        todo.extend(each.members)
+        except _PllUnresolved:
+            return True
+        contract.__dict__["_wraps"] = known
+    return known
+
+
 #: The copies being made of dataclasses with a type variable in them
-#: (`_PllDataContract.check`), by value, contract and call, so that a value
+#: (`_PllDataContract.remake`), by value, contract and call, so that a value
 #: that contains itself is copied once.
 _PLL_REMAKING = {}
 
 
-class _PllDataContract(_PllContract):
+class _PllDataContract(_PllPartsContract):
     """A generic dataclass with its type filled in, `Leaf[float]`: the class,
     and every field with `T` as `float`. Through a field that names the type
     again (`left: "BinTree[T]"`), a whole tree is checked to its leaves.
     `fields` gives `{name: contract}`, and is asked once, when first needed."""
 
-    def __init__(self, cls, fields, written, mentions=frozenset()):
+    def __init__(self, cls, fields, written, mentions=frozenset(), loose=None):
         super().__init__(written)
         self.cls = cls
         self._fields = fields
         self._made = None
+        # Where every type argument is a type variable: the same contract
+        # with each as Any, made when first asked (`_pll_lazily`).
+        self._loose = loose
+        self._lazy = {}
         # The type variables a call seals among its type arguments: said by
         # what it was made from, as its fields - which can name the class
         # again - are made only when first needed.
         self._mentions = mentions
+        self._steps = None
 
     @property
     def flat(self):
@@ -546,78 +1026,227 @@ class _PllDataContract(_PllContract):
     def fits(self, value, blame):
         return self.shaped(value) if self._mentions else self.accepts(value)
 
-    def check(self, value, blame):
-        """The value, or - with a type variable in it - a copy of it whose
-        fields are as their contracts give them back: made without its
-        `__init__`, which would check them again and run `__post_init__`."""
-        if not self._mentions:
-            self.check_now(value, blame)
-            return value
+    def contracts(self):
+        return list(self.fields().values())
+
+    def remake(self, value, blame):
+        """For `_pll_remade`: a copy of the value whose fields are as their
+        contracts give them back, made without its `__init__`, which would
+        check them again and run `__post_init__`."""
         if not isinstance(value, self.cls):
             _pll_broken(self, value, blame)
         key = (id(value), id(self), id(blame.seals), blame.gives)
         made = _PLL_REMAKING.get(key)
         if made is not None:
-            return made
+            return (), lambda: made
         made = _PLL_REMAKING[key] = object.__new__(type(value))
-        try:
-            fields = self.fields()
-            for name, contract in fields.items():
-                part = contract.check(getattr(value, name, None), blame.into(("part", name, self.cls.__name__)))
-                object.__setattr__(made, name, part)
+        fields = self.fields()
+        steps = [
+            (contract, getattr(value, name, None), blame.into(("part", name, self.cls.__name__)),
+             lambda part, name=name: object.__setattr__(made, name, part))
+            for name, contract in fields.items()
+        ]
+
+        def finish():
             for name, part in getattr(value, "__dict__", {}).items():
                 if name not in fields:
                     object.__setattr__(made, name, part)
-        finally:
             del _PLL_REMAKING[key]
-        return made
+            return made
+
+        return steps, finish
 
     def fields(self):
         if self._made is None:
             self._made = self._fields()
         return self._made
 
-    def _each(self, value, test):
-        key = (id(value), id(self))
-        if key in _PLL_CHECKING:
-            return True
-        _PLL_CHECKING.add(key)
-        try:
-            return test()
-        finally:
-            _PLL_CHECKING.discard(key)
+    def loose(self):
+        if callable(self._loose):
+            self._loose = self._loose()
+        return self._loose
+
+    def lazy_defaults(self, cls):
+        """The fields with defaults a lazy copy of a `cls` fills in at once,
+        or None where a `cls` can't be one (`_pll_lazy_defaults`)."""
+        if cls not in self._lazy:
+            self._lazy[cls] = _pll_lazy_defaults(cls, self)
+        return self._lazy[cls]
 
     def shaped(self, value):
         return isinstance(value, self.cls)
 
-    def accepts(self, value):
-        return isinstance(value, self.cls) and self._each(
-            value,
-            lambda: all(contract.accepts(getattr(value, name, None)) for name, contract in self.fields().items()),
-        )
+    def watched(self, value):
+        return _pll_watched(value)
 
-    def check_now(self, value, blame):
+    def parts(self, value):
         if not isinstance(value, self.cls):
-            _pll_broken(self, value, blame)
+            return None
+        if self._steps is None:
+            self._steps = [(name, contract, ("part", name, self.cls.__name__)) for name, contract in self.fields().items()]
+        return ((contract, getattr(value, name, None), step) for name, contract, step in self._steps)
 
-        def each():
-            for name, contract in self.fields().items():
-                field = getattr(value, name, None)
-                if not contract.accepts(field):
-                    contract.check_now(field, blame.into(("part", name, self.cls.__name__)))
-            return True
 
-        self._each(value, each)
+
+#: The copies a generic function's calls were given that fill in each field
+#: as it is first read (`_pll_lazy_field`), by `id`: a weak reference to the
+#: copy, the value it copies, its contract and the call's blame.
+_PLL_LAZY = {}
+
+#: Set while copies are made whole - every lazy copy filled in, or a field a
+#: recursion reads (`_pll_fill`) - when no lazy copy is made.
+_pll_filling = False
+
+
+def _pll_lazily(value, contract):
+    """Whether a copy of `value` for `contract` can fill in its fields as
+    they are first read, none of which can then be refused: its class can
+    hold such a copy (`lazy_defaults`), and `value` is accepted by `contract`
+    with each type variable as Any (`loose`), with nothing it relies on able
+    to change unseen (`_pll_unsure`)."""
+    if _pll_filling or not _pll_watched(value):
+        return False
+    sure = _pll_unsure
+    try:
+        if contract.lazy_defaults(type(value)) is None:
+            return False
+        loose = contract.loose()
+        return value in loose.accepted or loose.accepts(value) and _pll_unsure == sure
+    except _PllUnresolved:
+        return False
+
+
+def _pll_lazy_defaults(cls, contract):
+    """For `_PllDataContract.lazy_defaults`: None where a `cls` can't be a
+    lazy copy for `contract` - a type argument is not a type variable, so a
+    field could be refused; its class doesn't fill fields in
+    (`_pll_lazy_field`), into a `__dict__`, for a copy referred to weakly; or
+    a field it fills in at once, one with a default, is itself copied."""
+    if contract.loose() is None or getattr(cls, "__getattr__", None) is not _pll_lazy_field:
+        return None
+    if not (cls.__dictoffset__ and cls.__weakrefoffset__):
+        return None
+    fields = contract.fields()
+    defaults = tuple(name for name in fields if hasattr(cls, name))
+    return None if any(not fields[name].is_flat() for name in defaults) else defaults
+
+
+def _pll_lazy_copy(value, contract, blame):
+    """A copy of `value` whose fields are filled in as they are first read -
+    but a field with a default, which the class holds and Python would find
+    there, at once."""
+    cls = type(value)
+    made = object.__new__(cls)
+    fields = contract.fields()
+    for name, part in getattr(value, "__dict__", {}).items():
+        if name not in fields:
+            object.__setattr__(made, name, part)
+    key = id(made)
+    ref = _pll_weakref.ref(made, lambda _ref: _PLL_LAZY.pop(key, None))
+    _PLL_LAZY[key] = pending = (ref, value, contract, blame)
+    for name in contract.lazy_defaults(cls):
+        _pll_fill(made, name, pending)
+    return made
+
+
+def _pll_fill(view, name, pending):
+    """Fill in the field `name` of a lazy copy - at once, all that is under
+    it, where a call the function made to itself reads it: the recursion
+    goes on to read the rest, which one walk copies for less."""
+    global _pll_filling
+    _ref, value, contract, blame = pending
+    fields = contract.fields()
+    filling, _pll_filling = _pll_filling, _pll_filling or _pll_recursing(blame)
+    try:
+        part = fields[name].check(getattr(value, name, None), blame.into(("part", name, contract.cls.__name__)))
+    finally:
+        _pll_filling = filling
+    object.__setattr__(view, name, part)
+    if id(view) in _PLL_LAZY and all(field in view.__dict__ for field in fields):
+        del _PLL_LAZY[id(view)]
+    return part
+
+
+def _pll_recursing(blame):
+    """Whether the running call is one a generic function made to itself,
+    inside the call whose seals `blame` holds."""
+    running = _PLL_CALLS[-1].seals if _PLL_CALLS else None
+    if not running or not blame.seals:
+        return False
+    first, own = next(iter(running.values())), next(iter(blame.seals.values()))
+    return first.chain is own.chain and first.link.depth > own.link.depth
+
+
+def _pll_can_be_lazy(cls):
+    """Whether `cls`'s instances can be lazy copies: no lookup on one can fail
+    but for a missing attribute - every attribute its classes hold, but
+    Python's own, is a function or plain data, not a property, whose getter
+    can raise AttributeError, which Python drops before it asks
+    `__getattr__` - and a copy or a pickle of one asks `__getstate__`."""
+    return cls.__reduce_ex__ is object.__reduce_ex__ and cls.__reduce__ is object.__reduce__ and all(
+        name.startswith("__") or isinstance(value, (_pll_types.FunctionType, staticmethod, classmethod))
+        or not hasattr(type(value), "__get__")
+        for klass in cls.__mro__[:-1] for name, value in vars(klass).items()
+    )
+
+
+def _pll_lazy_field(view, name):
+    """A checked dataclass's `__getattr__`, which Python asks after any lookup
+    that failed: a field of a lazy copy, filled in as it is first read; a
+    descriptor a subclass added, whose own lookup failed, asked again for
+    its own error, which Python dropped; or no such attribute, as Python
+    says."""
+    pending = _PLL_LAZY.get(id(view))
+    if pending is not None and pending[0]() is view and name in pending[2].fields():
+        return _pll_fill(view, name, pending)
+    for klass in type(view).__mro__:
+        found = vars(klass).get(name)
+        if found is not None and hasattr(type(found), "__get__"):
+            return type(found).__get__(found, view, type(view))
+    raise AttributeError("'%s' object has no attribute '%s'" % (type(view).__name__, name), name=name, obj=view)
+
+
+def _pll_whole_state(self):
+    """A checked dataclass's `__getstate__`: a lazy copy filled in first, so
+    that a copy or a pickle of it is whole."""
+    pending = _PLL_LAZY.get(id(self))
+    if pending is not None and pending[0]() is self:
+        for name in pending[2].fields():
+            getattr(self, name)
+    return object.__getstate__(self)
+
+
+def _pll_fill_lazy(quietly=False):
+    """Fill in every lazy copy: before what they copy changes, and - quietly,
+    leaving a field that can't be filled as it is - before an error is
+    explained, from values read as they are stored."""
+    global _pll_filling
+    filling, _pll_filling = _pll_filling, True
+    try:
+        for ref, _value, contract, _blame in list(_PLL_LAZY.values()):
+            view = ref()
+            for name in contract.fields() if view is not None else ():
+                try:
+                    getattr(view, name)
+                except Exception:
+                    if not quietly:
+                        raise
+    finally:
+        _pll_filling = filling
 
 
 class _PllLaterContract(_PllContract):
     """A contract made when first needed: a name in quotes, or a type alias,
     either of which may name something the file defines further down."""
 
+    leaf = False
+
     def __init__(self, make, written, mentions=None):
         super().__init__(written)
         self._make = make
         self._made = None
+        # A type that names itself reaches this again while asked.
+        self._visiting = False
         # The type variables a call seals in it, where that is known before
         # it is made: a generic type alias's arguments say.
         self._mentions = mentions
@@ -640,6 +1269,12 @@ class _PllLaterContract(_PllContract):
     def check(self, value, blame):
         return self.made().check(value, blame)
 
+    def holds_no_seals(self, seen):
+        try:
+            return self.made().holds_no_seals(seen)
+        except _PllUnresolved:
+            return False
+
     def expected(self):
         return self.made().expected()
 
@@ -652,7 +1287,13 @@ class _PllLaterContract(_PllContract):
     def variables_in(self):
         if self._mentions is not None:
             return self._mentions
-        return self.made().variables_in()
+        if self._visiting:
+            return frozenset()
+        self._visiting = True
+        try:
+            return self.made().variables_in()
+        finally:
+            self._visiting = False
 
     def is_variable(self):
         return self.made().is_variable()
@@ -691,11 +1332,23 @@ class _PllFunctionContract(_PllContract):
                 (contract, ("argument", None, index, written)) for index, (_name, _kind, contract, written) in enumerate(params)
             ]
 
+    #: Whether a call the function makes to itself keeps the seals of the
+    #: call it is inside (`_pll_call_seals`).
+    reuses = False
+
     def contract(self):
         return self
 
     def variables_in(self):
         return frozenset().union(self.result.variables_in(), *(p[2].variables_in() for p in self.params or ()))
+
+    def holds_no_seals(self, seen):
+        try:
+            return self.params is not None and all(
+                _pll_made(contract).holds_no_seals(seen) for contract in [self.result, *(p[2] for p in self.params)]
+            )
+        except _PllUnresolved:
+            return False
 
     def accepts(self, value):
         if not callable(value) or isinstance(value, _PllSealed):
@@ -705,7 +1358,11 @@ class _PllFunctionContract(_PllContract):
         return _pll_takes(value, len(self.params))
 
     def check(self, value, blame):
-        self.check_now(value, blame)
+        """A function this contract already put under itself passed
+        `check_now` then; asking again would look through every layer under
+        it (`inspect.signature`, in `_pll_takes`)."""
+        if _pll_layer_under(value, self) is None:
+            self.check_now(value, blame)
         return _pll_wrapped(value, self, blame)
 
     def check_arguments(self, args, kwargs, blame):
@@ -897,15 +1554,50 @@ def _pll_sealed_class(name):
     return type(name, (_PllSealed,), {"__slots__": (), "__module__": "builtins"})
 
 
+class _PllLink:
+    """A call of a generic function, as a link in a chain of calls it makes
+    to itself (`_pll_call_seals`): how deep it is, the copies the chain's
+    calls share (`copies`) and those it made (`noted`), the results its own
+    calls made that it may take as they are (`passed`), whether it runs, and
+    whether its seals have sealed anything."""
+
+    __slots__ = ("outer", "depth", "copies", "noted", "passed", "running", "sealed")
+
+    def __init__(self, outer=None, copies=None):
+        self.outer, self.running, self.sealed = outer, True, False
+        self.depth, self.copies = (0, copies) if outer is None else (outer.depth + 1, outer.copies)
+        self.noted, self.passed = [], {}
+
+    def close(self):
+        """Its call has returned: what it sealed is no longer kept, and the
+        copies it made go, with no call of its left to pass them on."""
+        self.running = False
+        for key in self.noted:
+            self.copies.pop(key, None)
+        self.passed.clear()
+
+
 class _PllSeal:
-    """One call's seal for one of its function's type variables."""
+    """One call's seal for one of its function's type variables. A seal kept
+    by a call the function makes to itself (`_pll_call_seals`) is one of a
+    `chain`, one per call (`link`): a value another running call of the
+    chain sealed is passed in and out as it is (`kept`)."""
 
-    __slots__ = ("variable",)
+    __slots__ = ("variable", "chain", "link")
 
-    def __init__(self, variable):
-        self.variable = variable
+    def __init__(self, variable, link, outer=None):
+        self.variable, self.link = variable, link
+        self.chain = self if outer is None else outer.chain
+
+    def kept(self, value):
+        """Whether `value` was sealed by another running call of the chain."""
+        if not isinstance(value, _PllSealed):
+            return False
+        seal = _pll_sealed_seal(value)
+        return seal is not self and seal.link.running and seal.chain is self.chain
 
     def wrap(self, value):
+        self.link.sealed = True
         sealed = object.__new__(self.variable.cls)
         _pll_set_sealed_value(sealed, value)
         _pll_set_sealed_seal(sealed, self)
@@ -944,17 +1636,24 @@ class _PllVariableContract(_PllContract):
         if not blame.gives:
             return True
         seal = (blame.seals or {}).get(self.typevar)
-        return seal is not None and isinstance(value, _PllSealed) and _pll_sealed_seal(value) is seal
+        if seal is None:
+            return False
+        return isinstance(value, _PllSealed) and _pll_sealed_seal(value) is seal or seal.kept(value)
 
     def check(self, value, blame):
         seal = (blame.seals or {}).get(self.typevar)
         if seal is None:
             return value
         if not blame.gives:
-            return seal.wrap(value)
+            return value if seal.kept(value) else seal.wrap(value)
         if isinstance(value, _PllSealed) and _pll_sealed_seal(value) is seal:
             return _pll_sealed_value(value)
+        if seal.kept(value):
+            return value
         _pll_broken(self, value, blame)
+
+    def holds_no_seals(self, seen):
+        return True
 
     def check_now(self, value, blame):
         self.check(value, blame)
@@ -1043,17 +1742,71 @@ _PLL_WRAPPER_ASSIGNMENTS = ("__module__", "__name__", "__qualname__", "__doc__",
 
 class _PllCall:
     """A call of a contracted function that is running: its `def`'s code,
-    and the line of the `return` that ended it."""
+    the seals it made, and the line of the `return` that ended it."""
 
-    __slots__ = ("code", "returned_at")
+    __slots__ = ("code", "seals", "returned_at")
 
-    def __init__(self, code):
+    def __init__(self, code, seals=None):
         self.code = code
+        self.seals = seals
         self.returned_at = None
+
+
+def _pll_call_seals(contract, blame):
+    """The seals of a call of a generic function: its type variables sealed
+    afresh - but a call it makes to itself, where nothing but its type
+    variables can bring it a sealed value (`reuses`), keeps the seals of the
+    call it is inside (`_PllSeal.kept`)."""
+    first = contract.variables[0]
+    inside = _PLL_CALLS[-1].seals if _PLL_CALLS and contract.reuses and blame.positive is blame.negative else None
+    if inside is None or getattr(inside.get(first.typevar), "variable", None) is not first:
+        link = _PllLink(None, {} if contract.reuses else None)
+        return {v.typevar: _PllSeal(v, link) for v in contract.variables}
+    link = _PllLink(inside[first.typevar].link)
+    return {v.typevar: _PllSeal(v, link, inside[v.typevar]) for v in contract.variables}
 
 
 #: The calls of contracted functions under way, innermost last.
 _PLL_CALLS = []
+
+#: Set by a call through (`_pll_wrapped`) for the layer it calls: how far
+#: down the chain the layers it left out go.
+_PLL_SKIPPING = [None]
+
+
+def _pll_through(contract, args, blame, depth):
+    """For a call through (`_pll_wrapped`), whose layer `blame` is that of the
+    layer it calls: `args` as the layers it left out, of the calls of the
+    chain as far down as `depth`, pass them on - each sealed by one of those
+    calls unsealed by its own layer - or the refusal the first of them to
+    refuse one makes. A layer checks every argument before the next does: a
+    value no layer keeps is refused by the outermost, and one a left-out
+    call sealed by the layer just below that call's."""
+    positional = contract.positional
+    if positional is None or len(args) != len(positional):
+        return args
+    base, refused, at, passed = next(iter(blame.seals.values())).link.depth, None, None, list(args)
+    for index, ((part, step), arg) in enumerate(zip(positional, args)):
+        part = _pll_made(part)
+        fails = None
+        if part.is_variable():
+            seal = blame.seals[part.typevar]
+            sealer = _pll_sealed_seal(arg) if isinstance(arg, _PllSealed) else None
+            skipped = sealer is not None and sealer.chain is seal.chain and sealer.link.running
+            if skipped and base < sealer.link.depth <= depth:
+                fails, passed[index] = sealer.link.depth - 1, _pll_sealed_value(arg)
+            elif not (sealer is seal or seal.kept(arg)):
+                fails = depth
+        elif not part.accepts(arg):
+            fails = depth
+        if fails is not None and fails > base and (at is None or fails > at):
+            refused, at = (part, passed[index], step), fails
+    if refused is not None:
+        part, value, step = refused
+        if part.is_variable():
+            _pll_broken(part, value, blame.swapped(step))
+        part.check_now(value, blame.swapped(step))
+    return tuple(passed)
 
 
 class _PllReturnedFrom:
@@ -1079,35 +1832,64 @@ def _pll_wrapped(function, source, blame):
     `source` is a function contract, or a definition, which makes its
     contract at the first call: a name in quotes in its annotations may be
     defined after the function is.
+
+    A function already under the same contract and obligation, outermost,
+    is given back as it is: the second layer could only repeat the first.
+    A `Callable[[...], R]` with no type variable joins the layers of that
+    kind already on the function (`_pll_collapsed`).
     """
+    if isinstance(source, _PllFunctionContract) and source.signature is None and not source.mentions_variables():
+        return _pll_collapsed(function, source, blame)
+    layer = _pll_layer_under(function, source)
+    if layer is not None and layer[2].same(blame):
+        return function
+    # A layer a call further down a chain adds only repeats the one under it
+    # while that call runs (`_pll_deeper`): until it returns, it calls that.
+    under = layer[3] if layer is not None else None
+    if under is not None and not _pll_deeper(under.__pll_layer__[2], blame, source):
+        under = None
+    running = next(iter(blame.seals.values())).link if under is not None else None
 
     def contracted(*args, **kwargs):
+        if running is not None and running.running:
+            _PLL_SKIPPING[0] = running.depth
+            try:
+                return under(*args, **kwargs)
+            finally:
+                _PLL_SKIPPING[0] = None
+        skip, _PLL_SKIPPING[0] = _PLL_SKIPPING[0], None
         contract = source.contract()
-        # A generic function's call seals its type variables afresh.
-        made = blame.sealed({v.typevar: _PllSeal(v) for v in contract.variables}) if contract.variables else blame
+        seals = _pll_call_seals(contract, blame) if contract.variables else None
         try:
-            args, kwargs = contract.check_arguments(args, kwargs, made)
-        except _PllUnresolved as unresolved:
-            _pll_unresolved_inside(unresolved, blame)
-        call = _PllCall(contract.code)
-        _PLL_CALLS.append(call)
-        try:
-            result = function(*args, **kwargs)
+            made = blame.sealed(seals) if seals else blame
+            try:
+                if skip is not None and not kwargs:
+                    args = _pll_through(contract, args, made, skip)
+                args, kwargs = contract.check_arguments(args, kwargs, made)
+            except _PllUnresolved as unresolved:
+                _pll_unresolved_inside(unresolved, blame)
+            call = _PllCall(contract.code, seals)
+            _PLL_CALLS.append(call)
+            try:
+                result = function(*args, **kwargs)
+            finally:
+                _PLL_CALLS.pop()
+            wanted = contract.result
+            try:
+                if wanted.is_flat() and wanted.accepts(result):
+                    return result
+                return wanted.check(result, made.into(("result", call.returned_at, wanted.written)))
+            except _PllUnresolved as unresolved:
+                _pll_unresolved_inside(unresolved, blame)
+            except _PllTypeMismatch as error:
+                if contract.code is not None:
+                    # The function has returned; how it is built is still worth
+                    # reading (`_pll_code_facts`).
+                    error._pll_returned_from = _PllReturnedFrom(contract.code, function, call.returned_at)
+                raise
         finally:
-            _PLL_CALLS.pop()
-        wanted = contract.result
-        try:
-            if wanted.is_flat() and wanted.accepts(result):
-                return result
-            return wanted.check(result, made.into(("result", call.returned_at, wanted.written)))
-        except _PllUnresolved as unresolved:
-            _pll_unresolved_inside(unresolved, blame)
-        except _PllTypeMismatch as error:
-            if contract.code is not None:
-                # The function has returned; how it is built is still worth
-                # reading (`_pll_code_facts`).
-                error._pll_returned_from = _PllReturnedFrom(contract.code, function, call.returned_at)
-            raise
+            if seals:
+                next(iter(seals.values())).link.close()
 
     for attribute in _PLL_WRAPPER_ASSIGNMENTS:
         try:
@@ -1117,8 +1899,166 @@ def _pll_wrapped(function, source, blame):
     # So `inspect.signature` sees the function's own parameters - even
     # asked not to look through a wrapper, as finding a test's are.
     contracted.__wrapped__ = function
+    contracted.__pll_layer__ = (contracted, source, blame, under or contracted)
     if isinstance(source, _PllDefinition):
         contracted.__signature__ = source.signature
+    return contracted
+
+
+def _pll_layer_under(function, source):
+    """`function`'s layer, as `_pll_wrapped` made it, where `function` is a
+    layer under `source`; else None."""
+    layer = getattr(function, "__pll_layer__", None)
+    return layer if layer is not None and layer[0] is function and layer[1] is source else None
+
+
+def _pll_deeper(outer, inner, source):
+    """Whether a layer under `inner` would only repeat the one under `outer`
+    while `inner`'s call runs: the blame is the same but for its seals, each
+    the seal of a call further down a chain `outer`'s call still runs in,
+    and each place a type variable is in the function's contract is the
+    variable itself (`_pll_bare`) - so a value the layer would have unsealed
+    is refused as it would have refused it (`_PllVariableContract.check`)."""
+    if not (isinstance(source, _PllFunctionContract) and source.params is not None and outer.seals and inner.seals):
+        return False
+    if outer.seals.keys() != inner.seals.keys() or not outer.same(inner, but=("seals",)):
+        return False
+    for typevar, seal in outer.seals.items():
+        below = inner.seals[typevar]
+        if not (seal.link.running and below.chain is seal.chain and below.link.depth > seal.link.depth):
+            return False
+    try:
+        return _pll_bare(source)
+    except _PllUnresolved:
+        return False
+
+
+def _pll_bare(contract):
+    """Whether every place a type variable is in the function contract
+    `contract`, in what it takes and gives, is the variable itself - so no
+    function it takes or gives has a layer of its own to leave out."""
+    return all(
+        _pll_made(part).is_variable() or not _pll_made(part).mentions_variables()
+        for part in [contract.result, *(param[2] for param in contract.params)]
+    )
+
+
+class _PllLayerCheck:
+    """One check a layer of `_pll_collapsed` makes: its contract, the blame it
+    raises with, and the layer's own blame for a name it cannot read."""
+
+    __slots__ = ("contract", "blame", "layer", "flat", "key")
+
+    def __init__(self, contract, blame, layer):
+        self.contract, self.blame, self.layer = contract, blame, layer
+        try:
+            self.flat, self.key = contract.is_flat(), _pll_check_key(contract)
+        except _PllUnresolved:
+            # A name not defined yet: read at the call, as before, and never
+            # taken for another check.
+            self.flat, self.key = False, id(contract)
+
+    def apply(self, value):
+        try:
+            if not self.flat:
+                return self.contract.check(value, self.blame)
+            if not self.contract.accepts(value):
+                self.contract.check_now(value, self.blame)
+            return value
+        except _PllUnresolved as unresolved:
+            _pll_unresolved_inside(unresolved, self.layer)
+
+
+def _pll_check_key(contract, top=True):
+    """What makes two flat checks the same check, whatever their blame. A
+    part made later is only itself, so a type that names itself has a key."""
+    if isinstance(contract, _PllLaterContract):
+        if not top:
+            return id(contract)
+        contract = _pll_made(contract)
+    if isinstance(contract, _PllClassContract):
+        return ("class", contract.cls, contract.no_bools)
+    if isinstance(contract, (_PllNoneContract, _PllAnyContract)):
+        return type(contract)
+    if isinstance(contract, _PllItemsContract):
+        return ("items", contract.kind, _pll_check_key(contract.item, False))
+    if isinstance(contract, _PllUnionContract):
+        return ("union",) + tuple(_pll_check_key(member, False) for member in contract.members)
+    return id(contract)
+
+
+def _pll_checking(contract, blame, layer):
+    """The check of `contract`, or None for one that takes anything."""
+    check = _PllLayerCheck(contract, blame, layer)
+    return None if check.key is _PllAnyContract else check
+
+
+def _pll_collapsed(function, contract, blame):
+    """`function` under one more `Callable[[...], R]` layer, as Collapsible
+    Contracts merges them (Feltey et al., OOPSLA 2018), keeping each check's
+    order and blame: the layers' arguments are checked outermost first and
+    their results innermost first, in one call rather than one call each.
+    A check is dropped where an equal flat check on the same argument, or on
+    the result, runs before it with no check between that changes that
+    value; it could never be the one to fail. A layer left with no checks
+    goes, so a function passed on through the same parameters keeps a
+    bounded number of layers however many times it crosses them."""
+    arity = None if contract.params is None else len(contract.params)
+    held = getattr(function, "__pll_collapsed__", None)
+    if held is not None and held[0] is function and held[1] == arity:
+        base, layers = held[2], held[3]
+    else:
+        base, layers = function, ()
+    args = [_pll_checking(param, blame.swapped(step), blame) for param, step in getattr(contract, "positional", ())]
+    result = _pll_checking(contract.result, blame.into(("result", None, contract.result.written)), blame)
+    kept = [list(older_args) for older_args, _ in layers]
+    for position, check in enumerate(args):
+        if check is None or not check.flat:
+            continue
+        for older_args in kept:
+            older = older_args[position]
+            if older is None:
+                continue
+            if not older.flat:
+                break
+            if older.key == check.key:
+                older_args[position] = None
+    if result is not None and result.flat:
+        for _, older in layers:
+            if older is None:
+                continue
+            if not older.flat:
+                break
+            if older.key == result.key:
+                result = None
+                break
+    kept = [(tuple(older_args), older_result) for older_args, (_, older_result) in zip(kept, layers)]
+    layers = ((tuple(args), result),) + tuple(layer for layer in kept if any(layer[0]) or layer[1] is not None)
+
+    def contracted(*args, **kwargs):
+        if arity is not None and not kwargs and len(args) == arity:
+            args = list(args)
+            for layer_args, _ in layers:
+                for position, check in enumerate(layer_args):
+                    if check is not None:
+                        args[position] = check.apply(args[position])
+        _PLL_CALLS.append(_PllCall(None))
+        try:
+            value = base(*args, **kwargs)
+        finally:
+            _PLL_CALLS.pop()
+        for _, check in reversed(layers):
+            if check is not None:
+                value = check.apply(value)
+        return value
+
+    for attribute in _PLL_WRAPPER_ASSIGNMENTS:
+        try:
+            setattr(contracted, attribute, getattr(function, attribute))
+        except (AttributeError, TypeError):
+            pass
+    contracted.__wrapped__ = base
+    contracted.__pll_collapsed__ = (contracted, arity, base, layers)
     return contracted
 
 
@@ -1179,13 +2119,14 @@ class _PllDefinition:
         hints = self.annotations()
         namespace = self.function.__globals__
         typevars = self._type_variables(hints, namespace)
+        table = {}
 
         def made(name):
             if name not in hints:
                 return _PLL_ANY
             written = self.written.get(name)
             try:
-                return _pll_compile(hints[name], written, namespace, self.level, typevars, forced=True)
+                return _pll_compile(hints[name], written, namespace, self.level, typevars, forced=True, table=table)
             except _PllUnresolved as unresolved:
                 _pll_not_a_type(
                     unresolved.reason, written or _pll_type_text(hints[name]), self.party,
@@ -1201,9 +2142,11 @@ class _PllDefinition:
         variables = tuple(contract for contract in typevars.values() if contract.is_variable())
         for variable in variables:
             variable.sources = _pll_variable_sources(variable, params)
-        return _PllFunctionContract(
+        contract = _PllFunctionContract(
             params, result, self.written.get("return", ""), signature=signature, code=self.code, variables=variables
         )
+        contract.reuses = bool(variables) and contract.holds_no_seals(set())
+        return contract
 
     def _type_variables(self, hints, namespace):
         """What each of the `def`'s own type parameters is checked as, at the
@@ -1271,13 +2214,18 @@ def _pll_ref(value, party, line, column):
     return wrapper
 
 
+#: The calling lines a method keeps its obligations for (`_pll_boundary`).
+_PLL_CALL_SITES = 64
+
+
 def _pll_boundary(function, definition):
     """What a contracted `def`'s name is given: the function under its
     contract for code that reaches it with no reference of its own to make
     the obligation - a method, called through its object; a file at `#level
     raw` calling into one that checks. Each call makes the obligation with
     the code that made it, as Racket's module boundary does with whoever
-    imports what it provides."""
+    imports what it provides - once for each line that calls."""
+    calls = {}
 
     def contracted(*args, **kwargs):
         # The student's code that made the call, past any of PLL's own - a
@@ -1285,12 +2233,18 @@ def _pll_boundary(function, definition):
         caller = _sys._getframe(1)
         while caller.f_back is not None and not _pll_is_students(caller.f_code.co_filename):
             caller = caller.f_back
-        taker = _pll_party_of_code(caller.f_code)
-        blame = _PllBlame(
-            definition.party, taker, definition.party, (), (caller.f_code.co_filename, caller.f_lineno, None),
-            definition.level,
-        )
-        return _pll_wrapped(function, definition, blame)(*args, **kwargs)
+        # By the code's identity: code objects of two files compare equal.
+        site = (id(caller.f_code), caller.f_lineno)
+        made = calls.get(site)
+        if made is None or made[0] is not caller.f_code:
+            if len(calls) >= _PLL_CALL_SITES:
+                calls.clear()
+            blame = _PllBlame(
+                definition.party, _pll_party_of_code(caller.f_code), definition.party, (),
+                (caller.f_code.co_filename, caller.f_lineno, None), definition.level,
+            )
+            made = calls[site] = (caller.f_code, _pll_wrapped(function, definition, blame))
+        return made[1](*args, **kwargs)
 
     for attribute in _PLL_WRAPPER_ASSIGNMENTS:
         setattr(contracted, attribute, getattr(function, attribute))
@@ -1343,7 +2297,7 @@ _PLL_MAPPINGS = (
 )
 
 
-def _pll_compile(annotation, written, namespace, level, typevars=None, forced=False):
+def _pll_compile(annotation, written, namespace, level, typevars=None, forced=False, table=None):
     """The contract `annotation` makes. `written` is how the program wrote
     it, or None for its own text; `namespace` is where a name in quotes is
     looked up; `typevars` is what each type parameter stands for, inside a
@@ -1351,16 +2305,23 @@ def _pll_compile(annotation, written, namespace, level, typevars=None, forced=Fa
 
     `forced` makes a name in quotes now rather than when first checked: a
     `def`'s annotations are made at its first call, which is late enough.
+    `table` is the contracts made so far from the annotation this one is
+    part of (`_pll_once`).
     """
     typevars = typevars or {}
+    table = {} if table is None else table
     text = written if written else _pll_type_text(annotation, typevars)
     if isinstance(annotation, str) or isinstance(annotation, _pll_typing.ForwardRef):
         quoted = annotation if isinstance(annotation, str) else annotation.__forward_arg__
 
         def resolved():
-            return _pll_compile(_pll_contract_resolve(quoted, namespace, typevars), text, namespace, level, typevars, forced)
+            return _pll_compile(
+                _pll_contract_resolve(quoted, namespace, typevars), text, namespace, level, typevars, forced, table
+            )
 
-        return resolved() if forced else _PllLaterContract(resolved, text)
+        if forced:
+            return resolved()
+        return _pll_once(table, ("quoted", quoted, namespace, typevars), text, level, lambda: _PllLaterContract(resolved, text))
     if annotation is None or annotation is type(None):
         return _PllNoneContract("None")
     if annotation is _pll_typing.Any or annotation is object:
@@ -1373,32 +2334,38 @@ def _pll_compile(annotation, written, namespace, level, typevars=None, forced=Fa
         # Any other stands for any type.
         return typevars.get(annotation, _PllAnyContract(text))
     if isinstance(annotation, _pll_typing.TypeAliasType):
-        return _PllLaterContract(
-            lambda: _pll_compile(annotation.__value__, text, namespace, level, typevars), text
+        return _pll_once(
+            table, ("alias", annotation, namespace, typevars), text, level,
+            lambda: _PllLaterContract(
+                lambda: _pll_compile(annotation.__value__, text, namespace, level, typevars, table=table), text
+            ),
         )
     if isinstance(annotation, _pll_typing.NewType):
-        return _pll_compile(annotation.__supertype__, text, namespace, level, typevars)
+        return _pll_compile(annotation.__supertype__, text, namespace, level, typevars, table=table)
     origin = _pll_typing.get_origin(annotation)
     args = _pll_typing.get_args(annotation)
 
     def part(arg):
-        return _pll_compile(arg, None, namespace, level, typevars)
+        return _pll_compile(arg, None, namespace, level, typevars, table=table)
 
     if origin is _pll_typing.Union or origin is _pll_types.UnionType:
         return _PllUnionContract([part(arg) for arg in args], text)
     if origin is _pll_typing.Literal:
         return _PllLiteralContract(args, text)
     if origin is _pll_typing.Annotated:
-        return _pll_compile(args[0], text, namespace, level, typevars)
+        return _pll_compile(args[0], text, namespace, level, typevars, table=table)
     if origin in (_pll_typing.ClassVar, _pll_typing.Final):
-        return _pll_compile(args[0], text, namespace, level, typevars) if args else _PllAnyContract(text)
+        return _pll_compile(args[0], text, namespace, level, typevars, table=table) if args else _PllAnyContract(text)
     if isinstance(origin, _pll_typing.TypeAliasType):
         bound = dict(typevars)
         given = [part(arg) for arg in args]
         bound.update(zip(origin.__type_params__, given))
-        return _PllLaterContract(
-            lambda: _pll_compile(origin.__value__, text, namespace, level, bound), text,
-            frozenset().union(*(contract.variables_in() for contract in given)),
+        return _pll_once(
+            table, ("alias", origin, namespace, bound), text, level,
+            lambda: _PllLaterContract(
+                lambda: _pll_compile(origin.__value__, text, namespace, level, bound, table=table), text,
+                frozenset().union(*(contract.variables_in() for contract in given)),
+            ),
         )
     if origin is _pll_abc.Callable:
         return _pll_callable_contract(args, text, part)
@@ -1414,15 +2381,15 @@ def _pll_compile(annotation, written, namespace, level, typevars=None, forced=Fa
         target = args[0] if args else None
         return _PllClassOfContract(target if isinstance(target, type) else None, text)
     if origin in _PLL_ITEMS:
-        return _PllItemsContract(origin, part(args[0]) if args else _PLL_ANY, text, _PLL_ITEMS[origin])
+        return _PllItemsContract(origin, part(args[0]) if args else _PLL_ANY, text, _PLL_ITEMS[origin], level)
     if origin in _PLL_MAPPINGS:
         key, value = (part(args[0]), part(args[1])) if len(args) == 2 else (_PLL_ANY, _PLL_ANY)
         if origin is _pll_collections.Counter:
             key, value = (part(args[0]) if args else _PLL_ANY), _PllClassContract(int, "int", level)
-        return _PllMappingContract(origin, key, value, text)
+        return _PllMappingContract(origin, key, value, text, level)
     if isinstance(origin, type):
         if args and _pll_dataclasses.is_dataclass(origin) and getattr(origin, "__type_params__", ()):
-            return _pll_data_contract(origin, args, text, level, part)
+            return _pll_data_contract(origin, args, text, level, part, table)
         # A collection that cannot be gone through twice (an iterator), or a
         # class that is generic in some other way: the class alone.
         return _PllClassContract(origin, text, level)
@@ -1446,19 +2413,51 @@ def _pll_callable_contract(args, text, part):
     return _PllFunctionContract(params, part(result), text)
 
 
-def _pll_data_contract(cls, args, text, level, part):
+def _pll_data_contract(cls, args, text, level, part, table):
     """`Leaf[float]`: the dataclass `Leaf` with its `T` as `float`."""
-    given = [part(arg) for arg in args]
+    return _pll_data_contract_of(cls, [part(arg) for arg in args], text, level, table)
+
+
+def _pll_data_contract_of(cls, given, text, level, table):
     bound = dict(zip(cls.__type_params__, given))
     namespace = _PLL_CLASS_NAMESPACES.get(cls) or vars(_sys.modules.get(cls.__module__, _sys))
 
     def fields():
-        made = {}
-        for field in _pll_dataclasses.fields(cls):
-            made[field.name] = _pll_compile(field.type, None, namespace, level, bound)
-        return made
+        return {
+            field.name: _pll_compile(field.type, None, namespace, level, bound, table=table)
+            for field in _pll_dataclasses.fields(cls)
+        }
 
-    return _PllDataContract(cls, fields, text, frozenset().union(*(contract.variables_in() for contract in given)))
+    def loose():
+        return _pll_data_contract_of(cls, [_PLL_ANY] * len(given), text, level, table)
+
+    return _pll_once(
+        table, ("data", cls, namespace, bound), text, level,
+        lambda: _PllDataContract(
+            cls, fields, text, frozenset().union(*(contract.variables_in() for contract in given)),
+            loose if all(contract.is_variable() for contract in given) else None,
+        ),
+    )
+
+
+def _pll_once(table, made_from, text, level, make):
+    """The contract `make` makes from `made_from` - what it is (`kind`), the
+    object (a name in quotes, by its text), the namespace it is read in and
+    its type variables' contracts - made once in `table`. A table is one
+    annotation's, made where it is read - a `def`, a class's fields, an
+    assignment - so a type that names itself (a generic dataclass, a type
+    alias, a name in quotes) is one contract there, not one more for each
+    level of a value, and a name is read in the run that wrote it. Its key
+    holds identities; the table keeps what they are of alive."""
+    kind, of, namespace, bound = made_from
+    key = (
+        kind, of if isinstance(of, str) else id(of), id(namespace),
+        tuple((name, id(contract)) for name, contract in bound.items()), text, level,
+    )
+    made = table.get(key)
+    if made is None:
+        made = table[key] = make()
+    return made
 
 
 def _pll_contract_resolve(quoted, namespace, typevars):
@@ -1651,22 +2650,41 @@ def _pll_type_text(annotation, typevars=None):
 
 
 #: Contracts made from an annotation that is itself the type (`int`,
-#: `list[int]`), by `(annotation, level)`: an assignment makes its contract
-#: each time it runs.
+#: `list[int]`), by `(annotation, written, level)`: an assignment makes its
+#: contract each time it runs.
 _PLL_MADE = {}
 
 
 def _pll_contract_of(annotation, written, namespace, level):
     try:
-        key = (annotation, level)
+        key = (annotation, written, level)
         made = _PLL_MADE.get(key)
     except TypeError:
         key = made = None
     if made is None:
         made = _pll_compile(annotation, written, namespace, level)
-        if key is not None and not isinstance(annotation, str):
+        if key is not None and not _pll_quotes(annotation):
             _PLL_MADE[key] = made
     return made
+
+
+def _pll_quotes(annotation, seen=frozenset()):
+    """Whether `annotation` has a name in quotes in it, which its run reads -
+    a type alias's value included."""
+    if isinstance(annotation, (str, _pll_typing.ForwardRef)):
+        return True
+    origin = _pll_typing.get_origin(annotation)
+    if origin is _pll_typing.Literal:
+        return False
+    parts = list(annotation if isinstance(annotation, (list, tuple)) else _pll_typing.get_args(annotation))
+    for alias in (annotation, origin):
+        if isinstance(alias, _pll_typing.TypeAliasType) and id(alias) not in seen:
+            seen = seen | {id(alias)}
+            try:
+                parts.append(alias.__value__)
+            except Exception:
+                return True
+    return any(_pll_quotes(part, seen) for part in parts)
 
 
 def _pll_contract_assigned(value, annotation, written, name, party, line, quoted):

@@ -986,7 +986,13 @@ def _pll_checked_setattr(self, name, value):
         contract = contracts.get(name) if contracts else None
         if contract is not None:
             _pll_check_field(self, type(self), name, value, contract, frame, contracts, assigned=True)
+        _pll_field_written()
     object.__setattr__(self, name, value)
+
+
+def _pll_checked_delattr(self, name):
+    _pll_field_written()
+    object.__delattr__(self, name)
 
 
 def _pll_refuse_field(instance, name, level):
@@ -1038,18 +1044,21 @@ def _pll_check_dataclass_fields(cls):
     _PLL_CLASS_NAMESPACES[cls] = namespace
     level = namespace.get("__pll_level__")
     typevars = {param: _PllAnyContract(param.__name__) for param in getattr(cls, "__type_params__", ())}
-    made = {}
+    made, table = {}, {}
 
     def contracts():
         if not made:
             for field in _pll_dataclasses.fields(cls):
-                made[field.name] = _pll_compile(field.type, None, namespace, level, typevars)
+                made[field.name] = _pll_compile(field.type, None, namespace, level, typevars, table=table)
         return made
 
     _PLL_DATACLASS_FIELDS[cls] = contracts
     original = cls.__init__
 
     def __init__(self, *args, **kwargs):
+        if getattr(self, "__dict__", None) or any(hasattr(self, slot) for slot in getattr(cls, "__slots__", ())):
+            # Made before: this changes its fields.
+            _pll_field_written()
         _PLL_CONSTRUCTING.add(id(self))
         try:
             original(self, *args, **kwargs)
@@ -1069,6 +1078,12 @@ def _pll_check_dataclass_fields(cls):
     params = getattr(cls, "__dataclass_params__", None)
     if cls.__setattr__ is object.__setattr__ and not (params is not None and params.frozen):
         cls.__setattr__ = _pll_checked_setattr
+    if cls.__delattr__ is object.__delattr__:
+        cls.__delattr__ = _pll_checked_delattr
+    if getattr(cls, "__getattr__", None) is None and _pll_can_be_lazy(cls):
+        cls.__getattr__ = _pll_lazy_field
+        if cls.__getstate__ is object.__getstate__:
+            cls.__getstate__ = _pll_whole_state
     return cls
 
 
