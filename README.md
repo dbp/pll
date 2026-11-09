@@ -136,11 +136,10 @@ separate setting to keep in sync with it.
 ### The `#level` line in the editor
 
 PLL keeps a file's `#level` line where it is, so it is not lost by accident.
-The line is tinted, and above it **🔒 Level: beginner · change** opens a list
-of the levels, where you can also remove the line. The status bar shows the
-level too — **PLL: beginner**, or **PLL: raw** for a file with no line — and
-clicking it opens the same list; so does **PLL: Change Level** in the Command
-Palette, which also gives a file with no line one.
+The line is tinted, and the status bar shows the level — **PLL: beginner**, or
+**PLL: raw** for a file with no line. Clicking it opens a list of the levels,
+where you can also remove the line, or give a file with no line one; so does
+**PLL: Change Level** in the Command Palette.
 
 Editing the line itself does nothing to it. **Select All** selects everything
 below it, so Select All and Delete empties the file but keeps the line.

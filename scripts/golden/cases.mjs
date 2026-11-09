@@ -155,6 +155,7 @@ export const CASES = [
   { name: "name-defined-later", code: ["print(double(2))", "", "def double(n):", "    return n * 2"] },
   { name: "name-forward-annotation", code: dataclass("@dataclass", "class Node:", "    value: int", "    rest: NumList", "", "NumList = Node | None") },
   { name: "name-forward-annotation-student", code: [B, "@dataclass", "class Node:", "    value: int", "    rest: NumList", "", "NumList = Node | None", "", "print(Node(1, Node(2, None)))"] },
+  { name: "syntax-dashes-name-and-parameter", code: [B, "def lemonade-stand(num-cups: int, price: float) -> float:", "    return num-cups * price", "", "print(lemonade-stand(3, 0.5))"] },
   { name: "name-type-string", code: ["def lemonade_stand_1(num_cups_sold: string) -> int:", "    return num_cups_sold", "", "def test_lemonade_stand_1():", "    assert lemonade_stand_1(4) == 4"] },
   { name: "name-free-variable", code: ["def outer():", "    def inner():", "        return title", "    r = inner()", '    title = "x"', "    return r", "", "outer()"] },
   { name: "name-unbound-local", code: ["count = 0", "def bump():", "    count = count + 1", "", "bump()"] },

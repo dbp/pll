@@ -142,29 +142,74 @@ _PLL_DEFINITION_LINE = _pll_src_re.compile(
 )
 
 
+#: A parameter's own name with a `-` in it, where a parameter starts: past
+#: any `*`, and before its annotation, its default, or the next one.
+_PLL_DASHED_PARAMETER = _pll_src_re.compile(r"\s*\**\s*(?P<name>[A-Za-z_]\w*(?:-\w+)+)\s*(?=[:=,)])")
+
+
+def _pll_dashed_parameters(rest):
+    """The parameters' names with a `-` in them in `rest` - a `def` line from
+    its `(` on - each as `(start, end)` in it. Only a parameter's own name:
+    in an annotation or a default, a `-` may be a minus."""
+    starts, depth, quote = [], 0, None
+    for i, ch in enumerate(rest):
+        if quote is not None:
+            if ch == quote and rest[i - 1] != "\\":
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+            if depth == 1 and not starts:
+                starts.append(i + 1)
+        elif ch in ")]}":
+            depth -= 1
+            if depth == 0:
+                break
+        elif ch == "," and depth == 1:
+            starts.append(i + 1)
+    spans = []
+    for start in starts:
+        found = _PLL_DASHED_PARAMETER.match(rest, start)
+        if found is not None:
+            spans.append(found.span("name"))
+    return spans
+
+
 def _pll_definition_mistake(line, source=None, line_number=None):
-    """`def foo-bar(x):`, `def (x):` and Pyret's `fun foo(x):`, said as
-    what they are - but only a line that is exactly one of those: mended as
-    said, it has to parse, with the rest of the program around it when there
-    is one. Anything else wrong with it, and nothing here is said."""
+    """`def foo-bar(x):`, `def foo(num-cups):`, `def (x):` and Pyret's `fun
+    foo(x):`, said as what they are - but only a line that is exactly one of
+    those: mended as said, it has to parse, with the rest of the program
+    around it when there is one. Anything else wrong with it, and nothing
+    here is said."""
     found = _PLL_DEFINITION_LINE.match(line)
     if found is None:
         return None
     keyword, name, rest = found.group("keyword"), found.group("name"), found.group("rest")
     pyret = keyword == "fun"
     hyphens = name is not None and "-" in name
-    if (pyret and name is None) or (not pyret and name is not None and not hyphens):
+    params = _pll_dashed_parameters(rest) if name is not None else []
+    if (pyret and name is None) or (not pyret and name is not None and not hyphens and not params):
         return None
     mended = (name or "function_name").replace("-", "_")
+    renamed = [rest[start:end].replace("-", "_") for start, end in params]
+    for (start, end), new in reversed(list(zip(params, renamed))):
+        rest = rest[:start] + new + rest[end:]
     written = ("async def" if keyword.startswith("async") else "def") + " " + mended + rest
     if not _pll_parses_mended(line, written, source, line_number):
         return None
     call = "`%s(...)`" % mended
+    # What else has to change: the calls, and the body's uses of a parameter.
+    uses = (["call it %s" % call] if hyphens else []) + (
+        ["use %s in its body" % _pll_listed(["`%s`" % new for new in renamed])] if renamed else []
+    )
+    too = ", and %s too" % " and ".join(uses) if uses else ""
+    shown = written if renamed else "def %s(...)" % mended
     if pyret:
         headline = "Python defines a function with `def`, not `fun`%s." % (
-            " - and a name cannot have a `-` in it" if hyphens else ""
+            " - and a name cannot have a `-` in it" if hyphens or renamed else ""
         )
-        how_to_fix = ["Write `def %s(...)`%s." % (mended, ", and call it %s too" % call if hyphens else "")]
+        how_to_fix = ["Write `%s`%s." % (shown, too)]
         end = _pll_pyret_end(source, line_number)
         if end is not None:
             how_to_fix.append(
@@ -175,12 +220,18 @@ def _pll_definition_mistake(line, source=None, line_number=None):
         return "This `def` has no name.", [
             "Put one between `def` and the brackets - `def %s(...)` - with a name that says what it does." % mended
         ]
-    return "A function's name cannot have a `-` in it: Python reads `%s` as `%s`." % (
-        name, "` minus `".join(name.split("-"))
-    ), [
-        "Write `def %s(...)`, with %s, and call it %s too."
-        % (mended, "an underscore" if name.count("-") == 1 else "underscores", call)
-    ]
+    dashed = ([name] if hyphens else []) + [new.replace("_", "-") for new in renamed]
+    with_ = "an underscore" if sum(d.count("-") for d in dashed) == 1 else "underscores"
+    reads = "Python reads `%s` as `%s`" % (dashed[0], "` minus `".join(dashed[0].split("-")))
+    if hyphens and renamed:
+        headline = "A function's name and its parameters' names cannot have a `-` in them: %s." % reads
+    elif hyphens:
+        headline = "A function's name cannot have a `-` in it: %s." % reads
+    elif len(renamed) == 1:
+        headline = "A parameter's name cannot have a `-` in it: %s." % reads
+    else:
+        headline = "Parameters' names cannot have a `-` in them: %s." % reads
+    return headline, ["Write `%s`, with %s%s." % (shown, with_, too)]
 
 
 def _pll_parses_mended(line, written, source, line_number):

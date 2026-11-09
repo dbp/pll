@@ -1162,6 +1162,15 @@ stdout:
 stderr:
   student.py [beginner]
 
+=== syntax-dashes-name-and-parameter (exit 1)
+stderr:
+  student.py [beginner]
+  SyntaxError: A function's name and its parameters' names cannot have a `-` in them: Python reads `lemonade-stand` as `lemonade` minus `stand`.
+    at student.py:2:13
+  
+  How to fix:
+    - Write `def lemonade_stand(num_cups: int, price: float) -> float:`, with underscores, and call it `lemonade_stand(...)` and use `num_cups` in its body too.
+
 === name-type-string (exit 1)
 stderr:
   student.py [raw]

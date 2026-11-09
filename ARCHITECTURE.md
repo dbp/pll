@@ -85,7 +85,7 @@ src/
 │   ├── workspaceFiles.ts          the files beside a program, over vscode.workspace.fs
 │   ├── programDocuments.ts        which documents are programs
 │   ├── levelLine.ts               the `#level` line kept in place: its highlight,
-│   │                              CodeLens, status-bar item and picker
+│   │                              status-bar item and picker
 │   ├── bundleStore.ts, notify.ts
 │   ├── panel/view.ts              the interactions panel: entries, its state, messages
 │   ├── reactors/controller.ts     reactors: playing, their cards' ticks and controls,
@@ -313,10 +313,9 @@ edit nobody asked for.
 
 Once a file has a `#level` line, the editor keeps it: as its first line,
 exactly as written, until it is changed on purpose with the picker - the
-CodeLens above the line (`🔒 Level: beginner · change`), the status-bar item
-(`PLL: beginner`), or **PLL: Change Level**, which also adds a line to a file
-without one and has **Remove the #level line**. The line is tinted
-(`pll.levelLineBackground`, a color PLL contributes).
+status-bar item (`PLL: beginner`), or **PLL: Change Level**, which also adds
+a line to a file without one and has **Remove the #level line**. The line is
+tinted (`pll.levelLineBackground`, a color PLL contributes).
 
 VS Code gives an extension no read-only ranges, and Monaco has none either -
 only a whole editor's `readOnly`. Pages that freeze lines in Monaco do it by
@@ -357,9 +356,11 @@ web (`test-web:level` checks the behaviour that follows):
   where the whole-line edit left the cursor, at the start of the line
   below: `xy` typed fast at the end of the line comes out `yx`. A snippet
   focuses its editor, so this is only done in the active one.
-- A CodeLens runs on a plain click; an inlay hint's command needs Ctrl/Cmd
-  and a click, so it would be a poor thing to click. That is why the
-  `[python]` defaults leave CodeLens on (Editor defaults, below).
+- The picker is not opened from above the line. A CodeLens there does
+  nothing when tapped, on a tablet: the editor takes a tap as moving the
+  cursor, and a CodeLens runs on a mouse press, which a tap never makes.
+  An inlay hint's command needs Ctrl/Cmd and a click. The status-bar item
+  works with a tap, and with a click.
 
 Other ways in - binding Ctrl/Cmd+X and V (see Clipboard), or taking over
 typing - would break the browser's own clipboard or other extensions. What
@@ -1797,10 +1798,7 @@ Turned off for `[python]` files:
   `github.copilot.enable.python`,
   `github.copilot.editor.enableAutoCompletions`,
   `cursor.cpp.disabledLanguages` (Cursor Tab) — best-effort across forks
-- Lightbulb (quick-fix), minimap, sticky scroll, linked editing. CodeLens
-  stays on: PLL's own, above the `#level` line, is how the level is changed
-  (The `#level` line in the editor), and with the language servers off
-  hardly any other extension adds one
+- CodeLens, lightbulb (quick-fix), minimap, sticky scroll, linked editing
 - Format on save / paste / type
 
 Turned off globally (no-ops if the other extension is not installed):

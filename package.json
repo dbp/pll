@@ -188,6 +188,7 @@
         "editor.suggest.showWords": false,
         "editor.suggest.showSnippets": false,
         "editor.inlineSuggest.enabled": false,
+        "editor.codeLens": false,
         "editor.lightbulb.enabled": "off",
         "editor.minimap.enabled": false,
         "editor.formatOnSave": false,

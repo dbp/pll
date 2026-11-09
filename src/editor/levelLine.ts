@@ -22,8 +22,8 @@ import { isProgramDocument } from "./programDocuments";
  * instead, so that Select All and then Delete, Cut, Paste or typing leaves
  * the line alone without needing it put back - and shows that it is held.
  *
- * The line is changed or taken out on purpose with the picker: the CodeLens
- * above it, the status-bar item, or **PLL: Change Level**.
+ * The line is changed or taken out on purpose with the picker: the
+ * status-bar item, or **PLL: Change Level**.
  */
 
 /** Each level, as the picker says it. */
@@ -71,8 +71,6 @@ interface Kept {
   selections: readonly vscode.Selection[] | null;
   /** The put-backs since the text was last as it should be (`ROUNDS`). */
   rounds: number;
-  /** The line and level the CodeLens last showed, as `line:level`, or "". */
-  shown: string;
 }
 
 type PickItem = vscode.QuickPickItem & { level?: Level; remove?: true };
@@ -84,7 +82,6 @@ export class LevelLineKeeper implements vscode.Disposable {
     backgroundColor: new vscode.ThemeColor("pll.levelLineBackground"),
   });
   private readonly status = vscode.window.createStatusBarItem("pll.level", vscode.StatusBarAlignment.Right, 100);
-  private readonly lensesChanged = new vscode.EventEmitter<void>();
   private readonly subscriptions: vscode.Disposable[];
 
   constructor() {
@@ -93,11 +90,6 @@ export class LevelLineKeeper implements vscode.Disposable {
     this.subscriptions = [
       this.highlight,
       this.status,
-      this.lensesChanged,
-      vscode.languages.registerCodeLensProvider(
-        { language: "python" },
-        { onDidChangeCodeLenses: this.lensesChanged.event, provideCodeLenses: (document) => this.lenses(document) },
-      ),
       vscode.workspace.onDidOpenTextDocument((document) => void this.track(document)),
       vscode.workspace.onDidCloseTextDocument((document) => this.forget(document)),
       vscode.workspace.onDidChangeTextDocument((event) => this.changed(event)),
@@ -189,7 +181,6 @@ export class LevelLineKeeper implements vscode.Disposable {
         expected: null,
         selections: null,
         rounds: 0,
-        shown: "",
       };
       this.kept.set(key, kept);
     }
@@ -271,7 +262,7 @@ export class LevelLineKeeper implements vscode.Disposable {
     kept.queue = [];
     kept.rounds = 0;
     kept.good = findLevelLine(text) !== null ? text : null;
-    this.refresh(document, kept);
+    this.refresh(document);
   }
 
   private async putBack(
@@ -345,9 +336,10 @@ export class LevelLineKeeper implements vscode.Disposable {
     if (line === null) {
       return;
     }
-    const lens = vscode.workspace.getConfiguration("editor", document).get<boolean>("codeLens", true);
-    const where = lens ? `"Level: ${line.level}" above it` : `"PLL: ${line.level}" in the status bar`;
-    vscode.window.setStatusBarMessage(`$(lock) PLL keeps the #level line. To change it, click ${where}.`, 5000);
+    vscode.window.setStatusBarMessage(
+      `$(lock) PLL keeps the #level line. To change it, click "PLL: ${line.level}" in the status bar.`,
+      5000,
+    );
   }
 
   /**
@@ -401,7 +393,7 @@ export class LevelLineKeeper implements vscode.Disposable {
     }
   }
 
-  private refresh(document: vscode.TextDocument, kept: Kept): void {
+  private refresh(document: vscode.TextDocument): void {
     for (const editor of vscode.window.visibleTextEditors) {
       if (editor.document === document) {
         this.decorate(editor);
@@ -409,12 +401,6 @@ export class LevelLineKeeper implements vscode.Disposable {
     }
     if (vscode.window.activeTextEditor?.document === document) {
       this.showStatus();
-    }
-    const line = levelLineOf(document);
-    const shown = line === null ? "" : `${line.line}:${line.level}`;
-    if (shown !== kept.shown) {
-      kept.shown = shown;
-      this.lensesChanged.fire();
     }
   }
 
@@ -436,21 +422,6 @@ export class LevelLineKeeper implements vscode.Disposable {
         ? "This file has no #level line, so it runs as plain Python. Click to give it one."
         : `This file runs at the ${line.level} level, as its #level line says. Click to change it.`;
     this.status.show();
-  }
-
-  private lenses(document: vscode.TextDocument): vscode.CodeLens[] {
-    const line = this.applies(document) ? levelLineOf(document) : null;
-    if (line === null) {
-      return [];
-    }
-    return [
-      new vscode.CodeLens(new vscode.Range(line.line, 0, line.line, 0), {
-        title: `$(lock) Level: ${line.level} · change`,
-        tooltip: "PLL keeps this line in place. Click to change the level, or to remove the line.",
-        command: "pll.changeLevel",
-        arguments: [document.uri],
-      }),
-    ];
   }
 }
 

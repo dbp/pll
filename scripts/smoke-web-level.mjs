@@ -9,8 +9,8 @@
  *   2. Typing into the line, Backspace in it, and deleting it: the line
  *      stays, and what was typed lands on the line below, in its order
  *   3. A program pasted in with its own `#level` line brings it
- *   4. The CodeLens above the line opens the picker, which changes the level
- *      and removes the line; then nothing is held
+ *   4. The status-bar item opens the picker, which changes the level and
+ *      removes the line; then nothing is held
  *   5. The status-bar item gives a file with no line one
  *   6. A new file: its `#level` line typed, and Enter at its end - with LF
  *      line breaks and with CRLF, Windows's, which the editor gives any
@@ -157,7 +157,7 @@ async function main() {
     await open(page, "beginner_ok.py", HEADER);
     const original = await editorText(page);
     expect(original.startsWith(HEADER + "\n"), `beginner_ok.py opened: ${JSON.stringify(original)}`);
-    expect((await lens(page)).includes("Level: beginner · change"), `the CodeLens: ${JSON.stringify(await lens(page))}`);
+    expect((await lens(page)) === "", `no CodeLens: ${JSON.stringify(await lens(page))}`);
     expect((await statusBar(page)).includes("PLL: beginner"), "the status bar's level");
     await page.locator(".monaco-editor .view-line", { hasText: "answer" }).first().click();
     for (const [what, key, clipboard] of [["Delete", "Delete"], ["Paste", "Control+v", "print(9)\n"], ["Cut", "Control+x"]]) {
@@ -219,22 +219,20 @@ async function main() {
     const pasted = await textWhen(page, (t) => t === "#level intermediate\nx = 1\n");
     expect(pasted === "#level intermediate\nx = 1\n", `pasted: ${JSON.stringify(pasted)}`);
     await page.waitForTimeout(1500);
-    expect((await lens(page)).includes("Level: intermediate"), `the CodeLens follows: ${JSON.stringify(await lens(page))}`);
-    expect((await statusBar(page)).includes("PLL: intermediate"), "and the status bar");
+    expect((await statusBar(page)).includes("PLL: intermediate"), "the status bar follows");
 
-    console.log("\n[4] the CodeLens's picker changes the level, and removes the line");
-    await page.locator(".codelens-decoration a").first().click();
+    console.log("\n[4] the status-bar item's picker changes the level, and removes the line");
+    await page.locator(".statusbar-item", { hasText: "PLL: intermediate" }).first().click();
     await pickInPicker(page, "advanced");
     const changed = await textWhen(page, (t) => t.startsWith("#level advanced\n"));
     expect(changed === "#level advanced\nx = 1\n", `changed: ${JSON.stringify(changed)}`);
     await page.waitForTimeout(1500);
-    await page.locator(".codelens-decoration a").first().click();
+    await page.locator(".statusbar-item", { hasText: "PLL: advanced" }).first().click();
     await pickInPicker(page, "Remove the #level line");
     const removed = await textWhen(page, (t) => t === "x = 1\n");
     expect(removed === "x = 1\n", `removed: ${JSON.stringify(removed)}`);
     await page.waitForTimeout(1000);
     expect((await statusBar(page)).includes("PLL: raw"), "the status bar: raw");
-    expect((await lens(page)) === "", "and no CodeLens");
     await page.locator(".monaco-editor .view-line", { hasText: "x = 1" }).first().click();
     await selectAll(page);
     await page.keyboard.press("Delete");

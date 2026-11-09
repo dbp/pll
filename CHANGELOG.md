@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed
+- **The `#level` line has no CodeLens above it**: the level is changed
+  with **PLL: beginner** in the status bar, or **PLL: Change Level**.
+  Tapped on a tablet, **🔒 Level: beginner · change** did nothing - VS
+  Code's editor takes a tap as moving the cursor - while the status-bar
+  item works with a tap. CodeLens is off for Python files again, as it was
+  before 0.6.0.
+
+### Fixed
+- **A `-` in a parameter's name is said to be one**, as a `-` in a
+  function's name was: `def lemonade-stand(num-cups: int)` got Python's
+  "expected '('", and `def foo(num-cups):` its "invalid syntax". Each is
+  told the `def` with underscores - `def lemonade_stand(num_cups: int)` -
+  and to call it, and use its parameters in its body, by those names too.
+  A `-` in a default or an annotation is left alone: there it may be a
+  minus.
+
 ## 0.11.0 (2026-11-9)
 
 ### Changed
