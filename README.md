@@ -796,6 +796,11 @@ PLL turns off many extra Python tools (autocomplete popups, extra
 linters, and similar) so the editor stays simple while you are learning.
 Settings you choose yourself still win over PLL's defaults.
 
+PLL also turns off VS Code's pop-ups recommending extensions, so opening a
+`.py` file does not ask you to install Microsoft's Python extension. That
+holds for every kind of file while PLL is installed; unticking
+**Extensions: Ignore Recommendations** in Settings brings them back.
+
 If another Python extension is installed and might add confusing
 messages, PLL may ask whether to disable it **for this workspace**. That
 does not uninstall the extension.

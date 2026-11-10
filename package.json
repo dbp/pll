@@ -202,6 +202,7 @@
       "editor.editContext": false,
       "editor.experimentalEditContextEnabled": false,
       "workbench.startupEditor": "none",
+      "extensions.ignoreRecommendations": true,
       "github.copilot.enable": {
         "python": false
       },

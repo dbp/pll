@@ -9,6 +9,11 @@
   Code's editor takes a tap as moving the cursor - while the status-bar
   item works with a tap. CodeLens is off for Python files again, as it was
   before 0.6.0.
+- **Opening a `.py` file no longer asks to install Microsoft's Python
+  extension**: PLL's defaults turn off VS Code's pop-ups recommending
+  extensions (`extensions.ignoreRecommendations`) - for every kind of
+  file, while PLL is installed. Unticking **Extensions: Ignore
+  Recommendations** in Settings brings them back.
 
 ### Fixed
 - **A `-` in a parameter's name is said to be one**, as a `-` in a

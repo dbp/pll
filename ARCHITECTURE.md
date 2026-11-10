@@ -1819,6 +1819,8 @@ Turned off globally (no-ops if the other extension is not installed):
 - Other noise: `python.terminal.activateEnvironment`,
   `python.experiments.enabled`, `python.showStartPage`,
   `breadcrumbs.enabled`
+- VS Code's pop-ups recommending extensions, for every kind of file:
+  `extensions.ignoreRecommendations` (Extension guard, below)
 
 ### Extension guard
 
@@ -1838,16 +1840,24 @@ and shows one warning with:
   can *Disable (Workspace)*, then offers to reload.
 - **Don't ask again** — stores dismissal in workspace state.
 
-VS Code itself still recommends Microsoft's Python extension when a
-`.py` file is opened, and **no extension can suppress that**. The
-recommendation lives in the workbench's own product config
-(`extensionRecommendations`) as `{pathGlob: "{**/*.py}", important:
-true}` with no `whenNotInstalled` list. Other languages do have one —
-Java defers to `Oracle.oracle-java`, C++ to `vscode-clangd` — so the
-opt-out mechanism exists; Python's entry just doesn't use it. Installing
-PLL therefore cannot register it as an alternative.
+VS Code itself recommends Microsoft's Python extension when a `.py`
+file is opened. The recommendation lives in the workbench's own product
+config (`extensionRecommendations`) as `{pathGlob: "{**/*.py}",
+important: true}` with no `whenNotInstalled` list. Other languages do
+have one — Java defers to `Oracle.oracle-java`, C++ to `vscode-clangd` —
+so the opt-out mechanism exists; Python's entry just doesn't use it.
+Installing PLL therefore cannot register it as an alternative, and no
+setting turns off that one recommendation everywhere.
 
-What does work is per-workspace, as in `samples/.vscode/extensions.json`:
+So PLL's defaults set `"extensions.ignoreRecommendations": true`, which
+silences *all* recommendation prompts, for every kind of file, while PLL
+is installed. It is window-scoped, so unlike `keyboard.dispatch` an
+extension may give it a default. That is broader than the problem, and
+meant: someone who has installed PLL should not be asked to install
+another Python. It does not reach F5: with no Python debugger, Start
+Debugging still offers to find one in the Marketplace.
+
+Per workspace, `samples/.vscode/extensions.json` turns off just these two:
 
 ```json
 {
@@ -1855,12 +1865,6 @@ What does work is per-workspace, as in `samples/.vscode/extensions.json`:
   "unwantedRecommendations": ["ms-python.python", "ms-python.vscode-pylance"]
 }
 ```
-
-A user can also set `"extensions.ignoreRecommendations": true`, which
-silences *all* recommendation prompts. That one is window-scoped, so
-unlike `keyboard.dispatch` PLL could ship it in
-`configurationDefaults` — it is left out deliberately, as suppressing
-every recommendation is broader than the problem.
 
 If those extensions are already installed, the guard prompts the user to
 disable them for the workspace.
