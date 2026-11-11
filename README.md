@@ -35,10 +35,17 @@ to install it, you can skip it. PLL is enough.
 
    If you do not see that text, open the Command Palette
    (`Ctrl+Shift+P` on Windows, `Cmd+Shift+P` on a Mac) and run
-   **PLL: Run Python File**.
+   **PLL: Run Python File**. `Ctrl+Enter` (`Cmd+Enter` on a Mac) in the
+   editor does the same.
 
 The first run can take a little while: PLL is starting Python in the
 editor. Later runs are faster.
+
+A file with no `#level` line runs as plain Python, without PLL's
+assistance, so every run of one asks first: **Choose a Level** opens the
+list of levels, and **Run as Plain Python** runs it as it is. To run plain
+Python without being asked, give the file `#level raw`. See
+[Language levels](#language-levels).
 
 Your file stays a normal editor. Results appear in the **PLL** panel at
 the bottom of the window (near Problems and Terminal). If that panel is
@@ -760,7 +767,9 @@ the message, and the next run marks whatever is still wrong.
 ## Commands
 
 All of these are available from the Command Palette. **PLL: Run Python File**
-also appears in the editor title bar when a `.py` file is open.
+also appears in the editor title bar when a `.py` file is open, and
+`Ctrl+Enter` (`Cmd+Enter` on a Mac) in the editor runs it; in a Python file,
+that takes the place of VS Code's **Insert Line Below**.
 
 | Command | What it does |
 | --- | --- |

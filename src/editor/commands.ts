@@ -25,6 +25,11 @@ export function registerCommands(
     vscode.commands.registerCommand("pll.runActiveFile", () =>
       runActiveFile(services).catch(reportError),
     ),
+    // The editor title bar's button. It has no keybinding, as VS Code draws
+    // a text button's keybinding under its label, which makes the bar taller.
+    vscode.commands.registerCommand("pll.runActiveFileButton", () =>
+      runActiveFile(services).catch(reportError),
+    ),
     vscode.commands.registerCommand("pll.clearInteractions", () =>
       services.repl.clearActiveSession(),
     ),
@@ -62,6 +67,9 @@ async function runActiveFile(services: ExtensionServices): Promise<void> {
   }
   if (!isProgramDocument(document.uri)) {
     void showWarning("only a file can be run, and this editor shows something else - a diff, or a notebook cell.");
+    return;
+  }
+  if (!(await services.levelLine.confirmRun(document))) {
     return;
   }
 

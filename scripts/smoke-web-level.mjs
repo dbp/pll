@@ -16,6 +16,9 @@
  *   6. A new file: its `#level` line typed, and Enter at its end - with LF
  *      line breaks and with CRLF, Windows's, which the editor gives any
  *      line break PLL writes
+ *   7. Ctrl+Enter runs a file; in one with no `#level` line every run asks
+ *      first: **Choose a Level** opens the picker, and **Run as Plain
+ *      Python** runs it
  *
  *   node scripts/smoke-web-level.mjs                      # insiders
  *   VSCODE_WEB_QUALITY=stable node scripts/...            # what vscode.dev ships
@@ -93,6 +96,11 @@ async function statusBar(page) {
 async function lens(page) {
   const found = page.locator(".codelens-decoration a");
   return (await found.count()) > 0 ? ((await found.first().textContent()) ?? "").trim() : "";
+}
+
+/** The interactions view lives in a webview: an outer iframe, then an inner one. */
+function panel(page) {
+  return page.frameLocator("iframe.webview").frameLocator("iframe#active-frame");
 }
 
 /** The lines with PLL's lock in the gutter beside them, in the editor with focus. */
@@ -188,6 +196,16 @@ async function main() {
     expect((await lens(page)) === "", `no CodeLens: ${JSON.stringify(await lens(page))}`);
     expect((await statusBar(page)).includes("PLL: beginner"), "the status bar's level");
     expect(JSON.stringify(await locks(page)) === JSON.stringify([HEADER]), `a lock beside the line only: ${JSON.stringify(await locks(page))}`);
+    expect(
+      (await page.locator(".part.editor .title .action-item .keybinding").count()) === 0,
+      "no key drawn under the run button, which would make the title bar taller",
+    );
+    await page.keyboard.press("F1");
+    await page.locator(".quick-input-widget input").fill(">PLL: Run Python File");
+    await page.waitForTimeout(600);
+    const listed = await page.locator(".quick-input-widget .monaco-list-row", { hasText: "PLL: Run Python File" }).allTextContents();
+    expect(listed.length === 1 && /Ctrl\+?Enter/.test(listed[0]), `the Command Palette lists it once, with its key: ${JSON.stringify(listed)}`);
+    await page.keyboard.press("Escape");
     const said = await hoverOver(page, HEADER);
     expect(
       said === "PLL keeps this line. To change the level, click PLL: beginner in the status bar, at the bottom right of the window.",
@@ -311,6 +329,48 @@ async function main() {
       );
       await command(page, "View: Revert and Close Editor");
     }
+
+    console.log("\n[7] Ctrl+Enter runs; with no `#level` line it asks first");
+    const dialog = page.locator(".monaco-dialog-box");
+    const runWithKeys = async (lineText) => {
+      await page.locator(".monaco-editor .view-line", { hasText: lineText }).first().click();
+      await page.keyboard.press("Control+Enter");
+    };
+    await open(page, "input.py", "Interactive input");
+    const unlevelled = await editorText(page);
+    await runWithKeys("Interactive input");
+    await dialog.waitFor({ state: "visible", timeout: 10_000 });
+    const asked = ((await dialog.textContent()) ?? "").replace(/\s+/g, " ");
+    expect(asked.includes("Run this file without PLL's assistance?"), `asked: ${asked}`);
+    expect((await editorText(page)) === unlevelled, "Ctrl+Enter is not Insert Line Below here");
+    await dialog.getByRole("button", { name: "Choose a Level" }).click();
+    await pickInPicker(page, "intermediate");
+    const levelled = await textWhen(page, (t) => t.startsWith("#level intermediate\n"));
+    expect(levelled.startsWith("#level intermediate\n"), `a level chosen: ${JSON.stringify(levelled.slice(0, 40))}`);
+    expect((await page.locator("iframe.webview").count()) === 0, "and nothing ran");
+
+    await open(page, "name_error.py", "total = 10");
+    await runWithKeys("total = 10");
+    await dialog.waitFor({ state: "visible", timeout: 10_000 });
+    await dialog.getByRole("button", { name: "Run as Plain Python" }).click();
+    // What the program raised - or, with no network for Pyodide, that Python
+    // could not start: either way, it ran.
+    const stream = panel(page).locator("#stream");
+    await stream.filter({ hasText: /Total|InitializationError|could not/ }).waitFor({ state: "visible", timeout: 120_000 });
+    expect(/Total|InitializationError|could not/.test((await stream.textContent()) ?? ""), "Run as Plain Python ran it");
+    await runWithKeys("total = 10");
+    await dialog.waitFor({ state: "visible", timeout: 10_000 }).catch(() => {});
+    expect(await dialog.isVisible(), "and the next run asks again");
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await dialog.waitFor({ state: "hidden" });
+
+    await open(page, "intermediate_ok.py", "#level intermediate");
+    const levelledText = await editorText(page);
+    await runWithKeys("accumulator patterns");
+    await page.waitForTimeout(1500);
+    expect(!(await dialog.isVisible()), "a file with a #level line runs without asking");
+    expect((await editorText(page)) === levelledText, "and Ctrl+Enter inserts no line in it");
+
     expect(tokenizer.length === 0, `the editor tokenized PLL's edits wrongly: ${tokenizer.join("; ")}`);
   } finally {
     await browser?.close();

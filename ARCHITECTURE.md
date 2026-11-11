@@ -311,6 +311,14 @@ edit nobody asked for.
 
 ### The `#level` line in the editor
 
+PLL is not meant for a file with no `#level` line, which runs with none of
+its checks, so every run of one in the editor asks first
+(`LevelLineKeeper.confirmRun`), in a modal dialog. **Choose a Level** opens
+the picker and does not run the file; **Run as Plain Python** runs it. A
+file meant as plain Python says so with `#level raw`. A line that tries to
+be a `#level` line is not asked about: the run reports it. The CLI does not
+ask.
+
 Once a file has a `#level` line, the editor keeps it: as its first line,
 exactly as written, until it is changed on purpose with the picker - the
 status-bar item (`PLL: beginner`), or **PLL: Change Level**, which also adds
@@ -1792,6 +1800,15 @@ Kept on:
 - Auto-closing brackets / quotes
 - The Problems panel (so friendly errors show up)
 - The PLL interactions view and **PLL: Run Python File**
+
+PLL also contributes one keybinding: `Ctrl+Enter` (`Cmd+Enter`) runs the
+file, in the editor of a Python file it can run. There VS Code's own
+binding of the key is **Insert Line Below**; a notebook cell is not such a
+file, and keeps **Execute Cell**. The key is bound to `pll.runActiveFile`,
+which the Command Palette lists with it. The title bar's button runs
+`pll.runActiveFileButton` instead, the same command with no key and out
+of the Palette: VS Code draws a text button's key on a line under its
+label, which makes the title bar taller.
 
 Turned off for `[python]` files:
 

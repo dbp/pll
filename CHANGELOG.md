@@ -2,7 +2,16 @@
 
 ## Unreleased
 
+### Added
+- **`Ctrl+Enter` (`Cmd+Enter` on a Mac) runs the file**, in the editor of
+  a Python file. There it takes the place of VS Code's **Insert Line
+  Below**.
+
 ### Changed
+- **Running a file with no `#level` line asks first**, every time, in VS
+  Code: such a file runs without PLL's assistance. **Choose a Level**
+  opens the list of levels; **Run as Plain Python** runs it. `#level raw`
+  runs plain Python without asking. The command-line `pll` does not ask.
 - **The `#level` line has no CodeLens above it**: the level is changed
   with **PLL: beginner** in the status bar, or **PLL: Change Level**.
   Tapped on a tablet, **🔒 Level: beginner · change** did nothing - VS

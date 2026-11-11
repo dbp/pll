@@ -65,6 +65,10 @@
         "title": "PLL: Run Python File"
       },
       {
+        "command": "pll.runActiveFileButton",
+        "title": "PLL: Run Python File"
+      },
+      {
         "command": "pll.clearInteractions",
         "title": "PLL: Clear Interactions"
       },
@@ -96,12 +100,16 @@
     "menus": {
       "editor/title/run": [
         {
-          "command": "pll.runActiveFile",
+          "command": "pll.runActiveFileButton",
           "when": "editorLangId == python && resourceScheme in pll.programSchemes",
           "group": "navigation"
         }
       ],
       "commandPalette": [
+        {
+          "command": "pll.runActiveFileButton",
+          "when": "false"
+        },
         {
           "command": "pll.changeLevel",
           "when": "editorLangId == python"
@@ -112,6 +120,14 @@
         }
       ]
     },
+    "keybindings": [
+      {
+        "command": "pll.runActiveFile",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == python && resourceScheme in pll.programSchemes"
+      }
+    ],
     "colors": [
       {
         "id": "pll.levelLineBackground",

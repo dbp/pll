@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { LEVEL_NAMES, headerLevel, type Level } from "../core/level";
+import { LEVEL_NAMES, headerLevel, levelHeaderProblem, type Level } from "../core/level";
 import {
   changeBetween,
   findLevelLine,
@@ -151,6 +151,35 @@ export class LevelLineKeeper implements vscode.Disposable {
     } else if (chosen.level !== undefined && chosen.level !== line?.level) {
       await this.write(editor, chosen.level);
     }
+  }
+
+  /**
+   * Whether a run of `document` goes ahead. PLL is not meant for a file
+   * with no `#level` line, which runs with none of its checks, so every
+   * run of one asks first: **Choose a Level** opens the picker and does not
+   * run it, and **Run as Plain Python** runs it. A file meant as plain
+   * Python says so with `#level raw`. A line that tries to be a `#level`
+   * line goes ahead: the run says what is wrong with it.
+   */
+  async confirmRun(document: vscode.TextDocument): Promise<boolean> {
+    if (levelLineOf(document) !== null || levelHeaderProblem(document.getText()) !== null) {
+      return true;
+    }
+    const choose = "Choose a Level";
+    const plain = "Run as Plain Python";
+    const answer = await vscode.window.showWarningMessage(
+      "Run this file without PLL's assistance?",
+      { modal: true, detail: "It has no #level line, so it runs as plain Python. Choose a level to get PLL's assistance." },
+      choose,
+      plain,
+    );
+    if (answer === plain) {
+      return true;
+    }
+    if (answer === choose) {
+      await this.pick(document.uri);
+    }
+    return false;
   }
 
   /** **PLL: Remove Level Line**. */
