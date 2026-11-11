@@ -315,7 +315,12 @@ Once a file has a `#level` line, the editor keeps it: as its first line,
 exactly as written, until it is changed on purpose with the picker - the
 status-bar item (`PLL: beginner`), or **PLL: Change Level**, which also adds
 a line to a file without one and has **Remove the #level line**. The line is
-tinted (`pll.levelLineBackground`, a color PLL contributes).
+tinted (`pll.levelLineBackground`, a color PLL contributes), with a lock in
+the gutter (`media/level-lock-light.svg` and `-dark.svg`), and hovering over
+the line says where the level is changed. The hover is on the line's text,
+not on the lock: VS Code shows a hover on a gutter icon only for its own
+decorations, such as breakpoints, and an extension's decoration gets one
+only over its text. On a tablet there is no hover; the lock still shows.
 
 VS Code gives an extension no read-only ranges, and Monaco has none either -
 only a whole editor's `readOnly`. Pages that freeze lines in Monaco do it by

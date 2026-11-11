@@ -426,7 +426,7 @@ def _pll_examplar_compiled_definitions(test_source, filename):
 
 
 #: A `#level` line, as the host reads one (`HEADER_RE` in core/level.ts).
-_PLL_EXAMPLAR_HEADER_RE = _ex_re.compile(r"^#\s*level\s+([a-z]+)\s*$")
+_PLL_EXAMPLAR_HEADER_RE = _ex_re.compile(r"^#level\s+([a-z]+)\s*$")
 
 
 def _pll_examplar_level(source):

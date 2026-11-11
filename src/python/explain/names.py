@@ -44,15 +44,17 @@ def _pll_explain_syntax(e):
     """
     run = getattr(e, "run", None)
     source = run[1] if run and e.file == run[0] else None
-    headline, how_to_fix = _pll_syntax_wording(e.type, e.message, e.text, source, e.line)
+    headline, how_to_fix = _pll_syntax_wording(e.type, e.message, e.text, source, e.line, e.column)
     return {"id": "syntax-error", "headline": headline, "howToFix": how_to_fix, "nameToken": None}
 
 
-def _pll_syntax_wording(error_type, message, line, source=None, line_number=None):
+def _pll_syntax_wording(error_type, message, line, source=None, line_number=None, column=None):
     """`(headline, how_to_fix)` for a syntax error on `line`: the first
-    rewording that fits. `source` is the program, when there is one, and
-    `line_number` where in it the line is."""
-    line = (line or "").strip()
+    rewording that fits. `source` is the program, when there is one,
+    `line_number` where in it the line is, and `column` where on the line,
+    as written, Python's caret is."""
+    text = line or ""
+    line = text.strip()
     if error_type == "TabError":
         return "This line mixes tabs and spaces for its indentation.", [
             "Use spaces throughout. In VS Code, the command **Convert Indentation to Spaces** fixes the whole file.",
@@ -75,6 +77,9 @@ def _pll_syntax_wording(error_type, message, line, source=None, line_number=None
     # for the colon it wanted after `else`.
     if _pll_src_re.match(r"else\s+if\b", line):
         return "Python spells this `elif`, not `else if`.", ["Write `elif` as one word, then the condition and a colon."]
+    arrow = _pll_arrow_mistake(text, column, source, line_number)
+    if arrow is not None:
+        return arrow
     if "'return' outside function" in message:
         return "`return` only works inside a function.", [
             "To show a value at the top level of a file, use `print(...)` or write the value on a line of its own.",
@@ -105,6 +110,47 @@ def _pll_syntax_wording(error_type, message, line, source=None, line_number=None
             "Pick another name, such as `%s_value` or something describing what it holds." % keyword
         ]
     return (_pll_punctuated(message) if message.strip() else "Python could not read this line."), []
+
+
+#: A name alone between an `=` and an `=>`, as in `double = x => x * 2`:
+#: JavaScript's function, which a comparison mended would hide.
+_PLL_ARROW_FUNCTION = _pll_src_re.compile(r"(?:^|[^=!<>:])=\s*[^\W\d]\w*\s*$")
+
+
+def _pll_arrow_mistake(text, column, source=None, line_number=None):
+    """`x => 3` and `x =< 3` - `>=` and `<=` the wrong way round - and the
+    `=>` of `def f(x: int) => int:`, said as what they are; or None.
+
+    Only the `=>` Python's caret is on, at `column` of `text` - on its `=`,
+    or in a call, where `x =` reads as a keyword argument, on the `>` - so
+    one in a string or a format spec (`f"{s:=>10}"`) is never taken for
+    it. And only when the line, mended, parses: `case [] => 0` and `lambda
+    x => x` are other languages' arrows, and are left to Python.
+    """
+    if column is None:
+        return None
+    start = column if text[column : column + 2] in ("=>", "=<") else column - 1
+    if start < 0 or text[start : start + 2] not in ("=>", "=<"):
+        return None
+    line = text.strip()
+    at = start - (len(text) - len(text.lstrip()))
+    before, wrong, after = line[:at], line[at : at + 2], line[at + 2 :]
+    if _pll_src_re.match(r"(?:async\s+)?def\b", line):
+        written = before + "->" + after
+        if wrong != "=>" or not _pll_parses_mended(line, written, source, line_number):
+            return None
+        return "A function's return type comes after `->`, not `=>`.", [
+            "Write `%s`, with a `-` before the `>`." % written
+        ]
+    if wrong == "=>" and _PLL_ARROW_FUNCTION.search(before):
+        return None
+    right = wrong[::-1]
+    if not _pll_parses_mended(line, before + right + after, source, line_number):
+        return None
+    said = "greater than or equal to" if right == ">=" else "less than or equal to"
+    return 'Python writes "%s" as `%s`, not `%s`.' % (said, right, wrong), [
+        "The `=` goes second, in the order you say it."
+    ]
 
 
 def _pll_case_brackets(written, fixed, names, followed):

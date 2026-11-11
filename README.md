@@ -136,8 +136,9 @@ separate setting to keep in sync with it.
 ### The `#level` line in the editor
 
 PLL keeps a file's `#level` line where it is, so it is not lost by accident.
-The line is tinted, and the status bar shows the level — **PLL: beginner**, or
-**PLL: raw** for a file with no line. Clicking it opens a list of the levels,
+The line is tinted, with a lock beside it, and hovering over it says where to
+change it: the status bar, which shows the level — **PLL: beginner**, or
+**PLL: raw** for a file with no line. Clicking that opens a list of the levels,
 where you can also remove the line, or give a file with no line one; so does
 **PLL: Change Level** in the Command Palette.
 

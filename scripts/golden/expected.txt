@@ -1251,6 +1251,39 @@ stderr:
   How to fix:
     - `==` asks whether two values are equal; `=` gives a name a value.
 
+=== syntax-arrow-compare (exit 1)
+stderr:
+  student.py [beginner]
+  SyntaxError: Python writes "greater than or equal to" as `>=`, not `=>`.
+    at student.py:3:18
+  
+  How to fix:
+    - The `=` goes second, in the order you say it.
+
+=== syntax-arrow-test (exit 1)
+stderr:
+  student.py [beginner]
+  SyntaxError: Python writes "less than or equal to" as `<=`, not `=<`.
+    at student.py:3:15
+  
+  How to fix:
+    - The `=` goes second, in the order you say it.
+
+=== syntax-arrow-return-type (exit 1)
+stderr:
+  student.py [beginner]
+  SyntaxError: A function's return type comes after `->`, not `=>`.
+    at student.py:2:20
+  
+  How to fix:
+    - Write `def double(x: int) -> int:`, with a `-` before the `>`.
+
+=== syntax-arrow-function (exit 1)
+stderr:
+  student.py [raw]
+  SyntaxError: invalid syntax.
+    at student.py:1:13
+
 === syntax-class-keyword (exit 1)
 stderr:
   student.py [raw]
@@ -1412,6 +1445,16 @@ stderr:
   
   How to fix:
     - Write it as `#level beginner`, with a space.
+  
+  The file was not run.
+
+=== header-hash-space (exit 2)
+stderr:
+  Level: `#level` has no space after the `#`: `#level beginner`.
+    at student.py:1
+  
+  How to fix:
+    - Write it as `#level beginner`, with no space after the `#`.
   
   The file was not run.
 

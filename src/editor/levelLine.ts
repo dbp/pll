@@ -77,18 +77,26 @@ type PickItem = vscode.QuickPickItem & { level?: Level; remove?: true };
 
 export class LevelLineKeeper implements vscode.Disposable {
   private readonly kept = new Map<string, Kept>();
-  private readonly highlight = vscode.window.createTextEditorDecorationType({
-    isWholeLine: true,
-    backgroundColor: new vscode.ThemeColor("pll.levelLineBackground"),
-  });
+  /**
+   * The line's tint, a lock in the gutter beside it, and what hovering over
+   * the line says. An extension's hover cannot be on the gutter's icon.
+   */
+  private readonly marker: vscode.TextEditorDecorationType;
   private readonly status = vscode.window.createStatusBarItem("pll.level", vscode.StatusBarAlignment.Right, 100);
   private readonly subscriptions: vscode.Disposable[];
 
-  constructor() {
+  constructor(extensionUri: vscode.Uri) {
+    this.marker = vscode.window.createTextEditorDecorationType({
+      isWholeLine: true,
+      backgroundColor: new vscode.ThemeColor("pll.levelLineBackground"),
+      gutterIconSize: "contain",
+      light: { gutterIconPath: vscode.Uri.joinPath(extensionUri, "media", "level-lock-light.svg") },
+      dark: { gutterIconPath: vscode.Uri.joinPath(extensionUri, "media", "level-lock-dark.svg") },
+    });
     this.status.name = "PLL Level";
     this.status.command = "pll.changeLevel";
     this.subscriptions = [
-      this.highlight,
+      this.marker,
       this.status,
       vscode.workspace.onDidOpenTextDocument((document) => void this.track(document)),
       vscode.workspace.onDidCloseTextDocument((document) => this.forget(document)),
@@ -406,7 +414,20 @@ export class LevelLineKeeper implements vscode.Disposable {
 
   private decorate(editor: vscode.TextEditor): void {
     const line = this.applies(editor.document) ? levelLineOf(editor.document) : null;
-    editor.setDecorations(this.highlight, line === null ? [] : [new vscode.Range(line.line, 0, line.line, 0)]);
+    editor.setDecorations(
+      this.marker,
+      line === null
+        ? []
+        : [
+            {
+              range: new vscode.Range(line.line, 0, line.line, 0),
+              hoverMessage: new vscode.MarkdownString(
+                `$(lock) PLL keeps this line. To change the level, click **PLL: ${line.level}** in the status bar, at the bottom right of the window.`,
+                true,
+              ),
+            },
+          ],
+    );
   }
 
   private showStatus(): void {

@@ -27,7 +27,7 @@ console.log("\n[1] which line is the `#level` line");
   const cases = [
     ["#level beginner", "beginner"],
     ["  #level  advanced  ", "advanced"],
-    ["# level raw", "raw"],
+    ["# level raw", null],
     ["#level Beginner", null],
     ["#levelbeginner", null],
     ["#level begginer", null],

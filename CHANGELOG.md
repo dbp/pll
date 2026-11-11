@@ -14,6 +14,14 @@
   extensions (`extensions.ignoreRecommendations`) - for every kind of
   file, while PLL is installed. Unticking **Extensions: Ignore
   Recommendations** in Settings brings them back.
+- **The `#level` line has a lock beside it**, in the gutter, as well as
+  its tint, and hovering over the line says to change the level with
+  **PLL: beginner** in the status bar.
+- **`# level beginner`, with a space after the `#`, is not a level
+  line**: it was read as `#level beginner`. Now the file does not run,
+  and PLL says to write `#level beginner`. In the sources of a bundle or
+  an Examplar build, such a line is no level line, like any other line
+  that is not one.
 
 ### Fixed
 - **A `-` in a parameter's name is said to be one**, as a `-` in a
@@ -23,6 +31,12 @@
   and to call it, and use its parameters in its body, by those names too.
   A `-` in a default or an annotation is left alone: there it may be a
   minus.
+- **`=>` and `=<` are said to be `>=` and `<=` the wrong way round**:
+  `if x => 3:` got Python's "invalid syntax", and `assert f(x) => 0` was
+  told that a test compares with `==`. In a `def` line, `=>` is said to
+  be the `->` before the return type. A name alone between an `=` and
+  the `=>`, as in `double = x => x * 2`, keeps Python's message: it may
+  be JavaScript's arrow function.
 
 ## 0.11.0 (2026-11-9)
 

@@ -24,7 +24,7 @@ import types as _bd_types
 
 BUNDLE_FORMAT = 1
 
-_PLL_BUNDLE_LEVEL_RE = _bd_re.compile(r"^#\s*level\s+([a-z]+)\s*$")
+_PLL_BUNDLE_LEVEL_RE = _bd_re.compile(r"^#level\s+([a-z]+)\s*$")
 
 
 def _pll_bundle_level(source):

@@ -40,7 +40,7 @@ export function isLevel(name: string): name is Level {
 
 // Case-sensitive, and exactly one spelling: `#level beginner`. Anything
 // else falls back to the default rather than guessing at intent.
-const HEADER_RE = /^#\s*level\s+([a-z]+)\s*$/;
+const HEADER_RE = /^#level\s+([a-z]+)\s*$/;
 
 /**
  * Parse the level header from the start of a Python source file.
@@ -81,17 +81,21 @@ export interface LevelHeaderProblem {
  * runs as ordinary Python, and a stray comment is never an error. What is
  * reported is a line that *asked* for a level and did not get one: the
  * student believes `beginner` is watching and every check they expected has
- * vanished without a word. Three ways that happens:
+ * vanished without a word. Four ways that happens:
  *
  *   #level begginer      a name that is not a level
  *   #levelbeginner       the space missed out
+ *   # level beginner     a space after the `#`
  *   # my lab 1           something above it - a comment, or code - so it
  *   #level beginner      is not the first line
  */
 export function levelHeaderProblem(source: string): LevelHeaderProblem | null {
   const lines = source.split(/\r?\n/);
-  const valid = new RegExp(`^#\\s*level\\s+(?:${LEVEL_NAMES.join("|")})\\s*$`);
+  const valid = new RegExp(`^#level\\s+(?:${LEVEL_NAMES.join("|")})\\s*$`);
   const joined = new RegExp(`^#\\s*level(${LEVEL_NAMES.join("|")})\\s*$`);
+  const spaced = new RegExp(`^#\\s+level\\s+(${LEVEL_NAMES.join("|")})\\s*$`);
+  // A header, or one with a space after the `#`, as found below the top.
+  const either = new RegExp(`^#\\s*level\\s+(${LEVEL_NAMES.join("|")})\\s*$`);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -109,11 +113,19 @@ export function levelHeaderProblem(source: string): LevelHeaderProblem | null {
         howToFix: [`Write it as \`#level ${squashed[1]}\`, with a space.`],
       };
     }
+    const hashSpace = spaced.exec(line);
+    if (hashSpace !== null) {
+      return {
+        line: i + 1,
+        message: `\`#level\` has no space after the \`#\`: \`#level ${hashSpace[1]}\`.`,
+        howToFix: [`Write it as \`#level ${hashSpace[1]}\`, with no space after the \`#\`.`],
+      };
+    }
     const attempt = /^#\s*level\b(.*)$/.exec(line);
     if (attempt === null) {
       // Not a header. It may still be a comment with the real header
       // underneath, which is the commonest way to lose a level entirely.
-      return misplacedHeader(lines, i, valid);
+      return misplacedHeader(lines, i, either);
     }
     if (valid.test(line)) {
       return null;
@@ -141,15 +153,16 @@ export function levelHeaderProblem(source: string): LevelHeaderProblem | null {
 }
 
 /**
- * A valid header sitting below the top of the file, where it does nothing -
- * under a comment, or under code. Only a line that is a comment counts: a
- * `#level` line inside a docstring is text, and inventing an error out of a
- * string would be worse than missing a header.
+ * A header sitting below the top of the file, where it does nothing - under
+ * a comment, or under code - named as it has to be written there. `header`
+ * finds one, with the level's name as its group. Only a line that is a
+ * comment counts: a `#level` line inside a docstring is text, and inventing
+ * an error out of a string would be worse than missing a header.
  */
 function misplacedHeader(
   lines: string[],
   from: number,
-  valid: RegExp,
+  header: RegExp,
 ): LevelHeaderProblem | null {
   const comments = commentLines(lines);
   let underCode = false;
@@ -162,10 +175,11 @@ function misplacedHeader(
       underCode = true;
       continue;
     }
-    if (valid.test(line)) {
+    const found = header.exec(line);
+    if (found !== null) {
       return {
         line: i + 1,
-        message: `\`${line}\` only counts on the first line, so none of its checks ran.`,
+        message: `\`#level ${found[1]}\` only counts on the first line, so none of its checks ran.`,
         howToFix: [
           underCode
             ? "Move it to the very first line of the file, above the code."

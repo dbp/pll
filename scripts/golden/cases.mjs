@@ -166,6 +166,10 @@ export const CASES = [
   // ---- syntax -------------------------------------------------------------
   { name: "syntax-else-if", code: ["x = 3", "if x > 2:", '    print("a")', "else if x > 1:", '    print("b")'] },
   { name: "syntax-assign-in-if", code: ["x = 5", "if x = 5:", "    print(x)"] },
+  { name: "syntax-arrow-compare", code: [B, "def passed(score: int) -> bool:", "    return score => 60"] },
+  { name: "syntax-arrow-test", code: [B, "def test_passed():", "    assert 70 =< 60"] },
+  { name: "syntax-arrow-return-type", code: [B, "def double(x: int) => int:", "    return x * 2"] },
+  { name: "syntax-arrow-function", code: ["double = x => x * 2"] },
   { name: "syntax-class-keyword", code: ["class = 30"] },
   { name: "syntax-curly-quote", code: ["print(“hello”)"] },
   { name: "syntax-tab", code: ["def f():", "    x = 1", "\ty = 2", "    return x"] },
@@ -186,6 +190,7 @@ export const CASES = [
   { name: "header-capital", code: ["#level Beginner", 'print("x")'] },
   { name: "header-bare", code: ["#level", 'print("x")'] },
   { name: "header-no-space", code: ["#levelbeginner", 'print("x")'] },
+  { name: "header-hash-space", code: ["# level beginner", 'print("x")'] },
   { name: "header-not-first", code: ['print("x")', B] },
   { name: "header-under-comment", code: ["# Lab 1", B, 'print("x")'] },
   { name: "header-in-docstring", code: ['"""Lab 1', B, '"""', 'print("x")'] },

@@ -23,7 +23,7 @@ export function activateWithRuntime(
 ): PllApi {
   const diagnostics = new Diagnostics(context.extensionUri);
   const view = new InteractionsView(context.extensionUri);
-  const levelLine = new LevelLineKeeper();
+  const levelLine = new LevelLineKeeper(context.extensionUri);
   const repl = new ReplSession({
     runtime,
     diagnostics,

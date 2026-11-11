@@ -4,8 +4,9 @@
  * keys and clicks of `src/editor/levelLine.ts`, through Chromium's input
  * pipeline, in the editor VS Code ships.
  *
- *   1. Select All, then Delete, Paste or Cut: the line stays, and one undo
- *      brings everything back
+ *   1. The line has a lock in the gutter, and hovering over it says where
+ *      the level is changed. Select All, then Delete, Paste or Cut: the
+ *      line stays, and one undo brings everything back
  *   2. Typing into the line, Backspace in it, and deleting it: the line
  *      stays, and what was typed lands on the line below, in its order
  *   3. A program pasted in with its own `#level` line brings it
@@ -94,6 +95,33 @@ async function lens(page) {
   return (await found.count()) > 0 ? ((await found.first().textContent()) ?? "").trim() : "";
 }
 
+/** The lines with PLL's lock in the gutter beside them, in the editor with focus. */
+async function locks(page) {
+  return page.evaluate(() => {
+    const editor = document.querySelector(".part.editor .monaco-editor.focused") ?? document.querySelector(".part.editor .monaco-editor");
+    const icons = [...(editor?.querySelectorAll(".margin *") ?? [])].filter((el) =>
+      getComputedStyle(el).backgroundImage.includes("level-lock"),
+    );
+    const lines = [...(editor?.querySelectorAll(".view-lines .view-line") ?? [])];
+    return icons.map((icon) => {
+      const line = lines.find((l) => Math.abs(l.getBoundingClientRect().top - icon.getBoundingClientRect().top) < 3);
+      return (line?.textContent ?? "?").replace(/ /g, " ");
+    });
+  });
+}
+
+/** What hovering over the text of the line that reads `text` shows, or "" for no hover. */
+async function hoverOver(page, text) {
+  await page.locator(".monaco-editor .view-line", { hasText: text }).first().locator("span span").first().hover();
+  const hover = page.locator(".monaco-hover", { hasText: "PLL keeps this line" }).first();
+  const shown = await hover
+    .waitFor({ state: "visible", timeout: 5000 })
+    .then(async () => ((await hover.textContent()) ?? "").replace(/\s+/g, " ").trim())
+    .catch(() => "");
+  await page.keyboard.press("Escape");
+  return shown;
+}
+
 async function open(page, name, firstLine) {
   await page.locator(".monaco-list-row", { hasText: name }).first().dblclick();
   await page.locator(".monaco-editor .view-line", { hasText: firstLine }).first().waitFor({ state: "visible", timeout: 20_000 });
@@ -159,6 +187,12 @@ async function main() {
     expect(original.startsWith(HEADER + "\n"), `beginner_ok.py opened: ${JSON.stringify(original)}`);
     expect((await lens(page)) === "", `no CodeLens: ${JSON.stringify(await lens(page))}`);
     expect((await statusBar(page)).includes("PLL: beginner"), "the status bar's level");
+    expect(JSON.stringify(await locks(page)) === JSON.stringify([HEADER]), `a lock beside the line only: ${JSON.stringify(await locks(page))}`);
+    const said = await hoverOver(page, HEADER);
+    expect(
+      said === "PLL keeps this line. To change the level, click PLL: beginner in the status bar, at the bottom right of the window.",
+      `hovering over the line: ${JSON.stringify(said)}`,
+    );
     await page.locator(".monaco-editor .view-line", { hasText: "answer" }).first().click();
     for (const [what, key, clipboard] of [["Delete", "Delete"], ["Paste", "Control+v", "print(9)\n"], ["Cut", "Control+x"]]) {
       if (clipboard !== undefined) {
@@ -227,12 +261,14 @@ async function main() {
     const changed = await textWhen(page, (t) => t.startsWith("#level advanced\n"));
     expect(changed === "#level advanced\nx = 1\n", `changed: ${JSON.stringify(changed)}`);
     await page.waitForTimeout(1500);
+    expect((await hoverOver(page, "#level advanced")).includes("click PLL: advanced"), "the hover follows the level");
     await page.locator(".statusbar-item", { hasText: "PLL: advanced" }).first().click();
     await pickInPicker(page, "Remove the #level line");
     const removed = await textWhen(page, (t) => t === "x = 1\n");
     expect(removed === "x = 1\n", `removed: ${JSON.stringify(removed)}`);
     await page.waitForTimeout(1000);
     expect((await statusBar(page)).includes("PLL: raw"), "the status bar: raw");
+    expect((await locks(page)).length === 0, `and no lock: ${JSON.stringify(await locks(page))}`);
     await page.locator(".monaco-editor .view-line", { hasText: "x = 1" }).first().click();
     await selectAll(page);
     await page.keyboard.press("Delete");

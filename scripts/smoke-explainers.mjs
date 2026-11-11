@@ -129,7 +129,7 @@ const defUnion = (members) => ({ kind: "union", members });
 console.log("\n[parseLevel]");
 expect(mod.parseLevel("#level raw\nx=1") === "raw", "#level raw");
 expect(mod.parseLevel("#level beginner\nx=1") === "beginner", "#level beginner");
-expect(mod.parseLevel("# level beginner\nx=1") === "beginner", "# level beginner (with space)");
+expect(mod.parseLevel("# level beginner\nx=1") === "raw", "a space after the # is not a header");
 expect(mod.parseLevel("#level intermediate\nx=1") === "intermediate", "#level intermediate");
 expect(mod.parseLevel("#level advanced\nx=1") === "advanced", "#level advanced");
 expect(mod.parseLevel("#level  advanced \nx=1") === "advanced", "extra spaces around the name");
@@ -520,7 +520,11 @@ console.log("[a #level line that names nothing valid is an error, not silence]")
   const problem = (header) => mod.levelHeaderProblem(`${header}\nx = 1\n`)?.message ?? null;
 
   expect(problem("#level beginner") === null, "a valid header is fine");
-  expect(problem("# level advanced") === null, "a space after the hash is fine");
+  // Only `#level` is the line, so a space after the hash is named, with the fix.
+  expect(problem("# level advanced") === "`#level` has no space after the `#`: `#level advanced`.",
+    `a space after the hash is named: ${problem("# level advanced")}`);
+  expect(/Did you mean `beginner`/.test(problem("# level begginer") ?? ""),
+    `a space and a misspelling: ${problem("# level begginer")}`);
   expect(problem("#level raw") === null, "raw is a level like any other");
   // Absence, and anything that is not trying to be a header, stay silent.
   expect(problem("x = 1") === null, "no header at all is not an error");
@@ -556,6 +560,10 @@ console.log("[a #level line that names nothing valid is an error, not silence]")
     "# name\n# date\n\n#level intermediate\nx = 1\n",
   );
   expect(afterSeveral?.line === 4, `found past several comments, got ${afterSeveral?.line}`);
+  // With a space after the hash too, named as it has to be written.
+  const spacedBelow = mod.levelHeaderProblem("# my lab 1\n# level beginner\nx = 1\n");
+  expect(spacedBelow?.line === 2 && spacedBelow.message.startsWith("`#level beginner` only counts"),
+    `a spaced header below the top: ${JSON.stringify(spacedBelow)}`);
   // Below code too, anywhere in the file - but only on a line that is a
   // comment. A `#level` line inside a docstring is text, and erroring on a
   // string literal would be worse than missing a misplaced header.
@@ -716,6 +724,51 @@ console.log("[syntax errors: a function written as Pyret writes one, or with no 
   // A good `def`, failing for where it is: there is nothing to mend in it.
   const placed = JSON.parse(pllCall("_pll_syntax_wording", JSON.stringify(["IndentationError", "unexpected indent", "    def foo(x):"])));
   expect(placed[0] === "unexpected indent.", `a good def, out of place: ${placed[0]}`);
+  console.log(`    ${CASES.length} said, ${LEFT.length} left to Python, and a line on its own`);
+}
+
+console.log("[syntax errors: `=>` and `=<` for `>=` and `<=`, and `=>` for a return type's `->`]");
+{
+  const raised = (source) => ran(source, "lab.py", "raw");
+  const GE = 'Python writes "greater than or equal to" as `>=`, not `=>`.';
+  const LE = 'Python writes "less than or equal to" as `<=`, not `=<`.';
+  const SECOND = ["The `=` goes second, in the order you say it."];
+  const CASES = [
+    ["an `if`", "x = 4\nif x => 3:\n    print(x)\n", GE, SECOND],
+    ["a `return`, indented", "def f(x: int) -> bool:\n    return x => 3\n", GE, SECOND],
+    // In a call, `x =` reads as a keyword argument: the caret is on the `>`.
+    ["an argument", "x = 4\nprint(x => 3)\n", GE, SECOND],
+    ["`=<` as an argument", "x = 4\nprint(x =< 3)\n", LE, SECOND],
+    ["a test", "def test_f():\n    assert 4 => 3\n", GE, SECOND],
+    ["`=<`", "x = 4\nif x =< 3:\n    print(x)\n", LE, SECOND],
+    ["after a format spec's `=>`", 'name = "a"\nx = 4\ns = f"{name:=>10}" + str(x => 3)\n', GE, SECOND],
+    ["after a name that is not ASCII", "café = 4\nif café => 3:\n    print(café)\n", GE, SECOND],
+    ["a return type", "def f(x: int) => int:\n    return x\n",
+      "A function's return type comes after `->`, not `=>`.", ["Write `def f(x: int) -> int:`, with a `-` before the `>`."]],
+  ];
+  for (const [what, source, headline, fix] of CASES) {
+    const got = raised(source);
+    expect(got?.headline === headline, `${what}: ${got?.headline}`);
+    expect(JSON.stringify(got?.howToFix) === JSON.stringify(fix), `${what}, the fix: ${JSON.stringify(got?.howToFix)}`);
+  }
+  // A name alone after an `=` may be JavaScript's function; and another
+  // language's arrow, or a line with a second mistake, does not parse mended.
+  const LEFT = [
+    ["JavaScript's function", "double = x => x * 2\n"],
+    ["as a keyword argument", "xs = [3, 1]\nys = sorted(xs, key=x => -x)\n"],
+    ["Pyret's `cases`", "def f(l):\n    match l:\n        case [] => 0\n"],
+    ["a `lambda`", "f = lambda x => x * 2\n"],
+    ["two on one line", "a = 1\nb = 2\nif a => 1 and b => 2:\n    pass\n"],
+    ["a space in it", "x = 4\nif x = > 3:\n    pass\n"],
+    ["`==>`", "x = 4\nprint(x ==> 3)\n"],
+  ];
+  for (const [what, source] of LEFT) {
+    const got = raised(source);
+    expect(got !== null && !/`=>`|`=<`/.test(got.headline), `${what}: ${got?.headline}`);
+  }
+  // A prompt line has no program around it, so it has to parse alone.
+  const alone = JSON.parse(pllCall("_pll_syntax_wording", JSON.stringify(["SyntaxError", "invalid syntax", "x => 3", null, null, 2])));
+  expect(alone[0] === GE, `a line alone: ${alone[0]}`);
   console.log(`    ${CASES.length} said, ${LEFT.length} left to Python, and a line on its own`);
 }
 
