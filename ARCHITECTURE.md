@@ -1818,8 +1818,9 @@ Turned off for `[python]` files:
   `suggest.showSnippets`
 - Inline AI suggestions: `editor.inlineSuggest.enabled`,
   `github.copilot.enable.python`,
-  `github.copilot.editor.enableAutoCompletions`,
-  `cursor.cpp.disabledLanguages` (Cursor Tab) — best-effort across forks
+  `cursor.cpp.disabledLanguages` (Cursor Tab) — best-effort across forks.
+  These still hold in Python files if `chat.disableAIFeatures` (below) is
+  turned back on.
 - CodeLens, lightbulb (quick-fix), minimap, sticky scroll, linked editing
 - Format on save / paste / type
 
@@ -1843,6 +1844,10 @@ Turned off globally (no-ops if the other extension is not installed):
   `breadcrumbs.enabled`
 - VS Code's pop-ups recommending extensions, for every kind of file:
   `extensions.ignoreRecommendations` (Extension guard, below)
+- VS Code's built-in AI features, GitHub Copilot's chat and inline
+  suggestions, for every kind of file: `chat.disableAIFeatures`. Copilot
+  ships inside VS Code, so this setting is the only way to turn it off. It
+  is window-scoped, so an extension may give it a default.
 
 ### Extension guard
 

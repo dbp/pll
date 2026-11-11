@@ -219,10 +219,10 @@
       "editor.experimentalEditContextEnabled": false,
       "workbench.startupEditor": "none",
       "extensions.ignoreRecommendations": true,
+      "chat.disableAIFeatures": true,
       "github.copilot.enable": {
         "python": false
       },
-      "github.copilot.editor.enableAutoCompletions": false,
       "cursor.cpp.disabledLanguages": [
         "python"
       ],

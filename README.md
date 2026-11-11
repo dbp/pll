@@ -641,19 +641,32 @@ The long form names each handler:
 reactor(
     init=(160, 70),
     to_draw=lambda spot: place_image(star(18, "solid", "gold"), spot[0], spot[1], scene),
-    on_key=move,          # move(state, key) -> new state
+    on_key=move,          # def move(spot: tuple[int, int], key: str) -> tuple[int, int]
     title="Arrow keys",
 ).interact()
 ```
 
-| Handler | Called with | When |
-| --- | --- | --- |
-| `to_draw` | `(state)` | every frame; must return an image |
-| `on_tick` | `(state)` | on the clock |
-| `on_key` | `(state, key)` | a key press — `"left"`, `"a"`, `" "`, … |
-| `on_mouse` | `(state, x, y, event)` | `"button-down"`, `"button-up"`, `"drag"`, `"move"`, `"enter"`, `"leave"` |
-| `stop_when` | `(state)` | after each change; `True` ends it |
-| `on_receive` | `(state, message)` | a message from a server (see below) |
+| Handler | When |
+| --- | --- |
+| `to_draw` | every frame |
+| `on_tick` | on the clock |
+| `on_key` | a key press — `"left"`, `"a"`, `" "`, … |
+| `on_mouse` | `"button-down"`, `"button-up"`, `"drag"`, `"move"`, `"enter"`, `"leave"` |
+| `stop_when` | after each change; `True` ends it |
+| `on_receive` | a message from a server (see below) |
+
+Their signatures are below, where `State` stands for the type of the state
+and `Message` for the type of a server's messages. The names are yours to
+choose.
+
+```python
+def draw(state: State) -> Image: ...                               # to_draw
+def tick(state: State) -> State: ...                               # on_tick
+def press(state: State, key: str) -> State: ...                    # on_key
+def mouse(state: State, x: int, y: int, event: str) -> State: ...  # on_mouse
+def done(state: State) -> bool: ...                                # stop_when
+def receive(state: State, message: Message) -> State: ...          # on_receive
+```
 
 Also `tick_rate` (seconds between ticks, default about 1/28) and `title`.
 Each handler returns the **new state**. Click the picture before using the
@@ -810,6 +823,11 @@ PLL also turns off VS Code's pop-ups recommending extensions, so opening a
 `.py` file does not ask you to install Microsoft's Python extension. That
 holds for every kind of file while PLL is installed; unticking
 **Extensions: Ignore Recommendations** in Settings brings them back.
+
+PLL also turns off the AI features built into VS Code, GitHub Copilot's
+chat and suggestions, for every kind of file while PLL is installed.
+Unticking **Chat: Disable AI Features** in Settings brings them back;
+suggestions still stay out of Python files.
 
 If another Python extension is installed and might add confusing
 messages, PLL may ask whether to disable it **for this workspace**. That

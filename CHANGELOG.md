@@ -18,6 +18,11 @@
   Code's editor takes a tap as moving the cursor - while the status-bar
   item works with a tap. CodeLens is off for Python files again, as it was
   before 0.6.0.
+- **VS Code's built-in AI features are off while PLL is installed**:
+  PLL's defaults set `chat.disableAIFeatures`, which hides GitHub
+  Copilot's chat and turns off its inline suggestions, for every kind of
+  file. Unticking **Chat: Disable AI Features** in Settings brings them
+  back.
 - **Opening a `.py` file no longer asks to install Microsoft's Python
   extension**: PLL's defaults turn off VS Code's pop-ups recommending
   extensions (`extensions.ignoreRecommendations`) - for every kind of
