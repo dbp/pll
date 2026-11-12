@@ -336,7 +336,7 @@ def _pll_repl_eval(code, session_key, level=_PLL_LEVEL_RAW):
                     if payload is not None:
                         _pll_push(payload)
                     else:
-                        result["resultRepr"] = repr(value)
+                        result["resultRepr"] = repr(value) if level == _PLL_LEVEL_RAW else _pll_repr(value)
         result["ok"] = True
     except SystemExit as e:
         result["ok"] = True

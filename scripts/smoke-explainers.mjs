@@ -2406,11 +2406,18 @@ console.log("[third review: the cases replayed from docs/error-review.md]");
   expect(valueOf.howToFix.some((l) => l.includes('key "a"')), `in the advice too: ${JSON.stringify(valueOf.howToFix)}`);
   const keyB = keyed("dict[int, int]", '{"b": 1}');
   expect(/key "b"/.test(keyB.headline), `a key itself: ${keyB.headline}`);
-  // Not a string, or quoted the way it is because of what is in it: as Python wrote it.
+  // A number as Python writes it; a string in double quotes, even with one in it.
   const keyOne = keyed("dict[int, int]", '{1: "x"}');
   expect(/key 1 /.test(keyOne.headline), `a number key: ${keyOne.headline}`);
   const quoted = keyed("dict[str, int]", `{'say "hi"': "x"}`);
-  expect(quoted.headline.includes(`key 'say "hi"'`), `a key with a quote in it: ${quoted.headline}`);
+  expect(quoted.headline.includes(`key "say \\"hi\\""`), `a key with a quote in it: ${quoted.headline}`);
+  // A dataclass field's `Literal` in double quotes, though Python keeps the
+  // annotation to read later with single ones.
+  const literal = ran(
+    'from dataclasses import dataclass\nfrom typing import Literal\n\n\n@dataclass\nclass Pick:\n    kind: Literal["a", "b"]\n\n\nPick("c")\n',
+    "student.py",
+  );
+  expect(literal.headline.includes('`Literal["a", "b"]`'), `a Literal field: ${literal.headline}`);
 
   // mut-local-not-field: the line reads the field it meant to change.
   const field = ran(

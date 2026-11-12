@@ -348,7 +348,7 @@ def _pll_reach(steps):
         elif step["kind"] == "field":
             words.append("the `%s` of the `%s`" % (step["name"], _pll_clean_type_name(step["in"])))
         elif step["kind"] == "value":
-            words.append("the value for key %s of the dictionary" % _pll_plain_key(step["key"]))
+            words.append("the value for key %s of the dictionary" % step["key"])
         else:
             return None
     # Outermost first in the path; said inmost first.
@@ -602,24 +602,13 @@ def _pll_members_phrase(element):
 
 
 def _pll_describe_element(element):
-    """A contract's words for a part of a collection ("item 2", "value of key
-    'a'"), as something to point at."""
+    """A contract's words for a part of a collection ("item 2", 'value of key
+    "a"'), as something to point at."""
     if element.startswith("value of key "):
-        return "the value for key " + _pll_plain_key(element[len("value of key ") :])
-    if element.startswith("key "):
-        return "key " + _pll_plain_key(element[len("key ") :])
+        return "the value for key " + element[len("value of key ") :]
     if element.startswith("["):
         return "one of the values"
     return element
-
-
-def _pll_plain_key(key):
-    """A key as a contract quotes it - Python's `repr`, so `'a'` - in the
-    double quotes PLL writes a string in, so that the key and the value
-    beside it read alike. A key that is not a plain string, or whose quotes
-    Python chose because of what is in it, is left as Python wrote it."""
-    simple = _pll_src_re.fullmatch(r"'([^'\"\\]*)'", key)
-    return '"%s"' % simple.group(1) if simple else key
 
 
 def _pll_class_given(c):

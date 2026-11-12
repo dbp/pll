@@ -264,7 +264,7 @@ console.log("[annotations read when needed, where they were written: types named
   const early = JSON.parse(pllCall("_pll_repl_eval", JSON.stringify(["def make() -> Later:\n    return Later()", key, "beginner"])));
   pllCall("_pll_repl_eval", JSON.stringify(["class Later:\n    pass", key, "beginner"]));
   const made = JSON.parse(pllCall("_pll_repl_eval", JSON.stringify(["type(make()).__name__", key, "beginner"])));
-  expect(early.error === null && made.resultRepr === "'Later'", `at the prompt: ${early.error?.message ?? ""} ${made.error?.message ?? made.resultRepr}`);
+  expect(early.error === null && made.resultRepr === '"Later"', `at the prompt: ${early.error?.message ?? ""} ${made.error?.message ?? made.resultRepr}`);
   console.log("    a recursive type, a class's own name, type parameters and local names, all checked as before");
 }
 

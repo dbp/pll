@@ -96,6 +96,12 @@ async function main() {
         "the frames must not expose the contract's own:\n" + frames.join("\n"),
       );
       expect(frames.includes("hello.py:4"), "the frames should include the call site (line 4):\n" + frames.join("\n"));
+      // A list in it as the student wrote one, its strings in double quotes.
+      const listed = await run('def f(x: int) -> int:\n    return x\n\nf(["a", "b"])\n');
+      expect(
+        /argument x of f is \["a", "b"\] \(list\), not int/.test(listed.error?.message),
+        "a list value: " + listed.error?.message,
+      );
     }
 
     console.log("\n[4] wrong return type: reported at the return statement");
@@ -1099,7 +1105,7 @@ async function main() {
         ],
         [
           'def f(d: dict[str, int]) -> int:\n    return 0\n\nf({"a": "1"})\n',
-          { kind: "argument", name: "d", element: "value of key 'a'", actual: "dict", expected: ["int"], level: "beginner" },
+          { kind: "argument", name: "d", element: 'value of key "a"', actual: "dict", expected: ["int"], level: "beginner" },
         ],
       ];
       for (const [code, want] of contractShapes) {

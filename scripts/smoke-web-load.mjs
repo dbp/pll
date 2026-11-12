@@ -85,6 +85,7 @@ writeFileSync(join(work, "cars.csv"), CSV);
 writeFileSync(
   join(work, "local.py"),
   [
+    "#level raw",
     REPORT_BYTES,
     'report("png", load_image("cat.png"))',
     'badge = load_image("badge.svg")',
@@ -99,15 +100,16 @@ writeFileSync(
     "",
   ].join("\n"),
 );
-writeFileSync(join(work, "exits.py"), 'import os\nprint("before", 1)\nos._exit(0)\nprint("after", 1)\n');
-writeFileSync(join(work, "fatal.py"), "import faulthandler\nfaulthandler._sigabrt()\n");
-writeFileSync(join(work, "again.py"), 'print("again", 1 + 1)\n');
+writeFileSync(join(work, "exits.py"), '#level raw\nimport os\nprint("before", 1)\nos._exit(0)\nprint("after", 1)\n');
+writeFileSync(join(work, "fatal.py"), "#level raw\nimport faulthandler\nfaulthandler._sigabrt()\n");
+writeFileSync(join(work, "again.py"), '#level raw\nprint("again", 1 + 1)\n');
 // Its own file: one that already ran still shows that output, which a wait
 // for the new run's line would find before the new run has started.
-writeFileSync(join(work, "renewed.py"), 'print("renewed", 2 + 2)\n');
+writeFileSync(join(work, "renewed.py"), '#level raw\nprint("renewed", 2 + 2)\n');
 writeFileSync(
   join(work, "remote.py"),
   [
+    "#level raw",
     REPORT_BYTES,
     `report("png", load_image("http://127.0.0.1:${DATA_PORT}/cat.png"))`,
     `t = load_table("http://127.0.0.1:${DATA_PORT}/w.csv")`,

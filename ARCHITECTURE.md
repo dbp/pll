@@ -203,6 +203,14 @@ its level is fixed at `beginner`; it has no folder, so its runs mount no
 files and save none (it says which it could not save). With no file to run
 again, Clear also forgets its names, so it starts afresh.
 
+At the student levels, a value shown at a file's top level, or given by a
+prompt line, is written by `_pll_repr` (`sessions.py`). That is Python's
+`repr` with each string in double quotes, as the course writes strings. It
+reaches into lists, tuples, dictionaries, sets and dataclasses whose
+`__repr__` `@dataclass` wrote. A class's own `__repr__` is left alone, and
+`#level raw` shows Python's `repr`. `print` and `str()` are Python's at
+every level, so `print(["a"])` still shows `['a']`.
+
 ## Language levels
 
 Four levels, parsed from a `#level <name>` comment on the first non-blank
@@ -696,6 +704,14 @@ gave it; a function handed over by code that is to blame but called
 elsewhere, where it was handed over. The contracts' own frames are left out
 of the error's frames, so nothing a student sees points into PLL. An
 annotation that is not a type raises `NotAType`, at the `def`.
+
+A value or a key in a message is written as the panel shows one
+(`_pll_shown_value`, by `_pll_repr`), its strings in double quotes. A
+function's annotation is quoted from its source. A dataclass field's comes
+from the text Python keeps to read later, which writes the strings in it
+with single quotes, whichever the program used.
+`_pll_strings_double_quoted` puts them back in double quotes, so a field
+says `Literal["a", "b"]` as a parameter does.
 
 ## Reactors (big-bang / animate) and the universe client
 

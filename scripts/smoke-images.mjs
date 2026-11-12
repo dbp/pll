@@ -1072,6 +1072,37 @@ async function main() {
     console.log("    a function's print shows them; text around them stays in its lines; raw and a file get text");
   }
 
+  console.log("\n[32] a value's strings are in double quotes at the student levels, as the course writes them");
+  {
+    const code = [
+      "from dataclasses import dataclass",
+      "@dataclass",
+      "class Pet:",
+      "    name: str",
+      "    age: int",
+      "class Own:",
+      "    def __repr__(self):",
+      '        return "Own(\'o\')"',
+      '["a", ("b",), {"c": {"d"}}]',
+      'Pet("Rex", 3)',
+      '\'say "hi"\'',
+      '"it\'s"',
+      "Own()",
+    ].join("\n") + "\n";
+    const shown = py(callRunFile, [code, "quotes.py", "quotes:1", "beginner"]);
+    expect(
+      shown.stdout === '["a", ("b",), {"c": {"d"}}]\nPet(name="Rex", age=3)\n"say \\"hi\\""\n"it\'s"\nOwn(\'o\')\n',
+      `top-level values: ${JSON.stringify(shown.stdout)} ${shown.error?.message ?? ""}`,
+    );
+    const student = py(callReplEval, ['["a", {"b": 1}]', "quotes:2", "beginner"]);
+    const raw = py(callReplEval, ['["a", {"b": 1}]', "quotes:3", "raw"]);
+    expect(
+      student.resultRepr === '["a", {"b": 1}]' && raw.resultRepr === "['a', {'b': 1}]",
+      `a prompt line: ${student.resultRepr} at beginner, ${raw.resultRepr} at raw`,
+    );
+    console.log("    in lists, tuples, dicts, sets and dataclasses; a class's own __repr__, and raw, are Python's");
+  }
+
   callRunFile.destroy?.();
   callReplEval.destroy?.();
 

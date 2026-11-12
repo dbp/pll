@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Changed
+- **Values are shown with their strings in double quotes**, as the course
+  writes them. A list at the top level of a file, or the value of a prompt
+  line, shows as `["a", "b"]`, not `['a', 'b']` - and so do the strings in
+  tuples, dictionaries, sets and dataclasses. `#level raw` shows Python's
+  `repr`, as does a class with a `__repr__` of its own. `print` is
+  unchanged.
+- **Type errors quote values the same way**: `argument x of f is ["a",
+  "b"] (list)`, and the key `"say \"hi\""` rather than `'say "hi"'`. A
+  dataclass field annotated `Literal["a", "b"]` is said to be
+  `Literal["a", "b"]`, not `Literal['a', 'b']`.
+
+## 0.12.0 (2026-11-11)
+
 ### Added
 - **`Ctrl+Enter` (`Cmd+Enter` on a Mac) runs the file**, in the editor of
   a Python file. There it takes the place of VS Code's **Insert Line

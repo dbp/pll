@@ -14,6 +14,7 @@
 # program produced it.
 
 import contextlib
+import dataclasses as _pll_dataclasses
 import json as _pll_json
 import keyword as _pll_keyword
 import re as _pll_re
@@ -225,12 +226,75 @@ def _pll_display_of(value):
 _PLL_TEXT_TYPES = frozenset((str, int, float, bool, type(None), list, tuple, dict, set))
 
 
+def _pll_repr(value):
+    """`value` as the panel shows it at the student levels: Python's `repr`,
+    but with each string in double quotes, as the course writes them - in
+    lists, tuples, dictionaries, sets and dataclasses too. Anything else,
+    and a class's own `__repr__`, is shown as Python shows it."""
+    showing = set()
+
+    def shown(v):
+        kind = type(v)
+        if kind is str:
+            return _pll_double_quoted(v)
+        container = kind in (list, tuple, dict, set, frozenset)
+        names = None if container else _pll_generated_repr_fields(kind)
+        if not container and names is None:
+            return repr(v)
+        if id(v) in showing:
+            # A value inside itself, marked as Python marks it.
+            return {list: "[...]", tuple: "(...)", dict: "{...}"}.get(kind, "...")
+        showing.add(id(v))
+        try:
+            if kind is list:
+                return "[%s]" % ", ".join(map(shown, v))
+            if kind is tuple:
+                return "(%s,)" % shown(v[0]) if len(v) == 1 else "(%s)" % ", ".join(map(shown, v))
+            if kind is dict:
+                return "{%s}" % ", ".join("%s: %s" % (shown(k), shown(x)) for k, x in v.items())
+            if kind is set:
+                return "{%s}" % ", ".join(map(shown, v)) if v else "set()"
+            if kind is frozenset:
+                return "frozenset({%s})" % ", ".join(map(shown, v)) if v else "frozenset()"
+            return "%s(%s)" % (kind.__qualname__, ", ".join("%s=%s" % (n, shown(getattr(v, n))) for n in names))
+        finally:
+            showing.discard(id(v))
+
+    return shown(value)
+
+
+def _pll_double_quoted(text):
+    """`text` as a string literal in double quotes, with Python's escapes."""
+    written = repr(text)
+    if written.startswith('"'):
+        # Python chose double quotes itself: there is a ' in it, and no ".
+        return written
+    if "'" not in text:
+        return '"%s"' % written[1:-1].replace('"', '\\"')
+    return '"%s"' % "".join('\\"' if c == '"' else repr(c)[1:-1] for c in text)
+
+
+def _pll_generated_repr_fields(kind):
+    """The fields that `kind`'s `__repr__` shows when it is the one
+    `@dataclass` wrote - which Python compiles from a string - or None when
+    it is any other. Those of the class it was written for, as Python's
+    shows them, even when a subclass adds more."""
+    for owner in kind.__mro__:
+        if "__repr__" in owner.__dict__:
+            written = owner.__dict__["__repr__"]
+            code = getattr(getattr(written, "__wrapped__", written), "__code__", None)
+            if code is None or code.co_filename != "<string>" or not _pll_dataclasses.is_dataclass(owner):
+                return None
+            return [f.name for f in _pll_dataclasses.fields(owner) if f.repr]
+    return None
+
+
 def _pll_show_top_level(value):
     """Emit a value produced by a top-level expression statement.
 
     Mirrors the behavior of Python's interactive shell: `None` is suppressed,
     PLL images and tables are captured for the host to render, anything
-    else is printed via `repr` so bare expressions like `1 + 2` still display.
+    else is printed via `_pll_repr` so bare expressions like `1 + 2` still display.
     A matplotlib figure is shown as a picture; the lines and labels
     matplotlib's functions return are not printed.
     """
@@ -247,7 +311,7 @@ def _pll_show_top_level(value):
         return
     if _pll_is_matplotlib(value):
         return
-    print(repr(value))
+    print(_pll_repr(value))
     _pll_warn_iterators((value,), _sys._getframe(1).f_lineno)
 
 

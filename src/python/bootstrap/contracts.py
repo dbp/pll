@@ -11,6 +11,7 @@
 # that, by those rules, gave the value. compile.py puts the obligations into
 # a program, and explain/typeCheck.py words a broken one.
 
+import ast as _ast
 import collections as _pll_collections
 import collections.abc as _pll_abc
 import dataclasses as _pll_dataclasses
@@ -2679,6 +2680,31 @@ def _pll_why_not_a_type(annotation):
     return "value"
 
 
+def _pll_strings_double_quoted(text):
+    """`text`, an annotation as Python keeps one to read later - a dataclass
+    field's - with each string in it in double quotes. Python writes the
+    strings in that text back in single quotes, whichever the program used."""
+    if "'" not in text:
+        return text
+    try:
+        tree = _ast.parse(text, mode="eval")
+    except SyntaxError:
+        return text
+    strings = sorted(
+        (
+            (node.col_offset, node.end_col_offset, node.value)
+            for node in _ast.walk(tree)
+            if isinstance(node, _ast.Constant) and isinstance(node.value, str) and node.lineno == node.end_lineno == 1
+        ),
+        reverse=True,
+    )
+    # The offsets count bytes of the text in UTF-8.
+    written = text.encode()
+    for start, end, value in strings:
+        written = written[:start] + _pll_double_quoted(value).encode() + written[end:]
+    return written.decode()
+
+
 def _pll_type_text(annotation, typevars=None):
     """A type as a program would write it: `list[int]`, `int | None` - with
     a type parameter as what it stands for, where `typevars` says."""
@@ -2689,7 +2715,7 @@ def _pll_type_text(annotation, typevars=None):
     if annotation is Ellipsis:
         return "..."
     if isinstance(annotation, str):
-        return annotation
+        return _pll_strings_double_quoted(annotation)
     if isinstance(annotation, _pll_typing.ForwardRef):
         return annotation.__forward_arg__
     if isinstance(annotation, list):
@@ -2699,7 +2725,7 @@ def _pll_type_text(annotation, typevars=None):
     if origin is _pll_typing.Union or origin is _pll_types.UnionType:
         return " | ".join(_pll_type_text(arg, typevars) for arg in args)
     if origin is _pll_typing.Literal:
-        return "Literal[%s]" % ", ".join(repr(arg) for arg in args)
+        return "Literal[%s]" % ", ".join(_pll_repr(arg) for arg in args)
     if origin is not None:
         name = _pll_type_text(origin)
         return "%s[%s]" % (name, ", ".join(_pll_type_text(arg, typevars) for arg in args)) if args else name
@@ -2929,7 +2955,7 @@ def _pll_step_fact(step):
 
 
 def _pll_element_words(steps):
-    """The part of a collection that failed - "item 2", "value of key 'a'",
+    """The part of a collection that failed - "item 2", 'value of key "a"',
     the words explain/typeCheck.py reads - inmost first: "item 1 of
     item 0"."""
     words = []
@@ -2939,9 +2965,9 @@ def _pll_element_words(steps):
         elif step[0] == "member":
             words.append("one of the items")
         elif step[0] == "key":
-            words.append("key %r" % (step[1],))
+            words.append("key %s" % _pll_shown_value(step[1]))
         elif step[0] == "value":
-            words.append("value of key %r" % (step[1],))
+            words.append("value of key %s" % _pll_shown_value(step[1]))
         elif step[0] == "part":
             words.append("the %s of a %s" % (step[1], step[2]))
     return " of ".join(reversed(words))
@@ -2953,14 +2979,13 @@ def _pll_type_name(value):
 
 
 def _pll_shown_value(value):
-    """A value as a message quotes it: a string in double quotes, and a sealed
-    one as its type variable, which is all there is to know of it."""
+    """A value as a message quotes it: as the panel shows one (`_pll_repr`),
+    its strings in double quotes, and a sealed one as its type variable,
+    which is all there is to know of it."""
     if isinstance(value, _PllSealed):
         return type(value).__name__
-    if isinstance(value, str) and '"' not in value:
-        return '"%s"' % value
     try:
-        shown = repr(value)
+        shown = _pll_repr(value)
     except Exception:
         shown = "?"
     return shown if len(shown) <= 60 else shown[:57] + "..."

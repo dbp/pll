@@ -123,13 +123,14 @@ const WORK = {
   ],
   // Tests only, and not enough of them: one chaff goes uncaught and `total`
   // has no test at all. This is the tests-first state the feature exists for.
-  "weak.py": [DIRECTIVE, "", "def test_shout():", '    assert shout("hi") == "HI!"'],
+  "weak.py": ["#level raw", DIRECTIVE, "", "def test_shout():", '    assert shout("hi") == "HI!"'],
   // A test that expects the wrong answer. The lesson is the assertion.
-  "wrong.py": [DIRECTIVE, "", "def test_shout():", '    assert shout("hi") == "hi!"'],
+  "wrong.py": ["#level raw", DIRECTIVE, "", "def test_shout():", '    assert shout("hi") == "hi!"'],
   // A test that reads a data file. It cannot run during the phase, because
   // the phase unmounts the workspace - so the card has to say that rather
   // than accuse the test of expecting the wrong answer.
   "reads.py": [
+    "#level raw",
     DIRECTIVE,
     "",
     "def test_shout():",
