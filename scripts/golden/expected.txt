@@ -2412,6 +2412,21 @@ stderr:
           assert 6 == 4
           where 6 = double(2)
 
+=== test-fail-and (exit 3)
+stderr:
+  student.py [beginner]
+  Tests: 1 failed
+    FAILED test_both (line 5)
+          assert (True and False)
+          where True = positive(1)
+          and   False = positive(-1)
+
+=== assert-top-level (exit 1)
+stderr:
+  student.py [beginner]
+  AssertionError: This `assert` failed: `True and False` is not true.
+    at student.py:2:8
+
 === test-float (exit 3)
 stderr:
   student.py [raw]

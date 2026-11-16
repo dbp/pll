@@ -13,6 +13,19 @@
   "b"] (list)`, and the key `"say \"hi\""` rather than `'say "hi"'`. A
   dataclass field annotated `Literal["a", "b"]` is said to be
   `Literal["a", "b"]`, not `Literal['a', 'b']`.
+- **`raw` is the last level in the level picker**, below `beginner`,
+  `intermediate` and `advanced`. For a file with no `#level` line, the
+  picker opens on `beginner`.
+
+### Fixed
+- **`assert a and b` in a test fails as an assertion at `beginner` and
+  `intermediate`**, with pytest's `assert (True and False)` and what each
+  side was. It was refused as a change to a list in place - "`assert True
+  and False` changes a list in place" - because pytest's rewriting of
+  the `and` collects its explanation in a list.
+- **A failed `assert` with no message says what it asserted**: "This
+  `assert` failed: `True and False` is not true." It said only
+  "AssertionError while running your program."
 
 ## 0.12.0 (2026-11-11)
 

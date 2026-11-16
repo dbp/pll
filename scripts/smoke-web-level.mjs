@@ -275,6 +275,12 @@ async function main() {
 
     console.log("\n[4] the status-bar item's picker changes the level, and removes the line");
     await page.locator(".statusbar-item", { hasText: "PLL: intermediate" }).first().click();
+    await page.locator(".quick-input-widget .monaco-list-row", { hasText: "Plain Python" }).first().waitFor({ state: "visible" });
+    const rows = await page.locator(".quick-input-widget .monaco-list-row").allTextContents();
+    const levels = rows
+      .map((row) => ["beginner", "intermediate", "advanced", "raw"].find((level) => row.trim().startsWith(level)))
+      .filter(Boolean);
+    expect(levels.join() === "beginner,intermediate,advanced,raw", `the levels, raw last: ${JSON.stringify(rows)}`);
     await pickInPicker(page, "advanced");
     const changed = await textWhen(page, (t) => t.startsWith("#level advanced\n"));
     expect(changed === "#level advanced\nx = 1\n", `changed: ${JSON.stringify(changed)}`);

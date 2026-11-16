@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { LEVEL_NAMES, headerLevel, levelHeaderProblem, type Level } from "../core/level";
+import { LEVEL_NAMES, LEVEL_RAW, headerLevel, levelHeaderProblem, type Level } from "../core/level";
 import {
   changeBetween,
   findLevelLine,
@@ -33,6 +33,9 @@ const LEVEL_SUMMARY: Record<Level, string> = {
   intermediate: "As beginner, but a function may change its own variables.",
   advanced: "Python's own rules: annotations and names with no value are still checked.",
 };
+
+/** The levels in the picker's order: `raw`, plain Python, last, below the ones that check. */
+const PICKER_LEVELS: readonly Level[] = [...LEVEL_NAMES.filter((level) => level !== LEVEL_RAW), LEVEL_RAW];
 
 /** How often a put-back that lost a race with the next key is tried again. */
 const RETRIES = 3;
@@ -126,7 +129,7 @@ export class LevelLineKeeper implements vscode.Disposable {
       return;
     }
     const line = levelLineOf(editor.document);
-    const items: PickItem[] = LEVEL_NAMES.map((level) => ({
+    const items: PickItem[] = PICKER_LEVELS.map((level) => ({
       label: level,
       description: level === line?.level ? "current" : undefined,
       detail: LEVEL_SUMMARY[level],

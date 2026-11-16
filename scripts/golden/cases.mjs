@@ -300,6 +300,8 @@ export const CASES = [
   // ---- tests ----------------------------------------------------------------
   { name: "test-pass", code: ["def double(n):", "    return n * 2", "", "def test_double():", "    assert double(2) == 4"] },
   { name: "test-fail", code: ["def double(n):", "    return n * 3", "", "def test_double():", "    assert double(2) == 4"] },
+  { name: "test-fail-and", code: [B, "def positive(n: int) -> bool:", "    return n > 0", "", "def test_both():", "    assert positive(1) and positive(-1)"] },
+  { name: "assert-top-level", code: [B, "assert True and False"] },
   { name: "test-float", code: ["def tax(n):", "    return n * 0.31", "", "def test_tax():", "    assert tax(3) == 0.93"] },
   { name: "test-print-shown", code: [B, "def shout(word: str) -> str:", "    return None", "", "def test_shout():", '    print("about to call shout")', '    assert shout("hi") == "HI!"'] },
   { name: "test-error-concat", code: ["def add(xs):", '    return xs + "!"', "", "def test_add():", "    assert add([1]) == [1]"] },

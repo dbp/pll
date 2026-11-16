@@ -278,6 +278,35 @@ def test_add():
     console.log(`    not run: ${malformed.length}; run: ${ran.length}`);
   }
 
+  console.log("\n[8] `assert a and b` fails as an assertion at beginner, not as a list changed in place");
+  {
+    // pytest's rewriting collects the explanation of an `and` with
+    // `@py_assert2.append(...)`, which is not the student's.
+    const src = [
+      "def positive(n: int) -> bool:",
+      "    return n > 0",
+      "",
+      "def test_both():",
+      "    assert positive(1) and positive(-1)",
+      "",
+      "def test_changes():",
+      "    xs = [1]",
+      "    xs.append(2)",
+      "    assert xs == [1, 2]",
+    ].join("\n");
+    const tests = call(runFile, [src, "lab.py", "tests:and", "beginner", true]).tests?.tests ?? [];
+    const both = tests.find((t) => t.name === "test_both");
+    const changes = tests.find((t) => t.name === "test_changes");
+    expect(
+      both?.outcome === "failed" && both.message.includes("assert (True and False)"),
+      `the assertion fails, as pytest says it: ${both?.outcome} ${both?.message}`,
+    );
+    expect(
+      changes?.outcome === "error" && /changes a list in place/.test(changes.message ?? ""),
+      `the student's own append is still refused: ${changes?.outcome} ${changes?.message}`,
+    );
+  }
+
   hasTests.destroy?.();
   runFile.destroy?.();
   replEval.destroy?.();

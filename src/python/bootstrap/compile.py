@@ -631,6 +631,19 @@ _PLL_OPERATOR_SYMBOLS = {
 }
 
 
+def _pll_fetches_mutator(node):
+    """Whether `node` fetches a method that may change a value in place
+    (`xs.append`) - off anything but pytest's own names, which no program
+    can write: a rewritten `assert a and b` collects its explanation with
+    `@py_assert2.append(...)`."""
+    return (
+        isinstance(node, _ast.Attribute)
+        and isinstance(node.ctx, _ast.Load)
+        and node.attr in _PLL_MUTATOR_NAMES
+        and not (isinstance(node.value, _ast.Name) and node.value.id.startswith("@"))
+    )
+
+
 class _PllTeachingChecks(_ast.NodeTransformer):
     """What `beginner` and `intermediate` refuse as the code runs
     (typeChecking.py), each only when the value it meets is one it is about:
@@ -769,7 +782,7 @@ class _PllTeachingChecks(_ast.NodeTransformer):
 
     def visit_Call(self, node):
         func = node.func
-        if isinstance(func, _ast.Attribute) and isinstance(func.ctx, _ast.Load) and func.attr in _PLL_MUTATOR_NAMES:
+        if _pll_fetches_mutator(func):
             node.func = self._fetched(func, self._text(node), self._arguments(node))
         elif isinstance(func, _ast.Name) and func.id in _PLL_LIBRARY_MUTATOR_NAMES:
             node.func = self._call("pll:named", [func], [self._text(node), self._arguments(node)], func)
@@ -821,7 +834,7 @@ class _PllTeachingChecks(_ast.NodeTransformer):
         return node
 
     def visit_Attribute(self, node):
-        if isinstance(node.ctx, _ast.Load) and node.attr in _PLL_MUTATOR_NAMES:
+        if _pll_fetches_mutator(node):
             return self._fetched(node, self._text(node), None)
         self.generic_visit(node)
         return node

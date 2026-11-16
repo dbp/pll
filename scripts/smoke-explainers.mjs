@@ -772,6 +772,17 @@ console.log("[syntax errors: `=>` and `=<` for `>=` and `<=`, and `=>` for a ret
   console.log(`    ${CASES.length} said, ${LEFT.length} left to Python, and a line on its own`);
 }
 
+console.log("[a failed assert with no message says what it asserted]");
+{
+  const top = ran("assert True and False\n", "lab.py", "beginner");
+  expect(top?.headline === "This `assert` failed: `True and False` is not true.", `at the top level: ${top?.headline}`);
+  const empty = ran('assert len([1]) == 2, ""\n', "lab.py", "beginner");
+  expect(empty?.headline === "This `assert` failed: `len([1]) == 2` is not true.", `an empty message: ${empty?.headline}`);
+  const own = ran('assert 1 + 1 == 3, "arithmetic"\n', "lab.py", "beginner");
+  expect(own?.headline === "arithmetic.", `a message of its own, as it is: ${own?.headline}`);
+  console.log("    the condition from the line; a message of its own as it is");
+}
+
 console.log("[stock messages: Python's own wording replaced with the course's]");
 {
   /** Build a finding the way the hosts do, from a traceback and the file. */

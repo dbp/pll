@@ -30,7 +30,8 @@ def _pll_stock(types, pattern):
 
 
 @_pll_explains(
-    "TypeError", "AttributeError", "ValueError", "IndexError", "RecursionError", "KeyError", "ModuleNotFoundError"
+    "TypeError", "AttributeError", "ValueError", "IndexError", "RecursionError", "KeyError", "ModuleNotFoundError",
+    "AssertionError",
 )
 def _pll_explain_stock(e):
     for types, pattern, explain in _PLL_STOCK_RULES:
@@ -1232,6 +1233,21 @@ def _pll_missing_comma(m, e):
         "`[a, b] [c, d]` with no comma reads as looking `c, d` up inside the first list.",
         "Write `[[a, b], [c, d]]`, with a comma after every row.",
     ]
+
+
+@_pll_stock("AssertionError", r"\A\s*\Z")
+def _pll_failed_assert(m, e):
+    """An `assert` with no message of its own that failed outside a test,
+    where Python says nothing but `AssertionError`: what it asserted, from
+    the line. A test's failure says what it compared, as pytest says it."""
+    line = (e.text or "").strip()
+    try:
+        statement = _ast.parse(line).body[0]
+    except (SyntaxError, IndexError):
+        return None
+    if not isinstance(statement, _ast.Assert):
+        return None
+    return "This `assert` failed: `%s` is not true." % _ast.get_source_segment(line, statement.test), []
 
 
 @_pll_stock("RecursionError", r"maximum recursion depth")
