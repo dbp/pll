@@ -2427,6 +2427,26 @@ stderr:
   AssertionError: This `assert` failed: `True and False` is not true.
     at student.py:2:8
 
+=== tuple-item-return (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `fn` says it returns `tuple[int, str]`, so item 1 of the tuple should be a string (`str`), but item 1 is the number 5.
+    at student.py:3
+  
+  How to fix:
+    - Look at item 1 of the tuple this line returns: a tuple's annotation gives each of its items a type of its own, in order.
+    - Or, if that is what it should hold, change the annotation from `tuple[int, str]` to `tuple[int, int]`.
+
+=== tuple-length-argument (exit 1)
+stderr:
+  student.py [beginner]
+  TypeMismatch: `f` expects `pair` to be `tuple[int, str]`, a tuple of 2 items, but got a tuple of 3.
+    at student.py:5
+  
+  How to fix:
+    - For `pair`, pass a tuple of 2 items, one for each type in `tuple[int, str]`.
+    - Or, if `pair` should hold 3, give the annotation a type for each.
+
 === test-float (exit 3)
 stderr:
   student.py [raw]
@@ -2766,7 +2786,7 @@ stderr:
 === ex-two-directives (exit 0)
 stderr:
   student.py [beginner]
-  Line 3: there is more than one `#examplar` line (lines 2 and 3). Keep the one you want.
+  Line 3: line 2 already has implementations of `initials` and `longest`. A function's implementations can come from only one `#examplar` line, so your tests were not checked.
   Tests: 1 passed
     ok   test_a
 

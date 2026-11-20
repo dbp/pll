@@ -1514,9 +1514,10 @@ function is held at phase one until the student changes it. The card says
 exactly why (see the hint below), but it is a real cost of the unmount
 rather than a detail.
 
-Implementations travel as `.pyc` bytecode inside a single JSON bundle -
-one URL, because every wheat and chaff defines the *same* function names and
-so cannot come from one file:
+Implementations travel as `.pyc` bytecode inside a JSON bundle - one
+file at one URL holding every implementation of its functions, because each
+wheat and chaff defines the *same* function names and so cannot be one
+module:
 
 ```json
 { "examplar": 2,
@@ -1614,7 +1615,7 @@ and a fallback to an older copy - gets a banner.
 
 The run plan runs the Examplar step (`run/examplar.ts`) once libraries are
 loaded and before the student's files are mounted, in the editor and on the
-command line alike. It fetches the bundle (so a fetch failure is reported
+command line alike. It fetches the bundles (so a fetch failure is reported
 once) and runs the phase; the plan then mounts the files:
 
 ```
@@ -1655,8 +1656,8 @@ That unmount has a student-visible cost, and three decisions pay for it:
   entirely of our own unmounting. It is excluded from the chaff count. A test
   that *disagrees* still counts: it ran, and it did tell them apart.
 
-`runExamplarStep` returns whether the student defines every name the bundle
-provides (`student_defines`, recorded before the overlay). That gates only
+`runExamplarStep` returns whether the student defines every name the bundles
+provide (`student_defines`, recorded before the overlay). That gates only
 the file's own tests: running a file's `test_*` against the code in that
 same file needs that code to exist, or every test reports a `NameError`
 under a perfectly good verdict. Nothing is said about its absence, because
@@ -1695,11 +1696,35 @@ would be far worse than a readable one.
 
 ### The directive
 
-`#examplar <url>` is matched as a whole line, anywhere in the file, and two
-of them is an error rather than "first wins". It is deliberately *not* part
-of a header block: `parseLevel` has strict, tested semantics, and this way
-adding the directive cannot perturb how a file's level is read. Only `https`
-is accepted, except on localhost for authoring.
+`#examplar <url>` is matched as a whole line, anywhere in the file. It is
+deliberately *not* part of a header block: `parseLevel` has strict, tested
+semantics, and this way adding the directive cannot perturb how a file's
+level is read. Only `https` is accepted, except on localhost for authoring;
+a line whose address is refused, or whose file cannot be fetched, is said,
+and leaves out only its own functions.
+
+A file may have several, so an assignment can keep each part in an
+`#examplar` file of its own. They are checked as their union: the one file
+that has all of their functions, whose every implementation defines every
+function - a chaff of `total` comes with a correct `shout`. So
+`_pll_examplar_judge` runs each wheat and chaff with the other files' first
+wheats loaded beside it, in line order, and a test that uses functions from
+two of the files meets a version of each. The first wheats are in every
+run, so a run of any one of them is the same run, made once. One check
+rather than one per file also keeps the rest whole: one card per function,
+one gate over every function, one timeout that stops everything.
+
+A function in two of the files is refused before anything runs
+(`fetchBundles`), since neither could be the one whose implementations judge
+its tests - the same line twice is refused the same way. Each file must be
+self-contained apart from what the student's file gives it, such as the
+data definitions: `--verify` runs each on its own, where a call into
+another file's function fails rather than meeting that file's wheat, as it
+would in a student's run. Private helpers are not compared: the files' code
+shares the student's namespace, so two `_clean`s would replace one another,
+and authors keep them apart. Each card's tooltip is its own file's address,
+and a failure in one file names its line (`bundle` on the result, by line
+order).
 
 Bundles are fetched host-side with a conditional request and cached by URL.
 Offline with a cached copy is a note; offline without one is an error and

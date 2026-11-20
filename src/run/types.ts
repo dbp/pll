@@ -358,14 +358,22 @@ export interface ExamplarImpl {
   unloaded?: { line: number; error: string }[];
   /** The test that ran too long here, null for loading, false for none. */
   timedOut?: string | null | false;
+  /**
+   * Which of the file's bundles, in the order of their `#examplar` lines,
+   * this implementation is from - or, when it would not load, whose code
+   * would not.
+   */
+  bundle?: number;
   errorType?: string;
   errorMessage?: string;
 }
 
-/** A student's tests, run against every implementation in a bundle. */
+/** A student's tests, run against every implementation in the file's bundles. */
 export interface ExamplarOutcome {
   ok: boolean;
   error?: string;
+  /** Which bundle the error is about, when it is about one. */
+  bundle?: number;
   provides?: string[];
   /** test name -> the provided names it exercises. */
   attribution?: Record<string, string[]>;
@@ -386,6 +394,8 @@ export interface ExamplarOutcome {
     id: string;
     /** For a chaff, the function it breaks. */
     targets: string | null;
+    /** Which bundle the implementation is from. */
+    bundle?: number;
     test: string | null;
     seconds: number;
   } | null;

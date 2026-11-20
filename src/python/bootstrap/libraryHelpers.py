@@ -69,8 +69,10 @@ def _pll_describe(value):
         return "a reactor"
     if isinstance(value, dict):
         return "a row" if type(value).__name__ == "Row" else "a dictionary"
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list):
         return "a list of %d" % len(value)
+    if isinstance(value, tuple):
+        return "a tuple of %d" % len(value)
     if callable(value):
         return "the function `%s`" % getattr(value, "__name__", "given")
     name = type(value).__name__

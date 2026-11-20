@@ -90,7 +90,9 @@ class _PllBlame:
 
     A step is a tuple whose first item says what it is - `("argument",
     name, index, written)`, `("result", returned_at, written)`, `("item",
-    index)` - and whose last-but-structure is what a message needs.
+    index, holder)`, or `("position", index, "tuple")` for an item of a
+    tuple whose every item has its own type - and whose last-but-structure
+    is what a message needs.
 
     `gives` is whether the owner gives the value - a result - rather than
     being given it, which a recursive call cannot tell from the parties,
@@ -615,7 +617,7 @@ class _PllTupleContract(_PllPartsContract):
             return None
         if self.repeated:
             return _pll_parts(self.items[0], value, lambda index: ("item", index, "tuple"))
-        return ((contract, item, ("item", index, "tuple")) for index, (item, contract) in enumerate(self._parts(value)))
+        return ((contract, item, ("position", index, "tuple")) for index, (item, contract) in enumerate(self._parts(value)))
 
     def contracts(self):
         return list(self.items)
@@ -626,7 +628,7 @@ class _PllTupleContract(_PllPartsContract):
             _pll_broken(self, value, blame)
         items = [None] * len(value)
         steps = [
-            (contract, item, blame.into(("item", index, "tuple")),
+            (contract, item, blame.into(("item" if self.repeated else "position", index, "tuple")),
              lambda part, index=index: items.__setitem__(index, part))
             for index, (item, contract) in enumerate(self._parts(value))
         ]
@@ -2879,11 +2881,27 @@ def _pll_violation(contract, value, blame):
         "applied": _pll_applied(blame.positive),
         "level": blame.level,
         "arity": _pll_arity(contract, value),
+        "length": _pll_tuple_length(contract, value),
         # A type variable the value was refused for, and a sealed value
         # refused where its type variable was not wanted.
         "variables": [variable.fact() for variable in _pll_variables_wanted(contract)] or None,
         "sealed": _pll_sealed_fact(value),
     }
+
+
+def _pll_tuple_length(contract, value):
+    """For a tuple refused for holding a different number of items than its
+    annotation gives types for: both numbers."""
+    if isinstance(contract, _PllLaterContract):
+        contract = contract.made()
+    if (
+        isinstance(contract, _PllTupleContract)
+        and not contract.repeated
+        and isinstance(value, tuple)
+        and len(value) != len(contract.items)
+    ):
+        return {"wanted": len(contract.items), "given": len(value)}
+    return None
 
 
 def _pll_variables_wanted(contract):
@@ -2947,6 +2965,8 @@ def _pll_step_fact(step):
         return {"kind": kind, "name": step[1], "annotation": step[-1]}
     if kind == "item":
         return {"kind": "item", "index": step[1], "in": step[2]}
+    if kind == "position":
+        return {"kind": "item", "index": step[1], "in": step[2], "positional": True}
     if kind in ("key", "value"):
         return {"kind": kind, "key": _pll_shown_value(step[1]), "in": step[2]}
     if kind == "part":
@@ -2960,7 +2980,7 @@ def _pll_element_words(steps):
     item 0"."""
     words = []
     for step in steps:
-        if step[0] == "item":
+        if step[0] in ("item", "position"):
             words.append("item %d" % step[1])
         elif step[0] == "member":
             words.append("one of the items")

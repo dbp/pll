@@ -156,6 +156,18 @@ Publish the bundle at a URL and point students at it from their file:
 #examplar https://cs2000.example/hw3.json
 ```
 
+A file may have several `#examplar` lines, so an assignment can keep each
+part in an `#examplar` file of its own, built and verified on its own. A
+student's file is checked against their union: each wheat and chaff runs
+beside the first wheat of every other file, as a single file's chaff comes
+with correct versions of the functions it leaves alone, so a student's test
+may use functions from several. Each file must be self-contained apart from
+what the student's file gives it, such as data definitions: `--verify` runs
+it on its own, so a call into another file's function fails there. No
+function may be in two of the files - PLL refuses the check - and give
+their private helpers different names, since the files' code shares one
+namespace.
+
 The check runs wherever the file does - in the editor, and with `pll
 hw3.py`, which prints the same cards to stderr. Fetched bundles are cached
 (under `$PLL_CACHE_DIR`, `$XDG_CACHE_HOME` or `~/.cache`), so a run without a

@@ -1902,14 +1902,20 @@ console.log("\n[42] tests-first is the normal case: a verdict, and no noise");
 
 console.log("\n[43] a broken bundle never stops the file from running");
 {
+  // The same line twice: its functions are in two bundles.
   const two = [`#examplar ${EX_URL}`, `#examplar ${EX_URL}`, 'print("hi")'].join("\n");
-  const dup = await harness(withBundle());
+  const dup = await harness(
+    withBundle({ bundles: { [EX_URL]: { json: JSON.stringify({ examplar: 2, provides: ["shout"] }) } } }),
+  );
   await dup.repl.runFile(two, "hw.py", dup.doc);
   await settle();
   expect(
-    dup.view.entries.some((e) => e.kind === "banner" && /more than one/.test(e.text)),
-    "two directives should be reported",
+    dup.view.entries.some(
+      (e) => e.kind === "banner" && /^Line 2: line 1 already has implementations of `shout`\./.test(e.text),
+    ),
+    `two directives should be reported, got ${JSON.stringify(dup.view.entries.filter((e) => e.kind === "banner").map((e) => e.text))}`,
   );
+  expect(!dup.runtime.calls.some((c) => c[0] === "examplarRun"), "and not checked");
   expect(dup.runtime.calls.some((c) => c[0] === "runFile"), "and the file still runs");
   dup.repl.dispose();
 
@@ -1939,6 +1945,75 @@ console.log("\n[43] a broken bundle never stops the file from running");
   console.log("    duplicate directive, unreachable bundle, and a crash - file ran every time");
   cold.repl.dispose();
   boom.repl.dispose();
+}
+
+console.log("\n[43b] bundles of different functions are checked as their union");
+{
+  const PART_2 = "https://course.example/hw3-part2.json";
+  const src = [
+    `#examplar ${EX_URL}`,
+    `#examplar ${PART_2}`,
+    "",
+    "def test_shout():",
+    '    assert shout("hi") == "HI!"',
+    "",
+    "def test_total():",
+    "    assert total([1]) == 1",
+  ].join("\n");
+  const script = (defines) => ({
+    bundles: {
+      [EX_URL]: { json: JSON.stringify({ examplar: 2, provides: ["shout"] }) },
+      [PART_2]: { json: JSON.stringify({ examplar: 2, provides: ["total"] }) },
+    },
+    events: (kind) => (kind === "runFile" ? [{ kind: "done" }] : []),
+    examplarResult: examplarReply({
+      tests: ["test_shout", "test_total"],
+      provides: ["shout", "total"],
+      attribution: { test_shout: ["shout"], test_total: ["total"] },
+      defines,
+    }),
+  });
+  const { repl, view, runtime, doc } = await harness(script(["shout"]));
+  await repl.runFile(src, "hw.py", doc);
+  await settle();
+  const runs = runtime.calls.filter((c) => c[0] === "examplarRun");
+  expect(runs.length === 1, `one check for both, got ${runs.length}`);
+  const sent = JSON.parse(runs[0]?.[2] ?? "null");
+  expect(
+    Array.isArray(sent) && sent.map((b) => b.provides.join()).join(";") === "shout;total",
+    `it is given both bundles, in order: ${runs[0]?.[2]}`,
+  );
+  expect(
+    fnCard(view, "shout")?.url === EX_URL && fnCard(view, "total")?.url === PART_2,
+    "each card says which bundle it is from",
+  );
+  // Every function of every bundle has to be written before the file's own tests run.
+  expect(!runtime.calls.some((c) => c[0] === "hasTests"), "with total unwritten, the file's own tests wait");
+  repl.dispose();
+
+  const done = await harness(script(["shout", "total"]));
+  await done.repl.runFile(src, "hw.py", done.doc);
+  await settle();
+  expect(done.runtime.calls.some((c) => c[0] === "hasTests"), "with both written, they run");
+  done.repl.dispose();
+
+  // A bundle that can't be had costs only its own line.
+  const half = await harness({ ...script(["shout"]), bundles: { [EX_URL]: script().bundles[EX_URL] } });
+  await half.repl.runFile(src, "hw.py", half.doc);
+  await settle();
+  const halfRuns = half.runtime.calls.filter((c) => c[0] === "examplarRun");
+  expect(
+    half.view.entries.some(
+      (e) => e.kind === "banner" && e.text.startsWith(`Could not load the known implementations from ${PART_2}`),
+    ),
+    "the one that could not be loaded is said",
+  );
+  expect(
+    halfRuns.length === 1 && JSON.parse(halfRuns[0][2]).length === 1,
+    `and the other is still checked: ${halfRuns[0]?.[2]}`,
+  );
+  console.log("    one check, a card from each bundle, the gate over both; a missing one costs only itself");
+  half.repl.dispose();
 }
 
 console.log("\n[44] no directive means no Examplar at all");

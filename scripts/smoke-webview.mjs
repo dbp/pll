@@ -103,7 +103,7 @@ const testReport = {
 // whose test is wrong. The wrong test's assertion states the right answer,
 // so it must not reach the card.
 const examplar = buildExamplarEntries(
-  { url: "https://example.test/hw.json", json: "", cached: false },
+  [{ url: "https://example.test/hw.json", line: 1, json: "", cached: false, provides: ["add", "double"] }],
   {
     ok: true,
     provides: ["add", "double"],

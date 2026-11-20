@@ -59,38 +59,45 @@ function startServer(body) {
 
 async function main() {
   const mod = await load();
-  const { parseExamplarDirective, validateBundleUrl, loadBundle, createFileStore } = mod;
+  const { parseExamplarDirectives, validateBundleUrl, loadBundle, createFileStore } = mod;
 
-  console.log("\n[1] the directive: found, absent, malformed, duplicated");
+  console.log("\n[1] the directive: found, absent, malformed, several");
   {
-    const found = parseExamplarDirective(
+    const one = parseExamplarDirectives(
       ["#level beginner", "", "#examplar https://c.example/hw3.json", "", "def test_x():", "    pass"].join("\n"),
     );
-    expect(found.kind === "found", `expected found, got ${found.kind}`);
-    expect(found.url === "https://c.example/hw3.json", `url: ${found.url}`);
-    expect(found.line === 3, `line: ${found.line}`);
+    expect(one.found.length === 1 && one.problems.length === 0, `expected one found, got ${JSON.stringify(one)}`);
+    expect(one.found[0].url === "https://c.example/hw3.json", `url: ${one.found[0].url}`);
+    expect(one.found[0].line === 3, `line: ${one.found[0].line}`);
 
-    expect(parseExamplarDirective("x = 1\n").kind === "none", "no directive -> none");
+    const none = parseExamplarDirectives("x = 1\n");
+    expect(none.found.length === 0 && none.problems.length === 0, "no directive -> none");
     expect(
-      parseExamplarDirective("# examplar https://c.example/a.json\n").kind === "found",
+      parseExamplarDirectives("# examplar https://c.example/a.json\n").found.length === 1,
       "a space after the hash is still a directive",
     );
     // Only a whole line counts, so prose and trailing text are not directives.
     expect(
-      parseExamplarDirective("# see #examplar https://c.example/a.json for details\n").kind === "none",
+      parseExamplarDirectives("# see #examplar https://c.example/a.json for details\n").found.length === 0,
       "a URL mentioned in prose is not a directive",
     );
     expect(
-      parseExamplarDirective("x = 1  # examplar https://c.example/a.json\n").kind === "none",
+      parseExamplarDirectives("x = 1  # examplar https://c.example/a.json\n").found.length === 0,
       "a trailing comment is not a directive",
     );
 
-    const dup = parseExamplarDirective(
-      "#examplar https://c.example/a.json\n#examplar https://c.example/b.json\n",
+    // One bundle for each part of an assignment.
+    const two = parseExamplarDirectives(
+      "#examplar https://c.example/a.json\n\n#examplar https://c.example/b.json\n",
     );
-    expect(dup.kind === "error", `two directives should be an error, got ${dup.kind}`);
-    expect(/more than one/.test(dup.message), `message: ${dup.message}`);
-    console.log(`    duplicate: ${dup.message}`);
+    expect(
+      JSON.stringify(two.found) ===
+        JSON.stringify([
+          { url: "https://c.example/a.json", line: 1 },
+          { url: "https://c.example/b.json", line: 3 },
+        ]) && two.problems.length === 0,
+      `two directives are both found, in order: ${JSON.stringify(two)}`,
+    );
   }
 
   console.log("\n[2] only addresses a student can trust");
@@ -101,9 +108,16 @@ async function main() {
     expect(validateBundleUrl("http://evil.example/a.json") !== null, "plain http elsewhere is refused");
     expect(validateBundleUrl("file:///etc/passwd") !== null, "file:// is refused");
     expect(validateBundleUrl("not a url") !== null, "nonsense is refused");
-    const bad = parseExamplarDirective("#examplar http://evil.example/a.json\n");
-    expect(bad.kind === "error", "a bad url in a directive is an error");
-    console.log(`    ${bad.message}`);
+    const bad = parseExamplarDirectives("#examplar http://evil.example/a.json\n");
+    expect(bad.found.length === 0 && bad.problems.length === 1, "a bad url in a directive is a problem");
+    expect(bad.problems[0]?.line === 1, `on its line: ${JSON.stringify(bad.problems)}`);
+    console.log(`    ${bad.problems[0]?.message}`);
+    // A bad address costs only its own line.
+    const mixed = parseExamplarDirectives("#examplar http://evil.example/a.json\n#examplar https://c.example/b.json\n");
+    expect(
+      mixed.problems.length === 1 && mixed.found.length === 1 && mixed.found[0].line === 2,
+      `the other line is still found: ${JSON.stringify(mixed)}`,
+    );
   }
 
   const work = mkdtempSync(join(tmpdir(), "pll-examplar-"));

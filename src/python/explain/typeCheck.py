@@ -592,6 +592,37 @@ def _pll_conversion_for(expected, actual):
     return None
 
 
+def _pll_inside_steps(c):
+    """The path's steps inside what the check is on - the parts of a
+    collection, down to the one that failed - outermost first."""
+    path = c.check.get("path") or []
+    calls = [index for index, step in enumerate(path) if step["kind"] in ("argument", "result")]
+    return path[calls[-1] + 1 :] if calls else path[1:]
+
+
+def _pll_wanted_part(c, whole=None):
+    """What the annotation wants of the part that failed: "every item in
+    `nums`"; "item 1 of `pair`", for an item of a tuple whose items each
+    have a type of their own; or "item 1 of each tuple in `rows`". `whole`
+    is how the whole is said, and with none it is left out."""
+    inside = _pll_inside_steps(c)
+    if inside and inside[-1].get("positional"):
+        if all(step.get("positional") for step in inside):
+            return "%s of %s" % (c.element, whole) if whole else c.element
+        part = "item %d of each tuple" % inside[-1]["index"]
+        return "%s in %s" % (part, whole) if whole else part
+    members = _pll_members_phrase(c.element)
+    return "%s %s" % (members, whole) if whole else members[: -len(" in")]
+
+
+def _pll_each_matches(c):
+    """Why one part can be wrong when the rest are right, as advice."""
+    inside = _pll_inside_steps(c)
+    if inside and inside[-1].get("positional"):
+        return "A tuple's annotation gives each of its items a type of its own, in order."
+    return "Every one has to match the annotation, not just the first."
+
+
 def _pll_members_phrase(element):
     """How to describe "all the things inside" for the failing element's kind."""
     if element.startswith("the value for key"):
@@ -653,6 +684,42 @@ def _pll_data_path(c):
     return reached
 
 
+def _pll_tc_length(c):
+    """A tuple with a different number of items than its annotation gives
+    types for, said as that: "a tuple (`tuple`)" is what it already is."""
+    length = c.check.get("length")
+    annotation = c.check.get("annotation") or c.annotation
+    if not length or c.element or not annotation:
+        return None
+    wanted = "a tuple of %s" % _pll_plural(length["wanted"], "item")
+    given = "a tuple of %d" % length["given"]
+    shape = "`%s`, %s" % (annotation, wanted)
+    each = "%s, one for each type in `%s`" % (wanted, annotation)
+    more = "give the annotation a type for each"
+    if c.kind == "return":
+        return "%s says it returns %s, but this line returns %s." % (c.owner, shape, given), [
+            "Return %s." % each,
+            "Or, if it should give back %d, %s." % (length["given"], more),
+        ]
+    if c.kind == "argument":
+        return "%s expects %s to be %s, but got %s." % (c.owner, c.named, shape, given), [
+            "For %s, pass %s." % (c.named, each),
+            "Or, if %s should hold %d, %s." % (c.named, length["given"], more),
+        ]
+    if c.kind == "variable":
+        return "%s is annotated as %s, but was assigned %s." % (c.named, shape, given), [
+            "Assign %s." % each,
+            "Or, if %s should hold %d, %s." % (c.named, length["given"], more),
+        ]
+    if c.kind == "field":
+        owner = c.check.get("owner") or "this class"
+        return "The `%s` field of `%s` is annotated as %s, but got %s." % (c.name, owner, shape, given), [
+            "Give the `%s` field %s." % (c.name, each),
+            "Or, if it should hold %d, %s." % (length["given"], more),
+        ]
+    return None
+
+
 def _pll_tc_arity(c):
     """A function given where the annotation wants one that takes so many
     arguments, and it takes a different number."""
@@ -675,7 +742,7 @@ def _pll_tc_arity(c):
 
 def _pll_tc_argument(c):
     """An argument that does not match its parameter's annotation."""
-    arity = _pll_tc_arity(c)
+    arity = _pll_tc_arity(c) or _pll_tc_length(c)
     if arity is not None:
         return arity
     reached = _pll_data_path(c)
@@ -691,11 +758,11 @@ def _pll_tc_argument(c):
         # not" left the student to go and find out.
         value = c.e.facts.get("element_value")
         is_ = " is %s" % value if value is not None else " is not"
-        return "%s expects %s %s to be %s, but %s%s." % (
-            c.owner, _pll_members_phrase(c.element), c.named, c.wanted, c.element, is_
+        return "%s expects %s to be %s, but %s%s." % (
+            c.owner, _pll_wanted_part(c, c.named), c.wanted, c.element, is_
         ), [
             "Look at %s of the %s you passed for %s." % (c.element, c.actual or "value", c.named),
-            "Every one has to match the annotation, not just the first.",
+            _pll_each_matches(c),
         ]
     got = ", but got %s" % _pll_describe_type(c.actual) if c.actual else ""
     headline = "%s expects %s to be %s%s." % (c.owner, c.named, c.wanted, got)
@@ -754,6 +821,22 @@ def _pll_tc_field(c):
             % (c.name, value if value is not None else "?", swapped),
             "Give the values in the order the fields are written in `class %s`." % owner,
         ]
+    length = _pll_tc_length(c)
+    if length is not None:
+        return length
+    if c.element:
+        # A part of the field's value: the field is the collection.
+        element_value = c.e.facts.get("element_value")
+        annotation = c.check.get("annotation")
+        return "The `%s` field of `%s` is %s, so %s should be %s, but %s%s." % (
+            c.name,
+            owner,
+            "annotated as `%s`" % annotation if annotation else "annotated",
+            _pll_wanted_part(c),
+            c.wanted,
+            c.element,
+            " is %s" % element_value if element_value is not None else " is not",
+        ), ["Look at %s of the value given to the `%s` field." % (c.element, c.name), _pll_each_matches(c)]
     if value is not None:
         got = "`%s`" % value
     elif c.actual:
@@ -779,14 +862,17 @@ def _pll_tc_return(c):
     # all of them describes the symptom rather than any of them.
     if c.actual in ("None", "NoneType"):
         return _pll_none_returned(c)
+    length = _pll_tc_length(c)
+    if length is not None:
+        return length
     if c.element:
         # One item of a collection: the collection is what was asked for,
         # so the item is the thing to change - not the annotation's container.
         value = c.e.facts.get("element_value")
         container = _pll_clean_type_name(c.actual) if c.actual else "value"
+        reason = _pll_each_matches(c)
         how_to_fix = [
-            "Look at %s of the %s this line returns: every one has to match the annotation, not just the first."
-            % (c.element, container)
+            "Look at %s of the %s this line returns: %s" % (c.element, container, reason[0].lower() + reason[1:])
         ]
         element_type = c.e.facts.get("element_type")
         written = c.check.get("annotation")
@@ -799,10 +885,10 @@ def _pll_tc_return(c):
                 how_to_fix.append(
                     "Or, if that is what it should hold, change the annotation from `%s` to `%s`." % (written, replaced)
                 )
-        return "%s says it returns %s, with %s it %s, but %s%s." % (
+        return "%s says it returns %s, so %s should be %s, but %s%s." % (
             c.owner,
             "`%s`" % written if written is not None else "a %s" % container,
-            _pll_members_phrase(c.element),
+            _pll_wanted_part(c, "the %s" % (_pll_type_words(container) or container)),
             c.wanted,
             c.element,
             " is %s" % value if value is not None else " is not",
@@ -909,9 +995,19 @@ def _pll_none_returned(c):
 
 def _pll_tc_variable(c):
     """An annotated variable assigned a value of the wrong type."""
+    length = _pll_tc_length(c)
+    if length is not None:
+        return length
     if c.element:
-        return "%s is annotated so %s it is %s, but %s is not." % (
-            c.named, _pll_members_phrase(c.element), c.wanted, c.element
+        value = c.e.facts.get("element_value")
+        annotation = c.check.get("annotation")
+        return "%s is %s, so %s should be %s, but %s%s." % (
+            c.named,
+            "annotated as `%s`" % annotation if annotation else "annotated",
+            _pll_wanted_part(c),
+            c.wanted,
+            c.element,
+            " is %s" % value if value is not None else " is not",
         ), ["Look at %s of the value assigned to %s." % (c.element, c.named)]
     got = _pll_describe_type(c.actual) if c.actual else "a different type"
     headline = "%s is annotated as %s, but %s was assigned here." % (c.named, c.wanted, got)

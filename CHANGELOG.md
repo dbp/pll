@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+- **A file can have several `#examplar` lines**, so an assignment can keep
+  each part in a self-contained `#examplar` file of its own. They are
+  checked as their union, as though they were one file with all of their
+  functions: a card for each function, a test may use functions from
+  several of them, and every function has to be written before the file's
+  own tests run. A function in two of the files is refused, and the tests
+  are not checked; a file that cannot be fetched leaves out only its own
+  functions. Two `#examplar` lines were an error.
+
 ### Changed
 - **Values are shown with their strings in double quotes**, as the course
   writes them. A list at the top level of a file, or the value of a prompt
@@ -26,6 +36,19 @@
 - **A failed `assert` with no message says what it asserted**: "This
   `assert` failed: `True and False` is not true." It said only
   "AssertionError while running your program."
+- **A tuple's items are each said to have their own type**: "`f` expects
+  item 1 of `pair` to be a string (`str`)", not "every item in `pair`",
+  for a `tuple[int, str]`. A tuple in a list is "item 1 of each tuple in
+  `rows`", and `tuple[int, ...]` is still "every item". A returned
+  collection is "every item in the list", not "every item in it".
+- **A tuple of the wrong length is said to be one**: "`fn` says it returns
+  `tuple[int, str]`, a tuple of 2 items, but this line returns a tuple of
+  3." It said only that a tuple was returned. A tuple is described as "a
+  tuple of 3", not "a list of 3".
+- **A part of a dataclass field's value that is wrong is said to be a
+  part**: "The `pair` field of `P` is annotated as `tuple[int, str]`, so
+  item 1 should be a string (`str`)". It said the field itself should be a
+  string, and suggested changing the annotation to `tuple`.
 
 ## 0.12.0 (2026-11-11)
 

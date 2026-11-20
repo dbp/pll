@@ -14,43 +14,36 @@ export const MAX_BUNDLE_BYTES = 4 * 1024 * 1024;
 
 const DIRECTIVE_RE = /^#\s*examplar\s+(\S+)\s*$/;
 
-export type ExamplarDirective =
-  | { kind: "none" }
-  | { kind: "found"; url: string; line: number }
-  | { kind: "error"; message: string; line: number };
+export interface ExamplarDirectives {
+  /** The lines to fetch bundles from, in order. */
+  found: { url: string; line: number }[];
+  /** The lines whose address will not do. */
+  problems: { message: string; line: number }[];
+}
 
 /**
- * The `#examplar <url>` line, if there is exactly one.
+ * The file's `#examplar <url>` lines.
  *
  * Only a whole line counts, so a URL mentioned in prose or trailing another
- * statement is not a directive. Two directives are an error rather than
- * "first wins": silently ignoring the second would be a confusing way to
- * find out you had edited the wrong line.
+ * statement is not a directive. A file may have several, each naming a
+ * bundle of different functions - an assignment can keep each part's
+ * implementations in a bundle of its own.
  */
-export function parseExamplarDirective(source: string): ExamplarDirective {
-  const hits: { url: string; line: number }[] = [];
+export function parseExamplarDirectives(source: string): ExamplarDirectives {
+  const directives: ExamplarDirectives = { found: [], problems: [] };
   const lines = source.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const match = DIRECTIVE_RE.exec(lines[i].trim());
     if (match) {
-      hits.push({ url: match[1], line: i + 1 });
+      const problem = validateBundleUrl(match[1]);
+      if (problem) {
+        directives.problems.push({ message: problem, line: i + 1 });
+      } else {
+        directives.found.push({ url: match[1], line: i + 1 });
+      }
     }
   }
-  if (hits.length === 0) {
-    return { kind: "none" };
-  }
-  if (hits.length > 1) {
-    return {
-      kind: "error",
-      line: hits[1].line,
-      message:
-        `there is more than one \`#examplar\` line (lines ` +
-        `${hits.map((h) => h.line).join(" and ")}). Keep the one you want.`,
-    };
-  }
-  const { url, line } = hits[0];
-  const problem = validateBundleUrl(url);
-  return problem ? { kind: "error", message: problem, line } : { kind: "found", url, line };
+  return directives;
 }
 
 /**

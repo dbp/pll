@@ -453,8 +453,12 @@ def _pll_examplar_unwritten(test_source, filename):
     )
 
 
-def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), only=None, given=None, unwritten=()):
+def _pll_examplar_run_one(test_pieces, code, student_file, provided=(), only=None, given=None, unwritten=()):
     """Run every `test_*` the student defined against one implementation.
+
+    `code` is what the implementation loads, as `(bundle, bytecode)` pairs
+    in order: the wheat or chaff itself and, when the file has several
+    bundles, each other bundle's first wheat (`_pll_examplar_judge`).
 
     Their definitions are loaded first and the implementation second, so a
     name the implementation provides replaces whatever the student wrote.
@@ -476,7 +480,8 @@ def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), onl
     with - the libraries' among them - so an image assignment's tests can
     call `image_width` and its implementations `circle`. Whatever runs past
     `_PLL_EXAMPLAR_SECONDS` ends it: `timedOut` names the test, or None for
-    a definition or the implementation's own loading.
+    a definition or the implementation's own loading. Code that will not
+    load, or takes too long to, is named by its `bundle`.
     """
     module = _ex_types.ModuleType("__main__")
     module.__dict__.update(_pll_initial_globals)
@@ -519,24 +524,26 @@ def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), onl
         # early in the exercise there is no implementation, and doing so would
         # just spray NameErrors, or failures against `...`.
         student_defines = sorted(name for name in provided if name in namespace and name not in unwritten)
-        try:
-            with _pll_examplar_budget():
-                exec(_ex_marshal.loads(_ex_b64.b64decode(code_blob)), namespace)
-        except KeyboardInterrupt:
-            # A Stop, not a broken implementation, which the card would report
-            # as "the bundle may need rebuilding".
-            raise
-        except _PllExamplarTimeout:
-            return ended(None)
-        except BaseException as e:
-            return {
-                **ended(None),
-                "loaded": False,
-                "errorType": type(e).__name__,
-                "errorMessage": "the implementation could not be loaded (%s)" % e,
-                "tests": {},
-                "timedOut": False,
-            }
+        for bundle, blob in code:
+            try:
+                with _pll_examplar_budget():
+                    exec(_ex_marshal.loads(_ex_b64.b64decode(blob)), namespace)
+            except KeyboardInterrupt:
+                # A Stop, not a broken implementation, which the card would
+                # report as "the bundle may need rebuilding".
+                raise
+            except _PllExamplarTimeout:
+                return {**ended(None), "bundle": bundle}
+            except BaseException as e:
+                return {
+                    **ended(None),
+                    "loaded": False,
+                    "bundle": bundle,
+                    "errorType": type(e).__name__,
+                    "errorMessage": "the implementation could not be loaded (%s)" % e,
+                    "tests": {},
+                    "timedOut": False,
+                }
 
         for name in sorted(namespace):
             if not name.startswith("test_"):
@@ -568,6 +575,11 @@ def _pll_examplar_run_one(test_pieces, code_blob, student_file, provided=(), onl
 def _pll_examplar_run(test_source, bundle_json, filename="hw.py", session_key=None):
     """Run a student's suite against a bundle, per function and in two phases.
 
+    `bundle_json` is one bundle, or a list of them: a file's `#examplar`
+    lines, which the host has made sure provide different functions. A
+    list is judged as their union, the one bundle that has all of their
+    functions.
+
     Returns a dict the host turns into one report per provided function.
     Verdicts, for each function separately:
       * a test failing on any wheat  -> that test is wrong
@@ -596,32 +608,52 @@ def _pll_examplar_run(test_source, bundle_json, filename="hw.py", session_key=No
         return _pll_examplar_judge(test_source, bundle_json, filename, session_key)
 
 
+def _pll_examplar_unusable(bundle):
+    """Why a bundle cannot be run here, or None."""
+    form = bundle.get("examplar") if isinstance(bundle, dict) else None
+    if form != EXAMPLAR_FORMAT:
+        return "this bundle is format %r, but this PLL understands %d" % (form, EXAMPLAR_FORMAT)
+    built = bundle.get("built") or {}
+    if built.get("magic") and built["magic"] != _pll_examplar_magic():
+        return (
+            "this bundle was built for Python %s and cannot run here "
+            "(Python %s). It needs rebuilding with a matching pll-python."
+            % (built.get("python", "?"), _ex_sys.version.split()[0])
+        )
+    return None
+
+
 def _pll_examplar_judge(test_source, bundle_json, filename, session_key=None):
     import json as _ex_json
 
     try:
-        bundle = _ex_json.loads(bundle_json)
+        bundles = _ex_json.loads(bundle_json)
     except ValueError as e:
         return {"ok": False, "error": "the bundle is not valid JSON (%s)" % e}
+    if not isinstance(bundles, list):
+        bundles = [bundles]
+    for index, bundle in enumerate(bundles):
+        problem = _pll_examplar_unusable(bundle)
+        if problem is not None:
+            return {"ok": False, "error": problem, "bundle": index}
 
-    if bundle.get("examplar") != EXAMPLAR_FORMAT:
-        return {
-            "ok": False,
-            "error": "this bundle is format %r, but this PLL understands %d"
-            % (bundle.get("examplar"), EXAMPLAR_FORMAT),
-        }
-    built = bundle.get("built") or {}
-    if built.get("magic") and built["magic"] != _pll_examplar_magic():
-        return {
-            "ok": False,
-            "error": (
-                "this bundle was built for Python %s and cannot run here "
-                "(Python %s). It needs rebuilding with a matching pll-python."
-                % (built.get("python", "?"), __import__("sys").version.split()[0])
-            ),
-        }
+    provides = [name for bundle in bundles for name in bundle.get("provides") or ()]
+    # Their union is the bundle with all of their functions, and as in any
+    # bundle, each of its implementations defines every function: a buggy
+    # `total` comes with a correct `shout`. So each wheat and chaff runs with
+    # the other bundles' first wheats loaded beside it, and a test that uses
+    # functions from two of them meets a version of each.
+    firsts = [(bundle.get("wheats") or [None])[0] for bundle in bundles]
 
-    provides = list(bundle.get("provides") or ())
+    def code(index, entry):
+        """What a run of `entry`, from bundle `index`, loads, in order."""
+        loads = []
+        for other, first in enumerate(firsts):
+            chosen = entry if other == index else first
+            if chosen is not None:
+                loads.append((other, chosen.get("pyc", "")))
+        return loads
+
     # The student's own file not compiling is their problem to fix, and the
     # normal run reports it properly - say so once rather than once per
     # implementation. Some code parses and does not compile (`case Boa:`),
@@ -656,15 +688,25 @@ def _pll_examplar_judge(test_source, bundle_json, filename, session_key=None):
             "kind": kind,
             "id": ran["id"],
             "targets": ran.get("targets"),
+            "bundle": ran["bundle"],
             "test": ran["timedOut"],
             "seconds": _PLL_EXAMPLAR_SECONDS,
         }
         result["chaffsSkipped"] = sorted(provides)
         return True
 
-    for entry in bundle.get("wheats") or []:
-        ran = _pll_examplar_run_one(test_pieces, entry.get("pyc", ""), filename, provides, given=given, unwritten=unwritten)
+    # Each bundle's first wheat is in every run, so a run of any one of them
+    # is the same run: it happens once.
+    wheat_runs = []
+    for index, bundle in enumerate(bundles):
+        for position, entry in enumerate(bundle.get("wheats") or []):
+            if position == 0 and any(first is not None for first in firsts[:index]):
+                continue
+            wheat_runs.append((index, entry))
+    for index, entry in wheat_runs:
+        ran = _pll_examplar_run_one(test_pieces, code(index, entry), filename, provides, given=given, unwritten=unwritten)
         ran["id"] = entry.get("id", "?")
+        ran.setdefault("bundle", index)
         result["wheats"].append(ran)
         if stopped_by(ran, "wheat"):
             return result
@@ -699,7 +741,8 @@ def _pll_examplar_judge(test_source, bundle_json, filename, session_key=None):
         ):
             settled.add(function)
 
-    for entry in bundle.get("chaffs") or []:
+    chaff_runs = [(index, entry) for index, bundle in enumerate(bundles) for entry in bundle.get("chaffs") or []]
+    for index, entry in chaff_runs:
         function = entry.get("targets")
         if function not in settled:
             continue
@@ -707,9 +750,10 @@ def _pll_examplar_judge(test_source, bundle_json, filename, session_key=None):
         # fails on it as well, and crediting that would score the student
         # for a signal that says nothing about this chaff.
         mine = {name for name, names in attribution.items() if function in names}
-        ran = _pll_examplar_run_one(test_pieces, entry.get("pyc", ""), filename, provides, mine, given=given)
+        ran = _pll_examplar_run_one(test_pieces, code(index, entry), filename, provides, mine, given=given)
         ran["id"] = entry.get("id", "?")
         ran["targets"] = function
+        ran.setdefault("bundle", index)
         result["chaffs"].append(ran)
         if stopped_by(ran, "chaff"):
             return result

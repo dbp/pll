@@ -543,6 +543,119 @@ async function main() {
     console.log("    a recursive type with no quotes loads, in the student's file and in an implementation");
   }
 
+  if (section("13", "bundles of different functions are checked as their union")) {
+    // Each part of an assignment in a bundle of its own, each self-contained.
+    // A test that uses functions from both is checked like any other.
+    const PART_1 = {
+      wheats: {
+        reference: ["def shout(word):", '    return word.upper() + "!"'].join("\n"),
+        alternative: ["def shout(word):", '    return "".join(c.upper() for c in word) + "!"'].join("\n"),
+      },
+      chaffs: { shout: { 1: ["def shout(word):", "    return word.upper()"].join("\n") } },
+    };
+    const PART_2 = {
+      wheats: {
+        reference: ["def total(numbers):", "    return sum(numbers)"].join("\n"),
+        alternative: [
+          "def total(numbers):",
+          "    result = 0",
+          "    for n in numbers:",
+          "        result = result + n",
+          "    return result",
+        ].join("\n"),
+      },
+      chaffs: { total: { 1: ["def total(numbers):", "    return numbers[0] + sum(numbers[1:])"].join("\n") } },
+    };
+    const TESTS = [
+      "def test_shout():",
+      '    assert shout("hi") == "HI!"',
+      "",
+      "def test_shout_empty():",
+      '    assert shout("") == "!"',
+      "",
+      "def test_total():",
+      "    assert total([1, 2, 3]) == 6",
+      "",
+      "def test_total_empty():",
+      "    assert total([]) == 0",
+      "",
+      "def test_both():",
+      '    assert total([len(shout("ab"))]) == 3',
+    ];
+
+    const pyodide = await bootPll();
+    const call = (name, ...args) => JSON.parse(pyodide.globals.get("_pll_call")(name, JSON.stringify(args)));
+    const part1 = call("_pll_examplar_build", JSON.stringify(PART_1)).bundle;
+    const part2 = call("_pll_examplar_build", JSON.stringify(PART_2)).bundle;
+    const judged = (bundles, ...lines) => call("_pll_examplar_run", lines.join("\n") + "\n", JSON.stringify(bundles), "hw.py");
+
+    // Tests first, with nothing of the student's own: every test meets a
+    // version of each function, the one test of both among them.
+    const first = judged([part1, part2], ...TESTS);
+    expect(first.ok && first.provides.join() === "shout,total", `the functions of both: ${JSON.stringify(first.provides ?? first.error)}`);
+    expect(JSON.stringify(first.attribution?.test_both) === '["shout","total"]', `a test of both is on both cards: ${JSON.stringify(first.attribution)}`);
+    expect(
+      first.wheats?.every((w) => w.loaded && Object.keys(w.tests).length === 5 && Object.values(w.tests).every((t) => t.outcome === "pass")),
+      `every test passes on every correct implementation: ${JSON.stringify(first.wheats)}`,
+    );
+    // Each bundle's first wheat is in every run, so that run happens once.
+    expect(
+      first.wheats?.map((w) => `${w.bundle}:${w.id}`).join() === "0:alternative,0:reference,1:reference",
+      `each wheat once: ${first.wheats?.map((w) => `${w.bundle}:${w.id}`)}`,
+    );
+    expect(
+      first.chaffs?.map((c) => `${c.bundle}:${c.targets}/${c.id}`).join() === "0:shout/1,1:total/1" &&
+        first.chaffs.every((c) => Object.values(c.tests).some((t) => t.outcome === "fail")),
+      `each bundle's buggy implementations, each caught: ${JSON.stringify(first.chaffs)}`,
+    );
+    const written = judged([part1, part2], "def shout(word):", '    return word.upper() + "!"', "", "def total(numbers):", "    return sum(numbers)", "", ...TESTS);
+    expect(written.wheats?.[0].studentDefines.join() === "shout,total", `the student's functions, from both: ${JSON.stringify(written.wheats?.[0].studentDefines)}`);
+
+    // What goes wrong with one of them says which.
+    const stale = judged([part1, { ...part2, examplar: 1 }], ...TESTS);
+    expect(!stale.ok && stale.bundle === 1 && /format 1/.test(stale.error), `a bundle that cannot run: ${JSON.stringify(stale)}`);
+    const corrupt = { ...part2, wheats: part2.wheats.map((w, i) => (i === 0 ? { ...w, pyc: "AAAA" } : w)) };
+    const unloadable = judged([part1, corrupt], ...TESTS);
+    expect(
+      unloadable.wheats?.[0].loaded === false && unloadable.wheats[0].bundle === 1,
+      `code that would not load, beside another bundle's: ${JSON.stringify(unloadable.wheats?.[0])}`,
+    );
+    console.log("    one check over both; a test of both meets a version of each; a broken bundle is named");
+
+    // And in a run, from two lines of a file.
+    const server = createServer((req, res) => {
+      try {
+        res.end(readFileSync(join(work, "site", req.url.slice(1))));
+      } catch {
+        res.statusCode = 404;
+        res.end();
+      }
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    mkdirSync(join(work, "site"), { recursive: true });
+    writeFileSync(join(work, "site", "part1.json"), JSON.stringify(part1));
+    writeFileSync(join(work, "site", "part2.json"), JSON.stringify(part2));
+    const built = await run(["examplar", "build", "hw", "-o", "site/hw.json"]);
+    expect(built.code === 0, `the bundle of shout and total builds: ${built.stderr}`);
+
+    const both = await run([write("students/both.py", `#examplar ${base}/part1.json`, `#examplar ${base}/part2.json`, "", ...TESTS)]);
+    for (const name of ["shout", "total"]) {
+      const card = new RegExp(`examplar: ${name}\\n  Against correct implementations: all 3 of your tests pass\\.\\n  Against buggy implementations: caught all 1\\.`);
+      expect(card.test(both.stderr), `a card for ${name}: ${both.stderr}`);
+    }
+    const overlap = await run([
+      write("students/overlap.py", `#examplar ${base}/part1.json`, `#examplar ${base}/hw.json`, 'print("ran")', "", ...TESTS),
+    ]);
+    expect(
+      /Line 2: line 1 already has implementations of `shout`\. A function's implementations can come from only one `#examplar` line, so your tests were not checked\./.test(overlap.stderr),
+      `a function in two bundles: ${overlap.stderr}`,
+    );
+    expect(!/examplar: /.test(overlap.stderr) && /^ran$/m.test(overlap.stdout), `no cards, and the file runs: ${overlap.stdout}${overlap.stderr}`);
+    await new Promise((r) => server.close(r));
+    console.log("    a card from each line's bundle; a function in two of them is refused");
+  }
+
   rmSync(work, { recursive: true, force: true });
   if (!passed()) {
     console.error("\nsmoke-examplar-build: FAILED");

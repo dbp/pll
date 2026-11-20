@@ -1334,7 +1334,7 @@ async function main() {
       const cases = [
         // A collection's item, not its container.
         ["def names() -> list[int]:\n    return [\"a\", \"b\"]\n\nnames()\n",
-          ['says it returns `list[int]`, with every item in it a whole number (`int`), but item 0 is the string "a".',
+          ['says it returns `list[int]`, so every item in the list should be a whole number (`int`), but item 0 is the string "a".',
             "change the annotation from `list[int]` to `list[str]`"]],
         ["def prices() -> dict[str, int]:\n    return {\"tea\": \"two\"}\n\nprices()\n",
           ['but the value for key "tea" is the string "two"', "from `dict[str, int]` to `dict[str, str]`"]],

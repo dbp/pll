@@ -1,4 +1,4 @@
-import { loadBundle, parseExamplarDirective, type BundleStore } from "./examplarSource";
+import { loadBundle, parseExamplarDirectives, type BundleStore } from "./examplarSource";
 import type { ExamplarOutcome } from "./types";
 import type { PythonRuntime } from "./python";
 import { errorText } from "../core/errorText";
@@ -107,6 +107,11 @@ export interface ExamplarHost {
  * Run the file's `#examplar` check. Null when the file asks for none; false
  * when its own tests should not run after it; true when they should.
  *
+ * A file with several `#examplar` lines is checked against the union of
+ * their bundles, as though it were one bundle with every function in it: a
+ * card for each function, and every one has to be defined before the
+ * file's own tests run.
+ *
  * Examplar runs whenever the directive is present - writing tests before
  * any implementation of their own is the point, not a special case. What
  * the answer decides is only whether the *other* test phase makes sense:
@@ -130,8 +135,8 @@ export async function runExamplarStep(
   fileName: string,
   sessionKey: string,
 ): Promise<boolean | null> {
-  const bundle = await fetchBundle(bundles, host, code);
-  if (bundle === null) {
+  const loaded = await fetchBundles(bundles, host, code);
+  if (loaded === null) {
     return null;
   }
   host.status("Checking your tests...");
@@ -141,7 +146,7 @@ export async function runExamplarStep(
     if (!(err instanceof StoppedError)) {
       host.examplarCard(
         failedCard(
-          bundle,
+          everyBundle(loaded),
           `the known implementations were not run: your files could not be set aside first (${errorText(err)})`,
         ),
       );
@@ -163,15 +168,16 @@ export async function runExamplarStep(
   }
   let result: ExamplarOutcome;
   try {
-    result = await runtime.examplarRun(code, bundle.json, fileName, sessionKey);
+    // Each is JSON already, so the list of them is too.
+    result = await runtime.examplarRun(code, `[${loaded.map((b) => b.json).join(",")}]`, fileName, sessionKey);
   } catch (err) {
     // A Stop is not a reason the check failed; the run plan says it.
     if (!(err instanceof StoppedError)) {
-      host.examplarCard(failedCard(bundle, errorText(err)));
+      host.examplarCard(failedCard(everyBundle(loaded), errorText(err)));
     }
     return false;
   }
-  for (const entry of buildExamplarEntries(bundle, result)) {
+  for (const entry of buildExamplarEntries(loaded, result)) {
     host.examplarCard(entry);
   }
   const provides = result.provides ?? [];
@@ -179,43 +185,89 @@ export async function runExamplarStep(
   return provides.length > 0 && provides.every((name) => defines.includes(name));
 }
 
+/** A fetched bundle, and the `#examplar` line that named it. */
 interface Bundle {
   url: string;
+  line: number;
   json: string;
   cached: boolean;
+  /** The functions it has implementations of. */
+  provides: string[];
 }
+
+/** Where a card's implementations came from. */
+type Source = Pick<Bundle, "url" | "cached">;
 
 /**
- * The bundle the file's directive names, or null. Every failure here is said
- * and gives null: a missing or unreachable bundle must not stop the file
- * from running, the same fail-open stance as the type checker's.
+ * The bundles the file's `#examplar` lines name, or null when there are
+ * none to use. A line whose bundle cannot be had is said and left out: a
+ * missing or unreachable bundle must not stop the file from running, the
+ * same fail-open stance as the type checker's, and the other lines' bundles
+ * still check the tests of their functions.
+ *
+ * Two bundles with a function in common are said too, and stop the check:
+ * neither can be the one whose implementations decide it.
  */
-async function fetchBundle(bundles: BundleStore, host: ExamplarHost, code: string): Promise<Bundle | null> {
-  const directive = parseExamplarDirective(code);
-  if (directive.kind === "none") {
-    return null;
+async function fetchBundles(store: BundleStore, host: ExamplarHost, code: string): Promise<Bundle[] | null> {
+  const { found, problems } = parseExamplarDirectives(code);
+  for (const { message, line } of problems) {
+    host.say(`Line ${line}: ${message}`, "problem");
   }
-  if (directive.kind === "error") {
-    host.say(`Line ${directive.line}: ${directive.message}`, "problem");
-    return null;
+  const bundles: Bundle[] = [];
+  for (const { url, line } of found) {
+    host.status("Loading implementations...");
+    const load = await loadBundle(url, store);
+    if (load.note) {
+      host.say(`Known implementations: ${load.note}`, "note");
+    }
+    if (!load.json) {
+      host.say(`Could not load the known implementations from ${url}: ${load.error}`, "problem");
+      continue;
+    }
+    bundles.push({ url, line, json: load.json, cached: load.fromCache, provides: providedNames(load.json) });
   }
-  host.status("Loading implementations...");
-  const load = await loadBundle(directive.url, bundles);
-  if (load.note) {
-    host.say(`Known implementations: ${load.note}`, "note");
+  for (const [index, later] of bundles.entries()) {
+    for (const earlier of bundles.slice(0, index)) {
+      const shared = later.provides.filter((name) => earlier.provides.includes(name));
+      if (shared.length > 0) {
+        host.say(
+          `Line ${later.line}: line ${earlier.line} already has implementations of ${inCode(shared)}. ` +
+            `A function's implementations can come from only one \`#examplar\` line, so your tests were not checked.`,
+          "problem",
+        );
+        return null;
+      }
+    }
   }
-  if (!load.json) {
-    host.say(`Could not load the known implementations from ${directive.url}: ${load.error}`, "problem");
-    return null;
-  }
-  return { url: directive.url, json: load.json, cached: load.fromCache };
+  return bundles.length > 0 ? bundles : null;
 }
 
-function failedCard(bundle: Bundle, problem: string): ExamplarFailedEntry {
+/** The functions a bundle says it has. Its shape is checked where it runs. */
+function providedNames(json: string): string[] {
+  try {
+    const provides = (JSON.parse(json) as { provides?: unknown }).provides;
+    return Array.isArray(provides) ? provides.filter((name): name is string => typeof name === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** `a`, `a` and `b`, `a`, `b` and `c` - each in backticks. */
+function inCode(names: string[]): string {
+  const quoted = names.map((name) => `\`${name}\``);
+  return quoted.length === 1 ? quoted[0] : `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
+}
+
+/** The source of a card about the whole check: every bundle in it. */
+function everyBundle(bundles: Bundle[]): Source {
+  return { url: bundles.map((b) => b.url).join("\n"), cached: bundles.every((b) => b.cached) };
+}
+
+function failedCard(source: Source, problem: string): ExamplarFailedEntry {
   return {
     kind: "examplar",
-    url: bundle.url,
-    cached: bundle.cached,
+    url: source.url,
+    cached: source.cached,
     card: "failed",
     problem,
     body: [{ kind: "line", tone: "bad", text: problem }],
@@ -231,14 +283,27 @@ function failedCard(bundle: Bundle, problem: string): ExamplarFailedEntry {
  * implementation contributes only its id, because its failure messages
  * describe the bug it plants.
  */
-export function buildExamplarEntries(bundle: Bundle, result: ExamplarOutcome): ExamplarEntry[] {
+export function buildExamplarEntries(bundles: Bundle[], result: ExamplarOutcome): ExamplarEntry[] {
+  const whole = everyBundle(bundles);
+  /**
+   * A failed card about one bundle, when it is: with several, the problem
+   * says which, by its line.
+   */
+  const failedIn = (index: number | undefined, problem: string) => {
+    const bundle = index === undefined ? undefined : bundles[index];
+    if (bundle === undefined) {
+      return failedCard(whole, problem);
+    }
+    return failedCard(bundle, bundles.length > 1 ? `Line ${bundle.line}: ${problem}` : problem);
+  };
   if (!result.ok) {
-    return [failedCard(bundle, result.error ?? "the known implementations could not be run")];
+    return [failedIn(result.bundle, result.error ?? "the known implementations could not be run")];
   }
   // Something stuck ends the whole check: nothing after it was run, and
   // nothing before it can be trusted to stand alone.
   if (result.timedOut) {
-    return [failedCard(bundle, timedOutProblem(result.timedOut))];
+    const stuckIn = result.timedOut.bundle === undefined ? undefined : bundles[result.timedOut.bundle];
+    return [failedCard(stuckIn ?? whole, timedOutProblem(result.timedOut))];
   }
   const wheats = result.wheats ?? [];
   // Only the bundle can fail to load, so this is a message for whoever
@@ -249,8 +314,8 @@ export function buildExamplarEntries(bundle: Bundle, result: ExamplarOutcome): E
   if (unloadable) {
     const which = unloadable.targets === undefined ? "correct" : "buggy";
     return [
-      failedCard(
-        bundle,
+      failedIn(
+        unloadable.bundle,
         `a known ${which} implementation could not be loaded ` +
           `(${unloadable.errorType}: ${unloadable.errorMessage}). ` +
           `The bundle may need rebuilding.`,
@@ -299,10 +364,11 @@ export function buildExamplarEntries(bundle: Bundle, result: ExamplarOutcome): E
     const missed = mine
       .filter((c) => c.loaded && Object.values(c.tests).every((t) => t.outcome === "pass"))
       .map((c) => c.id);
+    const source = bundles.find((b) => b.provides.includes(name)) ?? whole;
     const card = {
       kind: "examplar" as const,
-      url: bundle.url,
-      cached: bundle.cached,
+      url: source.url,
+      cached: source.cached,
       card: "function" as const,
       name,
       testCount: tests.length,

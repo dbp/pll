@@ -342,7 +342,8 @@ is nothing of your own to run them against yet — so PLL can run them against
 code your course wrote: implementations known to be correct, and
 implementations known to contain a bug.
 
-Your course gives you a line to put at the top of the file:
+Your course gives you a line to put at the top of the file (or a line for
+each part of an assignment):
 
 ```python
 #examplar https://example.edu/hw3.json

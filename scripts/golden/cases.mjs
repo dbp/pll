@@ -302,6 +302,8 @@ export const CASES = [
   { name: "test-fail", code: ["def double(n):", "    return n * 3", "", "def test_double():", "    assert double(2) == 4"] },
   { name: "test-fail-and", code: [B, "def positive(n: int) -> bool:", "    return n > 0", "", "def test_both():", "    assert positive(1) and positive(-1)"] },
   { name: "assert-top-level", code: [B, "assert True and False"] },
+  { name: "tuple-item-return", code: [B, "def fn() -> tuple[int, str]:", "    return (1, 5)", "", "fn()"] },
+  { name: "tuple-length-argument", code: [B, "def f(pair: tuple[int, str]) -> int:", "    return 0", "", 'f((1, "a", 2))'] },
   { name: "test-float", code: ["def tax(n):", "    return n * 0.31", "", "def test_tax():", "    assert tax(3) == 0.93"] },
   { name: "test-print-shown", code: [B, "def shout(word: str) -> str:", "    return None", "", "def test_shout():", '    print("about to call shout")', '    assert shout("hi") == "HI!"'] },
   { name: "test-error-concat", code: ["def add(xs):", '    return xs + "!"', "", "def test_add():", "    assert add([1]) == [1]"] },

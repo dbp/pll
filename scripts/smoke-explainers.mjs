@@ -772,6 +772,45 @@ console.log("[syntax errors: `=>` and `=<` for `>=` and `<=`, and `=>` for a ret
   console.log(`    ${CASES.length} said, ${LEFT.length} left to Python, and a line on its own`);
 }
 
+console.log("[a tuple's items each have their own type, said as such; a wrong length is said as one]");
+{
+  const said = (source) => ran("from dataclasses import dataclass\n\n" + source, "lab.py", "beginner");
+  const returned = said("def fn() -> tuple[int, str]:\n    return (1, 5)\n\nfn()\n");
+  expect(
+    returned?.headline ===
+      "`fn` says it returns `tuple[int, str]`, so item 1 of the tuple should be a string (`str`), but item 1 is the number 5.",
+    `a returned tuple: ${returned?.headline}`,
+  );
+  const given = said("def f(pair: tuple[int, str]) -> int:\n    return 0\n\nf((1, 5))\n");
+  expect(
+    given?.headline === "`f` expects item 1 of `pair` to be a string (`str`), but item 1 is the number 5." &&
+      given.howToFix.includes("A tuple's annotation gives each of its items a type of its own, in order."),
+    `a tuple given: ${given?.headline} ${JSON.stringify(given?.howToFix)}`,
+  );
+  const repeated = said('def f(nums: tuple[int, ...]) -> int:\n    return 0\n\nf((1, "two"))\n');
+  expect(
+    repeated?.headline.startsWith("`f` expects every item in `nums` to be a whole number (`int`)"),
+    `tuple[int, ...] is every item: ${repeated?.headline}`,
+  );
+  const rows = said('def f(rows: list[tuple[str, int]]) -> int:\n    return 0\n\nf([("a", 1), ("b", "2")])\n');
+  expect(
+    rows?.headline.startsWith("`f` expects item 1 of each tuple in `rows` to be a whole number (`int`)"),
+    `tuples in a list: ${rows?.headline}`,
+  );
+  const field = said("@dataclass\nclass P:\n    pair: tuple[int, str]\n\nP((1, 5))\n");
+  expect(
+    field?.headline ===
+      "The `pair` field of `P` is annotated as `tuple[int, str]`, so item 1 should be a string (`str`), but item 1 is the number 5.",
+    `a field: ${field?.headline}`,
+  );
+  const long = said('def fn() -> tuple[int, str]:\n    return (1, "a", 2)\n\nfn()\n');
+  expect(
+    long?.headline === "`fn` says it returns `tuple[int, str]`, a tuple of 2 items, but this line returns a tuple of 3.",
+    `a wrong length: ${long?.headline}`,
+  );
+  console.log("    by place in a tuple, every item in tuple[int, ...], each tuple in a list, a field, a length");
+}
+
 console.log("[a failed assert with no message says what it asserted]");
 {
   const top = ran("assert True and False\n", "lab.py", "beginner");
